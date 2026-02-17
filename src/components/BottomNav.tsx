@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { CalendarDays, Users, BookOpen, TrendingUp, Settings } from "lucide-react";
+import { CalendarDays, Users, BookOpen, Flame, Settings } from "lucide-react";
 
 type Tab = "today" | "customers" | "book" | "sales" | "ops";
 
@@ -12,13 +12,13 @@ const tabs: { id: Tab; label: string; icon: typeof CalendarDays }[] = [
   { id: "today", label: "Today", icon: CalendarDays },
   { id: "customers", label: "Customers", icon: Users },
   { id: "book", label: "Book", icon: BookOpen },
-  { id: "sales", label: "Sales", icon: TrendingUp },
+  { id: "sales", label: "Sell", icon: Flame },
   { id: "ops", label: "Ops", icon: Settings },
 ];
 
 const BottomNav = ({ activeTab, onTabChange }: BottomNavProps) => {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-card/90 backdrop-blur-xl border-t border-border safe-area-bottom">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border safe-area-bottom" style={{ background: 'hsl(220 20% 6% / 0.95)', backdropFilter: 'blur(20px)' }}>
       <div className="flex items-center justify-around px-2 py-1 max-w-md mx-auto">
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;

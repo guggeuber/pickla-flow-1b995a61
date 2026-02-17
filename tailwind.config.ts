@@ -51,6 +51,10 @@ export default {
           DEFAULT: "hsl(var(--sell))",
           foreground: "hsl(var(--sell-foreground))",
         },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
         "court-free": "hsl(var(--court-free))",
         "court-soon": "hsl(var(--court-soon))",
         "court-active": "hsl(var(--court-active))",
