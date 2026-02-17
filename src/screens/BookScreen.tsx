@@ -1,8 +1,23 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Clock, Users, ChevronRight, Zap, AlertTriangle } from "lucide-react";
-import { useState } from "react";
+import { Clock, Users, ChevronRight, ChevronLeft, Zap, AlertTriangle, CalendarDays } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
 
-const timeSlots = ["Now", "2:30", "3:00", "3:30", "4:00", "4:30", "5:00"];
+// Generate next 14 days for horizontal date picker
+function generateDates() {
+  const dates: Date[] = [];
+  const today = new Date();
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    dates.push(d);
+  }
+  return dates;
+}
+
+const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const timeSlots = ["Now", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"];
 const durations = ["30 min", "60 min", "90 min"];
 
 const courts = [
@@ -23,14 +38,18 @@ const recentCustomers = [
 
 const BookScreen = () => {
   const [step, setStep] = useState(0);
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState("Now");
   const [selectedDuration, setSelectedDuration] = useState("60 min");
   const [selectedCourt, setSelectedCourt] = useState<number | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const dateScrollRef = useRef<HTMLDivElement>(null);
+  const dates = generateDates();
 
   const selectedCourtData = courts.find(c => c.id === selectedCourt);
-  const isPeak = selectedTime === "5:00" || selectedTime === "4:30";
+  const isPeak = selectedTime === "17:00" || selectedTime === "18:00" || selectedTime === "19:00";
+  const isToday = selectedDate.toDateString() === new Date().toDateString();
 
   const handleConfirm = () => {
     setConfirmed(true);
@@ -49,13 +68,13 @@ const BookScreen = () => {
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
           transition={{ type: "spring", stiffness: 300, damping: 20 }}
-          className="w-20 h-20 rounded-full bg-primary flex items-center justify-center mb-4"
+          className="w-24 h-24 rounded-full bg-court-free flex items-center justify-center mb-5"
         >
           <motion.span
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.2 }}
-            className="text-primary-foreground text-3xl"
+            className="text-white text-4xl"
           >
             ✓
           </motion.span>
@@ -64,7 +83,7 @@ const BookScreen = () => {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          className="text-xl font-display font-bold"
+          className="text-2xl font-display font-bold"
         >
           Booked!
         </motion.h2>
@@ -81,7 +100,7 @@ const BookScreen = () => {
   }
 
   return (
-    <div className="pb-24 px-4 pt-2 space-y-5">
+    <div className="pb-24 px-4 pt-2 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-display font-bold tracking-tight">Book</h1>
         <div className="flex items-center gap-1.5 bg-accent rounded-full px-3 py-1">
@@ -99,12 +118,48 @@ const BookScreen = () => {
 
       <AnimatePresence mode="wait">
         {step === 0 && (
-          <motion.div key="step0" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5">
-            {/* Time */}
+          <motion.div key="step0" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
+            
+            {/* Horizontal Date Picker — Apple style */}
             <div>
-              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Time</h2>
-              <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
-                {timeSlots.map(time => (
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Date</h2>
+              <div 
+                ref={dateScrollRef}
+                className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory"
+                style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', WebkitOverflowScrolling: 'touch' }}
+              >
+                {dates.map((date, i) => {
+                  const isSelected = date.toDateString() === selectedDate.toDateString();
+                  const isTodayDate = date.toDateString() === new Date().toDateString();
+                  return (
+                    <motion.button
+                      key={i}
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => setSelectedDate(date)}
+                      className={`flex-shrink-0 snap-center w-[60px] py-3 rounded-2xl flex flex-col items-center gap-0.5 transition-all duration-200 ${
+                        isSelected
+                          ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25 scale-105'
+                          : 'bg-secondary text-secondary-foreground'
+                      }`}
+                    >
+                      <span className={`text-[10px] font-medium uppercase ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                        {isTodayDate ? "Today" : dayNames[date.getDay()]}
+                      </span>
+                      <span className="text-xl font-display font-bold">{date.getDate()}</span>
+                      <span className={`text-[9px] font-medium ${isSelected ? 'text-primary-foreground/60' : 'text-muted-foreground'}`}>
+                        {monthNames[date.getMonth()]}
+                      </span>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Time — horizontal scroll */}
+            <div>
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Time</h2>
+              <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: 'none' }}>
+                {(isToday ? timeSlots : timeSlots.filter(t => t !== "Now")).map(time => (
                   <motion.button
                     key={time}
                     whileTap={{ scale: 0.92 }}
@@ -114,7 +169,7 @@ const BookScreen = () => {
                     }`}
                   >
                     {time}
-                    {(time === "5:00" || time === "4:30") && <span className="ml-1 text-[10px]">⚡</span>}
+                    {isPeak && (time === "17:00" || time === "18:00" || time === "19:00") && <span className="ml-1 text-[10px]">⚡</span>}
                   </motion.button>
                 ))}
               </div>
@@ -122,7 +177,7 @@ const BookScreen = () => {
 
             {/* Duration */}
             <div>
-              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Duration</h2>
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Duration</h2>
               <div className="flex gap-2">
                 {durations.map(dur => (
                   <motion.button
@@ -141,7 +196,7 @@ const BookScreen = () => {
 
             {/* Court */}
             <div>
-              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Court</h2>
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Court</h2>
               <div className="grid grid-cols-3 gap-2.5">
                 {courts.map(court => (
                   <motion.button
@@ -193,7 +248,7 @@ const BookScreen = () => {
                   onClick={() => { setSelectedCustomer(c.name); setStep(2); }}
                   className={`w-full glass-card rounded-2xl p-3.5 flex items-center gap-3 ${selectedCustomer === c.name ? 'ring-2 ring-primary' : ''}`}
                 >
-                  <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">
+                  <div className="w-10 h-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">
                     {c.new ? "+" : c.avatar}
                   </div>
                   <span className="text-sm font-semibold flex-1 text-left">{c.name}</span>
@@ -211,6 +266,12 @@ const BookScreen = () => {
             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Confirm</h2>
             
             <div className="glass-card rounded-2xl p-5 space-y-4">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Date</span>
+                <span className="text-sm font-semibold">
+                  {isToday ? "Today" : selectedDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                </span>
+              </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">Time</span>
                 <span className="text-sm font-semibold">{selectedTime} · {selectedDuration}</span>
@@ -236,6 +297,26 @@ const BookScreen = () => {
                 </div>
               )}
             </div>
+
+            {/* Upsell block in confirm step */}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="sell-block rounded-2xl p-4 flex items-center gap-3"
+            >
+              <span className="text-2xl">🥤</span>
+              <div className="flex-1">
+                <p className="text-sm font-bold">Add drinks package?</p>
+                <p className="text-[11px] text-muted-foreground">2 drinks + snack — $12</p>
+              </div>
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                className="bg-sell text-sell-foreground rounded-xl px-3 py-2 text-xs font-bold"
+              >
+                Add
+              </motion.button>
+            </motion.div>
 
             <motion.button
               whileTap={{ scale: 0.96 }}
