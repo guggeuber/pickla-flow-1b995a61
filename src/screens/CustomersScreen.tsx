@@ -1,13 +1,27 @@
-import { motion } from "framer-motion";
-import { Search, Phone, Star, Calendar, CreditCard, ChevronRight, UserPlus } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Search, Phone, Star, Calendar, CreditCard, ChevronRight, UserPlus, Edit3, MessageSquarePlus, X, Check } from "lucide-react";
 import { useState } from "react";
 
-const customers = [
-  { id: 1, name: "Sarah Mitchell", phone: "555-0142", tier: "VIP", spend: "$4,280", visits: 47, lastPlayed: "Yesterday", favTime: "6 PM", tags: ["VIP", "Corporate"], avatar: "SM" },
-  { id: 2, name: "Jake Thompson", phone: "555-0198", tier: "Play", spend: "$1,850", visits: 23, lastPlayed: "2 days ago", favTime: "10 AM", tags: ["Beginner"], avatar: "JT" },
-  { id: 3, name: "Emma Wilson", phone: "555-0267", tier: "Drop-in", spend: "$620", visits: 8, lastPlayed: "Today", favTime: "2 PM", tags: [], avatar: "EW" },
-  { id: 4, name: "David Park", phone: "555-0333", tier: "VIP", spend: "$6,120", visits: 89, lastPlayed: "Today", favTime: "7 AM", tags: ["VIP", "Tournament"], avatar: "DP" },
-  { id: 5, name: "Lisa Chen", phone: "555-0411", tier: "Play", spend: "$2,340", visits: 31, lastPlayed: "3 days ago", favTime: "12 PM", tags: ["Corporate"], avatar: "LC" },
+interface Customer {
+  id: number;
+  name: string;
+  phone: string;
+  tier: string;
+  spend: string;
+  visits: number;
+  lastPlayed: string;
+  favTime: string;
+  tags: string[];
+  avatar: string;
+  notes: string[];
+}
+
+const initialCustomers: Customer[] = [
+  { id: 1, name: "Sarah Mitchell", phone: "555-0142", tier: "VIP", spend: "$4,280", visits: 47, lastPlayed: "Yesterday", favTime: "6 PM", tags: ["VIP", "Corporate"], avatar: "SM", notes: ["Prefers court 5", "Birthday next week"] },
+  { id: 2, name: "Jake Thompson", phone: "555-0198", tier: "Play", spend: "$1,850", visits: 23, lastPlayed: "2 days ago", favTime: "10 AM", tags: ["Beginner"], avatar: "JT", notes: [] },
+  { id: 3, name: "Emma Wilson", phone: "555-0267", tier: "Drop-in", spend: "$620", visits: 8, lastPlayed: "Today", favTime: "2 PM", tags: [], avatar: "EW", notes: ["Called about group bookings"] },
+  { id: 4, name: "David Park", phone: "555-0333", tier: "VIP", spend: "$6,120", visits: 89, lastPlayed: "Today", favTime: "7 AM", tags: ["VIP", "Tournament"], avatar: "DP", notes: [] },
+  { id: 5, name: "Lisa Chen", phone: "555-0411", tier: "Play", spend: "$2,340", visits: 31, lastPlayed: "3 days ago", favTime: "12 PM", tags: ["Corporate"], avatar: "LC", notes: ["Interested in corporate package"] },
 ];
 
 const tierColors: Record<string, string> = {
@@ -26,6 +40,12 @@ const tagColors: Record<string, string> = {
 const CustomersScreen = () => {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
+  const [customers, setCustomers] = useState<Customer[]>(initialCustomers);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [newNote, setNewNote] = useState("");
+  const [showNoteInput, setShowNoteInput] = useState(false);
 
   const filtered = customers.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -35,20 +55,69 @@ const CustomersScreen = () => {
 
   const selectedCustomer = customers.find(c => c.id === selected);
 
+  const startEdit = (customer: Customer) => {
+    setEditName(customer.name);
+    setEditPhone(customer.phone);
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    if (!selected) return;
+    setCustomers(prev => prev.map(c =>
+      c.id === selected ? { ...c, name: editName, phone: editPhone } : c
+    ));
+    setEditing(false);
+  };
+
+  const addNote = () => {
+    if (!selected || !newNote.trim()) return;
+    setCustomers(prev => prev.map(c =>
+      c.id === selected ? { ...c, notes: [...c.notes, newNote.trim()] } : c
+    ));
+    setNewNote("");
+    setShowNoteInput(false);
+  };
+
   if (selectedCustomer) {
     return (
       <div className="pb-24 px-4 pt-2 space-y-5">
-        <button onClick={() => setSelected(null)} className="text-sm text-primary font-medium tap-target">
-          ← Back
-        </button>
+        <div className="flex items-center justify-between">
+          <button onClick={() => { setSelected(null); setEditing(false); setShowNoteInput(false); }} className="text-sm text-primary font-medium tap-target">
+            ← Back
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => editing ? saveEdit() : startEdit(selectedCustomer)}
+            className="tap-target rounded-xl bg-accent text-accent-foreground px-3 py-1.5 flex items-center gap-1.5"
+          >
+            {editing ? <Check className="w-4 h-4" /> : <Edit3 className="w-4 h-4" />}
+            <span className="text-xs font-semibold">{editing ? "Save" : "Edit"}</span>
+          </motion.button>
+        </div>
+
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center space-y-3">
           <div className="w-20 h-20 rounded-full bg-primary/15 text-primary flex items-center justify-center text-2xl font-display font-bold mx-auto">
             {selectedCustomer.avatar}
           </div>
-          <div>
-            <h1 className="text-xl font-display font-bold">{selectedCustomer.name}</h1>
-            <p className="text-sm text-muted-foreground">{selectedCustomer.phone}</p>
-          </div>
+          {editing ? (
+            <div className="space-y-2 max-w-[250px] mx-auto">
+              <input
+                value={editName}
+                onChange={e => setEditName(e.target.value)}
+                className="w-full bg-secondary rounded-xl py-2 px-3 text-center text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              <input
+                value={editPhone}
+                onChange={e => setEditPhone(e.target.value)}
+                className="w-full bg-secondary rounded-xl py-2 px-3 text-center text-sm text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-xl font-display font-bold">{selectedCustomer.name}</h1>
+              <p className="text-sm text-muted-foreground">{selectedCustomer.phone}</p>
+            </div>
+          )}
           <span className={`status-chip ${tierColors[selectedCustomer.tier]}`}>{selectedCustomer.tier}</span>
         </motion.div>
 
@@ -73,6 +142,63 @@ const CustomersScreen = () => {
           </div>
         )}
 
+        {/* Notes section */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Notes</h2>
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setShowNoteInput(!showNoteInput)}
+              className="tap-target rounded-lg bg-accent text-accent-foreground px-2 py-1 flex items-center gap-1"
+            >
+              {showNoteInput ? <X className="w-3.5 h-3.5" /> : <MessageSquarePlus className="w-3.5 h-3.5" />}
+              <span className="text-[10px] font-semibold">{showNoteInput ? "Cancel" : "Add"}</span>
+            </motion.button>
+          </div>
+
+          <AnimatePresence>
+            {showNoteInput && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="mb-2"
+              >
+                <div className="flex gap-2">
+                  <input
+                    value={newNote}
+                    onChange={e => setNewNote(e.target.value)}
+                    placeholder="Called about..."
+                    className="flex-1 bg-secondary rounded-xl py-2.5 px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    onKeyDown={e => e.key === "Enter" && addNote()}
+                    autoFocus
+                  />
+                  <motion.button
+                    whileTap={{ scale: 0.9 }}
+                    onClick={addNote}
+                    className="tap-target rounded-xl bg-primary text-primary-foreground w-10 h-10 flex items-center justify-center"
+                  >
+                    <Check className="w-4 h-4" />
+                  </motion.button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {selectedCustomer.notes.length > 0 ? (
+            <div className="space-y-1.5">
+              {selectedCustomer.notes.map((note, i) => (
+                <div key={i} className="glass-card rounded-xl px-3 py-2">
+                  <p className="text-sm">{note}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">No notes yet</p>
+          )}
+        </div>
+
+        {/* Actions */}
         <div className="space-y-2">
           {[
             { label: "Book for customer", icon: Calendar },

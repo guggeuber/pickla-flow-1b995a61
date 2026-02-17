@@ -6,60 +6,68 @@
 
 @layer base {
   :root {
-    /* Warm whites & creams */
-    --background: 40 20% 97%;
-    --foreground: 200 15% 15%;
+    /* Warm creamy base */
+    --background: 30 25% 97%;
+    --foreground: 220 20% 12%;
 
-    --card: 40 25% 99%;
-    --card-foreground: 200 15% 15%;
+    --card: 30 30% 99%;
+    --card-foreground: 220 20% 12%;
 
-    --popover: 40 25% 99%;
-    --popover-foreground: 200 15% 15%;
+    --popover: 30 30% 99%;
+    --popover-foreground: 220 20% 12%;
 
-    /* Emerald/Teal primary */
-    --primary: 163 60% 36%;
+    /* Electric Coral primary — energetic, modern, SELL */
+    --primary: 12 90% 58%;
     --primary-foreground: 0 0% 100%;
 
-    /* Warm secondary */
-    --secondary: 40 15% 93%;
-    --secondary-foreground: 200 15% 20%;
+    /* Warm sand secondary */
+    --secondary: 30 18% 93%;
+    --secondary-foreground: 220 15% 20%;
 
-    --muted: 40 10% 94%;
-    --muted-foreground: 200 8% 50%;
+    --muted: 30 12% 94%;
+    --muted-foreground: 220 8% 48%;
 
-    --accent: 163 50% 92%;
-    --accent-foreground: 163 60% 25%;
+    --accent: 12 80% 94%;
+    --accent-foreground: 12 85% 38%;
 
     --destructive: 0 72% 55%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 40 15% 90%;
-    --input: 40 15% 90%;
-    --ring: 163 60% 36%;
+    --border: 30 15% 89%;
+    --input: 30 15% 89%;
+    --ring: 12 90% 58%;
 
     --radius: 1rem;
 
-    /* Custom Pickla tokens */
+    /* Court status */
     --court-free: 145 60% 45%;
     --court-soon: 45 90% 55%;
     --court-active: 0 70% 55%;
     --court-vip: 270 55% 55%;
 
+    /* Glass */
     --glass: 0 0% 100% / 0.7;
     --glass-border: 0 0% 100% / 0.3;
 
-    --stat-bg: 163 50% 95%;
-    --stat-value: 163 60% 30%;
+    /* Stat cards */
+    --stat-bg: 12 60% 96%;
+    --stat-value: 12 80% 40%;
 
+    /* Revenue */
     --revenue-up: 145 60% 40%;
     --revenue-down: 0 60% 50%;
 
+    /* Badges */
     --badge-vip: 270 55% 55%;
     --badge-vip-foreground: 0 0% 100%;
-    --badge-paid: 163 60% 36%;
+    --badge-paid: 145 55% 42%;
     --badge-paid-foreground: 0 0% 100%;
     --badge-unpaid: 35 90% 55%;
     --badge-unpaid-foreground: 0 0% 100%;
+
+    /* Sell accent — hot yellow-orange for upsell blocks */
+    --sell: 32 95% 55%;
+    --sell-foreground: 0 0% 100%;
 
     --sidebar-background: 0 0% 98%;
     --sidebar-foreground: 240 5.3% 26.1%;
@@ -72,25 +80,27 @@
   }
 
   .dark {
-    --background: 200 15% 8%;
-    --foreground: 40 20% 95%;
-    --card: 200 15% 11%;
-    --card-foreground: 40 20% 95%;
-    --popover: 200 15% 11%;
-    --popover-foreground: 40 20% 95%;
-    --primary: 163 55% 45%;
+    --background: 220 18% 7%;
+    --foreground: 30 25% 95%;
+    --card: 220 16% 10%;
+    --card-foreground: 30 25% 95%;
+    --popover: 220 16% 10%;
+    --popover-foreground: 30 25% 95%;
+    --primary: 12 85% 55%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 200 12% 16%;
-    --secondary-foreground: 40 20% 90%;
-    --muted: 200 10% 18%;
-    --muted-foreground: 200 8% 55%;
-    --accent: 163 40% 15%;
-    --accent-foreground: 163 55% 70%;
+    --secondary: 220 14% 16%;
+    --secondary-foreground: 30 20% 90%;
+    --muted: 220 12% 18%;
+    --muted-foreground: 220 8% 55%;
+    --accent: 12 50% 15%;
+    --accent-foreground: 12 70% 70%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 200 12% 20%;
-    --input: 200 12% 20%;
-    --ring: 163 55% 45%;
+    --border: 220 14% 20%;
+    --input: 220 14% 20%;
+    --ring: 12 85% 55%;
+    --sell: 32 90% 50%;
+    --sell-foreground: 0 0% 100%;
     --sidebar-background: 240 5.9% 10%;
     --sidebar-foreground: 240 4.8% 95.9%;
     --sidebar-primary: 224.3 76.3% 48%;
@@ -150,6 +160,10 @@
     border: 1.5px solid hsl(var(--court-vip) / 0.4);
     color: hsl(var(--court-vip));
   }
+  .sell-block {
+    background: linear-gradient(135deg, hsl(var(--sell) / 0.15), hsl(var(--primary) / 0.1));
+    border: 1.5px solid hsl(var(--sell) / 0.35);
+  }
   .bottom-nav-item {
     @apply flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl transition-all duration-200;
   }
@@ -184,8 +198,13 @@
 }
 
 @keyframes glow-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 hsl(163 60% 36% / 0.3); }
-  50% { box-shadow: 0 0 20px 4px hsl(163 60% 36% / 0.15); }
+  0%, 100% { box-shadow: 0 0 0 0 hsl(12 90% 58% / 0.3); }
+  50% { box-shadow: 0 0 20px 4px hsl(12 90% 58% / 0.15); }
+}
+
+@keyframes sell-shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
 }
 
 .animate-count-up {
@@ -198,4 +217,9 @@
 
 .animate-glow {
   animation: glow-pulse 2s ease-in-out infinite;
+}
+
+.animate-sell-shimmer {
+  background-size: 200% auto;
+  animation: sell-shimmer 3s linear infinite;
 }

@@ -47,6 +47,22 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        sell: {
+          DEFAULT: "hsl(var(--sell))",
+          foreground: "hsl(var(--sell-foreground))",
+        },
+        "court-free": "hsl(var(--court-free))",
+        "court-soon": "hsl(var(--court-soon))",
+        "court-active": "hsl(var(--court-active))",
+        "court-vip": "hsl(var(--court-vip))",
+        "revenue-up": "hsl(var(--revenue-up))",
+        "revenue-down": "hsl(var(--revenue-down))",
+        "badge-vip": "hsl(var(--badge-vip))",
+        "badge-vip-foreground": "hsl(var(--badge-vip-foreground))",
+        "badge-paid": "hsl(var(--badge-paid))",
+        "badge-paid-foreground": "hsl(var(--badge-paid-foreground))",
+        "badge-unpaid": "hsl(var(--badge-unpaid))",
+        "badge-unpaid-foreground": "hsl(var(--badge-unpaid-foreground))",
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
@@ -65,20 +81,12 @@ export default {
       },
       keyframes: {
         "accordion-down": {
-          from: {
-            height: "0",
-          },
-          to: {
-            height: "var(--radix-accordion-content-height)",
-          },
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
         },
         "accordion-up": {
-          from: {
-            height: "var(--radix-accordion-content-height)",
-          },
-          to: {
-            height: "0",
-          },
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
         },
       },
       animation: {
