@@ -1,13 +1,14 @@
 import { motion } from "framer-motion";
-import { Activity, Users, TrendingUp, Zap, ChevronRight, Check } from "lucide-react";
+import { Activity, Users, TrendingUp, Zap, ChevronRight, Check, Clock } from "lucide-react";
+import { useState, useEffect } from "react";
 
 const courts = [
   { id: 1, name: "Court 1", status: "free" as const },
-  { id: 2, name: "Court 2", status: "active" as const, players: "Sarah M. vs Jake T.", time: "12 min left" },
-  { id: 3, name: "Court 3", status: "soon" as const, time: "Starts 2:30" },
+  { id: 2, name: "Court 2", status: "active" as const, players: "Sarah M. vs Jake T.", endsAt: Date.now() + 12 * 60000 },
+  { id: 3, name: "Court 3", status: "soon" as const, startsAt: "2:30 PM" },
   { id: 4, name: "Court 4", status: "free" as const },
-  { id: 5, name: "Court 5", status: "vip" as const, players: "Corp Event", time: "45 min left" },
-  { id: 6, name: "Court 6", status: "active" as const, players: "Mike R. vs Ana P.", time: "28 min left" },
+  { id: 5, name: "Court 5", status: "vip" as const, players: "Corp Event", endsAt: Date.now() + 45 * 60000 },
+  { id: 6, name: "Court 6", status: "active" as const, players: "Mike R. vs Ana P.", endsAt: Date.now() + 28 * 60000 },
 ];
 
 const upcoming = [
@@ -24,18 +25,46 @@ const statusConfig = {
   vip: { class: "court-vip", label: "VIP" },
 };
 
+function useRealtimeClock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
+
+function formatCountdown(endsAt: number, now: number) {
+  const diff = Math.max(0, endsAt - now);
+  const m = Math.floor(diff / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 const TodayScreen = () => {
+  const now = useRealtimeClock();
+
   return (
     <div className="pb-24 px-4 pt-2 space-y-5">
-      {/* Header */}
+      {/* Header with live clock */}
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-muted-foreground text-sm">Tuesday, Feb 17</p>
+          <p className="text-muted-foreground text-sm">
+            {now.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
+          </p>
           <h1 className="text-2xl font-display font-bold tracking-tight">Today</h1>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-court-free pulse-live" />
-          <span className="text-xs font-medium text-muted-foreground">Live</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 bg-accent rounded-lg px-2.5 py-1">
+            <Clock className="w-3.5 h-3.5 text-primary" />
+            <span className="text-sm font-display font-bold text-foreground tabular-nums">
+              {now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-court-free pulse-live" />
+            <span className="text-[10px] font-medium text-muted-foreground">Live</span>
+          </div>
         </div>
       </div>
 
@@ -64,7 +93,7 @@ const TodayScreen = () => {
         ))}
       </div>
 
-      {/* Court Grid */}
+      {/* Court Grid with live timers */}
       <div>
         <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Courts</h2>
         <div className="grid grid-cols-3 gap-2.5">
@@ -79,8 +108,13 @@ const TodayScreen = () => {
             >
               <span className="text-[11px] font-semibold opacity-70">{court.name}</span>
               <span className="text-xs font-bold">{statusConfig[court.status].label}</span>
-              {court.time && (
-                <span className="text-[10px] opacity-70">{court.time}</span>
+              {court.endsAt && (
+                <span className="text-sm font-display font-bold tabular-nums">
+                  {formatCountdown(court.endsAt, now.getTime())}
+                </span>
+              )}
+              {court.startsAt && (
+                <span className="text-[10px] opacity-70">{court.startsAt}</span>
               )}
             </motion.button>
           ))}

@@ -1,15 +1,27 @@
 import { motion } from "framer-motion";
-import { TrendingUp, TrendingDown, Users, Zap, Star, ChevronRight } from "lucide-react";
+import { TrendingUp, TrendingDown, Users, Zap, Star, ChevronRight, Flame, Gift, ShoppingBag, Target } from "lucide-react";
 
 const nudges = [
-  { text: "3 customers played 3x this week — sell Play membership", icon: Star, action: "View" },
-  { text: "Court utilization low 2–4 PM — push happy hour pricing", icon: Zap, action: "Details" },
+  { text: "3 customers played 3x this week — sell Play membership", icon: Star, action: "View", hot: true },
+  { text: "Court utilization low 2–4 PM — push happy hour pricing", icon: Zap, action: "Details", hot: false },
+];
+
+const walkInOffers = [
+  { title: "Upgrade to 90 min", sub: "+$15 — 68% accept rate", icon: Target, color: "bg-primary" },
+  { title: "Add Drinks Package", sub: "+$12 — 2 waters + smoothie", icon: ShoppingBag, color: "bg-sell" },
+  { title: "First Timer → Play Pass", sub: "$99/mo — show savings calc", icon: Gift, color: "bg-badge-vip" },
 ];
 
 const SalesScreen = () => {
   return (
     <div className="pb-24 px-4 pt-2 space-y-5">
-      <h1 className="text-2xl font-display font-bold tracking-tight">Sales</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-display font-bold tracking-tight">Sales</h1>
+        <div className="flex items-center gap-1.5 bg-primary/10 rounded-lg px-2.5 py-1">
+          <Flame className="w-3.5 h-3.5 text-primary" />
+          <span className="text-xs font-bold text-primary">SELL MODE</span>
+        </div>
+      </div>
 
       {/* Revenue Hero */}
       <motion.div
@@ -24,6 +36,35 @@ const SalesScreen = () => {
           <span className="text-sm font-semibold text-revenue-up">+12% vs yesterday</span>
         </div>
       </motion.div>
+
+      {/* 🔥 Walk-in Sell Block */}
+      <div>
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
+          <Flame className="w-4 h-4 text-primary" />
+          Walk-in Upsells
+        </h2>
+        <div className="space-y-2">
+          {walkInOffers.map((offer, i) => (
+            <motion.button
+              key={offer.title}
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.15 + i * 0.08 }}
+              whileTap={{ scale: 0.97 }}
+              className="w-full sell-block rounded-2xl p-4 flex items-center gap-3 text-left"
+            >
+              <div className={`w-10 h-10 rounded-xl ${offer.color} text-white flex items-center justify-center flex-shrink-0`}>
+                <offer.icon className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold">{offer.title}</p>
+                <p className="text-xs text-muted-foreground">{offer.sub}</p>
+              </div>
+              <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+            </motion.button>
+          ))}
+        </div>
+      </div>
 
       {/* Breakdown */}
       <div className="grid grid-cols-2 gap-3">
@@ -64,21 +105,21 @@ const SalesScreen = () => {
           </div>
           <div className="flex justify-between items-center">
             <span className="text-sm">Upsells</span>
-            <span className="font-display font-bold text-lg">3</span>
+            <span className="font-display font-bold text-lg text-primary">3</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-sm">Check-ins</span>
             <span className="font-display font-bold text-lg">12</span>
           </div>
-          <div className="w-full bg-border rounded-full h-2 mt-2">
+          <div className="w-full bg-border rounded-full h-2.5 mt-2">
             <motion.div
               initial={{ width: 0 }}
               animate={{ width: "72%" }}
               transition={{ delay: 0.5, duration: 0.8 }}
-              className="bg-primary h-2 rounded-full"
+              className="bg-primary h-2.5 rounded-full"
             />
           </div>
-          <p className="text-xs text-muted-foreground">72% of daily target</p>
+          <p className="text-xs text-muted-foreground">72% of daily target — <span className="text-primary font-semibold">push for 100%! 🔥</span></p>
         </div>
       </div>
 
@@ -93,7 +134,7 @@ const SalesScreen = () => {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.6 + i * 0.1 }}
               whileTap={{ scale: 0.97 }}
-              className="w-full glass-card rounded-2xl p-4 flex items-start gap-3 text-left animate-glow"
+              className={`w-full glass-card rounded-2xl p-4 flex items-start gap-3 text-left ${nudge.hot ? 'animate-glow' : ''}`}
             >
               <nudge.icon className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
               <span className="text-sm flex-1">{nudge.text}</span>
