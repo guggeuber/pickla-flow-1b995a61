@@ -1,33 +1,18 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
 
 type CourtStatus = "free" | "active" | "soon" | "vip";
 
-interface Court {
-  id: number;
+interface CourtDisplay {
+  id: string;
   name: string;
   status: CourtStatus;
   players?: string;
   endsAt?: number;
   startsAt?: string;
 }
-
-const initialCourts: Court[] = [
-  { id: 1, name: "Court 1", status: "free" },
-  { id: 2, name: "Court 2", status: "active", players: "Sarah M.", endsAt: Date.now() + 12 * 60000 },
-  { id: 3, name: "Court 3", status: "soon", startsAt: "2:30 PM" },
-  { id: 4, name: "Court 4", status: "free" },
-  { id: 5, name: "Court 5", status: "vip", players: "Corp Event", endsAt: Date.now() + 45 * 60000 },
-  { id: 6, name: "Court 6", status: "active", players: "Mike R.", endsAt: Date.now() + 28 * 60000 },
-];
-
-const upcoming = [
-  { time: "2:30", court: "Court 3", customer: "Emma Wilson", paid: true },
-  { time: "3:00", court: "Court 1", customer: "Tom Harris", paid: false },
-  { time: "3:00", court: "Court 4", customer: "Lisa Chen", paid: true },
-  { time: "3:30", court: "Court 2", customer: "David Park", paid: true },
-];
 
 const statusConfig: Record<CourtStatus, { class: string; label: string; dot: string }> = {
   free: { class: "court-free", label: "Free", dot: "bg-court-free" },
@@ -67,19 +52,111 @@ function getVenueStatus(occupancy: number) {
 
 const TodayScreen = () => {
   const now = useRealtimeClock();
-  const [selectedCourt, setSelectedCourt] = useState<Court | null>(null);
-  const occupancy = 67;
+  const [selectedCourt, setSelectedCourt] = useState<CourtDisplay | null>(null);
+
+  const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
+  const venueId = staffVenue?.venue_id;
+  const { data: courts } = useVenueCourts(venueId);
+  const { data: bookings } = useTodayBookings(venueId);
+  const { data: revenue } = useTodayRevenue(venueId);
+
+  // Map courts + bookings to display state
+  const courtDisplays: CourtDisplay[] = useMemo(() => {
+    if (!courts) return [];
+    const nowMs = now.getTime();
+
+    return courts.map((court) => {
+      const courtBookings = bookings?.filter(
+        (b) => b.venue_court_id === court.id && (b.status === "confirmed" || b.status === "completed")
+      ) || [];
+
+      // Find current active booking
+      const activeBooking = courtBookings.find((b) => {
+        const start = new Date(b.start_time).getTime();
+        const end = new Date(b.end_time).getTime();
+        return start <= nowMs && end > nowMs;
+      });
+
+      // Find next upcoming booking
+      const nextBooking = courtBookings.find((b) => {
+        const start = new Date(b.start_time).getTime();
+        return start > nowMs;
+      });
+
+      if (activeBooking) {
+        const endTime = new Date(activeBooking.end_time).getTime();
+        const remaining = endTime - nowMs;
+        const isSoon = remaining < 10 * 60 * 1000; // < 10 min
+
+        return {
+          id: court.id,
+          name: court.name,
+          status: (isSoon ? "soon" : "active") as CourtStatus,
+          players: activeBooking.booked_by || undefined,
+          endsAt: endTime,
+        };
+      }
+
+      if (nextBooking) {
+        const startTime = new Date(nextBooking.start_time);
+        return {
+          id: court.id,
+          name: court.name,
+          status: "free" as CourtStatus,
+          startsAt: startTime.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" }),
+        };
+      }
+
+      return {
+        id: court.id,
+        name: court.name,
+        status: "free" as CourtStatus,
+      };
+    });
+  }, [courts, bookings, now]);
+
+  const activeCourts = courtDisplays.filter((c) => c.status === "active" || c.status === "soon").length;
+  const totalCourts = courtDisplays.length;
+  const occupancy = totalCourts > 0 ? Math.round((activeCourts / totalCourts) * 100) : 0;
   const venueStatus = getVenueStatus(occupancy);
+
+  const upcomingBookings = useMemo(() => {
+    if (!bookings) return [];
+    const nowMs = now.getTime();
+    return bookings
+      .filter((b) => new Date(b.start_time).getTime() > nowMs && b.status !== "cancelled")
+      .slice(0, 6);
+  }, [bookings, now]);
+
+  // No venue assigned
+  if (!venueLoading && !staffVenue) {
+    return (
+      <div className="pb-24 px-4 pt-8 text-center space-y-4">
+        <div className="w-14 h-14 rounded-2xl bg-badge-unpaid/15 flex items-center justify-center mx-auto">
+          <AlertCircle className="w-7 h-7 text-badge-unpaid" />
+        </div>
+        <h2 className="text-lg font-display font-bold">Ingen venue kopplad</h2>
+        <p className="text-sm text-muted-foreground">
+          Ditt konto är inte kopplat till en venue. Kontakta admin för att bli tilldelad.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="pb-24 px-4 pt-2 space-y-4">
-      {/* Top Bar — Control Tower */}
+      {/* Top Bar */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className={`w-2 h-2 rounded-full ${venueStatus.color} pulse-live`} />
           <span className={`text-xs font-bold uppercase tracking-wider ${venueStatus.textColor}`}>{venueStatus.label}</span>
+          {staffVenue?.venues && (
+            <span className="text-xs text-muted-foreground ml-1">
+              · {(staffVenue.venues as any).name}
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-1" style={{ background: 'hsl(var(--surface-2))' }}>
+        <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-1" style={{ background: "hsl(var(--surface-2))" }}>
           <Clock className="w-3 h-3 text-primary" />
           <span className="text-sm font-bold tabular-nums">
             {now.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -87,19 +164,19 @@ const TodayScreen = () => {
         </div>
       </div>
 
-      {/* Revenue Strip — instant comprehension */}
+      {/* Revenue Strip */}
       <div className="revenue-hero rounded-2xl p-4">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Today</p>
-            <p className="text-2xl font-display font-bold text-foreground">12 400 kr</p>
+            <p className="text-2xl font-display font-bold text-foreground">
+              {revenue ? `${revenue.total.toLocaleString("sv-SE")} kr` : "–"}
+            </p>
           </div>
           <div className="text-right">
-            <div className="flex items-center gap-1 justify-end">
-              <TrendingUp className="w-3 h-3 text-revenue-up" />
-              <span className="text-xs font-bold text-revenue-up">+12%</span>
-            </div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{occupancy}% occupied · 14 check-ins</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              {occupancy}% occupied · {revenue?.bookingCount || 0} bookings
+            </p>
           </div>
         </div>
       </div>
@@ -107,10 +184,10 @@ const TodayScreen = () => {
       {/* Quick Stats */}
       <div className="grid grid-cols-4 gap-2">
         {[
-          { label: "Courts", value: "4/6", icon: Activity },
-          { label: "Walk-ins", value: "14", icon: Zap },
-          { label: "Pending", value: "4", icon: Users },
-          { label: "Upsells", value: "3", icon: TrendingUp },
+          { label: "Courts", value: `${activeCourts}/${totalCourts}`, icon: Activity },
+          { label: "Bookings", value: String(bookings?.length || 0), icon: Zap },
+          { label: "Upcoming", value: String(upcomingBookings.length), icon: Users },
+          { label: "Passes", value: String(revenue?.passCount || 0), icon: TrendingUp },
         ].map((stat, i) => (
           <motion.div
             key={stat.label}
@@ -118,7 +195,7 @@ const TodayScreen = () => {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
             className="rounded-xl p-2.5 text-center"
-            style={{ background: 'hsl(var(--surface-1))' }}
+            style={{ background: "hsl(var(--surface-1))" }}
           >
             <stat.icon className="w-3.5 h-3.5 text-primary mx-auto mb-1" />
             <p className="text-base font-display font-bold">{stat.value}</p>
@@ -127,7 +204,7 @@ const TodayScreen = () => {
         ))}
       </div>
 
-      {/* Court Grid — Large Tap Targets */}
+      {/* Court Grid */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Courts</h2>
@@ -140,69 +217,81 @@ const TodayScreen = () => {
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          {initialCourts.map((court, i) => (
-            <motion.button
-              key={court.id}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.1 + i * 0.04 }}
-              className={`court-cell min-h-[80px] ${statusConfig[court.status].class}`}
-              whileTap={{ scale: 0.92 }}
-              onClick={() => setSelectedCourt(court)}
-            >
-              <span className="text-[10px] font-bold opacity-60">{court.name}</span>
-              <span className="text-xs font-extrabold">{statusConfig[court.status].label}</span>
-              {court.players && (
-                <span className="text-[9px] opacity-70 truncate max-w-full">{court.players}</span>
-              )}
-              {court.endsAt && (
-                <span className="text-lg font-display font-black tabular-nums">
-                  {formatCountdown(court.endsAt, now.getTime())}
-                </span>
-              )}
-              {court.startsAt && (
-                <span className="text-[10px] opacity-60">{court.startsAt}</span>
-              )}
-            </motion.button>
-          ))}
-        </div>
+        {courtDisplays.length > 0 ? (
+          <div className="grid grid-cols-3 gap-2">
+            {courtDisplays.map((court, i) => (
+              <motion.button
+                key={court.id}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.1 + i * 0.04 }}
+                className={`court-cell min-h-[80px] ${statusConfig[court.status].class}`}
+                whileTap={{ scale: 0.92 }}
+                onClick={() => setSelectedCourt(court)}
+              >
+                <span className="text-[10px] font-bold opacity-60">{court.name}</span>
+                <span className="text-xs font-extrabold">{statusConfig[court.status].label}</span>
+                {court.players && <span className="text-[9px] opacity-70 truncate max-w-full">{court.players}</span>}
+                {court.endsAt && (
+                  <span className="text-lg font-display font-black tabular-nums">
+                    {formatCountdown(court.endsAt, now.getTime())}
+                  </span>
+                )}
+                {court.startsAt && <span className="text-[10px] opacity-60">Next: {court.startsAt}</span>}
+              </motion.button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            {venueLoading ? "Laddar banor..." : "Inga banor konfigurerade"}
+          </p>
+        )}
       </div>
 
-      {/* Upcoming Check-ins */}
+      {/* Upcoming Bookings */}
       <div>
         <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Upcoming</h2>
-        <div className="space-y-1.5">
-          {upcoming.map((booking, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: -8 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.3 + i * 0.06 }}
-              className="glass-card rounded-2xl p-3 flex items-center gap-3"
-            >
-              <div className="text-center min-w-[40px]">
-                <p className="text-sm font-display font-bold text-primary">{booking.time}</p>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate">{booking.customer}</p>
-                <p className="text-[11px] text-muted-foreground">{booking.court}</p>
-              </div>
-              <span className={`status-chip text-[9px] ${booking.paid ? 'bg-badge-paid/15 text-badge-paid' : 'bg-badge-unpaid/15 text-badge-unpaid'}`}>
-                {booking.paid ? "Paid" : "Unpaid"}
-              </span>
-              <motion.button
-                whileTap={{ scale: 0.85 }}
-                className="tap-target rounded-xl bg-primary text-primary-foreground w-9 h-9 flex items-center justify-center"
-              >
-                <Check className="w-4 h-4" />
-              </motion.button>
-            </motion.div>
-          ))}
-        </div>
+        {upcomingBookings.length > 0 ? (
+          <div className="space-y-1.5">
+            {upcomingBookings.map((booking, i) => {
+              const startTime = new Date(booking.start_time);
+              const courtName = (booking.venue_courts as any)?.name || "–";
+              return (
+                <motion.div
+                  key={booking.id}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.3 + i * 0.06 }}
+                  className="glass-card rounded-2xl p-3 flex items-center gap-3"
+                >
+                  <div className="text-center min-w-[40px]">
+                    <p className="text-sm font-display font-bold text-primary">
+                      {startTime.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{booking.booked_by || "Gäst"}</p>
+                    <p className="text-[11px] text-muted-foreground">{courtName}</p>
+                  </div>
+                  <span className={`status-chip text-[9px] ${booking.status === "confirmed" ? "bg-badge-paid/15 text-badge-paid" : "bg-badge-unpaid/15 text-badge-unpaid"}`}>
+                    {booking.status === "confirmed" ? "Paid" : booking.status}
+                  </span>
+                  <motion.button
+                    whileTap={{ scale: 0.85 }}
+                    className="tap-target rounded-xl bg-primary text-primary-foreground w-9 h-9 flex items-center justify-center"
+                  >
+                    <Check className="w-4 h-4" />
+                  </motion.button>
+                </motion.div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-4">Inga kommande bokningar idag</p>
+        )}
       </div>
 
-      {/* Court Action Sheet — DoorDash style */}
+      {/* Court Action Sheet */}
       <AnimatePresence>
         {selectedCourt && (
           <>
@@ -219,7 +308,7 @@ const TodayScreen = () => {
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
               className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto rounded-t-3xl p-5 pb-10 space-y-3"
-              style={{ background: 'hsl(var(--surface-1))', borderTop: '1px solid hsl(var(--border))' }}
+              style={{ background: "hsl(var(--surface-1))", borderTop: "1px solid hsl(var(--border))" }}
             >
               <div className="flex items-center justify-between mb-2">
                 <div>
@@ -230,7 +319,7 @@ const TodayScreen = () => {
                     {selectedCourt.endsAt && ` · ${formatCountdown(selectedCourt.endsAt, now.getTime())} left`}
                   </p>
                 </div>
-                <motion.button whileTap={{ scale: 0.9 }} onClick={() => setSelectedCourt(null)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: 'hsl(var(--surface-3))' }}>
+                <motion.button whileTap={{ scale: 0.9 }} onClick={() => setSelectedCourt(null)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "hsl(var(--surface-3))" }}>
                   <X className="w-4 h-4" />
                 </motion.button>
               </div>
