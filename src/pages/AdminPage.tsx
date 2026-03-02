@@ -3,18 +3,50 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Building2, Users, LayoutGrid, Clock, Tag, Link2,
   Loader2, ShieldAlert, ChevronDown, TrendingUp, TrendingDown, Minus,
-  Ticket, CalendarCheck, ChevronRight,
+  Ticket, CalendarCheck, ChevronRight, Plus,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useAdminCheck, useAdminVenues, useAdminStats } from "@/hooks/useAdmin";
+import { useAdminCheck, useAdminVenues, useAdminStats, useAdminHistory } from "@/hooks/useAdmin";
+import { useAdminMutation } from "@/hooks/useAdmin";
 import AdminStaff from "@/components/admin/AdminStaff";
 import AdminCourts from "@/components/admin/AdminCourts";
 import AdminHours from "@/components/admin/AdminHours";
 import AdminPricing from "@/components/admin/AdminPricing";
 import AdminLinks from "@/components/admin/AdminLinks";
 import AdminVenue from "@/components/admin/AdminVenue";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | null;
+
+/* ── Sparkline SVG ── */
+function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
+  if (!data || data.length < 2) return null;
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const w = 80, h = 24, pad = 2;
+  const points = data.map((v, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return `${x},${y}`;
+  });
+  return (
+    <svg width={w} height={h} className="block mx-auto mt-1" viewBox={`0 0 ${w} ${h}`}>
+      <polyline
+        points={points.join(" ")}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={points[points.length - 1].split(",")[0]} cy={points[points.length - 1].split(",")[1]} r="2" fill={color} />
+    </svg>
+  );
+}
 
 function TrendBadge({ current, previous, label }: { current: number; previous: number; label: string }) {
   if (previous === 0 && current === 0) return null;
@@ -33,9 +65,10 @@ function TrendBadge({ current, previous, label }: { current: number; previous: n
   );
 }
 
-function MetricCell({ value, label, icon, prevValue, weekValue, currentValue }: {
+function MetricCell({ value, label, icon, prevValue, weekValue, currentValue, sparkData, sparkColor }: {
   value: string; label: string; icon?: React.ReactNode;
   prevValue?: number; weekValue?: number; currentValue?: number;
+  sparkData?: number[]; sparkColor?: string;
 }) {
   const cur = currentValue ?? 0;
   const prev = prevValue ?? 0;
@@ -47,11 +80,61 @@ function MetricCell({ value, label, icon, prevValue, weekValue, currentValue }: 
         <p className="text-2xl font-display font-black text-foreground">{value}</p>
       </div>
       <p className="text-[9px] text-muted-foreground uppercase tracking-wider">{label}</p>
+      {sparkData && <Sparkline data={sparkData} color={sparkColor} />}
       <div className="flex flex-col items-center gap-0.5">
         <TrendBadge current={cur} previous={prev} label="igår" />
         <TrendBadge current={cur} previous={week} label="v." />
       </div>
     </div>
+  );
+}
+
+/* ── Create Venue Dialog ── */
+function CreateVenueDialog({ onCreated }: { onCreated: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [city, setCity] = useState("");
+  const { createVenue } = useAdminMutation(undefined);
+
+  const handleCreate = () => {
+    if (!name.trim()) return;
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    createVenue.mutate({ name: name.trim(), slug, city: city.trim() || undefined }, {
+      onSuccess: (data: any) => {
+        toast.success(`${data.name} skapad!`);
+        setOpen(false);
+        setName("");
+        setCity("");
+        onCreated(data.id);
+      },
+      onError: (err: any) => toast.error(err.message),
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <motion.button
+          whileTap={{ scale: 0.95 }}
+          className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-primary/5 border-t border-border"
+        >
+          <Plus className="w-4 h-4 text-primary" />
+          <span className="text-sm font-semibold text-primary">Skapa ny venue</span>
+        </motion.button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Skapa ny venue</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 pt-2">
+          <Input placeholder="Venue-namn *" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input placeholder="Stad (valfritt)" value={city} onChange={(e) => setCity(e.target.value)} />
+          <Button onClick={handleCreate} disabled={!name.trim() || createVenue.isPending} className="w-full">
+            {createVenue.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Skapa"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -65,8 +148,14 @@ const AdminPage = () => {
 
   const venueId = selectedVenueId || adminData?.venueId;
   const { data: stats } = useAdminStats(venueId);
+  const { data: history } = useAdminHistory(venueId);
 
   const currentVenue = (venues || []).find((v: any) => v.id === venueId);
+
+  // Extract sparkline data from history
+  const revenueSparkData = history?.map((d) => d.revenue) || [];
+  const bookingsSparkData = history?.map((d) => d.bookings) || [];
+  const passesSparkData = history?.map((d) => d.passes) || [];
 
   if (isLoading) {
     return (
@@ -134,48 +223,12 @@ const AdminPage = () => {
   }
 
   const actionCards = [
-    {
-      id: "courts" as SectionId,
-      icon: LayoutGrid,
-      label: "Banor",
-      stat: `${stats?.totalCourts || 0} banor`,
-      color: "var(--court-free)",
-    },
-    {
-      id: "pricing" as SectionId,
-      icon: Tag,
-      label: "Priser",
-      stat: `${stats?.pricingRules || 0} aktiva regler`,
-      color: "var(--sell)",
-    },
-    {
-      id: "staff" as SectionId,
-      icon: Users,
-      label: "Personal",
-      stat: `${stats?.activeStaff || 0} aktiva`,
-      color: "var(--primary)",
-    },
-    {
-      id: "hours" as SectionId,
-      icon: Clock,
-      label: "Öppettider",
-      stat: "Veckoschema",
-      color: "var(--badge-unpaid)",
-    },
-    {
-      id: "links" as SectionId,
-      icon: Link2,
-      label: "Länkar",
-      stat: `${stats?.linksCount || 0} aktiva`,
-      color: "var(--badge-vip)",
-    },
-    {
-      id: "venue" as SectionId,
-      icon: Building2,
-      label: "Venue",
-      stat: "Inställningar",
-      color: "var(--muted-foreground)",
-    },
+    { id: "courts" as SectionId, icon: LayoutGrid, label: "Banor", stat: `${stats?.totalCourts || 0} banor`, color: "var(--court-free)" },
+    { id: "pricing" as SectionId, icon: Tag, label: "Priser", stat: `${stats?.pricingRules || 0} aktiva regler`, color: "var(--sell)" },
+    { id: "staff" as SectionId, icon: Users, label: "Personal", stat: `${stats?.activeStaff || 0} aktiva`, color: "var(--primary)" },
+    { id: "hours" as SectionId, icon: Clock, label: "Öppettider", stat: "Veckoschema", color: "var(--badge-unpaid)" },
+    { id: "links" as SectionId, icon: Link2, label: "Länkar", stat: `${stats?.linksCount || 0} aktiva`, color: "var(--badge-vip)" },
+    { id: "venue" as SectionId, icon: Building2, label: "Venue", stat: "Inställningar", color: "var(--muted-foreground)" },
   ];
 
   return (
@@ -208,9 +261,7 @@ const AdminPage = () => {
             >
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{
-                  background: `hsl(${currentVenue?.primary_color ? "24 85% 52%" : "var(--primary)"} / 0.15)`,
-                }}
+                style={{ background: `hsl(var(--primary) / 0.15)` }}
               >
                 <Building2 className="w-5 h-5 text-primary" />
               </div>
@@ -226,7 +277,7 @@ const AdminPage = () => {
             </motion.button>
 
             <AnimatePresence>
-              {showVenuePicker && venues.length > 1 && (
+              {showVenuePicker && (
                 <motion.div
                   initial={{ opacity: 0, y: -8, height: 0 }}
                   animate={{ opacity: 1, y: 0, height: "auto" }}
@@ -247,6 +298,10 @@ const AdminPage = () => {
                       </div>
                     </button>
                   ))}
+                  {/* Create venue button for super_admin */}
+                  {adminData?.isSuperAdmin && (
+                    <CreateVenueDialog onCreated={(id) => { setSelectedVenueId(id); setShowVenuePicker(false); }} />
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -257,7 +312,7 @@ const AdminPage = () => {
         <div className="revenue-hero rounded-2xl p-5 space-y-3">
           <div className="flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-primary" />
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Idag</p>
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Idag · 7 dagars trend</p>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <MetricCell
@@ -266,6 +321,8 @@ const AdminPage = () => {
               prevValue={stats?.yesterdayRevenue}
               weekValue={stats?.lastWeekRevenue}
               currentValue={stats?.todayRevenue}
+              sparkData={revenueSparkData}
+              sparkColor="hsl(var(--primary))"
             />
             <MetricCell
               value={String(stats?.bookingsToday || 0)}
@@ -274,6 +331,8 @@ const AdminPage = () => {
               prevValue={stats?.yesterdayBookings}
               weekValue={stats?.lastWeekBookings}
               currentValue={stats?.bookingsToday}
+              sparkData={bookingsSparkData}
+              sparkColor="hsl(var(--court-free))"
             />
             <MetricCell
               value={String(stats?.activePasses || 0)}
@@ -282,6 +341,8 @@ const AdminPage = () => {
               prevValue={stats?.yesterdayPasses}
               weekValue={stats?.lastWeekPasses}
               currentValue={stats?.activePasses}
+              sparkData={passesSparkData}
+              sparkColor="hsl(var(--sell))"
             />
           </div>
         </div>

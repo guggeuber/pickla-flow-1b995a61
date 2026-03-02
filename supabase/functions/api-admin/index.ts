@@ -151,6 +151,55 @@ Deno.serve(async (req) => {
       }, 200, 5);
     }
 
+    // ── 7-DAY HISTORY (for sparklines) ──
+    if (req.method === 'GET' && path === 'history') {
+      const days: string[] = [];
+      for (let i = 6; i >= 0; i--) {
+        days.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+      }
+      const results = await Promise.all(days.map(async (date) => {
+        const [{ data: bookings }, { count: passes }] = await Promise.all([
+          admin.from('bookings').select('total_price, status').eq('venue_id', venueId)
+            .gte('start_time', `${date}T00:00:00`).lt('start_time', `${date}T23:59:59`),
+          admin.from('day_passes').select('id', { count: 'exact', head: true })
+            .eq('venue_id', venueId).eq('valid_date', date).eq('status', 'active'),
+        ]);
+        const rows = bookings || [];
+        return {
+          date,
+          revenue: rows.filter((b: any) => b.status !== 'cancelled').reduce((s: number, b: any) => s + (b.total_price || 0), 0),
+          bookings: rows.length,
+          passes: passes || 0,
+        };
+      }));
+      return jsonResponse(results, 200, 5);
+    }
+
+    // ── CREATE VENUE (super_admin only) ──
+    if (req.method === 'POST' && path === 'venues') {
+      const { data: superRole } = await admin.from('user_roles')
+        .select('id').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
+      if (!superRole) return errorResponse('Only super_admin can create venues', 403);
+
+      const body = await req.json();
+      if (!body.name || !body.slug) return errorResponse('Missing name or slug');
+
+      const { data, error: e } = await admin.from('venues').insert({
+        name: body.name,
+        slug: body.slug,
+        city: body.city || null,
+        address: body.address || null,
+      }).select().single();
+      if (e) return errorResponse(e.message);
+
+      // Add creator as venue_admin staff
+      await admin.from('venue_staff').insert({
+        venue_id: data.id, user_id: userId, role: 'venue_admin', is_active: true,
+      });
+
+      return jsonResponse(data, 201);
+    }
+
     // ── VENUE INFO ──
     if (req.method === 'GET' && path === 'venue') {
       const { data, error: e } = await admin.from('venues').select('*').eq('id', venueId).single();
