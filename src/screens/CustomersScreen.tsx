@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Search, Phone, Star, Calendar, CreditCard, ChevronRight, UserPlus, Edit3, MessageSquarePlus, Check, ArrowLeft, Zap, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiGet, apiPatch } from "@/lib/api";
 import type { Tables } from "@/integrations/supabase/types";
 
 type PlayerProfile = Tables<"player_profiles">;
@@ -30,24 +30,12 @@ const CustomersScreen = () => {
 
   const { data: profiles, isLoading } = useQuery({
     queryKey: ["player-profiles"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("player_profiles")
-        .select("*")
-        .order("pickla_rating", { ascending: false });
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => apiGet("api-customers", "list", { limit: "100" }),
   });
 
   const updateProfile = useMutation({
-    mutationFn: async (updates: { id: string; display_name: string; phone: string }) => {
-      const { error } = await supabase
-        .from("player_profiles")
-        .update({ display_name: updates.display_name, phone: updates.phone })
-        .eq("id", updates.id);
-      if (error) throw error;
-    },
+    mutationFn: (updates: { id: string; display_name: string; phone: string }) =>
+      apiPatch("api-customers", "update", updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["player-profiles"] });
       setEditing(false);

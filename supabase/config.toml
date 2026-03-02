@@ -1,1 +1,19 @@
 project_id = "qrzkxhnpxtsicqcpzplc"
+
+[functions.api-auth]
+verify_jwt = false
+
+[functions.api-bookings]
+verify_jwt = false
+
+[functions.api-matches]
+verify_jwt = false
+
+[functions.api-checkins]
+verify_jwt = false
+
+[functions.api-customers]
+verify_jwt = false
+
+[functions.api-day-passes]
+verify_jwt = false

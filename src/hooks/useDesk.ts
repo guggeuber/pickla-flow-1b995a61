@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { apiGet } from "@/lib/api";
 
 export function useVenueForStaff() {
   const { user } = useAuth();
@@ -9,17 +9,15 @@ export function useVenueForStaff() {
     queryKey: ["staff-venue", user?.id],
     enabled: !!user,
     queryFn: async () => {
-      // First check venue_staff for the user
-      const { data: staffEntry, error } = await supabase
-        .from("venue_staff")
-        .select("venue_id, role, venues(id, name, slug, primary_color, logo_url)")
-        .eq("user_id", user!.id)
-        .eq("is_active", true)
-        .limit(1)
-        .maybeSingle();
-
-      if (error) throw error;
-      return staffEntry;
+      const me = await apiGet("api-auth", "me");
+      // Return first venue in the same shape as before
+      const v = me.venues?.[0];
+      if (!v) return null;
+      return {
+        venue_id: v.venue_id,
+        role: v.role,
+        venues: v.venues,
+      };
     },
   });
 }
@@ -28,15 +26,7 @@ export function useVenueCourts(venueId: string | undefined) {
   return useQuery({
     queryKey: ["venue-courts", venueId],
     enabled: !!venueId,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("venue_courts")
-        .select("*")
-        .eq("venue_id", venueId!)
-        .order("court_number");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => apiGet("api-bookings", "courts", { venueId: venueId! }),
   });
 }
 
@@ -44,22 +34,10 @@ export function useTodayBookings(venueId: string | undefined) {
   return useQuery({
     queryKey: ["today-bookings", venueId],
     enabled: !!venueId,
-    refetchInterval: 30000, // refresh every 30s
-    queryFn: async () => {
-      const today = new Date();
-      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
-      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toISOString();
-
-      const { data, error } = await supabase
-        .from("bookings")
-        .select("*, venue_courts(name, court_number)")
-        .eq("venue_id", venueId!)
-        .gte("start_time", startOfDay)
-        .lt("start_time", endOfDay)
-        .order("start_time");
-
-      if (error) throw error;
-      return data;
+    refetchInterval: 30000,
+    queryFn: () => {
+      const today = new Date().toISOString().split("T")[0];
+      return apiGet("api-bookings", "venue", { venueId: venueId!, date: today });
     },
   });
 }
@@ -69,34 +47,9 @@ export function useTodayRevenue(venueId: string | undefined) {
     queryKey: ["today-revenue", venueId],
     enabled: !!venueId,
     refetchInterval: 60000,
-    queryFn: async () => {
-      const today = new Date();
-      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
-
-      const { data: bookings } = await supabase
-        .from("bookings")
-        .select("total_price")
-        .eq("venue_id", venueId!)
-        .gte("start_time", startOfDay)
-        .in("status", ["confirmed", "completed"]);
-
-      const { data: dayPasses } = await supabase
-        .from("day_passes")
-        .select("price")
-        .eq("venue_id", venueId!)
-        .eq("valid_date", today.toISOString().split("T")[0])
-        .eq("status", "active");
-
-      const bookingRevenue = bookings?.reduce((sum, b) => sum + (b.total_price || 0), 0) || 0;
-      const passRevenue = dayPasses?.reduce((sum, p) => sum + (p.price || 0), 0) || 0;
-
-      return {
-        total: bookingRevenue + passRevenue,
-        bookings: bookingRevenue,
-        dayPasses: passRevenue,
-        bookingCount: bookings?.length || 0,
-        passCount: dayPasses?.length || 0,
-      };
+    queryFn: () => {
+      const today = new Date().toISOString().split("T")[0];
+      return apiGet("api-bookings", "revenue", { venueId: venueId!, date: today });
     },
   });
 }
