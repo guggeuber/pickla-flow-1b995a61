@@ -1,6 +1,11 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap, AlertTriangle, ChevronRight, ShoppingBag, Timer, Gift, Crown } from "lucide-react";
-import { useState, useRef } from "react";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { useVenueForStaff, useVenueCourts } from "@/hooks/useDesk";
+import { toast } from "sonner";
 
 function generateDates() {
   const dates: Date[] = [];
@@ -17,22 +22,6 @@ const dayNames = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"];
 const timeSlots = ["Nu", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"];
 
-const courts = [
-  { id: 1, name: "Bana 1", available: true, price: 350 },
-  { id: 2, name: "Bana 2", available: false, price: 350 },
-  { id: 3, name: "Bana 3", available: false, price: 350 },
-  { id: 4, name: "Bana 4", available: true, price: 350, recommended: true },
-  { id: 5, name: "Bana 5", available: false, price: 500, vip: true },
-  { id: 6, name: "Bana 6", available: true, price: 350 },
-];
-
-const recentCustomers = [
-  { name: "Walk-in Gäst", new: true },
-  { name: "Sarah Mitchell", avatar: "SM", credits: "2 500 kr" },
-  { name: "Jake Thompson", avatar: "JT" },
-  { name: "Emma Wilson", avatar: "EW", credits: "800 kr" },
-];
-
 const upsells = [
   { title: "Förläng till 90 min", sub: "+120 kr — 68% accepterar", icon: Timer, tag: "Populär" },
   { title: "Dryckespaket", sub: "+89 kr — 2 drycker + snack", icon: ShoppingBag, tag: "Bästsäljare" },
@@ -41,27 +30,133 @@ const upsells = [
 ];
 
 const BookScreen = () => {
+  const { user } = useAuth();
+  const { data: staffVenue } = useVenueForStaff();
+  const venueId = staffVenue?.venue_id;
+  const { data: venueCourts } = useVenueCourts(venueId);
+  const queryClient = useQueryClient();
+
   const [step, setStep] = useState(0);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState("Nu");
   const [selectedDuration, setSelectedDuration] = useState("60 min");
-  const [selectedCourt, setSelectedCourt] = useState<number | null>(null);
+  const [selectedCourt, setSelectedCourt] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
   const [addedUpsells, setAddedUpsells] = useState<string[]>([]);
   const [confirmed, setConfirmed] = useState(false);
+
   const dates = generateDates();
-
-  const selectedCourtData = courts.find(c => c.id === selectedCourt);
-  const isPeak = ["17:00", "18:00", "19:00"].includes(selectedTime);
   const isToday = selectedDate.toDateString() === new Date().toDateString();
+  const isPeak = ["17:00", "18:00", "19:00"].includes(selectedTime);
 
-  const handleConfirm = () => {
-    setConfirmed(true);
-    setTimeout(() => { setConfirmed(false); setStep(0); setSelectedCourt(null); setSelectedCustomer(null); setAddedUpsells([]); }, 2000);
-  };
+  // Fetch recent customers (player_profiles)
+  const { data: recentProfiles } = useQuery({
+    queryKey: ["recent-customers"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("player_profiles")
+        .select("id, display_name, auth_user_id")
+        .order("updated_at", { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  // Fetch existing bookings for the selected date to determine court availability
+  const { data: dateBookings } = useQuery({
+    queryKey: ["date-bookings", venueId, selectedDate.toDateString(), selectedTime],
+    enabled: !!venueId,
+    queryFn: async () => {
+      const startOfDay = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate()).toISOString();
+      const endOfDay = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate() + 1).toISOString();
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("venue_court_id, start_time, end_time, status")
+        .eq("venue_id", venueId!)
+        .gte("start_time", startOfDay)
+        .lt("start_time", endOfDay)
+        .neq("status", "cancelled");
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  // Calculate court availability
+  const courtsWithAvailability = useMemo(() => {
+    if (!venueCourts) return [];
+    const bookingTime = (() => {
+      if (selectedTime === "Nu") return new Date();
+      const [h, m] = selectedTime.split(":").map(Number);
+      const d = new Date(selectedDate);
+      d.setHours(h, m, 0, 0);
+      return d;
+    })();
+    const durationMs = selectedDuration === "30 min" ? 30 * 60000 : selectedDuration === "90 min" ? 90 * 60000 : 60 * 60000;
+    const endTime = new Date(bookingTime.getTime() + durationMs);
+
+    return venueCourts.map((court) => {
+      const isBooked = (dateBookings || []).some((b) => {
+        if (b.venue_court_id !== court.id) return false;
+        const bs = new Date(b.start_time).getTime();
+        const be = new Date(b.end_time).getTime();
+        return bookingTime.getTime() < be && endTime.getTime() > bs;
+      });
+      return { ...court, available: !isBooked };
+    });
+  }, [venueCourts, dateBookings, selectedDate, selectedTime, selectedDuration]);
+
+  const selectedCourtData = courtsWithAvailability.find((c) => c.id === selectedCourt);
+
+  const createBooking = useMutation({
+    mutationFn: async () => {
+      if (!venueId || !selectedCourt || !user) throw new Error("Missing data");
+
+      const bookingTime = (() => {
+        if (selectedTime === "Nu") return new Date();
+        const [h, m] = selectedTime.split(":").map(Number);
+        const d = new Date(selectedDate);
+        d.setHours(h, m, 0, 0);
+        return d;
+      })();
+      const durationMs = selectedDuration === "30 min" ? 30 * 60000 : selectedDuration === "90 min" ? 90 * 60000 : 60 * 60000;
+      const endTime = new Date(bookingTime.getTime() + durationMs);
+      const price = selectedCourtData?.hourly_rate
+        ? selectedCourtData.hourly_rate * (durationMs / 3600000)
+        : 350 * (durationMs / 3600000);
+
+      const { error } = await supabase.from("bookings").insert({
+        venue_id: venueId,
+        venue_court_id: selectedCourt,
+        user_id: user.id,
+        booked_by: selectedCustomer || "Walk-in",
+        start_time: bookingTime.toISOString(),
+        end_time: endTime.toISOString(),
+        total_price: price,
+        status: "confirmed",
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["today-bookings"] });
+      queryClient.invalidateQueries({ queryKey: ["today-revenue"] });
+      queryClient.invalidateQueries({ queryKey: ["date-bookings"] });
+      setConfirmed(true);
+      setTimeout(() => {
+        setConfirmed(false);
+        setStep(0);
+        setSelectedCourt(null);
+        setSelectedCustomer(null);
+        setAddedUpsells([]);
+      }, 2000);
+    },
+    onError: (err) => {
+      toast.error("Bokning misslyckades: " + (err as Error).message);
+    },
+  });
 
   const toggleUpsell = (title: string) => {
-    setAddedUpsells(prev => prev.includes(title) ? prev.filter(u => u !== title) : [...prev, title]);
+    setAddedUpsells((prev) => (prev.includes(title) ? prev.filter((u) => u !== title) : [...prev, title]));
   };
 
   if (confirmed) {
@@ -86,10 +181,10 @@ const BookScreen = () => {
         </div>
       </div>
 
-      {/* Progress — 4 steps */}
+      {/* Progress */}
       <div className="flex gap-1">
-        {[0, 1, 2, 3].map(s => (
-          <div key={s} className={`h-1 flex-1 rounded-full transition-colors duration-300 ${s <= step ? 'bg-primary' : 'bg-border'}`} />
+        {[0, 1, 2, 3].map((s) => (
+          <div key={s} className={`h-1 flex-1 rounded-full transition-colors duration-300 ${s <= step ? "bg-primary" : "bg-border"}`} />
         ))}
       </div>
 
@@ -97,32 +192,29 @@ const BookScreen = () => {
         {/* Step 1: Time */}
         {step === 0 && (
           <motion.div key="s0" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
-            {/* Date Scroller */}
             <div>
               <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Datum</h2>
-              <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory" style={{ scrollbarWidth: 'none' }}>
+              <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory" style={{ scrollbarWidth: "none" }}>
                 {dates.map((date, i) => {
                   const isSelected = date.toDateString() === selectedDate.toDateString();
                   const isTodayDate = date.toDateString() === new Date().toDateString();
                   return (
-                    <motion.button key={i} whileTap={{ scale: 0.9 }} onClick={() => setSelectedDate(date)} className={`flex-shrink-0 snap-center w-[56px] py-2.5 rounded-2xl flex flex-col items-center gap-0.5 transition-all ${isSelected ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25' : 'text-secondary-foreground'}`} style={!isSelected ? { background: 'hsl(var(--surface-1))' } : undefined}>
-                      <span className={`text-[9px] font-bold uppercase ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>{isTodayDate ? "Idag" : dayNames[date.getDay()]}</span>
+                    <motion.button key={i} whileTap={{ scale: 0.9 }} onClick={() => setSelectedDate(date)} className={`flex-shrink-0 snap-center w-[56px] py-2.5 rounded-2xl flex flex-col items-center gap-0.5 transition-all ${isSelected ? "bg-primary text-primary-foreground shadow-lg shadow-primary/25" : "text-secondary-foreground"}`} style={!isSelected ? { background: "hsl(var(--surface-1))" } : undefined}>
+                      <span className={`text-[9px] font-bold uppercase ${isSelected ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{isTodayDate ? "Idag" : dayNames[date.getDay()]}</span>
                       <span className="text-xl font-display font-bold">{date.getDate()}</span>
-                      <span className={`text-[8px] font-medium ${isSelected ? 'text-primary-foreground/60' : 'text-muted-foreground'}`}>{monthNames[date.getMonth()]}</span>
+                      <span className={`text-[8px] font-medium ${isSelected ? "text-primary-foreground/60" : "text-muted-foreground"}`}>{monthNames[date.getMonth()]}</span>
                     </motion.button>
                   );
                 })}
               </div>
             </div>
-
-            {/* Time Chips */}
             <div>
               <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Tid</h2>
-              <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: 'none' }}>
-                {(isToday ? timeSlots : timeSlots.filter(t => t !== "Nu")).map(time => {
+              <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
+                {(isToday ? timeSlots : timeSlots.filter((t) => t !== "Nu")).map((time) => {
                   const isTimePeak = ["17:00", "18:00", "19:00"].includes(time);
                   return (
-                    <motion.button key={time} whileTap={{ scale: 0.92 }} onClick={() => setSelectedTime(time)} className={`flex-shrink-0 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-colors relative ${selectedTime === time ? 'bg-primary text-primary-foreground' : 'text-secondary-foreground'}`} style={selectedTime !== time ? { background: 'hsl(var(--surface-1))' } : undefined}>
+                    <motion.button key={time} whileTap={{ scale: 0.92 }} onClick={() => setSelectedTime(time)} className={`flex-shrink-0 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-colors relative ${selectedTime === time ? "bg-primary text-primary-foreground" : "text-secondary-foreground"}`} style={selectedTime !== time ? { background: "hsl(var(--surface-1))" } : undefined}>
                       {time}
                       {isTimePeak && <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-court-active flex items-center justify-center text-[7px] text-white font-bold">⚡</span>}
                     </motion.button>
@@ -130,22 +222,17 @@ const BookScreen = () => {
                 })}
               </div>
             </div>
-
-            {/* Duration */}
             <div>
               <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Längd</h2>
               <div className="flex gap-2">
-                {["30 min", "60 min", "90 min"].map(dur => (
-                  <motion.button key={dur} whileTap={{ scale: 0.92 }} onClick={() => setSelectedDuration(dur)} className={`flex-1 py-3 rounded-xl text-sm font-semibold ${selectedDuration === dur ? 'bg-primary text-primary-foreground' : 'text-secondary-foreground'}`} style={selectedDuration !== dur ? { background: 'hsl(var(--surface-1))' } : undefined}>
+                {["30 min", "60 min", "90 min"].map((dur) => (
+                  <motion.button key={dur} whileTap={{ scale: 0.92 }} onClick={() => setSelectedDuration(dur)} className={`flex-1 py-3 rounded-xl text-sm font-semibold ${selectedDuration === dur ? "bg-primary text-primary-foreground" : "text-secondary-foreground"}`} style={selectedDuration !== dur ? { background: "hsl(var(--surface-1))" } : undefined}>
                     {dur}
                   </motion.button>
                 ))}
               </div>
             </div>
-
-            <motion.button whileTap={{ scale: 0.96 }} onClick={() => setStep(1)} className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm">
-              Välj bana →
-            </motion.button>
+            <motion.button whileTap={{ scale: 0.96 }} onClick={() => setStep(1)} className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm">Välj bana →</motion.button>
           </motion.div>
         )}
 
@@ -153,17 +240,19 @@ const BookScreen = () => {
         {step === 1 && (
           <motion.div key="s1" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
             <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Välj bana</h2>
-            <div className="grid grid-cols-3 gap-2">
-              {courts.map(court => (
-                <motion.button key={court.id} whileTap={court.available ? { scale: 0.92 } : undefined} onClick={() => court.available && setSelectedCourt(court.id)} disabled={!court.available} className={`court-cell min-h-[80px] relative ${!court.available ? 'opacity-25 bg-muted border border-border cursor-not-allowed' : selectedCourt === court.id ? 'bg-primary/15 border-2 border-primary text-primary' : court.vip ? 'court-vip' : 'court-free'}`}>
-                  {court.recommended && court.available && <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 bg-sell text-sell-foreground rounded-full text-[8px] font-bold">Bäst</span>}
-                  {court.vip && <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 bg-badge-vip text-white rounded-full text-[8px] font-bold">VIP</span>}
-                  <span className="text-[10px] font-bold">{court.name}</span>
-                  <span className="text-base font-display font-bold">{court.price} kr</span>
-                  {isPeak && court.available && <span className="text-[9px] text-court-active font-bold">Peak ⚡</span>}
-                </motion.button>
-              ))}
-            </div>
+            {courtsWithAvailability.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                {courtsWithAvailability.map((court) => (
+                  <motion.button key={court.id} whileTap={court.available ? { scale: 0.92 } : undefined} onClick={() => court.available && setSelectedCourt(court.id)} disabled={!court.available} className={`court-cell min-h-[80px] relative ${!court.available ? "opacity-25 bg-muted border border-border cursor-not-allowed" : selectedCourt === court.id ? "bg-primary/15 border-2 border-primary text-primary" : "court-free"}`}>
+                    <span className="text-[10px] font-bold">{court.name}</span>
+                    <span className="text-base font-display font-bold">{court.hourly_rate || 350} kr</span>
+                    {isPeak && court.available && <span className="text-[9px] text-court-active font-bold">Peak ⚡</span>}
+                  </motion.button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-6">Inga banor konfigurerade</p>
+            )}
             <div className="flex gap-2">
               <button onClick={() => setStep(0)} className="text-sm text-primary font-medium tap-target">← Tillbaka</button>
               <motion.button whileTap={{ scale: 0.96 }} onClick={() => selectedCourt && setStep(2)} disabled={!selectedCourt} className="flex-1 bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm disabled:opacity-40">Välj kund →</motion.button>
@@ -176,26 +265,30 @@ const BookScreen = () => {
           <motion.div key="s2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
             <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Kund</h2>
             <div className="space-y-1.5">
-              {recentCustomers.map((c, i) => (
-                <motion.button key={c.name} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer(c.name); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">{c.new ? "+" : c.avatar}</div>
-                  <div className="flex-1 text-left">
-                    <span className="text-sm font-semibold">{c.name}</span>
-                    {c.credits && <p className="text-[10px] text-court-free font-medium">{c.credits} kredit</p>}
-                  </div>
-                  {c.new && <span className="status-chip bg-accent text-accent-foreground text-[9px]">Ny</span>}
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                </motion.button>
-              ))}
+              <motion.button whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer("Walk-in Gäst"); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">+</div>
+                <div className="flex-1 text-left"><span className="text-sm font-semibold">Walk-in Gäst</span></div>
+                <span className="status-chip bg-accent text-accent-foreground text-[9px]">Ny</span>
+                <ChevronRight className="w-4 h-4 text-muted-foreground" />
+              </motion.button>
+              {(recentProfiles || []).map((p, i) => {
+                const initials = (p.display_name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+                return (
+                  <motion.button key={p.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer(p.display_name || "Gäst"); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">{initials}</div>
+                    <div className="flex-1 text-left"><span className="text-sm font-semibold">{p.display_name || "Unnamed"}</span></div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                  </motion.button>
+                );
+              })}
             </div>
             <button onClick={() => setStep(1)} className="text-sm text-primary font-medium tap-target">← Tillbaka</button>
           </motion.div>
         )}
 
-        {/* Step 4: Upsell + Confirm */}
+        {/* Step 4: Confirm */}
         {step === 3 && (
           <motion.div key="s3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
-            {/* Summary */}
             <div className="glass-card rounded-2xl p-4 space-y-3">
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Datum</span><span className="font-semibold">{isToday ? "Idag" : selectedDate.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tid</span><span className="font-semibold">{selectedTime} · {selectedDuration}</span></div>
@@ -203,40 +296,46 @@ const BookScreen = () => {
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Kund</span><span className="font-semibold">{selectedCustomer}</span></div>
               <div className="border-t border-border pt-3 flex justify-between items-center">
                 <span className="text-sm font-semibold">Total</span>
-                <span className="text-xl font-display font-bold text-primary">{selectedCourtData ? selectedCourtData.price * (selectedDuration === "30 min" ? 0.5 : selectedDuration === "90 min" ? 1.5 : 1) : 0} kr</span>
+                <span className="text-xl font-display font-bold text-primary">
+                  {selectedCourtData ? Math.round((selectedCourtData.hourly_rate || 350) * (selectedDuration === "30 min" ? 0.5 : selectedDuration === "90 min" ? 1.5 : 1)) : 0} kr
+                </span>
               </div>
               {isPeak && (
                 <div className="flex items-center gap-2 bg-court-active/10 rounded-xl p-2.5">
                   <AlertTriangle className="w-3.5 h-3.5 text-court-active" />
-                  <span className="text-xs text-court-active font-medium">Peak-pris tillagt</span>
+                  <span className="text-xs text-court-active font-medium">Peak-tid</span>
                 </div>
               )}
             </div>
 
-            {/* Upsell Layer — DoorDash add-on psychology */}
             <div>
               <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Lägg till</h2>
               <div className="space-y-1.5">
                 {upsells.map((up, i) => {
                   const added = addedUpsells.includes(up.title);
                   return (
-                    <motion.button key={up.title} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} whileTap={{ scale: 0.97 }} onClick={() => toggleUpsell(up.title)} className={`w-full rounded-2xl p-3.5 flex items-center gap-3 text-left transition-all ${added ? 'bg-primary/10 border border-primary/30' : 'sell-block'}`}>
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${added ? 'bg-primary text-primary-foreground' : 'bg-sell/15 text-sell'}`}>
+                    <motion.button key={up.title} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} whileTap={{ scale: 0.97 }} onClick={() => toggleUpsell(up.title)} className={`w-full rounded-2xl p-3.5 flex items-center gap-3 text-left transition-all ${added ? "bg-primary/10 border border-primary/30" : "sell-block"}`}>
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${added ? "bg-primary text-primary-foreground" : "bg-sell/15 text-sell"}`}>
                         <up.icon className="w-4 h-4" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-bold">{up.title}</p>
                         <p className="text-[11px] text-muted-foreground">{up.sub}</p>
                       </div>
-                      <span className={`text-[9px] px-2 py-1 rounded-full font-bold ${added ? 'bg-primary text-primary-foreground' : 'bg-sell/15 text-sell'}`}>{added ? "✓" : up.tag}</span>
+                      <span className={`text-[9px] px-2 py-1 rounded-full font-bold ${added ? "bg-primary text-primary-foreground" : "bg-sell/15 text-sell"}`}>{added ? "✓" : up.tag}</span>
                     </motion.button>
                   );
                 })}
               </div>
             </div>
 
-            <motion.button whileTap={{ scale: 0.96 }} onClick={handleConfirm} className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm animate-glow">
-              Bekräfta & Debitera
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={() => createBooking.mutate()}
+              disabled={createBooking.isPending}
+              className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm animate-glow disabled:opacity-50"
+            >
+              {createBooking.isPending ? "Bokar..." : "Bekräfta & Debitera"}
             </motion.button>
             <button onClick={() => setStep(2)} className="text-sm text-primary font-medium tap-target">← Tillbaka</button>
           </motion.div>
