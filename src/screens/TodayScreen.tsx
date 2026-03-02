@@ -156,10 +156,10 @@ const TodayScreen = () => {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-1" style={{ background: "hsl(var(--surface-2))" }}>
-          <Clock className="w-3 h-3 text-primary" />
-          <span className="text-sm font-bold tabular-nums">
-            {now.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+        <div className="flex items-center gap-1 text-muted-foreground">
+          <Clock className="w-3 h-3" />
+          <span className="text-[11px] font-medium tabular-nums">
+            {now.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
       </div>
