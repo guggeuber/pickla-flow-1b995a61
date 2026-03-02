@@ -47,7 +47,87 @@ Deno.serve(async (req) => {
 
     // ── CHECK ROLE ──
     if (req.method === 'GET' && path === 'check') {
-      return jsonResponse({ isAdmin: true, venueId });
+      // Check if super_admin
+      const { data: superRole } = await admin.from('user_roles')
+        .select('id').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
+      return jsonResponse({ isAdmin: true, venueId, isSuperAdmin: !!superRole });
+    }
+
+    // ── LIST VENUES (super_admin sees all, venue_admin sees own) ──
+    if (req.method === 'GET' && path === 'venues') {
+      const { data: superRole } = await admin.from('user_roles')
+        .select('id').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
+
+      let venues;
+      if (superRole) {
+        const { data, error: e } = await admin.from('venues').select('id, name, slug, city, status, logo_url, primary_color').order('name');
+        if (e) return errorResponse(e.message);
+        venues = data;
+      } else {
+        const { data: staffVenues } = await admin.from('venue_staff')
+          .select('venue_id').eq('user_id', userId).eq('is_active', true);
+        const vIds = (staffVenues || []).map((v: any) => v.venue_id);
+        const { data, error: e } = await admin.from('venues').select('id, name, slug, city, status, logo_url, primary_color').in('id', vIds).order('name');
+        if (e) return errorResponse(e.message);
+        venues = data;
+      }
+      return jsonResponse(venues, 200, 10);
+    }
+
+    // ── VENUE STATS (revenue dashboard) ──
+    if (req.method === 'GET' && path === 'stats') {
+      const today = new Date().toISOString().slice(0, 10);
+
+      // Courts count
+      const { count: totalCourts } = await admin.from('venue_courts')
+        .select('id', { count: 'exact', head: true }).eq('venue_id', venueId);
+
+      // Today's bookings
+      const { data: todayBookings } = await admin.from('bookings')
+        .select('id, total_price, status')
+        .eq('venue_id', venueId)
+        .gte('start_time', `${today}T00:00:00`)
+        .lt('start_time', `${today}T23:59:59`);
+
+      const bookingsCount = todayBookings?.length || 0;
+      const todayRevenue = (todayBookings || [])
+        .filter((b: any) => b.status !== 'cancelled')
+        .reduce((sum: number, b: any) => sum + (b.total_price || 0), 0);
+
+      // Active day passes today
+      const { count: activePasses } = await admin.from('day_passes')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('valid_date', today)
+        .eq('status', 'active');
+
+      // Staff count
+      const { count: activeStaff } = await admin.from('venue_staff')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('is_active', true);
+
+      // Pricing rules count
+      const { count: pricingRules } = await admin.from('pricing_rules')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('is_active', true);
+
+      // Links count
+      const { count: linksCount } = await admin.from('venue_links')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', venueId)
+        .eq('is_active', true);
+
+      return jsonResponse({
+        totalCourts: totalCourts || 0,
+        bookingsToday: bookingsCount,
+        todayRevenue,
+        activePasses: activePasses || 0,
+        activeStaff: activeStaff || 0,
+        pricingRules: pricingRules || 0,
+        linksCount: linksCount || 0,
+      }, 200, 5);
     }
 
     // ── VENUE INFO ──

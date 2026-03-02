@@ -9,6 +9,22 @@ export function useAdminCheck() {
   });
 }
 
+export function useAdminVenues() {
+  return useQuery({
+    queryKey: ["admin-venues"],
+    queryFn: () => apiGet("api-admin", "venues"),
+  });
+}
+
+export function useAdminStats(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-stats", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-admin", "stats", { venueId: venueId! }),
+    refetchInterval: 30000, // refresh every 30s
+  });
+}
+
 export function useAdminVenue(venueId: string | undefined) {
   return useQuery({
     queryKey: ["admin-venue", venueId],
@@ -62,6 +78,7 @@ export function useAdminMutation(venueId: string | undefined) {
 
   const invalidate = (key: string) => () => {
     qc.invalidateQueries({ queryKey: [`admin-${key}`, venueId] });
+    qc.invalidateQueries({ queryKey: ["admin-stats", venueId] });
   };
 
   const addStaff = useMutation({
