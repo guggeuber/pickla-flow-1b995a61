@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, Wrench, Radio, Megaphone, CheckCircle2, Circle, Clock, Sparkles, Flame } from "lucide-react";
+import { AlertTriangle, Wrench, Radio, Megaphone, CheckCircle2, Circle, Clock, Sparkles, Flame, Trophy } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 interface ShiftTask {
   id: number;
@@ -40,7 +41,7 @@ const incidents = [
 const OpsScreen = () => {
   const [eventMode, setEventMode] = useState(false);
   const [tasks, setTasks] = useState<ShiftTask[]>(initialShiftTasks);
-
+  const navigate = useNavigate();
   const toggleTask = (id: number) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
   };
@@ -117,6 +118,23 @@ const OpsScreen = () => {
           );
         })}
       </div>
+
+      {/* Event Ops CTA */}
+      <motion.button
+        whileTap={{ scale: 0.96 }}
+        onClick={() => navigate("/event-ops")}
+        className="w-full rounded-2xl p-4 flex items-center gap-3 border border-court-vip/30"
+        style={{ background: "linear-gradient(135deg, hsl(270 55% 55% / 0.1), hsl(24 85% 52% / 0.08))" }}
+      >
+        <div className="w-10 h-10 rounded-xl bg-court-vip/20 flex items-center justify-center">
+          <Trophy className="w-5 h-5 text-court-vip" />
+        </div>
+        <div className="flex-1 text-left">
+          <p className="text-sm font-bold">Event Ops</p>
+          <p className="text-[10px] text-muted-foreground">Live banstyrning & poängrapportering</p>
+        </div>
+        <Radio className="w-4 h-4 text-court-vip" />
+      </motion.button>
 
       {/* Event Mode */}
       <div className="glass-card rounded-2xl p-4 flex items-center justify-between">
