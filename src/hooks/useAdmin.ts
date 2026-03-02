@@ -73,6 +73,15 @@ export function useAdminLinks(venueId: string | undefined) {
   });
 }
 
+export function useAdminHistory(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-history", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet<{ date: string; revenue: number; bookings: number; passes: number }[]>("api-admin", "history", { venueId: venueId! }),
+    refetchInterval: 60000,
+  });
+}
+
 export function useAdminMutation(venueId: string | undefined) {
   const qc = useQueryClient();
 
@@ -141,12 +150,20 @@ export function useAdminMutation(venueId: string | undefined) {
     onSuccess: invalidate("venue"),
   });
 
+  const createVenue = useMutation({
+    mutationFn: (body: { name: string; slug: string; city?: string; address?: string }) =>
+      apiPost("api-admin", "venues", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-venues"] });
+    },
+  });
+
   return {
     addStaff, updateStaff,
     addCourt, updateCourt,
     saveHours,
     addPricing, updatePricing,
     addLink, updateLink,
-    updateVenue,
+    updateVenue, createVenue,
   };
 }
