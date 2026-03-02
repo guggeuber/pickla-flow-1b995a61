@@ -5,20 +5,10 @@ import { apiGet, apiPost } from "@/lib/api";
 export function useActiveEvents(venueId?: string) {
   return useQuery({
     queryKey: ["active-events", venueId],
-    queryFn: async () => {
-      // Events are public reads — we still go via API for consistency
-      // but the api-matches endpoint doesn't cover events listing yet,
-      // so we use the Supabase client for this one read
-      const { supabase } = await import("@/integrations/supabase/client");
-      let query = supabase
-        .from("events")
-        .select("*")
-        .in("status", ["active", "in_progress", "upcoming"])
-        .order("start_date", { ascending: false });
-      if (venueId) query = query.eq("venue_id", venueId);
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
+    queryFn: () => {
+      const params: Record<string, string> = {};
+      if (venueId) params.venueId = venueId;
+      return apiGet("api-events", "list", params);
     },
   });
 }

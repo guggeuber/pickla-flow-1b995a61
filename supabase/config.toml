@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.api-day-passes]
 verify_jwt = false
+
+[functions.api-events]
+verify_jwt = false
