@@ -32,7 +32,7 @@ const MatchQueue = () => {
   ) ?? [];
 
   // Group by round
-  const rounds = [...new Set(filtered.map((m) => m.round))].sort((a, b) => a - b);
+  const rounds = [...new Set(filtered.map((m: any) => Number(m.round)))].sort((a: number, b: number) => a - b);
 
   const handleAutoAssign = () => {
     const pending = matches?.filter((m) => m.status === "scheduled" && !m.court_id) ?? [];
@@ -109,10 +109,10 @@ const MatchQueue = () => {
         const roundMatches = filtered.filter((m) => m.round === round);
         const completed = roundMatches.filter((m) => m.status === "completed").length;
         return (
-          <div key={round}>
+          <div key={String(round)}>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-muted-foreground">
-                Round {round}
+                Round {String(round)}
               </h3>
               <span className="text-xs text-muted-foreground">
                 {completed}/{roundMatches.length} klara

@@ -2,9 +2,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Zap, AlertTriangle, ChevronRight, ShoppingBag, Timer, Gift, Crown } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useVenueForStaff, useVenueCourts } from "@/hooks/useDesk";
+import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
 
 function generateDates() {
@@ -52,34 +52,17 @@ const BookScreen = () => {
   // Fetch recent customers (player_profiles)
   const { data: recentProfiles } = useQuery({
     queryKey: ["recent-customers"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("player_profiles")
-        .select("id, display_name, auth_user_id")
-        .order("updated_at", { ascending: false })
-        .limit(10);
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => apiGet("api-customers", "recent", { limit: "10" }),
   });
 
   // Fetch existing bookings for the selected date to determine court availability
   const { data: dateBookings } = useQuery({
     queryKey: ["date-bookings", venueId, selectedDate.toDateString(), selectedTime],
     enabled: !!venueId,
-    queryFn: async () => {
-      const startOfDay = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate()).toISOString();
-      const endOfDay = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate() + 1).toISOString();
-      const { data, error } = await supabase
-        .from("bookings")
-        .select("venue_court_id, start_time, end_time, status")
-        .eq("venue_id", venueId!)
-        .gte("start_time", startOfDay)
-        .lt("start_time", endOfDay)
-        .neq("status", "cancelled");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => apiGet("api-bookings", "venue", {
+      venueId: venueId!,
+      date: selectedDate.toISOString().split("T")[0],
+    }),
   });
 
   // Calculate court availability
@@ -125,17 +108,14 @@ const BookScreen = () => {
         ? selectedCourtData.hourly_rate * (durationMs / 3600000)
         : 350 * (durationMs / 3600000);
 
-      const { error } = await supabase.from("bookings").insert({
-        venue_id: venueId,
-        venue_court_id: selectedCourt,
-        user_id: user.id,
-        booked_by: selectedCustomer || "Walk-in",
-        start_time: bookingTime.toISOString(),
-        end_time: endTime.toISOString(),
-        total_price: price,
-        status: "confirmed",
+      await apiPost("api-bookings", "create", {
+        venueId,
+        venueCourtId: selectedCourt,
+        startTime: bookingTime.toISOString(),
+        endTime: endTime.toISOString(),
+        totalPrice: price,
+        bookedBy: selectedCustomer || "Walk-in",
       });
-      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["today-bookings"] });
