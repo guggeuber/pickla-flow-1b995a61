@@ -77,7 +77,7 @@ const item = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transiti
 
 const LinkHub = () => {
   const [searchParams] = useSearchParams();
-  const slug = searchParams.get("v") || "pickla-solna"; // default venue slug
+  const slug = searchParams.get("v") || "pickla-arena-sthlm";
 
   const { data, isLoading } = usePublicVenue(slug);
 
