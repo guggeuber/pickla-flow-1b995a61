@@ -129,7 +129,7 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === 'POST' && path === 'courts') {
-      const body = await req.json();
+      const { venueId: _v, ...body } = await req.json();
       const { data, error: e } = await admin.from('venue_courts').insert({
         venue_id: venueId, ...body,
       }).select().single();
@@ -185,7 +185,7 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === 'POST' && path === 'pricing') {
-      const body = await req.json();
+      const { venueId: _v, ...body } = await req.json();
       const { data, error: e } = await admin.from('pricing_rules').insert({
         venue_id: venueId, ...body,
       }).select().single();
@@ -218,7 +218,7 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === 'POST' && path === 'links') {
-      const body = await req.json();
+      const { venueId: _v, ...body } = await req.json();
       const { data, error: e } = await admin.from('venue_links').insert({
         venue_id: venueId, ...body,
       }).select().single();
