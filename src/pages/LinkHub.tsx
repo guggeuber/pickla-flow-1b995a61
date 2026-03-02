@@ -10,11 +10,13 @@ import {
   MapPin,
   Loader2,
   Link as LinkIcon,
+  User,
   type LucideIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -77,6 +79,8 @@ const item = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transiti
 
 const LinkHub = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
 
   const { data, isLoading } = usePublicVenue(slug);
@@ -112,9 +116,33 @@ const LinkHub = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center px-4 pt-8 pb-12">
+    <div className="min-h-screen bg-background flex flex-col items-center px-4 pt-6 pb-12 relative">
+      {/* ── Account button ── */}
+      <motion.button
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.3 }}
+        whileTap={{ scale: 0.9 }}
+        onClick={() => {
+          if (user) {
+            navigate(`/my?v=${slug}`);
+          } else {
+            navigate(`/auth?redirect=/my&v=${slug}`);
+          }
+        }}
+        className="absolute top-4 right-4 z-10 flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors"
+        style={{
+          background: user ? "hsl(var(--primary) / 0.15)" : "hsl(var(--surface-1))",
+          color: user ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))",
+          border: `1px solid ${user ? "hsl(var(--primary) / 0.25)" : "hsl(var(--border))"}`,
+        }}
+      >
+        <User className="w-3.5 h-3.5" />
+        {user ? "Mitt konto" : "Logga in"}
+      </motion.button>
+
       {/* ── Header ── */}
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, type: "spring" }} className="flex flex-col items-center mb-6">
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, type: "spring" }} className="flex flex-col items-center mb-6 mt-4">
         {/* Logo circle */}
         <div
           className="w-20 h-20 rounded-full flex items-center justify-center mb-3 shadow-lg overflow-hidden"
