@@ -1184,6 +1184,59 @@ export type Database = {
           },
         ]
       }
+      venue_links: {
+        Row: {
+          color: string | null
+          created_at: string | null
+          description: string | null
+          icon: string | null
+          id: string
+          is_active: boolean | null
+          member_count: string | null
+          sort_order: number | null
+          title: string
+          updated_at: string | null
+          url: string
+          venue_id: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string | null
+          description?: string | null
+          icon?: string | null
+          id?: string
+          is_active?: boolean | null
+          member_count?: string | null
+          sort_order?: number | null
+          title: string
+          updated_at?: string | null
+          url: string
+          venue_id: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string | null
+          description?: string | null
+          icon?: string | null
+          id?: string
+          is_active?: boolean | null
+          member_count?: string | null
+          sort_order?: number | null
+          title?: string
+          updated_at?: string | null
+          url?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "venue_links_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       venue_staff: {
         Row: {
           created_at: string | null
