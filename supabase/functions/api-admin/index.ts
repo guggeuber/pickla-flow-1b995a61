@@ -76,57 +76,78 @@ Deno.serve(async (req) => {
 
     // ── VENUE STATS (revenue dashboard) ──
     if (req.method === 'GET' && path === 'stats') {
-      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+      const lastWeekDay = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+
+      // Helper to get revenue & bookings for a date
+      const getDateStats = async (date: string) => {
+        const { data } = await admin.from('bookings')
+          .select('id, total_price, status')
+          .eq('venue_id', venueId)
+          .gte('start_time', `${date}T00:00:00`)
+          .lt('start_time', `${date}T23:59:59`);
+        const rows = data || [];
+        return {
+          bookings: rows.length,
+          revenue: rows.filter((b: any) => b.status !== 'cancelled')
+            .reduce((s: number, b: any) => s + (b.total_price || 0), 0),
+        };
+      };
+
+      // Helper to get day pass count
+      const getPassCount = async (date: string) => {
+        const { count } = await admin.from('day_passes')
+          .select('id', { count: 'exact', head: true })
+          .eq('venue_id', venueId).eq('valid_date', date).eq('status', 'active');
+        return count || 0;
+      };
+
+      // Fetch all periods in parallel
+      const [todayStats, yesterdayStats, lastWeekStats, todayPasses, yesterdayPasses, lastWeekPasses] = await Promise.all([
+        getDateStats(today),
+        getDateStats(yesterday),
+        getDateStats(lastWeekDay),
+        getPassCount(today),
+        getPassCount(yesterday),
+        getPassCount(lastWeekDay),
+      ]);
 
       // Courts count
       const { count: totalCourts } = await admin.from('venue_courts')
         .select('id', { count: 'exact', head: true }).eq('venue_id', venueId);
 
-      // Today's bookings
-      const { data: todayBookings } = await admin.from('bookings')
-        .select('id, total_price, status')
-        .eq('venue_id', venueId)
-        .gte('start_time', `${today}T00:00:00`)
-        .lt('start_time', `${today}T23:59:59`);
-
-      const bookingsCount = todayBookings?.length || 0;
-      const todayRevenue = (todayBookings || [])
-        .filter((b: any) => b.status !== 'cancelled')
-        .reduce((sum: number, b: any) => sum + (b.total_price || 0), 0);
-
-      // Active day passes today
-      const { count: activePasses } = await admin.from('day_passes')
-        .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .eq('valid_date', today)
-        .eq('status', 'active');
-
       // Staff count
       const { count: activeStaff } = await admin.from('venue_staff')
         .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .eq('is_active', true);
+        .eq('venue_id', venueId).eq('is_active', true);
 
       // Pricing rules count
       const { count: pricingRules } = await admin.from('pricing_rules')
         .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .eq('is_active', true);
+        .eq('venue_id', venueId).eq('is_active', true);
 
       // Links count
       const { count: linksCount } = await admin.from('venue_links')
         .select('id', { count: 'exact', head: true })
-        .eq('venue_id', venueId)
-        .eq('is_active', true);
+        .eq('venue_id', venueId).eq('is_active', true);
 
       return jsonResponse({
         totalCourts: totalCourts || 0,
-        bookingsToday: bookingsCount,
-        todayRevenue,
-        activePasses: activePasses || 0,
+        bookingsToday: todayStats.bookings,
+        todayRevenue: todayStats.revenue,
+        activePasses: todayPasses,
         activeStaff: activeStaff || 0,
         pricingRules: pricingRules || 0,
         linksCount: linksCount || 0,
+        // Trend data
+        yesterdayRevenue: yesterdayStats.revenue,
+        yesterdayBookings: yesterdayStats.bookings,
+        yesterdayPasses,
+        lastWeekRevenue: lastWeekStats.revenue,
+        lastWeekBookings: lastWeekStats.bookings,
+        lastWeekPasses,
       }, 200, 5);
     }
 

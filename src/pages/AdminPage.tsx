@@ -2,8 +2,8 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Building2, Users, LayoutGrid, Clock, Tag, Link2,
-  Loader2, ShieldAlert, ChevronDown, TrendingUp, Ticket, DollarSign,
-  CalendarCheck, ChevronRight, X,
+  Loader2, ShieldAlert, ChevronDown, TrendingUp, TrendingDown, Minus,
+  Ticket, CalendarCheck, ChevronRight,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAdminCheck, useAdminVenues, useAdminStats } from "@/hooks/useAdmin";
@@ -15,6 +15,45 @@ import AdminLinks from "@/components/admin/AdminLinks";
 import AdminVenue from "@/components/admin/AdminVenue";
 
 type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | null;
+
+function TrendBadge({ current, previous, label }: { current: number; previous: number; label: string }) {
+  if (previous === 0 && current === 0) return null;
+  const diff = previous === 0 ? (current > 0 ? 100 : 0) : Math.round(((current - previous) / previous) * 100);
+  if (diff === 0) return (
+    <span className="inline-flex items-center gap-0.5 text-[8px] text-muted-foreground">
+      <Minus className="w-2.5 h-2.5" /> {label}
+    </span>
+  );
+  const isUp = diff > 0;
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[8px] font-semibold ${isUp ? "text-court-free" : "text-destructive"}`}>
+      {isUp ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />}
+      {isUp ? "+" : ""}{diff}% {label}
+    </span>
+  );
+}
+
+function MetricCell({ value, label, icon, prevValue, weekValue, currentValue }: {
+  value: string; label: string; icon?: React.ReactNode;
+  prevValue?: number; weekValue?: number; currentValue?: number;
+}) {
+  const cur = currentValue ?? 0;
+  const prev = prevValue ?? 0;
+  const week = weekValue ?? 0;
+  return (
+    <div className="text-center space-y-1">
+      <div className="flex items-center justify-center gap-1">
+        {icon}
+        <p className="text-2xl font-display font-black text-foreground">{value}</p>
+      </div>
+      <p className="text-[9px] text-muted-foreground uppercase tracking-wider">{label}</p>
+      <div className="flex flex-col items-center gap-0.5">
+        <TrendBadge current={cur} previous={prev} label="igår" />
+        <TrendBadge current={cur} previous={week} label="v." />
+      </div>
+    </div>
+  );
+}
 
 const AdminPage = () => {
   const navigate = useNavigate();
@@ -221,30 +260,29 @@ const AdminPage = () => {
             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Idag</p>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div className="text-center">
-              <p className="text-2xl font-display font-black text-foreground animate-count-up">
-                {stats?.todayRevenue?.toLocaleString("sv-SE") || "0"}
-              </p>
-              <p className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">SEK Revenue</p>
-            </div>
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1">
-                <CalendarCheck className="w-4 h-4 text-court-free" />
-                <p className="text-2xl font-display font-black text-foreground animate-count-up">
-                  {stats?.bookingsToday || 0}
-                </p>
-              </div>
-              <p className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">Bokningar</p>
-            </div>
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1">
-                <Ticket className="w-4 h-4 text-sell" />
-                <p className="text-2xl font-display font-black text-foreground animate-count-up">
-                  {stats?.activePasses || 0}
-                </p>
-              </div>
-              <p className="text-[9px] text-muted-foreground uppercase tracking-wider mt-0.5">Dagspass</p>
-            </div>
+            <MetricCell
+              value={stats?.todayRevenue?.toLocaleString("sv-SE") || "0"}
+              label="SEK Revenue"
+              prevValue={stats?.yesterdayRevenue}
+              weekValue={stats?.lastWeekRevenue}
+              currentValue={stats?.todayRevenue}
+            />
+            <MetricCell
+              value={String(stats?.bookingsToday || 0)}
+              label="Bokningar"
+              icon={<CalendarCheck className="w-4 h-4 text-court-free" />}
+              prevValue={stats?.yesterdayBookings}
+              weekValue={stats?.lastWeekBookings}
+              currentValue={stats?.bookingsToday}
+            />
+            <MetricCell
+              value={String(stats?.activePasses || 0)}
+              label="Dagspass"
+              icon={<Ticket className="w-4 h-4 text-sell" />}
+              prevValue={stats?.yesterdayPasses}
+              weekValue={stats?.lastWeekPasses}
+              currentValue={stats?.activePasses}
+            />
           </div>
         </div>
 
