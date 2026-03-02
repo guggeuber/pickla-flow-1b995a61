@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { LogOut } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import BottomNav, { type Tab } from "@/components/BottomNav";
 import { useAuth } from "@/hooks/useAuth";
 import TodayScreen from "@/screens/TodayScreen";
@@ -19,13 +20,17 @@ const screens: Record<Tab, React.FC> = {
 
 const Index = () => {
   const { signOut } = useAuth();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Tab>("today");
 
   const Screen = screens[activeTab];
 
   return (
     <div className="min-h-screen bg-background max-w-md mx-auto relative">
-      <div className="absolute top-3 right-4 z-10">
+      <div className="absolute top-3 right-4 z-10 flex items-center gap-1.5">
+        <motion.button whileTap={{ scale: 0.9 }} onClick={() => navigate("/admin")} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground" style={{ background: "hsl(var(--surface-1))" }}>
+          <Settings className="w-4 h-4" />
+        </motion.button>
         <motion.button whileTap={{ scale: 0.9 }} onClick={signOut} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground" style={{ background: "hsl(var(--surface-1))" }}>
           <LogOut className="w-4 h-4" />
         </motion.button>
