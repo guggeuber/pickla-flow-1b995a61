@@ -42,7 +42,14 @@ Deno.serve(async (req) => {
       .order('start_date')
       .limit(5);
 
-    return jsonResponse({ venue, openingHours: hours || [], events: events || [] }, 200, 60); // cache 60s
+    // Get community/social links
+    const { data: links } = await admin.from('venue_links')
+      .select('id, title, description, url, icon, color, member_count')
+      .eq('venue_id', venue.id)
+      .eq('is_active', true)
+      .order('sort_order');
+
+    return jsonResponse({ venue, openingHours: hours || [], events: events || [], links: links || [] }, 200, 60);
   }
 
   try {

@@ -8,11 +8,9 @@ import {
   Bot,
   ChevronRight,
   MapPin,
-  Clock,
-  Users,
-  Music,
-  Beer,
   Loader2,
+  Link as LinkIcon,
+  type LucideIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
@@ -53,12 +51,19 @@ const quickActions = [
   { title: "Live Games", icon: Gamepad2, url: "https://games.pickla.xyz", color: "success" as const },
 ];
 
-/* ── Community links ── */
-const communityLinks = [
-  { title: "WhatsApp Community", description: "500+ spelare — häng med i chatten", icon: MessageCircle, url: "https://chat.whatsapp.com/pickla", color: "success" as const, memberCount: "500+" },
-  { title: "Instagram", description: "@picklaparks — följ oss", icon: Instagram, url: "https://instagram.com/picklaparks", color: "court-vip" as const },
-  { title: "Chatta med oss", description: "Frågor? Vi svarar direkt", icon: Bot, url: "https://pickla.xyz/chat", color: "primary" as const },
-];
+const iconMap: Record<string, LucideIcon> = {
+  "message-circle": MessageCircle,
+  instagram: Instagram,
+  bot: Bot,
+  calendar: Calendar,
+  ticket: Ticket,
+  gamepad2: Gamepad2,
+  link: LinkIcon,
+};
+
+function resolveIcon(name: string): LucideIcon {
+  return iconMap[name] || LinkIcon;
+}
 
 const colorMap: Record<string, { bg: string; border: string; icon: string; solid: string }> = {
   primary: { bg: "hsl(var(--primary) / 0.1)", border: "hsl(var(--primary) / 0.3)", icon: "hsl(var(--primary))", solid: "hsl(var(--primary))" },
@@ -79,6 +84,7 @@ const LinkHub = () => {
   const venue = data?.venue;
   const openingHours = data?.openingHours || [];
   const events = data?.events || [];
+  const dynamicLinks = data?.links || [];
   const open = useMemo(() => isOpenNow(openingHours), [openingHours]);
 
   const venueName = venue?.name || "PICKLA";
@@ -193,18 +199,19 @@ const LinkHub = () => {
           <div className="flex-1 h-px bg-border" />
         </motion.div>
 
-        {/* ── Community Links ── */}
-        {communityLinks.map((link) => {
-          const colors = colorMap[link.color];
+        {/* ── Community Links (dynamic from DB) ── */}
+        {dynamicLinks.map((link: any) => {
+          const colors = colorMap[link.color] || colorMap.primary;
+          const Icon = resolveIcon(link.icon);
           return (
-            <motion.a key={link.title} variants={item} href={link.url} target="_blank" rel="noopener noreferrer" className="group relative rounded-2xl p-4 flex items-center gap-3.5 transition-all duration-200 active:scale-[0.97]" style={{ background: colors.bg, border: `1.5px solid ${colors.border}` }} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}>
+            <motion.a key={link.id} variants={item} href={link.url} target="_blank" rel="noopener noreferrer" className="group relative rounded-2xl p-4 flex items-center gap-3.5 transition-all duration-200 active:scale-[0.97]" style={{ background: colors.bg, border: `1.5px solid ${colors.border}` }} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}>
               <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${colors.solid}15` }}>
-                <link.icon className="w-5 h-5" style={{ color: colors.icon }} />
+                <Icon className="w-5 h-5" style={{ color: colors.icon }} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-foreground font-semibold text-sm">{link.title}</span>
-                  {link.memberCount && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: `${colors.solid}20`, color: colors.icon }}>{link.memberCount}</span>}
+                  {link.member_count && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: `${colors.solid}20`, color: colors.icon }}>{link.member_count}</span>}
                 </div>
                 <span className="text-muted-foreground text-xs mt-0.5 block">{link.description}</span>
               </div>
