@@ -2,11 +2,13 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LogIn, UserPlus, ArrowRight, Loader2, Mail, Lock, User } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 const Auth = () => {
   const { user, loading, signIn, signUp } = useAuth();
+  const [searchParams] = useSearchParams();
+  const redirectTo = searchParams.get("redirect") || "/";
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,7 +23,10 @@ const Auth = () => {
     );
   }
 
-  if (user) return <Navigate to="/" replace />;
+  // Preserve venue slug when redirecting
+  const venueParam = searchParams.get("v");
+  const fullRedirect = venueParam && !redirectTo.includes("v=") ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}v=${venueParam}` : redirectTo;
+  if (user) return <Navigate to={fullRedirect} replace />;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,9 +66,13 @@ const Auth = () => {
           <div className="w-14 h-14 rounded-2xl bg-primary/15 flex items-center justify-center mx-auto mb-4">
             <span className="text-2xl font-display font-black text-primary">P</span>
           </div>
-          <h1 className="text-3xl font-display font-bold tracking-tight">Pickla Desk</h1>
+          <h1 className="text-3xl font-display font-bold tracking-tight">
+            {redirectTo.startsWith("/my") ? "Pickla" : "Pickla Desk"}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {mode === "login" ? "Logga in för att hantera din venue" : "Skapa ett konto"}
+            {mode === "login"
+              ? redirectTo.startsWith("/my") ? "Logga in på ditt konto" : "Logga in för att hantera din venue"
+              : "Skapa ett konto"}
           </p>
         </div>
 

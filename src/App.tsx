@@ -10,6 +10,7 @@ import LinkHub from "./pages/LinkHub";
 import EventOps from "./pages/EventOps";
 import AdminPage from "./pages/AdminPage";
 import Auth from "./pages/Auth";
+import MyPage from "./pages/MyPage";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -41,6 +42,7 @@ const App = () => (
             <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/links" element={<LinkHub />} />
+            <Route path="/my" element={<MyPage />} />
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
