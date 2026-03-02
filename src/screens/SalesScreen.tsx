@@ -1,5 +1,7 @@
 import { motion } from "framer-motion";
-import { TrendingUp, TrendingDown, Flame, ChevronRight, Target, ShoppingBag, Gift, Crown, Trophy, Zap } from "lucide-react";
+import { TrendingUp, TrendingDown, Flame, ChevronRight, Target, ShoppingBag, Gift, Crown, Trophy, Zap, Loader2 } from "lucide-react";
+import { useVenueForStaff, useTodayRevenue, useTodayBookings } from "@/hooks/useDesk";
+import { useMemo } from "react";
 
 const walkInOffers = [
   { title: "Förläng till 90 min", sub: "+120 kr — 68% accepterar", icon: Target, tag: "Hot" },
@@ -9,6 +11,24 @@ const walkInOffers = [
 ];
 
 const SalesScreen = () => {
+  const { data: staffVenue } = useVenueForStaff();
+  const venueId = staffVenue?.venue_id;
+  const { data: revenue, isLoading: revenueLoading } = useTodayRevenue(venueId);
+  const { data: bookings } = useTodayBookings(venueId);
+
+  // Derive breakdown from real data
+  const breakdown = useMemo(() => {
+    if (!revenue) return null;
+    return [
+      { label: "Bokningar", value: `${revenue.bookings?.toLocaleString("sv-SE") || 0} kr`, sub: `${revenue.bookingCount || 0} st`, trend: "up" as const },
+      { label: "Dagspass", value: `${revenue.dayPasses?.toLocaleString("sv-SE") || 0} kr`, sub: `${revenue.passCount || 0} st`, trend: revenue.passCount > 0 ? "up" as const : "down" as const },
+      { label: "Totalt", value: `${revenue.total?.toLocaleString("sv-SE") || 0} kr`, sub: "Allt idag", trend: "up" as const },
+      { label: "Bokningar", value: `${revenue.bookingCount || 0} st`, sub: "Bekräftade", trend: "up" as const },
+    ];
+  }, [revenue]);
+
+  const totalRevenue = revenue?.total || 0;
+
   return (
     <div className="pb-24 px-4 pt-2 space-y-4">
       <div className="flex items-center justify-between">
@@ -22,11 +42,19 @@ const SalesScreen = () => {
       {/* Revenue Hero — BIG number */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="revenue-hero rounded-2xl p-6 text-center">
         <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">Intäkt idag</p>
-        <p className="text-5xl font-display font-black text-foreground animate-count-up">12 400</p>
+        {revenueLoading ? (
+          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto my-3" />
+        ) : (
+          <p className="text-5xl font-display font-black text-foreground">
+            {totalRevenue.toLocaleString("sv-SE")}
+          </p>
+        )}
         <p className="text-lg font-display font-bold text-muted-foreground -mt-1">kr</p>
         <div className="flex items-center justify-center gap-1 mt-2">
           <TrendingUp className="w-3.5 h-3.5 text-revenue-up" />
-          <span className="text-sm font-bold text-revenue-up">+12% vs igår</span>
+          <span className="text-sm font-bold text-revenue-up">
+            {revenue?.bookingCount || 0} bokningar · {revenue?.passCount || 0} pass
+          </span>
         </div>
       </motion.div>
 
@@ -52,23 +80,20 @@ const SalesScreen = () => {
       </div>
 
       {/* Breakdown */}
-      <div className="grid grid-cols-2 gap-2">
-        {[
-          { label: "Walk-ins", value: "6 800 kr", sub: "59%", trend: "up" },
-          { label: "Prepaid", value: "5 600 kr", sub: "41%", trend: "down" },
-          { label: "Medlemskap", value: "3 sålda", sub: "5 970 kr", trend: "up" },
-          { label: "Upsells", value: "2 400 kr", sub: "Dryck + Gear", trend: "up" },
-        ].map((item, i) => (
-          <motion.div key={item.label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 + i * 0.06 }} className="stat-card">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{item.label}</p>
-            <p className="text-base font-display font-bold">{item.value}</p>
-            <div className="flex items-center gap-1 mt-0.5">
-              {item.trend === "up" ? <TrendingUp className="w-3 h-3 text-revenue-up" /> : <TrendingDown className="w-3 h-3 text-revenue-down" />}
-              <span className="text-[10px] text-muted-foreground">{item.sub}</span>
-            </div>
-          </motion.div>
-        ))}
-      </div>
+      {breakdown && (
+        <div className="grid grid-cols-2 gap-2">
+          {breakdown.map((item, i) => (
+            <motion.div key={`${item.label}-${i}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 + i * 0.06 }} className="stat-card">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{item.label}</p>
+              <p className="text-base font-display font-bold">{item.value}</p>
+              <div className="flex items-center gap-1 mt-0.5">
+                {item.trend === "up" ? <TrendingUp className="w-3 h-3 text-revenue-up" /> : <TrendingDown className="w-3 h-3 text-revenue-down" />}
+                <span className="text-[10px] text-muted-foreground">{item.sub}</span>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
 
       {/* Staff Performance — Gamified */}
       <div>
@@ -82,25 +107,25 @@ const SalesScreen = () => {
                 <Zap className="w-4 h-4 text-primary" />
               </div>
               <div>
-                <p className="text-sm font-bold">8 bokningar · 3 upsells</p>
-                <p className="text-[10px] text-muted-foreground">12 check-ins idag</p>
+                <p className="text-sm font-bold">{revenue?.bookingCount || 0} bokningar · {revenue?.passCount || 0} pass</p>
+                <p className="text-[10px] text-muted-foreground">{bookings?.length || 0} totala idag</p>
               </div>
             </div>
-            <span className="text-2xl font-display font-black text-primary">72%</span>
+            <span className="text-2xl font-display font-black text-primary">
+              {totalRevenue > 0 ? Math.min(100, Math.round((totalRevenue / 20000) * 100)) : 0}%
+            </span>
           </div>
           <div className="w-full h-2.5 rounded-full overflow-hidden" style={{ background: 'hsl(var(--surface-3))' }}>
-            <motion.div initial={{ width: 0 }} animate={{ width: "72%" }} transition={{ delay: 0.4, duration: 0.8 }} className="bg-primary h-full rounded-full" />
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${totalRevenue > 0 ? Math.min(100, Math.round((totalRevenue / 20000) * 100)) : 0}%` }}
+              transition={{ delay: 0.4, duration: 0.8 }}
+              className="bg-primary h-full rounded-full"
+            />
           </div>
-          <p className="text-xs text-muted-foreground">72% av dagsmål — <span className="text-primary font-bold">pusha för 100%! 🔥</span></p>
-
-          {/* Streak */}
-          <div className="flex items-center gap-2 bg-court-free/10 rounded-xl p-3 animate-streak">
-            <span className="text-xl">🔥</span>
-            <div>
-              <p className="text-sm font-bold text-court-free">3 upsells i rad!</p>
-              <p className="text-[10px] text-muted-foreground">Bästa streak idag</p>
-            </div>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            {Math.min(100, Math.round((totalRevenue / 20000) * 100))}% av dagsmål (20 000 kr) — <span className="text-primary font-bold">pusha för 100%! 🔥</span>
+          </p>
         </div>
       </div>
 
