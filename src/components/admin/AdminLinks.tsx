@@ -44,7 +44,10 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
       <div className="glass-card rounded-2xl p-4 space-y-3">
         <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Ny länk</p>
         <input placeholder="Titel" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={title} onChange={(e) => setTitle(e.target.value)} />
-        <input placeholder="URL" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={url} onChange={(e) => setUrl(e.target.value)} />
+        <input placeholder="URL (Instagram-post-URL visas som embed!)" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={url} onChange={(e) => setUrl(e.target.value)} />
+        {/instagram\.com\/(p|reel)\//.test(url) && (
+          <p className="text-[10px] font-semibold px-1" style={{ color: "#E1306C" }}>📸 Denna URL visas som inbäddad Instagram-post på LinkHub</p>
+        )}
         <input placeholder="Beskrivning" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={description} onChange={(e) => setDescription(e.target.value)} />
         <div className="flex items-center gap-2">
           <Image className="w-4 h-4 text-muted-foreground shrink-0" />
