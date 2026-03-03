@@ -13,6 +13,7 @@ import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
 import CommunityPage from "./pages/CommunityPage";
 import EventPage from "./pages/EventPage";
+import BookingPage from "./pages/BookingPage";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -49,6 +50,7 @@ const App = () => (
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="/event/:id" element={<EventPage />} />
             <Route path="/e/:slug" element={<EventPage />} />
+            <Route path="/book" element={<BookingPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
