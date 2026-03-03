@@ -18,6 +18,8 @@ import { useMemo, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { StoriesCarousel } from "@/components/community/StoriesCarousel";
+import { FeedPreview } from "@/components/community/FeedPreview";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -205,6 +207,11 @@ const LinkHub = () => {
       </motion.div>
 
       <motion.div variants={container} initial="hidden" animate="show" className="w-full max-w-sm flex flex-col gap-6">
+        {/* ── Stories Carousel ── */}
+        <motion.div variants={item}>
+          <StoriesCarousel />
+        </motion.div>
+
         {/* ── Quick Action Buttons ── */}
         <motion.div variants={item} className="flex gap-3 justify-center">
           {quickActions.map((action) => (
@@ -285,6 +292,11 @@ const LinkHub = () => {
           <span className="text-xs font-semibold tracking-wide" style={{ color: open ? "#4CAF50" : "#E53935" }}>
             {open ? "ÖPPET NU" : "STÄNGT"}
           </span>
+        </motion.div>
+
+        {/* ── Community Feed Preview ── */}
+        <motion.div variants={item}>
+          <FeedPreview />
         </motion.div>
 
         {/* ── Community Hub link ── */}
