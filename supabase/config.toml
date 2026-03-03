@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.api-admin]
 verify_jwt = false
+
+[functions.api-event-public]
+verify_jwt = false
