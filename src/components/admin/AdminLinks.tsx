@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useAdminLinks, useAdminMutation } from "@/hooks/useAdmin";
-import { Loader2, Plus, Link2, Image, Pencil, X, Check, Trash2, MapPin } from "lucide-react";
+import { Loader2, Plus, Link2, Image, Pencil, X, Check, Trash2, GripVertical, MapPin } from "lucide-react";
 import { toast } from "sonner";
 
 const iconOptions = ["message-circle", "instagram", "bot", "calendar", "ticket", "gamepad2", "link", "map-pin"];
@@ -99,10 +99,18 @@ function LinkForm({
 
 const AdminLinks = ({ venueId }: { venueId: string }) => {
   const { data: links, isLoading } = useAdminLinks(venueId);
-  const { addLink, updateLink } = useAdminMutation(venueId);
+  const { addLink, updateLink, deleteLink, reorderLinks } = useAdminMutation(venueId);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // Drag state
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const dragItemRef = useRef<number | null>(null);
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
+
+  const sortedLinks = [...(links || [])].sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
 
   const handleAdd = (data: any) => {
     addLink.mutate({
@@ -133,10 +141,43 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
     });
   };
 
+  const handleDelete = (linkId: string) => {
+    deleteLink.mutate(linkId, {
+      onSuccess: () => { toast.success("Länk borttagen!"); setConfirmDeleteId(null); },
+      onError: (e) => toast.error(e.message),
+    });
+  };
+
   const toggleActive = (link: any) => {
     updateLink.mutate({ linkId: link.id, is_active: !link.is_active }, {
       onSuccess: () => toast.success(link.is_active ? "Dold" : "Synlig"),
     });
+  };
+
+  // Touch drag handlers
+  const handleDragStart = (index: number) => {
+    dragItemRef.current = index;
+    setDragIndex(index);
+  };
+
+  const handleDragEnter = (index: number) => {
+    setOverIndex(index);
+  };
+
+  const handleDragEnd = () => {
+    if (dragItemRef.current !== null && overIndex !== null && dragItemRef.current !== overIndex) {
+      const reordered = [...sortedLinks];
+      const [moved] = reordered.splice(dragItemRef.current, 1);
+      reordered.splice(overIndex, 0, moved);
+      const orderedIds = reordered.map((l: any) => l.id);
+      reorderLinks.mutate(orderedIds, {
+        onSuccess: () => toast.success("Ordning sparad!"),
+        onError: (e) => toast.error(e.message),
+      });
+    }
+    setDragIndex(null);
+    setOverIndex(null);
+    dragItemRef.current = null;
   };
 
   return (
@@ -155,10 +196,26 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
 
       {/* Existing links */}
       <div className="space-y-2">
-        {(links || []).map((link: any) => (
-          <div key={link.id} className="glass-card rounded-2xl overflow-hidden">
+        {sortedLinks.map((link: any, index: number) => (
+          <div
+            key={link.id}
+            className={`glass-card rounded-2xl overflow-hidden transition-all ${
+              dragIndex === index ? "opacity-50 scale-95" : ""
+            } ${overIndex === index && dragIndex !== index ? "ring-2 ring-primary" : ""}`}
+            draggable
+            onDragStart={() => handleDragStart(index)}
+            onDragEnter={() => handleDragEnter(index)}
+            onDragOver={(e) => e.preventDefault()}
+            onDragEnd={handleDragEnd}
+          >
             {/* Summary row */}
             <div className="p-3 sm:p-4 flex items-center gap-2 sm:gap-3">
+              <div
+                className="cursor-grab active:cursor-grabbing touch-none p-1"
+                onTouchStart={() => handleDragStart(index)}
+              >
+                <GripVertical className="w-4 h-4 text-muted-foreground/40" />
+              </div>
               {link.image_url ? (
                 <div className="w-9 h-9 rounded-xl overflow-hidden shrink-0">
                   <img src={link.image_url} alt="" className="w-full h-full object-cover" />
@@ -172,14 +229,10 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
                 <p className="text-sm font-semibold truncate">{link.title}</p>
                 <p className="text-[10px] text-muted-foreground truncate">{link.url}</p>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {link.member_count && (
-                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-bold hidden sm:inline">{link.member_count}</span>
-                )}
+              <div className="flex items-center gap-1 shrink-0">
                 <button
                   onClick={() => setEditingId(editingId === link.id ? null : link.id)}
                   className="p-1.5 rounded-lg hover:bg-accent transition-colors"
-                  title="Redigera"
                 >
                   {editingId === link.id ? <X className="w-3.5 h-3.5 text-muted-foreground" /> : <Pencil className="w-3.5 h-3.5 text-muted-foreground" />}
                 </button>
@@ -194,7 +247,7 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
 
             {/* Edit panel */}
             {editingId === link.id && (
-              <div className="px-3 sm:px-4 pb-4 pt-1 border-t" style={{ borderColor: "hsl(var(--border))" }}>
+              <div className="px-3 sm:px-4 pb-4 pt-1 border-t space-y-3" style={{ borderColor: "hsl(var(--border))" }}>
                 <LinkForm
                   initial={{
                     title: link.title || "",
@@ -211,11 +264,41 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
                   submitLabel="Spara"
                   submitIcon={<Check className="w-4 h-4" />}
                 />
+                {/* Delete */}
+                <div className="pt-2 border-t" style={{ borderColor: "hsl(var(--border))" }}>
+                  {confirmDeleteId === link.id ? (
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-destructive flex-1">Säker? Kan inte ångras.</p>
+                      <button
+                        onClick={() => handleDelete(link.id)}
+                        disabled={deleteLink.isPending}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-destructive text-destructive-foreground font-semibold disabled:opacity-50"
+                      >
+                        {deleteLink.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Radera"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                        style={{ background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))" }}
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmDeleteId(link.id)}
+                      className="flex items-center gap-1.5 text-xs text-destructive/70 hover:text-destructive font-medium transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Ta bort länk permanent
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>
         ))}
-        {(!links || links.length === 0) && (
+        {sortedLinks.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-6">Inga länkar ännu</p>
         )}
       </div>
