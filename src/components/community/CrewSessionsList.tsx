@@ -44,7 +44,7 @@ export function CrewSessionsList({ crewId, isMember, isLeader }: Props) {
       const ids = sessions.map((s: any) => s.id);
       const { data, error } = await supabase
         .from("crew_session_signups" as any)
-        .select("*, player_profiles(display_name)")
+        .select("*, player_profiles(display_name, avatar_url)")
         .in("crew_session_id", ids)
         .eq("status", "signed_up");
       if (error) throw error;
@@ -208,6 +208,42 @@ export function CrewSessionsList({ crewId, isMember, isLeader }: Props) {
                 Bokad
               </span>
             </div>
+
+            {/* Signed-up players */}
+            {sessionSignups.length > 0 && (
+              <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                {sessionSignups.map((s: any) => {
+                  const name = s.player_profiles?.display_name || "?";
+                  const avatarUrl = s.player_profiles?.avatar_url;
+                  return (
+                    <div
+                      key={s.id}
+                      className="flex items-center gap-1 rounded-full px-1.5 py-0.5"
+                      style={{ background: "rgba(62,61,57,0.06)" }}
+                      title={name}
+                    >
+                      {avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt={name}
+                          className="w-4 h-4 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div
+                          className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shrink-0"
+                          style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}
+                        >
+                          {name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <span className="text-[10px] font-medium truncate max-w-[60px]" style={{ color: "#3E3D39" }}>
+                        {name}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Signups count + actions */}
             <div className="flex items-center justify-between">
