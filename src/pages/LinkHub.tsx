@@ -56,6 +56,9 @@ interface UpcomingEvent {
   name: string;
   display_name: string | null;
   start_date: string | null;
+  logo_url: string | null;
+  category: string;
+  slug: string | null;
 }
 
 function useUpcomingEvents(venueId: string | undefined) {
@@ -66,13 +69,30 @@ function useUpcomingEvents(venueId: string | undefined) {
     queryFn: async () => {
       const { data } = await supabase
         .from("events")
-        .select("id, name, display_name, start_date, show_on_sticker")
+        .select("id, name, display_name, start_date, show_on_sticker, logo_url, category, slug")
         .eq("venue_id", venueId!)
         .eq("show_on_sticker", true)
         .gte("start_date", new Date().toISOString().slice(0, 10))
         .order("start_date", { ascending: true })
         .limit(4);
-      return (data || []) as UpcomingEvent[];
+      return (data || []) as unknown as UpcomingEvent[];
+    },
+  });
+}
+
+function useCategoryLogos(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["venue-cat-logos", venueId],
+    enabled: !!venueId,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("venue_event_categories")
+        .select("category_key, logo_url")
+        .eq("venue_id", venueId!);
+      const map: Record<string, string> = {};
+      data?.forEach((d: any) => { if (d.logo_url) map[d.category_key] = d.logo_url; });
+      return map;
     },
   });
 }
@@ -107,6 +127,7 @@ const LinkHub = () => {
 
   const venue = data?.venue;
   const { data: upcomingEvents } = useUpcomingEvents(venue?.id);
+  const { data: catLogos } = useCategoryLogos(venue?.id);
   const openingHours = data?.openingHours || [];
   const open = useMemo(() => isOpenNow(openingHours), [openingHours]);
   const hoursStr = useMemo(() => getTodayHoursString(openingHours), [openingHours]);
@@ -271,27 +292,33 @@ const LinkHub = () => {
 
       {/* Floating event stickers — fixed on screen */}
       {upcomingEvents && upcomingEvents.length > 0 && (
-        <div className="fixed left-5 top-[65%] z-30 flex flex-col gap-2.5">
-          {upcomingEvents.map((evt) => (
-            <button
-              key={evt.id}
-              onClick={() => navigate(`/event/${evt.id}`)}
-              className="px-4 py-2 active:scale-95 transition-transform text-left"
-              style={{
-                background: "rgba(255,255,255,0.92)",
-                backdropFilter: "blur(8px)",
-                fontFamily: "'Space Mono', monospace",
-              }}
-            >
-              <span
-                className="text-[15px] font-bold underline underline-offset-4"
-                style={{ color: "#2a3a8f" }}
+        <div className="fixed left-0 top-[65%] z-30 flex flex-col gap-2">
+          {upcomingEvents.map((evt) => {
+            const logo = evt.logo_url || catLogos?.[evt.category];
+            return (
+              <button
+                key={evt.id}
+                onClick={() => navigate(evt.slug ? `/e/${evt.slug}` : `/event/${evt.id}`)}
+                className="flex items-center gap-2.5 pl-3 pr-4 py-2 active:scale-95 transition-transform text-left rounded-r-xl"
+                style={{
+                  background: "rgba(255,255,255,0.92)",
+                  backdropFilter: "blur(8px)",
+                  fontFamily: "'Space Mono', monospace",
+                }}
               >
-                {(evt.display_name || evt.name).toLowerCase()}{" "}
-                {evt.start_date ? format(new Date(evt.start_date), "d/M") : ""}
-              </span>
-            </button>
-          ))}
+                {logo && (
+                  <img src={logo} alt="" className="h-6 max-w-[28px] object-contain flex-shrink-0" />
+                )}
+                <span
+                  className="text-[14px] font-bold underline underline-offset-4"
+                  style={{ color: "#2a3a8f" }}
+                >
+                  {(evt.display_name || evt.name).toLowerCase()}{" "}
+                  {evt.start_date ? format(new Date(evt.start_date), "d/M") : ""}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
