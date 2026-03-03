@@ -4,7 +4,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiGet, apiPost } from "@/lib/api";
 import { format } from "date-fns";
 import { sv } from "date-fns/locale";
-import { CalendarDays, MapPin, Users, ArrowLeft, CheckCircle2, Loader2, MessageCircle, ChevronRight, Share2 } from "lucide-react";
+import { CalendarDays, MapPin, Users, ArrowLeft, CheckCircle2, Loader2, MessageCircle, ChevronRight, Share2, Crown, Tag } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
@@ -63,12 +64,20 @@ export default function EventPage() {
   const { id, slug } = useParams<{ id: string; slug: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
   const isSlugRoute = location.pathname.startsWith("/e/");
   const { data: event, isLoading, error } = usePublicEvent(
     isSlugRoute ? undefined : id,
     isSlugRoute ? (slug || id) : undefined
   );
   const { data: otherEvents } = useOtherEvents(event?.venue_id, event?.id);
+
+  // Fetch membership for logged-in user to show event discount
+  const { data: userMembership } = useQuery({
+    queryKey: ["user-membership-event", user?.id, event?.venue_id],
+    enabled: !!user?.id && !!event?.venue_id,
+    queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: event!.venue_id }),
+  });
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -212,6 +221,61 @@ export default function EventPage() {
           )}
         </div>
       </div>
+
+      {/* Event price */}
+      {event.event_pricing && (
+        <div className="px-5 pb-5">
+          {(() => {
+            const basePrice = event.event_pricing.price;
+            const vatRate = event.event_pricing.vat_rate ?? 6;
+            const tierPricing = (userMembership?.tier_pricing || []).find((tp: any) => tp.product_type === "event_fee");
+            const memberTier = userMembership?.membership_tiers;
+            let finalPrice = basePrice;
+            let discountLabel = "";
+
+            if (tierPricing?.fixed_price != null) {
+              finalPrice = tierPricing.fixed_price;
+              discountLabel = "fast pris";
+            } else if (tierPricing?.discount_percent) {
+              finalPrice = Math.round(basePrice * (1 - tierPricing.discount_percent / 100));
+              discountLabel = `${tierPricing.discount_percent}%`;
+            }
+
+            const vatAmount = Math.round(finalPrice * vatRate / (100 + vatRate));
+            const hasDiscount = finalPrice < basePrice;
+
+            return (
+              <div className="rounded-2xl bg-neutral-50 border border-neutral-200 px-4 py-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Tag className="w-3.5 h-3.5 text-neutral-400" />
+                    <span className="text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>per deltagare</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {hasDiscount && (
+                      <span className="text-[12px] text-neutral-400 line-through" style={{ fontFamily: FONT_MONO }}>{basePrice} kr</span>
+                    )}
+                    <span className="text-[15px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>{finalPrice} kr</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mt-1">
+                  {hasDiscount && memberTier ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600" style={{ fontFamily: FONT_MONO }}>
+                      <Crown className="w-3 h-3" style={{ color: memberTier.color }} />
+                      {memberTier.name} ({discountLabel})
+                    </span>
+                  ) : (
+                    <span />
+                  )}
+                  <span className="text-[10px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                    varav moms ({vatRate}%) {vatAmount} kr
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* Divider */}
       <div className="h-px bg-neutral-100 mx-5" />
