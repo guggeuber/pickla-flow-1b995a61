@@ -13,7 +13,7 @@ import {
   Link as LinkIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -68,6 +68,45 @@ function resolveIcon(name: string): LucideIcon {
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.06, delayChildren: 0.15 } } };
 const item = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 26 } } };
+
+function isInstagramUrl(url: string): boolean {
+  return /^https?:\/\/(www\.)?instagram\.com\/(p|reel)\/[\w-]+/i.test(url);
+}
+
+function getInstagramEmbedUrl(url: string): string {
+  // Strip query params and ensure trailing slash, then add /embed
+  const clean = url.split("?")[0].replace(/\/$/, "");
+  return `${clean}/embed`;
+}
+
+function InstagramEmbed({ url }: { url: string }) {
+  const embedUrl = getInstagramEmbedUrl(url);
+
+  useEffect(() => {
+    // Load Instagram embed script if not already loaded
+    if (!(window as any).instgrm) {
+      const script = document.createElement("script");
+      script.src = "https://www.instagram.com/embed.js";
+      script.async = true;
+      document.body.appendChild(script);
+    } else {
+      (window as any).instgrm.Embeds.process();
+    }
+  }, [url]);
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ background: "#fff", border: "1.5px solid rgba(62,61,57,0.1)" }}>
+      <iframe
+        src={embedUrl}
+        className="w-full border-0"
+        style={{ minHeight: 480 }}
+        allowTransparency
+        scrolling="no"
+        title="Instagram post"
+      />
+    </div>
+  );
+}
 
 const LinkHub = () => {
   const [searchParams] = useSearchParams();
@@ -231,6 +270,15 @@ const LinkHub = () => {
             </motion.div>
 
             {dynamicLinks.map((link: any) => {
+              // Instagram embed for Instagram post/reel URLs
+              if (isInstagramUrl(link.url)) {
+                return (
+                  <motion.div key={link.id} variants={item}>
+                    <InstagramEmbed url={link.url} />
+                  </motion.div>
+                );
+              }
+
               const Icon = resolveIcon(link.icon);
               return (
                 <motion.a
