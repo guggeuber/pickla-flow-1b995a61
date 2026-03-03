@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
       const template = templateResult.data || null;
 
       // Template pricing takes precedence over venue pricing rules
-      const effectivePricing = template?.entry_fee
+      const effectivePricing = template && template.entry_fee != null && template.entry_fee > 0
         ? { price: template.entry_fee, vat_rate: template.vat_rate || 6, source: 'template', currency: template.currency || 'SEK' }
         : eventPricing
           ? { ...eventPricing, source: 'venue_rule' }
