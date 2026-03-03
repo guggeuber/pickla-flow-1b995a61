@@ -104,6 +104,8 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
           >
             <option value="hourly">Per timme</option>
             <option value="day_pass">Dagspass</option>
+            <option value="event">Event (per deltagare)</option>
+            <option value="guest_pass">Gästpass</option>
             <option value="membership">Medlemskap</option>
             <option value="other">Övrigt</option>
           </select>
@@ -185,7 +187,7 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold">{rule.name}</p>
               <p className="text-[10px] text-muted-foreground">
-                {rule.type === "hourly" ? "Per timme" : rule.type === "day_pass" ? "Dagspass" : rule.type}
+                {rule.type === "hourly" ? "Per timme" : rule.type === "day_pass" ? "Dagspass" : rule.type === "event" ? "Event" : rule.type === "guest_pass" ? "Gästpass" : rule.type}
                 {" · "}
                 {formatDays(rule.days_of_week)}
                 {" · "}

@@ -31,8 +31,8 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await query.single();
       if (qErr) return errorResponse('Event not found', 404);
 
-      // Get player count + category config in parallel
-      const [playerResult, catResult] = await Promise.all([
+      // Get player count, category config, and event pricing in parallel
+      const [playerResult, catResult, pricingResult] = await Promise.all([
         client.from('players')
           .select('id', { count: 'exact', head: true })
           .eq('event_id', data.id),
@@ -43,14 +43,25 @@ Deno.serve(async (req) => {
               .eq('category_key', data.category)
               .maybeSingle()
           : Promise.resolve({ data: null }),
+        data.venue_id
+          ? client.from('pricing_rules')
+              .select('id, name, price, vat_rate')
+              .eq('venue_id', data.venue_id)
+              .eq('type', 'event')
+              .eq('is_active', true)
+              .limit(1)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
       ]);
 
       const categoryConfig = catResult.data || null;
+      const eventPricing = pricingResult.data || null;
 
       return jsonResponse({
         ...data,
         player_count: playerResult.count || 0,
         category_config: categoryConfig,
+        event_pricing: eventPricing,
       }, 200, 5);
     }
 
