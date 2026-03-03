@@ -181,7 +181,7 @@ const LinkHub = () => {
               />
               {/* Event sticker overlays */}
               {i === 0 && upcomingEvents && upcomingEvents.length > 0 && (
-                <div className="absolute bottom-8 left-5 flex flex-col gap-2.5">
+                <div className="absolute top-[70%] left-5 flex flex-col gap-2.5">
                   {upcomingEvents.map((evt) => (
                     <button
                       key={evt.id}
