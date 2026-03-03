@@ -656,8 +656,10 @@ export type Database = {
           background_url: string | null
           battle_config: Json | null
           best_of: number | null
+          category: string
           competition_type: string | null
           created_at: string | null
+          description: string | null
           display_name: string | null
           end_date: string | null
           event_type: Database["public"]["Enums"]["event_type"]
@@ -665,6 +667,7 @@ export type Database = {
           format: Database["public"]["Enums"]["event_format"]
           group_stage_completed: boolean | null
           id: string
+          is_drop_in: boolean
           is_public: boolean | null
           logo_url: string | null
           match_duration_default: number | null
@@ -678,6 +681,7 @@ export type Database = {
           player_info_general: string | null
           points_to_win: number | null
           primary_color: string | null
+          registration_fields: Json
           scoring_format: string | null
           scoring_type: string | null
           secondary_color: string | null
@@ -689,6 +693,7 @@ export type Database = {
           tournament_complete: boolean | null
           updated_at: string | null
           venue_id: string | null
+          whatsapp_url: string | null
           win_by_two: boolean | null
           winner_team_id: string | null
         }
@@ -697,8 +702,10 @@ export type Database = {
           background_url?: string | null
           battle_config?: Json | null
           best_of?: number | null
+          category?: string
           competition_type?: string | null
           created_at?: string | null
+          description?: string | null
           display_name?: string | null
           end_date?: string | null
           event_type: Database["public"]["Enums"]["event_type"]
@@ -706,6 +713,7 @@ export type Database = {
           format: Database["public"]["Enums"]["event_format"]
           group_stage_completed?: boolean | null
           id?: string
+          is_drop_in?: boolean
           is_public?: boolean | null
           logo_url?: string | null
           match_duration_default?: number | null
@@ -719,6 +727,7 @@ export type Database = {
           player_info_general?: string | null
           points_to_win?: number | null
           primary_color?: string | null
+          registration_fields?: Json
           scoring_format?: string | null
           scoring_type?: string | null
           secondary_color?: string | null
@@ -730,6 +739,7 @@ export type Database = {
           tournament_complete?: boolean | null
           updated_at?: string | null
           venue_id?: string | null
+          whatsapp_url?: string | null
           win_by_two?: boolean | null
           winner_team_id?: string | null
         }
@@ -738,8 +748,10 @@ export type Database = {
           background_url?: string | null
           battle_config?: Json | null
           best_of?: number | null
+          category?: string
           competition_type?: string | null
           created_at?: string | null
+          description?: string | null
           display_name?: string | null
           end_date?: string | null
           event_type?: Database["public"]["Enums"]["event_type"]
@@ -747,6 +759,7 @@ export type Database = {
           format?: Database["public"]["Enums"]["event_format"]
           group_stage_completed?: boolean | null
           id?: string
+          is_drop_in?: boolean
           is_public?: boolean | null
           logo_url?: string | null
           match_duration_default?: number | null
@@ -760,6 +773,7 @@ export type Database = {
           player_info_general?: string | null
           points_to_win?: number | null
           primary_color?: string | null
+          registration_fields?: Json
           scoring_format?: string | null
           scoring_type?: string | null
           secondary_color?: string | null
@@ -771,6 +785,7 @@ export type Database = {
           tournament_complete?: boolean | null
           updated_at?: string | null
           venue_id?: string | null
+          whatsapp_url?: string | null
           win_by_two?: boolean | null
           winner_team_id?: string | null
         }
