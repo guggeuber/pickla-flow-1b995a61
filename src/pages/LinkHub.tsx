@@ -83,7 +83,6 @@ function InstagramEmbed({ url }: { url: string }) {
   const embedUrl = getInstagramEmbedUrl(url);
 
   useEffect(() => {
-    // Load Instagram embed script if not already loaded
     if (!(window as any).instgrm) {
       const script = document.createElement("script");
       script.src = "https://www.instagram.com/embed.js";
@@ -105,6 +104,32 @@ function InstagramEmbed({ url }: { url: string }) {
         title="Instagram post"
       />
     </div>
+  );
+}
+
+function isGoogleMapsUrl(url: string): boolean {
+  return /google\.(com|se)\/maps|maps\.app\.goo\.gl|goo\.gl\/maps/i.test(url);
+}
+
+function GoogleMapsEmbed({ url, title }: { url: string; title: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group rounded-2xl overflow-hidden flex flex-col transition-all duration-200 active:scale-[0.97]"
+      style={{ background: "rgba(255,255,255,0.6)", border: "1.5px solid rgba(62,61,57,0.1)" }}
+    >
+      <div className="p-4 flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(66,133,244,0.12)" }}>
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z" fill="#4285F4"/></svg>
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold truncate" style={{ color: "#3e3d39" }}>{title}</p>
+          <p className="text-[10px] font-medium" style={{ color: "#4285F4" }}>Öppna i Google Maps →</p>
+        </div>
+      </div>
+    </a>
   );
 }
 
@@ -270,11 +295,17 @@ const LinkHub = () => {
             </motion.div>
 
             {dynamicLinks.map((link: any) => {
-              // Instagram embed for Instagram post/reel URLs
               if (isInstagramUrl(link.url)) {
                 return (
                   <motion.div key={link.id} variants={item}>
                     <InstagramEmbed url={link.url} />
+                  </motion.div>
+                );
+              }
+              if (isGoogleMapsUrl(link.url)) {
+                return (
+                  <motion.div key={link.id} variants={item}>
+                    <GoogleMapsEmbed url={link.url} title={link.title || "Hitta hit"} />
                   </motion.div>
                 );
               }
