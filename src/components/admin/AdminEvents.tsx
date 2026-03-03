@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X } from "lucide-react";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 
 interface EventRow {
   id: string;
@@ -92,16 +93,49 @@ function generateSlug(name: string): string {
     .replace(/(^-|-$)/g, '');
 }
 
-/* ── Create Event Dialog ── */
+/* ── Template picker for "create from template" ── */
+interface TemplateOption {
+  id: string;
+  name: string;
+  display_name: string | null;
+  event_type: string;
+  format: string;
+  entry_fee: number;
+  currency: string;
+  logo_url: string | null;
+  is_active: boolean;
+}
+
+function useTemplates() {
+  return useQuery<TemplateOption[]>({
+    queryKey: ["event-templates"],
+    queryFn: () => apiGet("api-event-templates", "list"),
+  });
+}
+
+/* ── Create Event Dialog — now with template support ── */
 function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string; onCreated: () => void; categories: CategoryOption[] }) {
   const [open, setOpen] = useState(false);
+  const { data: templates } = useTemplates();
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [eventType, setEventType] = useState("tournament");
   const [eventFormat, setEventFormat] = useState("round_robin");
-  const [category, setCategory] = useState("tournament");
   const [startDate, setStartDate] = useState("");
+  const [numberOfCourts, setNumberOfCourts] = useState("1");
   const [isPending, setIsPending] = useState(false);
+
+  const activeTemplates = (templates || []).filter(t => t.is_active);
+  const selectedTemplate = activeTemplates.find(t => t.id === selectedTemplateId);
+
+  const handleSelectTemplate = (tpl: TemplateOption) => {
+    setSelectedTemplateId(tpl.id);
+    setName(tpl.display_name || tpl.name);
+    setDisplayName(tpl.display_name || "");
+    setEventType(tpl.event_type);
+    setEventFormat(tpl.format);
+  };
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -114,13 +148,17 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
         format: eventFormat,
         venueId,
         startDate: startDate || undefined,
+        numberOfCourts: Number(numberOfCourts) || 1,
         isPublic: true,
+        templateId: selectedTemplateId || undefined,
       });
       toast.success("Event skapat!");
       setOpen(false);
       setName("");
       setDisplayName("");
       setStartDate("");
+      setSelectedTemplateId(null);
+      setNumberOfCourts("1");
       onCreated();
     } catch (e: any) {
       toast.error(e.message);
@@ -137,50 +175,117 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
           <span className="text-sm font-semibold text-primary">Skapa nytt event</span>
         </button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Skapa event</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 pt-2">
+          {/* Template picker */}
+          {activeTemplates.length > 0 && (
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Välj mall (franchise)</Label>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                {activeTemplates.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    onClick={() => handleSelectTemplate(tpl)}
+                    className={`rounded-xl p-3 text-left border transition-all ${
+                      selectedTemplateId === tpl.id
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:border-primary/30"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {tpl.logo_url ? (
+                        <img src={tpl.logo_url} alt="" className="w-8 h-8 rounded-lg object-cover" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center">
+                          <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold truncate">{tpl.display_name || tpl.name}</p>
+                        {tpl.entry_fee > 0 && (
+                          <p className="text-[10px] text-primary font-semibold">{tpl.entry_fee} {tpl.currency}</p>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+                <button
+                  onClick={() => { setSelectedTemplateId(null); setName(""); setDisplayName(""); }}
+                  className={`rounded-xl p-3 text-left border transition-all ${
+                    !selectedTemplateId
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/30"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center">
+                      <Plus className="w-3.5 h-3.5 text-muted-foreground" />
+                    </div>
+                    <p className="text-xs font-bold">Utan mall</p>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {selectedTemplate && (
+            <Badge variant="secondary" className="text-[10px]">
+              Pris, logga, format & scoring ärvs från mallen
+            </Badge>
+          )}
+
           <div>
-            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Namn (internt) *</Label>
-            <Input className="mt-1" value={name} onChange={(e) => setName(e.target.value)} placeholder="T.ex. Fredagsklubben Mars" />
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Namn *</Label>
+            <Input className="mt-1" value={name} onChange={(e) => setName(e.target.value)} placeholder="T.ex. Fredagsklubben 7 mars" />
           </div>
-          <div>
-            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Visningsnamn (sticker-text)</Label>
-            <Input className="mt-1" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="fredagsklubben 🎉" />
-          </div>
+          {!selectedTemplate && (
+            <>
+              <div>
+                <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Visningsnamn</Label>
+                <Input className="mt-1" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="fredagsklubben 🎉" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Typ</Label>
+                  <Select value={eventType} onValueChange={setEventType}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="tournament">Turnering</SelectItem>
+                      <SelectItem value="team_competition">Lagtävling</SelectItem>
+                      <SelectItem value="corporate_event">Företagsevent</SelectItem>
+                      <SelectItem value="mini_cup">Mini Cup</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Format</Label>
+                  <Select value={eventFormat} onValueChange={setEventFormat}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="round_robin">Round Robin</SelectItem>
+                      <SelectItem value="knockout">Knockout</SelectItem>
+                      <SelectItem value="amerikano">Amerikano</SelectItem>
+                      <SelectItem value="ladder">Stege</SelectItem>
+                      <SelectItem value="mini_cup_2h">Mini Cup 2h</SelectItem>
+                      <SelectItem value="team_vs_team">Team vs Team</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Typ</Label>
-              <Select value={eventType} onValueChange={setEventType}>
-                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="tournament">Turnering</SelectItem>
-                  <SelectItem value="team_competition">Lagtävling</SelectItem>
-                  <SelectItem value="corporate_event">Företagsevent</SelectItem>
-                  <SelectItem value="mini_cup">Mini Cup</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Startdatum</Label>
+              <Input className="mt-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div>
-              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Format</Label>
-              <Select value={eventFormat} onValueChange={setEventFormat}>
-                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="round_robin">Round Robin</SelectItem>
-                  <SelectItem value="knockout">Knockout</SelectItem>
-                  <SelectItem value="amerikano">Amerikano</SelectItem>
-                  <SelectItem value="ladder">Stege</SelectItem>
-                  <SelectItem value="mini_cup_2h">Mini Cup 2h</SelectItem>
-                  <SelectItem value="team_vs_team">Team vs Team</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Antal banor</Label>
+              <Input className="mt-1" type="number" value={numberOfCourts} onChange={(e) => setNumberOfCourts(e.target.value)} />
             </div>
-          </div>
-          <div>
-            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Startdatum</Label>
-            <Input className="mt-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
           </div>
           <Button onClick={handleCreate} disabled={!name.trim() || isPending} className="w-full">
             {isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Skapa"}

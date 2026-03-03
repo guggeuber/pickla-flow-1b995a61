@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.api-event-public]
 verify_jwt = false
+
+[functions.api-event-templates]
+verify_jwt = false
