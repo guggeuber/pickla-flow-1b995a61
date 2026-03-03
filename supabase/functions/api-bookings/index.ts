@@ -140,7 +140,7 @@ Deno.serve(async (req) => {
         venue_id: venueId,
         venue_court_id: venueCourtId,
         user_id: userId,
-        booked_by: bookedBy || 'Walk-in',
+        booked_by: bookedBy || userId,
         start_time: startTime,
         end_time: endTime,
         total_price: totalPrice,
