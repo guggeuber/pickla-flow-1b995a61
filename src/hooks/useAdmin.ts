@@ -133,7 +133,7 @@ export function useAdminMutation(venueId: string | undefined) {
   });
 
   const addLink = useMutation({
-    mutationFn: (body: { title: string; url: string; icon?: string; color?: string; description?: string; member_count?: string; sort_order?: number }) =>
+    mutationFn: (body: { title: string; url: string; icon?: string; color?: string; description?: string; member_count?: string; image_url?: string; sort_order?: number }) =>
       apiPost("api-admin", "links", { ...body, venueId }),
     onSuccess: invalidate("links"),
   });

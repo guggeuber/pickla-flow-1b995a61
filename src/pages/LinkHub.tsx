@@ -247,9 +247,15 @@ const LinkHub = () => {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.97 }}
                 >
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(62,61,57,0.06)" }}>
-                    <Icon className="w-5 h-5" style={{ color: "#3E3D39" }} />
-                  </div>
+                  {link.image_url ? (
+                    <div className="w-10 h-10 rounded-xl overflow-hidden shrink-0">
+                      <img src={link.image_url} alt="" className="w-full h-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(62,61,57,0.06)" }}>
+                      <Icon className="w-5 h-5" style={{ color: "#3E3D39" }} />
+                    </div>
+                  )}
                   <div className="flex-1 min-w-0">
                     <span className="font-semibold text-sm" style={{ color: "#3E3D39" }}>{link.title}</span>
                     {link.member_count && (
