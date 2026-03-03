@@ -4,6 +4,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { motion } from "framer-motion";
 import { Loader2, ArrowLeft, Swords, LogOut, UserPlus } from "lucide-react";
 import { CrewBadge } from "./CrewBadge";
+import { ChallengesList } from "./ChallengesList";
+import { CreateChallengeModal } from "./CreateChallengeModal";
 import { toast } from "sonner";
 import { useState } from "react";
 
@@ -19,6 +21,7 @@ export function CrewDetailView({ crewId, onBack }: Props) {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [joining, setJoining] = useState(false);
+  const [showChallenge, setShowChallenge] = useState(false);
 
   const { data: crew, isLoading } = useQuery({
     queryKey: ["crew-detail", crewId],
@@ -216,15 +219,29 @@ export function CrewDetailView({ crewId, onBack }: Props) {
             {joining ? "Går med..." : "Gå med"}
           </button>
         )}
-        {myMembership && !isLeader && (
-          <button
-            onClick={handleLeave}
-            className="w-full rounded-xl py-3 text-sm font-medium transition-all active:scale-95 flex items-center justify-center gap-2"
-            style={{ background: "rgba(62,61,57,0.06)", border: "1px solid rgba(62,61,57,0.1)", color: "rgba(62,61,57,0.6)" }}
-          >
-            <LogOut className="w-4 h-4" />
-            Lämna crew
-          </button>
+        {myMembership && (
+          <div className="flex gap-2">
+            {isLeader && (
+              <button
+                onClick={() => setShowChallenge(true)}
+                className="flex-1 rounded-xl py-3 text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
+                style={{ background: "#E86C24", color: "#fff" }}
+              >
+                <Swords className="w-4 h-4" />
+                Clash
+              </button>
+            )}
+            {!isLeader && (
+              <button
+                onClick={handleLeave}
+                className="flex-1 rounded-xl py-3 text-sm font-medium transition-all active:scale-95 flex items-center justify-center gap-2"
+                style={{ background: "rgba(62,61,57,0.06)", border: "1px solid rgba(62,61,57,0.1)", color: "rgba(62,61,57,0.6)" }}
+              >
+                <LogOut className="w-4 h-4" />
+                Lämna crew
+              </button>
+            )}
+          </div>
         )}
       </motion.div>
 
@@ -281,6 +298,24 @@ export function CrewDetailView({ crewId, onBack }: Props) {
           })}
         </div>
       </motion.div>
+      {/* Challenges */}
+      <motion.div variants={item}>
+        <h3
+          className="text-sm font-semibold mb-2 flex items-center gap-2"
+          style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#3E3D39" }}
+        >
+          <Swords className="w-4 h-4" style={{ color: "#E86C24" }} />
+          Clash-utmaningar
+        </h3>
+        <ChallengesList crewId={crewId} isLeader={isLeader} />
+      </motion.div>
+
+      <CreateChallengeModal
+        open={showChallenge}
+        onClose={() => setShowChallenge(false)}
+        myCrewId={crewId}
+        myCrewName={crew.name}
+      />
     </motion.div>
   );
 }
