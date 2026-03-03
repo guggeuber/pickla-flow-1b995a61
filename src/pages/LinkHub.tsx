@@ -115,16 +115,16 @@ const LinkHub = () => {
           <img
             src={picklaLogo}
             alt="Pickla"
-            className="h-10 w-auto"
+            className="h-14 w-auto"
             style={{ filter: "brightness(0) invert(1)" }}
           />
           <div className="mt-1 flex items-center gap-1.5">
             <span
-              className="w-2 h-2 rounded-full inline-block"
+              className="w-2.5 h-2.5 rounded-full inline-block"
               style={{ background: open ? "#00E676" : "rgba(255,255,255,0.35)" }}
             />
             <span
-              className="text-[11px] font-semibold tracking-wide uppercase"
+              className="text-[13px] font-bold tracking-wider uppercase"
               style={{
                 color: open ? "#00E676" : "rgba(255,255,255,0.5)",
                 fontFamily: "'Space Mono', monospace",
@@ -200,7 +200,7 @@ const LinkHub = () => {
           href="https://chat.whatsapp.com/pickla"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-white/80 text-[13px] font-semibold underline underline-offset-2 decoration-white/20 active:opacity-60 transition-opacity"
+          className="text-white/90 text-[15px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Mono', monospace" }}
         >
           join whatsapp
@@ -210,7 +210,7 @@ const LinkHub = () => {
           href="https://pickla.xyz/book"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-white/80 text-[13px] font-semibold underline underline-offset-2 decoration-white/20 active:opacity-60 transition-opacity"
+          className="text-white/90 text-[15px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Mono', monospace" }}
         >
           book
@@ -224,9 +224,9 @@ const LinkHub = () => {
               navigate(`/auth?redirect=/my&v=${slug}`);
             }
           }}
-          className="text-white/80 active:opacity-60 transition-opacity p-1"
+          className="text-white/90 active:opacity-60 transition-opacity p-1"
         >
-          <User className="w-5 h-5" />
+          <User className="w-6 h-6" />
         </button>
       </nav>
     </div>
