@@ -653,6 +653,99 @@ export type Database = {
           },
         ]
       }
+      event_templates: {
+        Row: {
+          background_url: string | null
+          best_of: number | null
+          category: string
+          competition_type: string | null
+          created_at: string | null
+          currency: string | null
+          description: string | null
+          display_name: string | null
+          entry_fee: number | null
+          event_type: Database["public"]["Enums"]["event_type"]
+          format: Database["public"]["Enums"]["event_format"]
+          id: string
+          is_active: boolean | null
+          is_drop_in: boolean | null
+          is_public: boolean | null
+          logo_url: string | null
+          match_duration_default: number | null
+          name: string
+          points_to_win: number | null
+          primary_color: string | null
+          registration_fields: Json
+          scoring_format: string | null
+          scoring_type: string | null
+          secondary_color: string | null
+          updated_at: string | null
+          vat_rate: number | null
+          whatsapp_url: string | null
+          win_by_two: boolean | null
+        }
+        Insert: {
+          background_url?: string | null
+          best_of?: number | null
+          category?: string
+          competition_type?: string | null
+          created_at?: string | null
+          currency?: string | null
+          description?: string | null
+          display_name?: string | null
+          entry_fee?: number | null
+          event_type: Database["public"]["Enums"]["event_type"]
+          format: Database["public"]["Enums"]["event_format"]
+          id?: string
+          is_active?: boolean | null
+          is_drop_in?: boolean | null
+          is_public?: boolean | null
+          logo_url?: string | null
+          match_duration_default?: number | null
+          name: string
+          points_to_win?: number | null
+          primary_color?: string | null
+          registration_fields?: Json
+          scoring_format?: string | null
+          scoring_type?: string | null
+          secondary_color?: string | null
+          updated_at?: string | null
+          vat_rate?: number | null
+          whatsapp_url?: string | null
+          win_by_two?: boolean | null
+        }
+        Update: {
+          background_url?: string | null
+          best_of?: number | null
+          category?: string
+          competition_type?: string | null
+          created_at?: string | null
+          currency?: string | null
+          description?: string | null
+          display_name?: string | null
+          entry_fee?: number | null
+          event_type?: Database["public"]["Enums"]["event_type"]
+          format?: Database["public"]["Enums"]["event_format"]
+          id?: string
+          is_active?: boolean | null
+          is_drop_in?: boolean | null
+          is_public?: boolean | null
+          logo_url?: string | null
+          match_duration_default?: number | null
+          name?: string
+          points_to_win?: number | null
+          primary_color?: string | null
+          registration_fields?: Json
+          scoring_format?: string | null
+          scoring_type?: string | null
+          secondary_color?: string | null
+          updated_at?: string | null
+          vat_rate?: number | null
+          whatsapp_url?: string | null
+          win_by_two?: boolean | null
+        }
+        Relationships: []
+      }
       events: {
         Row: {
           aspect_ratio: string | null
@@ -693,6 +786,7 @@ export type Database = {
           slug: string | null
           start_date: string | null
           status: string | null
+          template_id: string | null
           third_place_enabled: boolean | null
           tournament_complete: boolean | null
           updated_at: string | null
@@ -740,6 +834,7 @@ export type Database = {
           slug?: string | null
           start_date?: string | null
           status?: string | null
+          template_id?: string | null
           third_place_enabled?: boolean | null
           tournament_complete?: boolean | null
           updated_at?: string | null
@@ -787,6 +882,7 @@ export type Database = {
           slug?: string | null
           start_date?: string | null
           status?: string | null
+          template_id?: string | null
           third_place_enabled?: boolean | null
           tournament_complete?: boolean | null
           updated_at?: string | null
@@ -796,6 +892,13 @@ export type Database = {
           winner_team_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "events_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "event_templates"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "events_venue_id_fkey"
             columns: ["venue_id"]

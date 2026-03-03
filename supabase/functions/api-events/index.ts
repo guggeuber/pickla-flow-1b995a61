@@ -76,9 +76,39 @@ Deno.serve(async (req) => {
     // POST /api-events/create
     if (req.method === 'POST' && path === 'create') {
       const body = await req.json();
-      const { name, eventType, format, venueId, startDate, endDate, numberOfCourts, pointsToWin, bestOf, winByTwo, matchDurationDefault, isPublic, scoringType, scoringFormat, competitionType } = body;
+      const { name, eventType, format, venueId, startDate, endDate, numberOfCourts, pointsToWin, bestOf, winByTwo, matchDurationDefault, isPublic, scoringType, scoringFormat, competitionType, templateId } = body;
 
       if (!name || !eventType || !format) return errorResponse('Missing name, eventType, or format');
+
+      // If templateId provided, fetch template and inherit locked fields
+      let templateFields: Record<string, any> = {};
+      if (templateId) {
+        const { data: tpl, error: tplErr } = await client.from('event_templates')
+          .select('*').eq('id', templateId).single();
+        if (tplErr || !tpl) return errorResponse('Template not found', 404);
+
+        templateFields = {
+          template_id: tpl.id,
+          logo_url: tpl.logo_url,
+          background_url: tpl.background_url,
+          primary_color: tpl.primary_color,
+          secondary_color: tpl.secondary_color,
+          scoring_type: tpl.scoring_type,
+          scoring_format: tpl.scoring_format,
+          points_to_win: tpl.points_to_win,
+          best_of: tpl.best_of,
+          win_by_two: tpl.win_by_two || false,
+          match_duration_default: tpl.match_duration_default,
+          competition_type: tpl.competition_type,
+          is_drop_in: tpl.is_drop_in || false,
+          is_public: tpl.is_public !== false,
+          registration_fields: tpl.registration_fields,
+          whatsapp_url: tpl.whatsapp_url,
+          category: tpl.category,
+          description: tpl.description,
+          display_name: tpl.display_name,
+        };
+      }
 
       const { data, error: insertErr } = await client.from('events').insert({
         name,
@@ -97,6 +127,16 @@ Deno.serve(async (req) => {
         scoring_format: scoringFormat || null,
         competition_type: competitionType || null,
         status: 'upcoming',
+        // Template fields override defaults but manual fields take precedence
+        ...templateFields,
+        // Always use the user-provided name
+        name,
+        event_type: eventType,
+        format,
+        venue_id: venueId || null,
+        start_date: startDate || null,
+        end_date: endDate || null,
+        number_of_courts: numberOfCourts || 1,
       }).select().single();
 
       if (insertErr) return errorResponse(insertErr.message);

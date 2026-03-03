@@ -19,7 +19,7 @@ Deno.serve(async (req) => {
       const slug = url.searchParams.get('slug');
       if (!id && !slug) return errorResponse('Missing id or slug');
 
-      const selectFields = 'id, name, display_name, description, event_type, format, category, start_date, end_date, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, whatsapp_url, is_drop_in, registration_fields, slug, venue_id, venues(id, name, address, city)';
+      const selectFields = 'id, name, display_name, description, event_type, format, category, start_date, end_date, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, whatsapp_url, is_drop_in, registration_fields, slug, venue_id, template_id, venues(id, name, address, city)';
 
       let query = client.from('events').select(selectFields).eq('is_public', true);
       if (slug) {
@@ -31,8 +31,8 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await query.single();
       if (qErr) return errorResponse('Event not found', 404);
 
-      // Get player count, category config, and event pricing in parallel
-      const [playerResult, catResult, pricingResult] = await Promise.all([
+      // Get player count, category config, event pricing, and template in parallel
+      const [playerResult, catResult, pricingResult, templateResult] = await Promise.all([
         client.from('players')
           .select('id', { count: 'exact', head: true })
           .eq('event_id', data.id),
@@ -52,16 +52,31 @@ Deno.serve(async (req) => {
               .limit(1)
               .maybeSingle()
           : Promise.resolve({ data: null }),
+        data.template_id
+          ? client.from('event_templates')
+              .select('id, name, entry_fee, currency, vat_rate, logo_url, display_name')
+              .eq('id', data.template_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
       ]);
 
       const categoryConfig = catResult.data || null;
       const eventPricing = pricingResult.data || null;
+      const template = templateResult.data || null;
+
+      // Template pricing takes precedence over venue pricing rules
+      const effectivePricing = template?.entry_fee
+        ? { price: template.entry_fee, vat_rate: template.vat_rate || 6, source: 'template', currency: template.currency || 'SEK' }
+        : eventPricing
+          ? { ...eventPricing, source: 'venue_rule' }
+          : null;
 
       return jsonResponse({
         ...data,
         player_count: playerResult.count || 0,
         category_config: categoryConfig,
-        event_pricing: eventPricing,
+        event_pricing: effectivePricing,
+        template,
       }, 200, 5);
     }
 
