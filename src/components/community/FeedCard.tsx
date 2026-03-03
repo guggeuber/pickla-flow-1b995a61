@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Heart, Share2, Trophy, UserCheck, CalendarPlus, Star } from "lucide-react";
+import { Heart, Share2, Trophy, UserCheck, CalendarPlus, Star, Swords } from "lucide-react";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -23,6 +23,9 @@ const feedTypeConfig: Record<string, { icon: typeof Trophy; label: string; color
   checkin: { icon: UserCheck, label: "Check-in", color: "#4CAF50" },
   event_created: { icon: CalendarPlus, label: "Nytt event", color: "#2196F3" },
   achievement: { icon: Star, label: "Achievement", color: "#FFD700" },
+  crew_challenge_created: { icon: Swords, label: "Clash", color: "#9C27B0" },
+  crew_challenge_accepted: { icon: Swords, label: "Clash accepterad", color: "#4CAF50" },
+  crew_challenge_completed: { icon: Swords, label: "Clash avslutad", color: "#E86C24" },
 };
 
 function timeAgo(dateStr: string): string {
@@ -99,6 +102,20 @@ export function FeedCard({ item }: { item: FeedItem }) {
           {item.content.format} · {item.content.event_type}
           {item.content.start_date && ` · ${new Date(item.content.start_date).toLocaleDateString("sv-SE", { day: "numeric", month: "short" })}`}
         </p>
+      );
+    }
+    if (item.feed_type?.startsWith("crew_challenge") && item.content) {
+      const c = item.content;
+      return (
+        <div className="flex items-center justify-between mt-2 rounded-xl p-3" style={{ background: "rgba(156,39,176,0.06)" }}>
+          <div className="text-center flex-1">
+            <p className="text-sm font-bold" style={{ color: "#3E3D39" }}>{c.challenger_name || "Crew"}</p>
+          </div>
+          <span className="text-xs font-black px-2" style={{ color: "rgba(62,61,57,0.3)" }}>⚔️</span>
+          <div className="text-center flex-1">
+            <p className="text-sm font-bold" style={{ color: "#3E3D39" }}>{c.challenged_name || "Crew"}</p>
+          </div>
+        </div>
       );
     }
     return null;
