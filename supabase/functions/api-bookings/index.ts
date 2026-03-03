@@ -153,6 +153,12 @@ Deno.serve(async (req) => {
       .neq('status', 'cancelled')
       .gte('start_time', start).lte('start_time', end);
 
+    // Get active pricing rules for this venue
+    const { data: pricingRules } = await admin.from('pricing_rules')
+      .select('id, name, type, price, days_of_week, time_from, time_to')
+      .eq('venue_id', venue.id).eq('is_active', true)
+      .order('price', { ascending: false });
+
     return jsonResponse({
       venue: { id: venue.id, name: venue.name },
       courts: courts || [],
@@ -162,6 +168,7 @@ Deno.serve(async (req) => {
         start: b.start_time,
         end: b.end_time,
       })),
+      pricingRules: pricingRules || [],
     }, 200, 10);
   }
 
@@ -206,11 +213,31 @@ Deno.serve(async (req) => {
 
     const publicUserId = await getOrCreatePublicBookingUserId(admin);
 
+    // Fetch pricing rules for this venue
+    const { data: pricingRules } = await admin.from('pricing_rules')
+      .select('type, price, days_of_week, time_from, time_to')
+      .eq('venue_id', venue.id).eq('is_active', true).eq('type', 'hourly')
+      .order('price', { ascending: false });
+
+    const bookingDayOfWeek = new Date(date + 'T12:00:00Z').getUTCDay();
+
     const bookings = [];
     for (const courtId of courtIds) {
       const { data: court } = await admin.from('venue_courts')
         .select('hourly_rate').eq('id', courtId).single();
-      const hourlyRate = court?.hourly_rate || 350;
+
+      // Find matching pricing rule: day + time window
+      let hourlyRate = court?.hourly_rate || 350;
+      if (pricingRules && pricingRules.length > 0) {
+        const matchingRule = pricingRules.find((r: any) => {
+          const daysMatch = !r.days_of_week || r.days_of_week.length === 0 || r.days_of_week.includes(bookingDayOfWeek);
+          const timeFrom = r.time_from || '00:00';
+          const timeTo = r.time_to || '23:59';
+          return daysMatch && startTime >= timeFrom.slice(0, 5) && startTime < timeTo.slice(0, 5);
+        });
+        if (matchingRule) hourlyRate = matchingRule.price;
+      }
+
       const durationHours = (new Date(endISO).getTime() - new Date(startISO).getTime()) / 3600000;
       const price = Math.round(hourlyRate * durationHours);
 
