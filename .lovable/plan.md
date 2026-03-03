@@ -1,160 +1,94 @@
 
 
-# Pickla Crews -- Gille/Klan-system inspirerat av gaming
+# Crew-traning med direkt bokning
 
-Spelare bildar "Crews" (gillen/klaner) som tranar tillsammans, tar i mot utmaningar och klimbar pa en gemensam rankinglista -- precis som i Clash of Clans eller Brawl Stars, men for pickleball.
+## Oversikt
 
----
+Nar en crew-ledare **eller co-leader** skapar ett traningstillfalle sa gors en riktig bokning i systemet direkt -- inget separat steg. Medlemmar kan sedan anmala sig till traningen.
 
-## Koncept
+## Flode
 
 ```text
-+----------------------------------------------+
-|              PICKLA CREWS                     |
-|                                               |
-|  Crew Card (som referensbilden)               |
-|  +----------------------------------------+  |
-|  | [Badge]  Nora the best     16/50       |  |
-|  |          "This is nora sigma join me"   |  |
-|  |                                         |  |
-|  |  Crew Score: 1826   Activity: Medium    |  |
-|  |  Required Level: 0  Type: Open          |  |
-|  |                                         |  |
-|  |          [ Ga med ]                     |  |
-|  +----------------------------------------+  |
-|                                               |
-|  Crew Members (rankade)                       |
-|  #1  An1         Rating 434                   |
-|  #2  Clyde       Rating 258                   |
-|  ...                                          |
-+----------------------------------------------+
+1. Leader/co-leader klickar "Ny traning" i crew-vyn
+2. Valjer datum, tid, langd, venue och bana
+3. Klickar "Boka traning"
+4. -> Riktig bokning skapas via api-bookings/create
+5. -> crew_sessions-rad skapas med booking_id kopplat
+6. -> Status = "booked" direkt
+7. Medlemmar ser traningen och kan anmala sig
 ```
 
----
+## Databasandringar
 
-## Nya databastabeller
+### Ny tabell: `crew_sessions`
 
-### 1. `crews` -- Gillen/klaner
-- `id` (uuid, PK)
-- `name` (text, unikt)
-- `description` (text, valfritt)
-- `badge_emoji` (text, t.ex. "flower" -- anvands for att valja badge-ikon)
-- `badge_color` (text, hex-farg for badge)
-- `crew_type` (text: "open", "invite_only", "closed")
-- `min_rating` (integer, default 0 -- krav for att ga med)
-- `max_members` (integer, default 50)
-- `created_by` (uuid, auth_user_id)
-- `venue_id` (uuid, nullable -- kan kopplas till en hall eller vara global)
-- `created_at`, `updated_at`
+| Kolumn | Typ | Beskrivning |
+|---|---|---|
+| id | uuid PK | |
+| crew_id | uuid FK -> crews | |
+| title | text | T.ex. "Tisdagstraning" |
+| description | text (nullable) | Valfri beskrivning |
+| session_date | date | |
+| start_time | timestamptz | |
+| end_time | timestamptz | |
+| venue_id | uuid (nullable) | |
+| venue_court_id | uuid (nullable) | |
+| booking_id | uuid (nullable) | Kopplas till bookings |
+| max_participants | integer (nullable) | null = obegransat |
+| status | text | "booked", "completed", "cancelled" |
+| created_by | uuid | auth user id |
+| created_at / updated_at | timestamptz | |
 
-### 2. `crew_members` -- Medlemmar
-- `id` (uuid, PK)
-- `crew_id` (uuid, FK -> crews)
-- `player_profile_id` (uuid, FK -> player_profiles)
-- `role` (text: "leader", "co_leader", "elder", "member")
-- `joined_at` (timestamptz)
+### Ny tabell: `crew_session_signups`
 
-### 3. `crew_challenges` -- Clash mellan crews
-- `id` (uuid, PK)
-- `challenger_crew_id` (uuid, FK -> crews)
-- `challenged_crew_id` (uuid, FK -> crews)
-- `status` (text: "pending", "accepted", "completed", "declined")
-- `message` (text, valfritt)
-- `result` (jsonb -- vinnare, matcher spelade, poang)
-- `created_at`, `completed_at`
+| Kolumn | Typ | Beskrivning |
+|---|---|---|
+| id | uuid PK | |
+| crew_session_id | uuid FK -> crew_sessions | |
+| player_profile_id | uuid FK -> player_profiles | |
+| status | text | "signed_up" / "cancelled" |
+| signed_up_at | timestamptz | |
 
 ### RLS-policyer
-- Crews: publikt lasbara, bara leader kan uppdatera/ta bort
-- Crew members: publikt lasbara, autentiserade kan ga med (INSERT), bara leader kan ta bort andra
-- Crew challenges: publikt lasbara, crew leaders kan skapa/svara
 
----
+- **crew_sessions**: Publikt lasbara. Leader **och co-leader** kan INSERT/UPDATE/DELETE (via `is_crew_leader` som redan inkluderar bade leader och co_leader). Samma funktion anvands for bokningsknappen.
+- **crew_session_signups**: Publikt lasbara. Crew-medlemmar kan INSERT sin egen rad. Kan DELETE sin egen rad.
 
-## Nya UI-komponenter
+Befintlig `is_crew_leader()` kontrollerar redan `role IN ('leader', 'co_leader')` -- ingen andring behovs dar.
 
-### Community-navigering -- ny flik "Crews"
-Utoka `CommunityNav.tsx` med en fjarde flik:
+## Nya komponenter
 
-```text
-[ Feed ]  [ Ranking ]  [ Crews ]  [ Profil ]
-```
+### `CreateSessionModal.tsx`
+Modal som leader/co-leader oppnar:
+- Titel-falt
+- Datumvaljare
+- Tidvaljare (klickbara tidsluckor)
+- Langdvaljare (60/90 min)
+- Venue + bana-val (hamtar venues och venue_courts)
+- Max deltagare (valfritt)
+- "Boka traning"-knapp som:
+  1. Anropar `api-bookings/create` for att skapa riktig bokning
+  2. Skapar `crew_sessions`-rad med `booking_id` och status `booked`
 
-### CrewsTab.tsx -- Oversikt
-- Lista alla crews sorterade pa "crew score" (summa av medlemmarnas rating)
-- Varje crew-kort visar: badge, namn, beskrivning, medlemsantal/max, crew score, typ (Open/Invite), krav
-- "Skapa Crew"-knapp for inloggade utan crew
-- Filter: "Alla" / "Oppna" / "Min hall"
+### `CrewSessionsList.tsx`
+Visas i `CrewDetailView` under medlemmar:
+- Listar kommande traningar med datum, tid, bana, antal anmalda
+- "Anmal dig" / "Avanmal"-knapp for crew-medlemmar
+- Badge som visar "Bokad" (gron)
 
-### CrewCard.tsx -- Enskilt crew-kort
-- Gaming-inspirerad design med badge/emblem, farg, och stor "Ga med"-knapp for oppna crews
-- Visa crew stats: Total score, aktivitetsniva, antal medlemmar
-- Klicka for att oppna crew-detaljvy
+## Andringar i befintliga filer
 
-### CrewDetailPage.tsx -- ny route `/community/crew/:id`
-- Fullstandig crew-vy (som referensbilden):
-  - Crew-header med badge, namn, beskrivning, kapacitet
-  - Stats-ruta: Crew Score, Activity, Required Level, Type
-  - "Ga med" / "Lamna"-knapp
-  - Medlemslista rankad pa rating med position, avatar, namn, rating
-  - "Utmana"-knapp for ledare av andra crews -- skapar en crew_challenge
+### `CrewDetailView.tsx`
+- Importera `CrewSessionsList` och `CreateSessionModal`
+- Lagg till "Ny traning"-knapp synlig for leader och co-leader
+- Visa sessionslistan i crew-detaljvyn
 
-### CrewBadge.tsx -- Visuellt emblem
-- Emoji-baserat badge med konfigurerbar bakgrundsfarg
-- Anvands i crew-kort, leaderboard och spelarens profil
+## Sammanfattning av filer
 
----
-
-## Andringar i befintliga komponenter
-
-### ProfileTab.tsx
-- Visa spelarens crew under profilkortet: "Crew: [badge] Nora the best"
-- Lank till crew-detaljsidan
-
-### LeaderboardTab.tsx
-- Ny sub-tab: "Spelare" / "Crews" -- crews-leaderboard visar crews rankade pa total score
-
-### CommunityPage.tsx
-- Lagg till "crews"-tab i state
-- Ny route `/community/crew/:id` i App.tsx
-
-### FeedTab.tsx (framtida)
-- Auto-genererade feed-poster nar: ny crew skapas, medlem gar med, crew challenge avslutas
-
----
-
-## Check-in-koppling
-
-Allt forblir lankat till inloggad spelare:
-- Nar en crew-medlem checkar in pa en hall, syns det i crew-aktiviteten
-- Crew score beraknas fran alla medlemmars `pickla_rating`
-- Matcher spelade av crew-medlemmar rakas in i crewens aktivitetsniva
-- Crew activity level beraknas som: "High" (5+ matcher/vecka), "Medium" (2-4), "Low" (0-1)
-
----
-
-## Teknisk plan
-
-### Nya filer
-- `src/components/community/CrewsTab.tsx` -- crew-lista
-- `src/components/community/CrewCard.tsx` -- enskilt crew-kort
-- `src/components/community/CrewDetailView.tsx` -- fullstandig crew-vy
-- `src/components/community/CrewBadge.tsx` -- visuellt emblem
-- `src/components/community/CreateCrewModal.tsx` -- skapa ny crew
-
-### Andrade filer
-- `src/pages/CommunityPage.tsx` -- lagg till "crews"-tab
-- `src/components/community/CommunityNav.tsx` -- fjarde flik
-- `src/components/community/ProfileTab.tsx` -- visa crew-koppling
-- `src/components/community/LeaderboardTab.tsx` -- crew-rankinglista
-- `src/App.tsx` -- route for crew-detalj (hanteras inuti CommunityPage)
-
-### Databasmigrering
-- Skapa tabellerna `crews`, `crew_members`, `crew_challenges` med RLS
-- Databasvy `crew_scores` som beraknar summan av medlemmars rating per crew
-
-### Designprinciper
-- Gaming-inspirerat men med Picklas varma, rosa estetik
-- Badges med emoji + farg istallet for bilduppladdning (enklare, snabbare)
-- Touch-first, staggered animationer med framer-motion
-- Crew-korten har en tydlig visuell hierarki: badge, namn, stats, CTA
+| Vad | Fil |
+|---|---|
+| DB-migrering | `supabase/migrations/xxx_crew_sessions.sql` |
+| Skapa session + boka | `src/components/community/CreateSessionModal.tsx` |
+| Sessionslista + anmalan | `src/components/community/CrewSessionsList.tsx` |
+| Andrad | `src/components/community/CrewDetailView.tsx` |
 
