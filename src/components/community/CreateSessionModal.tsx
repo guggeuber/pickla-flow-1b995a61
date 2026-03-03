@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiPost } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { Loader2, Calendar, Clock, MapPin, Users } from "lucide-react";
+import { Loader2, Calendar, Clock, MapPin, Users, Lock } from "lucide-react";
 import { format, addDays, addMinutes, parseISO } from "date-fns";
 import { sv } from "date-fns/locale";
 
@@ -28,6 +28,7 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
   const [venueId, setVenueId] = useState<string>("");
   const [courtIds, setCourtIds] = useState<string[]>([]);
   const [maxParticipants, setMaxParticipants] = useState<string>("");
+  const [isPrivate, setIsPrivate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const dates = useMemo(() => {
@@ -116,6 +117,7 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
         max_participants: maxParticipants ? parseInt(maxParticipants) : null,
         status: "booked",
         created_by: user.id,
+        is_private: isPrivate,
       }));
 
       const { error: sessionErr } = await supabase.from("crew_sessions" as any).insert(sessionInserts);
@@ -138,6 +140,7 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
     setMaxParticipants("");
     setDuration(60);
     setCourtIds([]);
+    setIsPrivate(false);
   };
 
   const canSubmit = !!selectedTime && courtIds.length > 0 && !!venueId;
@@ -349,6 +352,35 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
                 min={2}
               />
             </div>
+
+            {/* Private toggle */}
+            <button
+              onClick={() => setIsPrivate(!isPrivate)}
+              className="flex items-center gap-3 rounded-xl p-3.5 transition-all active:scale-[0.98] w-full text-left"
+              style={{
+                background: isPrivate ? "rgba(232,108,36,0.08)" : "rgba(62,61,57,0.04)",
+                border: isPrivate ? "1.5px solid rgba(232,108,36,0.25)" : "1.5px solid rgba(62,61,57,0.08)",
+              }}
+            >
+              <Lock className="w-4 h-4 shrink-0" style={{ color: isPrivate ? "#E86C24" : "rgba(62,61,57,0.35)" }} />
+              <div className="flex-1">
+                <span className="text-sm font-semibold block" style={{ color: "#3E3D39" }}>
+                  Privat träning
+                </span>
+                <span className="text-[11px] block" style={{ color: "rgba(62,61,57,0.5)" }}>
+                  {isPrivate ? "Syns bara i crew-vyn" : "Syns i community-flödet"}
+                </span>
+              </div>
+              <div
+                className="w-10 h-6 rounded-full p-0.5 transition-colors"
+                style={{ background: isPrivate ? "#E86C24" : "rgba(62,61,57,0.15)" }}
+              >
+                <div
+                  className="w-5 h-5 rounded-full bg-white transition-transform"
+                  style={{ transform: isPrivate ? "translateX(16px)" : "translateX(0)" }}
+                />
+              </div>
+            </button>
 
             {/* Spacer for sticky button */}
             <div className="h-20" />
