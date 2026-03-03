@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -18,7 +19,7 @@ Deno.serve(async (req) => {
       if (!id) return errorResponse('Missing id');
 
       const { data, error: qErr } = await client.from('events')
-        .select('id, name, display_name, event_type, format, start_date, end_date, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, venue_id, venues(id, name, address, city)')
+        .select('id, name, display_name, description, event_type, format, category, start_date, end_date, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, whatsapp_url, is_drop_in, registration_fields, venue_id, venues(id, name, address, city)')
         .eq('id', id)
         .eq('is_public', true)
         .single();
@@ -33,18 +34,42 @@ Deno.serve(async (req) => {
       return jsonResponse({ ...data, player_count: count || 0 }, 200, 5);
     }
 
-    // POST /api-event-public/register — register a player for an event
+    // GET /api-event-public/list?venueId=X — list public events
+    if (req.method === 'GET' && path === 'list') {
+      const venueId = url.searchParams.get('venueId');
+      const category = url.searchParams.get('category');
+      const excludeId = url.searchParams.get('excludeId');
+
+      let query = client.from('events')
+        .select('id, name, display_name, category, start_date, status, logo_url, primary_color, is_drop_in, format, venue_id, venues(id, name)')
+        .eq('is_public', true)
+        .in('status', ['active', 'upcoming', 'in_progress'])
+        .order('start_date', { ascending: true })
+        .limit(10);
+
+      if (venueId) query = query.eq('venue_id', venueId);
+      if (category) query = query.eq('category', category);
+      if (excludeId) query = query.neq('id', excludeId);
+
+      const { data, error: qErr } = await query;
+      if (qErr) return errorResponse(qErr.message);
+
+      return jsonResponse(data, 200, 10);
+    }
+
+    // POST /api-event-public/register — register a player + auto-create account
     if (req.method === 'POST' && path === 'register') {
       const body = await req.json();
-      const { eventId, name, email } = body;
+      const { eventId, name, phone, email, level } = body;
 
       if (!eventId || !name) return errorResponse('Missing eventId or name');
       if (name.length > 100) return errorResponse('Name too long');
+      if (phone && phone.length > 20) return errorResponse('Phone too long');
       if (email && email.length > 255) return errorResponse('Email too long');
 
       // Check event exists and is public
       const { data: event, error: evErr } = await client.from('events')
-        .select('id, status')
+        .select('id, status, is_drop_in')
         .eq('id', eventId)
         .eq('is_public', true)
         .single();
@@ -52,22 +77,59 @@ Deno.serve(async (req) => {
       if (evErr || !event) return errorResponse('Event not found', 404);
       if (event.status === 'completed') return errorResponse('Event is completed');
 
-      // Check duplicate by email if provided
-      if (email) {
+      // Check duplicate by phone if provided
+      if (phone) {
         const { data: existing } = await client.from('players')
           .select('id')
           .eq('event_id', eventId)
-          .eq('email', email)
+          .eq('email', phone)
           .maybeSingle();
 
-        if (existing) return errorResponse('Already registered with this email');
+        if (existing) return errorResponse('Redan anmäld med detta nummer');
+      }
+
+      // Auto-create auth account with phone as identifier
+      let authUserId: string | null = null;
+      if (phone) {
+        // Check if user already exists by looking at player_profiles with this phone
+        const { data: existingProfile } = await client.from('player_profiles')
+          .select('auth_user_id')
+          .eq('phone', phone)
+          .maybeSingle();
+
+        if (existingProfile) {
+          authUserId = existingProfile.auth_user_id;
+        } else if (email) {
+          // Create new account with email + phone
+          const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+          const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+          const adminClient = createClient(supabaseUrl, serviceKey, {
+            auth: { autoRefreshToken: false, persistSession: false },
+          });
+
+          const { data: newUser, error: authErr } = await adminClient.auth.admin.createUser({
+            email,
+            phone,
+            user_metadata: { display_name: name.trim() },
+            email_confirm: true,
+          });
+
+          if (!authErr && newUser?.user) {
+            authUserId = newUser.user.id;
+            // Update player_profile with phone
+            await client.from('player_profiles')
+              .update({ phone: phone.trim(), display_name: name.trim() })
+              .eq('auth_user_id', authUserId);
+          }
+        }
       }
 
       const { data: player, error: insErr } = await client.from('players')
         .insert({
           event_id: eventId,
           name: name.trim(),
-          email: email?.trim() || null,
+          email: phone?.trim() || email?.trim() || null, // store phone in email field for now
+          auth_user_id: authUserId,
         })
         .select()
         .single();
