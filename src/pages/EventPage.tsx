@@ -10,12 +10,12 @@ import { toast } from "sonner";
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-// WhatsApp groups per category (hardcoded)
+// WhatsApp fallback groups (used if no category config exists)
 const WHATSAPP_GROUPS: Record<string, { label: string; url: string }> = {
-  open_play: { label: "Pickla Open", url: "https://chat.whatsapp.com/PLACEHOLDER_OPEN" },
-  social: { label: "Fredagsklubben", url: "https://chat.whatsapp.com/PLACEHOLDER_SOCIAL" },
-  training: { label: "Träningsgruppen", url: "https://chat.whatsapp.com/PLACEHOLDER_TRAINING" },
-  tournament: { label: "Turneringar", url: "https://chat.whatsapp.com/PLACEHOLDER_TOURNAMENT" },
+  open_play: { label: "Pickla Open", url: "" },
+  social: { label: "Fredagsklubben", url: "" },
+  training: { label: "Träningsgruppen", url: "" },
+  tournament: { label: "Turneringar", url: "" },
 };
 
 function usePublicEvent(id?: string, slug?: string) {
@@ -125,8 +125,10 @@ export default function EventPage() {
   const endDate = event.end_date ? new Date(event.end_date) : null;
   const venue = event.venues;
   const fields: string[] = event.registration_fields || ["name", "phone"];
-  const whatsapp = event.whatsapp_url || WHATSAPP_GROUPS[event.category]?.url;
-  const whatsappLabel = event.display_name || event.name || WHATSAPP_GROUPS[event.category]?.label || "WhatsApp-grupp";
+  const catConfig = event.category_config;
+  const eventLogo = event.logo_url || catConfig?.logo_url;
+  const whatsapp = event.whatsapp_url || catConfig?.whatsapp_url || WHATSAPP_GROUPS[event.category]?.url;
+  const whatsappLabel = event.display_name || event.name || catConfig?.display_name || WHATSAPP_GROUPS[event.category]?.label || "WhatsApp-grupp";
 
   const shareUrl = event.slug
     ? `${window.location.origin}/e/${event.slug}`
@@ -167,8 +169,8 @@ export default function EventPage() {
 
       {/* Event header */}
       <div className="px-5 pb-5">
-        {event.logo_url && (
-          <img src={event.logo_url} alt="" className="w-14 h-14 rounded-2xl object-cover mb-5" />
+        {eventLogo && (
+          <img src={eventLogo} alt="" className="w-14 h-14 rounded-2xl object-cover mb-5" />
         )}
 
         <h1 className="text-[28px] font-bold text-neutral-900 tracking-tight leading-tight" style={{ fontFamily: FONT_GROTESK }}>

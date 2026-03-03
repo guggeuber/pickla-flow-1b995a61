@@ -31,12 +31,27 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await query.single();
       if (qErr) return errorResponse('Event not found', 404);
 
-      // Get player count
-      const { count } = await client.from('players')
-        .select('id', { count: 'exact', head: true })
-        .eq('event_id', data.id);
+      // Get player count + category config in parallel
+      const [playerResult, catResult] = await Promise.all([
+        client.from('players')
+          .select('id', { count: 'exact', head: true })
+          .eq('event_id', data.id),
+        data.venue_id
+          ? client.from('venue_event_categories')
+              .select('*')
+              .eq('venue_id', data.venue_id)
+              .eq('category_key', data.category)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
 
-      return jsonResponse({ ...data, player_count: count || 0 }, 200, 5);
+      const categoryConfig = catResult.data || null;
+
+      return jsonResponse({
+        ...data,
+        player_count: playerResult.count || 0,
+        category_config: categoryConfig,
+      }, 200, 5);
     }
 
     // GET /api-event-public/list?venueId=X — list public events
