@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiGet, apiPost } from "@/lib/api";
 import { format } from "date-fns";
 import { sv } from "date-fns/locale";
-import { CalendarDays, MapPin, Users, ArrowLeft, CheckCircle2, Loader2, MessageCircle, ChevronRight } from "lucide-react";
+import { CalendarDays, MapPin, Users, ArrowLeft, CheckCircle2, Loader2, MessageCircle, ChevronRight, Share2 } from "lucide-react";
 import { toast } from "sonner";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
@@ -18,11 +18,16 @@ const WHATSAPP_GROUPS: Record<string, { label: string; url: string }> = {
   tournament: { label: "Turneringar", url: "https://chat.whatsapp.com/PLACEHOLDER_TOURNAMENT" },
 };
 
-function usePublicEvent(id?: string) {
+function usePublicEvent(id?: string, slug?: string) {
   return useQuery({
-    queryKey: ["public-event", id],
-    enabled: !!id,
-    queryFn: () => apiGet("api-event-public", "detail", { id: id! }),
+    queryKey: ["public-event", id || slug],
+    enabled: !!(id || slug),
+    queryFn: () => {
+      const params: Record<string, string> = {};
+      if (slug) params.slug = slug;
+      else if (id) params.id = id;
+      return apiGet("api-event-public", "detail", params);
+    },
   });
 }
 
@@ -55,10 +60,15 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export default function EventPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id, slug } = useParams<{ id: string; slug: string }>();
   const navigate = useNavigate();
-  const { data: event, isLoading, error } = usePublicEvent(id);
-  const { data: otherEvents } = useOtherEvents(event?.venue_id, id);
+  const location = useLocation();
+  const isSlugRoute = location.pathname.startsWith("/e/");
+  const { data: event, isLoading, error } = usePublicEvent(
+    isSlugRoute ? undefined : id,
+    isSlugRoute ? (slug || id) : undefined
+  );
+  const { data: otherEvents } = useOtherEvents(event?.venue_id, event?.id);
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -80,9 +90,9 @@ export default function EventPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !id) return;
+    if (!name.trim() || !event?.id) return;
     registerMutation.mutate({
-      eventId: id,
+      eventId: event.id,
       name: name.trim(),
       phone: phone.trim(),
       email: email.trim(),
@@ -118,10 +128,27 @@ export default function EventPage() {
   const whatsapp = event.whatsapp_url || WHATSAPP_GROUPS[event.category]?.url;
   const whatsappLabel = WHATSAPP_GROUPS[event.category]?.label || "WhatsApp-grupp";
 
+  const shareUrl = event.slug
+    ? `${window.location.origin}/e/${event.slug}`
+    : `${window.location.origin}/event/${event.id}`;
+
+  const handleShare = async () => {
+    const shareData = {
+      title: event.display_name || event.name,
+      url: shareUrl,
+    };
+    if (navigator.share) {
+      try { await navigator.share(shareData); } catch {}
+    } else {
+      navigator.clipboard.writeText(shareUrl);
+      toast.success("Länk kopierad!");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white pb-20">
       {/* Top bar */}
-      <div className="px-5 pt-12 pb-3">
+      <div className="px-5 pt-12 pb-3 flex items-center justify-between">
         <Link
           to="/links"
           className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
@@ -130,6 +157,12 @@ export default function EventPage() {
           <ArrowLeft className="w-3.5 h-3.5" />
           tillbaka
         </Link>
+        <button
+          onClick={handleShare}
+          className="p-2 -mr-2 text-neutral-400 active:opacity-60 transition-opacity"
+        >
+          <Share2 className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Event header */}
@@ -341,7 +374,7 @@ export default function EventPage() {
                     setPhone("");
                     setEmail("");
                     setLevel("");
-                    navigate(`/event/${evt.id}`);
+                    navigate(evt.slug ? `/e/${evt.slug}` : `/event/${evt.id}`);
                   }}
                   className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl bg-neutral-50 active:bg-neutral-100 transition-colors text-left"
                 >

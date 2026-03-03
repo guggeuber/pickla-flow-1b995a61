@@ -122,6 +122,9 @@ Deno.serve(async (req) => {
         playerInfoGeneral: 'player_info_general',
         thirdPlaceEnabled: 'third_place_enabled',
         showOnSticker: 'show_on_sticker',
+        description: 'description', category: 'category',
+        isDropIn: 'is_drop_in', registrationFields: 'registration_fields',
+        whatsappUrl: 'whatsapp_url', slug: 'slug',
       };
 
       const dbUpdates: Record<string, any> = {};

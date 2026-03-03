@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
-import { Loader2, Plus, ChevronRight, Trash2, Eye, EyeOff, Tag } from "lucide-react";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -9,7 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface EventRow {
   id: string;
@@ -23,6 +25,12 @@ interface EventRow {
   is_public: boolean | null;
   show_on_sticker: boolean;
   number_of_courts: number | null;
+  description?: string | null;
+  category?: string;
+  is_drop_in?: boolean;
+  registration_fields?: string[];
+  whatsapp_url?: string | null;
+  slug?: string | null;
 }
 
 function useVenueEvents(venueId?: string) {
@@ -36,6 +44,13 @@ function useVenueEvents(venueId?: string) {
   });
 }
 
+function generateSlug(name: string): string {
+  return name.toLowerCase()
+    .replace(/[åä]/g, 'a').replace(/ö/g, 'o')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
 /* ── Create Event Dialog ── */
 function CreateEventDialog({ venueId, onCreated }: { venueId: string; onCreated: () => void }) {
   const [open, setOpen] = useState(false);
@@ -43,6 +58,7 @@ function CreateEventDialog({ venueId, onCreated }: { venueId: string; onCreated:
   const [displayName, setDisplayName] = useState("");
   const [eventType, setEventType] = useState("tournament");
   const [eventFormat, setEventFormat] = useState("round_robin");
+  const [category, setCategory] = useState("tournament");
   const [startDate, setStartDate] = useState("");
   const [isPending, setIsPending] = useState(false);
 
@@ -141,7 +157,28 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
   const [isPublic, setIsPublic] = useState(event.is_public !== false);
   const [displayName, setDisplayName] = useState(event.display_name || "");
   const [status, setStatus] = useState(event.status || "upcoming");
+  const [description, setDescription] = useState(event.description || "");
+  const [category, setCategory] = useState(event.category || "tournament");
+  const [isDropIn, setIsDropIn] = useState(event.is_drop_in || false);
+  const [whatsappUrl, setWhatsappUrl] = useState(event.whatsapp_url || "");
+  const [slug, setSlug] = useState(event.slug || "");
+  const [regFields, setRegFields] = useState<string[]>(event.registration_fields || ["name", "phone"]);
   const [saving, setSaving] = useState(false);
+
+  const toggleRegField = (field: string) => {
+    setRegFields((prev) =>
+      prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field]
+    );
+  };
+
+  const eventUrl = slug
+    ? `${window.location.origin}/e/${slug}`
+    : `${window.location.origin}/event/${event.id}`;
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(eventUrl);
+    toast.success("Länk kopierad!");
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -150,8 +187,14 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
         id: event.id,
         displayName: displayName.trim() || null,
         isPublic,
-        showOnSticker: showOnSticker,
+        showOnSticker,
         status,
+        description: description.trim() || null,
+        category,
+        isDropIn: isDropIn,
+        whatsappUrl: whatsappUrl.trim() || null,
+        slug: slug.trim() || null,
+        registrationFields: regFields,
       });
       toast.success("Event uppdaterat!");
       qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
@@ -178,6 +221,24 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
     <div className="space-y-4">
       <button onClick={onBack} className="text-sm text-primary font-semibold hover:underline">← Tillbaka</button>
 
+      {/* Shareable link */}
+      <div className="glass-card rounded-2xl p-4">
+        <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Delbar länk</Label>
+        <div className="flex items-center gap-2 mt-2">
+          <div className="flex-1 text-xs text-muted-foreground bg-secondary rounded-xl px-3 py-2.5 truncate font-mono">
+            {eventUrl}
+          </div>
+          <Button size="icon" variant="ghost" onClick={copyLink} className="shrink-0">
+            <Copy className="w-4 h-4" />
+          </Button>
+          <Button size="icon" variant="ghost" asChild className="shrink-0">
+            <a href={eventUrl} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </Button>
+        </div>
+      </div>
+
       <div className="glass-card rounded-2xl p-4 space-y-4">
         <div>
           <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Namn</Label>
@@ -187,6 +248,30 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
           <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Visningsnamn (sticker-text)</Label>
           <Input className="mt-1" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="T.ex. fredagsklubben 🎉" />
         </div>
+        <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Slug (för snygg URL)</Label>
+          <div className="flex gap-2 mt-1">
+            <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="t.ex. fredagsklubben-mars" />
+            <Button variant="outline" size="sm" onClick={() => setSlug(generateSlug(displayName || event.name))}>
+              Auto
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-1">Lämna tomt för att använda event-ID</p>
+        </div>
+
+        <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Kategori</Label>
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="tournament">Turnering</SelectItem>
+              <SelectItem value="open_play">Open Play</SelectItem>
+              <SelectItem value="training">Träning</SelectItem>
+              <SelectItem value="social">Social / Klubb</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
         <div>
           <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Status</Label>
           <Select value={status} onValueChange={setStatus}>
@@ -199,21 +284,74 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
             </SelectContent>
           </Select>
         </div>
-        <div className="flex items-center justify-between py-2">
-          <div>
-            <p className="text-sm font-semibold text-foreground">Visa som sticker</p>
-            <p className="text-[10px] text-muted-foreground">Visas som klickbar sticker på landningssidan</p>
-          </div>
-          <Switch checked={showOnSticker} onCheckedChange={setShowOnSticker} />
+
+        <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Beskrivning</Label>
+          <Textarea
+            className="mt-1 min-h-[100px]"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Beskriv eventet, regler, tider, pris..."
+          />
         </div>
-        <div className="flex items-center justify-between py-2">
-          <div>
-            <p className="text-sm font-semibold text-foreground">Publikt event</p>
-            <p className="text-[10px] text-muted-foreground">Synligt för alla besökare</p>
+
+        <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">WhatsApp-grupplänk</Label>
+          <Input className="mt-1" value={whatsappUrl} onChange={(e) => setWhatsappUrl(e.target.value)} placeholder="https://chat.whatsapp.com/..." />
+        </div>
+
+        {/* Toggles */}
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Drop-in</p>
+              <p className="text-[10px] text-muted-foreground">Ingen föranmälan krävs</p>
+            </div>
+            <Switch checked={isDropIn} onCheckedChange={setIsDropIn} />
           </div>
-          <Switch checked={isPublic} onCheckedChange={setIsPublic} />
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Visa som sticker</p>
+              <p className="text-[10px] text-muted-foreground">Klickbar sticker på landningssidan</p>
+            </div>
+            <Switch checked={showOnSticker} onCheckedChange={setShowOnSticker} />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Publikt event</p>
+              <p className="text-[10px] text-muted-foreground">Synligt för alla besökare</p>
+            </div>
+            <Switch checked={isPublic} onCheckedChange={setIsPublic} />
+          </div>
         </div>
       </div>
+
+      {/* Registration fields config */}
+      {!isDropIn && (
+        <div className="glass-card rounded-2xl p-4 space-y-3">
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Anmälningsfält</Label>
+          <p className="text-[10px] text-muted-foreground">Välj vilka fält som visas i anmälningsformuläret</p>
+          {[
+            { id: "name", label: "Namn", desc: "Alltid med" },
+            { id: "phone", label: "Telefon", desc: "För WhatsApp-kommunikation" },
+            { id: "email", label: "E-post", desc: "Valfritt kontaktfält" },
+            { id: "level", label: "Nivå", desc: "Nybörjare / Medel / Avancerad" },
+          ].map((f) => (
+            <div key={f.id} className="flex items-center gap-3">
+              <Checkbox
+                id={`reg-${f.id}`}
+                checked={regFields.includes(f.id)}
+                onCheckedChange={() => f.id === "name" ? null : toggleRegField(f.id)}
+                disabled={f.id === "name"}
+              />
+              <label htmlFor={`reg-${f.id}`} className="flex-1">
+                <p className="text-sm font-medium text-foreground">{f.label}</p>
+                <p className="text-[10px] text-muted-foreground">{f.desc}</p>
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="flex gap-2">
         <Button onClick={handleSave} disabled={saving} className="flex-1">

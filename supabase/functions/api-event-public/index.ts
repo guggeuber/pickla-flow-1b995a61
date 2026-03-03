@@ -13,23 +13,28 @@ Deno.serve(async (req) => {
   try {
     const client = getServiceClient();
 
-    // GET /api-event-public/detail?id=X — public event info
+    // GET /api-event-public/detail?id=X or ?slug=X — public event info
     if (req.method === 'GET' && path === 'detail') {
       const id = url.searchParams.get('id');
-      if (!id) return errorResponse('Missing id');
+      const slug = url.searchParams.get('slug');
+      if (!id && !slug) return errorResponse('Missing id or slug');
 
-      const { data, error: qErr } = await client.from('events')
-        .select('id, name, display_name, description, event_type, format, category, start_date, end_date, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, whatsapp_url, is_drop_in, registration_fields, venue_id, venues(id, name, address, city)')
-        .eq('id', id)
-        .eq('is_public', true)
-        .single();
+      const selectFields = 'id, name, display_name, description, event_type, format, category, start_date, end_date, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, whatsapp_url, is_drop_in, registration_fields, slug, venue_id, venues(id, name, address, city)';
 
+      let query = client.from('events').select(selectFields).eq('is_public', true);
+      if (slug) {
+        query = query.eq('slug', slug);
+      } else {
+        query = query.eq('id', id!);
+      }
+
+      const { data, error: qErr } = await query.single();
       if (qErr) return errorResponse('Event not found', 404);
 
       // Get player count
       const { count } = await client.from('players')
         .select('id', { count: 'exact', head: true })
-        .eq('event_id', id);
+        .eq('event_id', data.id);
 
       return jsonResponse({ ...data, player_count: count || 0 }, 200, 5);
     }

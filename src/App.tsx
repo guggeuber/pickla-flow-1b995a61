@@ -48,6 +48,7 @@ const App = () => (
             <Route path="/community" element={<CommunityPage />} />
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="/event/:id" element={<EventPage />} />
+            <Route path="/e/:slug" element={<EventPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
