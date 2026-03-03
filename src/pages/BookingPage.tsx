@@ -74,6 +74,21 @@ export default function BookingPage() {
   const openingHours = data?.openingHours;
   const existingBookings = data?.bookings || [];
   const venueName = data?.venue?.name || "";
+  const pricingRules: any[] = data?.pricingRules || [];
+
+  // Resolve price for a court based on pricing rules, selected day + time
+  const getCourtPrice = (court: CourtData): number => {
+    if (!selectedTime) return court.hourly_rate || 0;
+    const dayOfWeek = selectedDate.getDay();
+    const matchingRule = pricingRules.find((r: any) => {
+      if (r.type !== "hourly") return false;
+      const daysMatch = !r.days_of_week || r.days_of_week.length === 0 || r.days_of_week.includes(dayOfWeek);
+      const timeFrom = (r.time_from || "00:00").slice(0, 5);
+      const timeTo = (r.time_to || "23:59").slice(0, 5);
+      return daysMatch && selectedTime >= timeFrom && selectedTime < timeTo;
+    });
+    return matchingRule ? matchingRule.price : (court.hourly_rate || 0);
+  };
 
   const timeSlots = useMemo(
     () =>
@@ -116,9 +131,9 @@ export default function BookingPage() {
   const totalPrice = useMemo(() => {
     return selectedCourts.reduce((sum, id) => {
       const court = courts.find((c) => c.id === id);
-      return sum + (court?.hourly_rate || 350);
+      return sum + (court ? getCourtPrice(court) : 0);
     }, 0);
-  }, [selectedCourts, courts]);
+  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate]);
 
   const bookMutation = useMutation({
     mutationFn: async () => {
@@ -387,7 +402,7 @@ export default function BookingPage() {
                         }`}
                         style={{ fontFamily: FONT_MONO }}
                       >
-                        {court.hourly_rate || 350} kr/h
+                        {getCourtPrice(court)} kr/h
                       </p>
                       {!available && (
                         <span
