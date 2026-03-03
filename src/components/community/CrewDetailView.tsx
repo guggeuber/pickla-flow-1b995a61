@@ -319,7 +319,7 @@ export function CrewDetailView({ crewId, onBack }: Props) {
         >
           🎾 Träningar
         </h3>
-        <CrewSessionsList crewId={crewId} isMember={!!myMembership} />
+        <CrewSessionsList crewId={crewId} isMember={!!myMembership} isLeader={isLeader} />
       </motion.div>
 
       {/* Challenges */}

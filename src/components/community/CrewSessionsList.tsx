@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { apiPatch } from "@/lib/api";
 import { motion } from "framer-motion";
-import { Calendar, Clock, MapPin, Users, Check, X } from "lucide-react";
+import { Calendar, Clock, MapPin, Users, Check, X, Trash2 } from "lucide-react";
 import { format, parseISO, isBefore } from "date-fns";
 import { sv } from "date-fns/locale";
 import { toast } from "sonner";
@@ -13,12 +14,14 @@ const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } };
 interface Props {
   crewId: string;
   isMember: boolean;
+  isLeader?: boolean;
 }
 
-export function CrewSessionsList({ crewId, isMember }: Props) {
+export function CrewSessionsList({ crewId, isMember, isLeader }: Props) {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   const { data: sessions } = useQuery({
     queryKey: ["crew-sessions", crewId],
@@ -119,6 +122,33 @@ export function CrewSessionsList({ crewId, isMember }: Props) {
     }
   };
 
+  const handleCancelSession = async (session: any) => {
+    if (!confirm("Vill du avboka denna träning? Bokningen avbokas också.")) return;
+    setCancellingId(session.id);
+    try {
+      // Cancel the booking if linked
+      if (session.booking_id) {
+        await apiPatch("api-bookings", "update", {
+          bookingId: session.booking_id,
+          status: "cancelled",
+        });
+      }
+      // Update crew_session status to cancelled
+      const { error } = await supabase
+        .from("crew_sessions" as any)
+        .update({ status: "cancelled" })
+        .eq("id", session.id);
+      if (error) throw error;
+
+      toast.success("Träning avbokad 🗑️");
+      qc.invalidateQueries({ queryKey: ["crew-sessions", crewId] });
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte avboka");
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const getCourtName = (courtId: string) => courts?.find((c) => c.id === courtId)?.name || "";
 
   if (!sessions?.length) {
@@ -179,7 +209,7 @@ export function CrewSessionsList({ crewId, isMember }: Props) {
               </span>
             </div>
 
-            {/* Signups count */}
+            {/* Signups count + actions */}
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1 text-[11px]" style={{ color: "rgba(62,61,57,0.5)" }}>
                 <Users className="w-3 h-3" />
@@ -187,29 +217,48 @@ export function CrewSessionsList({ crewId, isMember }: Props) {
                 {session.max_participants ? ` / ${session.max_participants}` : ""} anmälda
               </span>
 
-              {/* Signup/cancel button */}
-              {isMember && user && (
-                <button
-                  onClick={() => (signed ? handleCancel(session.id) : handleSignup(session.id))}
-                  disabled={loadingId === session.id || (!signed && isFull)}
-                  className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all active:scale-95 flex items-center gap-1 disabled:opacity-50"
-                  style={{
-                    background: signed ? "rgba(62,61,57,0.06)" : "#E86C24",
-                    color: signed ? "rgba(62,61,57,0.6)" : "#fff",
-                    border: signed ? "1px solid rgba(62,61,57,0.1)" : "none",
-                  }}
-                >
-                  {signed ? (
-                    <>
-                      <X className="w-3 h-3" /> Avanmäl
-                    </>
-                  ) : (
-                    <>
-                      <Check className="w-3 h-3" /> Anmäl dig
-                    </>
-                  )}
-                </button>
-              )}
+              <div className="flex items-center gap-1.5">
+                {/* Cancel session button for leaders */}
+                {isLeader && (
+                  <button
+                    onClick={() => handleCancelSession(session)}
+                    disabled={cancellingId === session.id}
+                    className="rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-all active:scale-95 flex items-center gap-1 disabled:opacity-50"
+                    style={{
+                      background: "rgba(244,67,54,0.08)",
+                      color: "#F44336",
+                      border: "1px solid rgba(244,67,54,0.15)",
+                    }}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    {cancellingId === session.id ? "..." : "Avboka"}
+                  </button>
+                )}
+
+                {/* Signup/cancel signup button */}
+                {isMember && user && (
+                  <button
+                    onClick={() => (signed ? handleCancel(session.id) : handleSignup(session.id))}
+                    disabled={loadingId === session.id || (!signed && isFull)}
+                    className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all active:scale-95 flex items-center gap-1 disabled:opacity-50"
+                    style={{
+                      background: signed ? "rgba(62,61,57,0.06)" : "#E86C24",
+                      color: signed ? "rgba(62,61,57,0.6)" : "#fff",
+                      border: signed ? "1px solid rgba(62,61,57,0.1)" : "none",
+                    }}
+                  >
+                    {signed ? (
+                      <>
+                        <X className="w-3 h-3" /> Avanmäl
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3 h-3" /> Anmäl dig
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </motion.div>
         );
