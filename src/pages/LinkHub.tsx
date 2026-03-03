@@ -127,7 +127,7 @@ const LinkHub = () => {
               className="text-[11px] font-semibold tracking-wide uppercase"
               style={{
                 color: open ? "#00E676" : "rgba(255,255,255,0.5)",
-                fontFamily: "'Space Grotesk', monospace",
+                fontFamily: "'Space Mono', monospace",
               }}
             >
               {open ? "öppet" : "stängt"} {hoursStr}
@@ -162,7 +162,7 @@ const LinkHub = () => {
                   <p
                     className="text-white text-lg font-bold"
                     style={{
-                      fontFamily: "'Space Grotesk', sans-serif",
+                      fontFamily: "'Space Mono', monospace",
                       textShadow: "0 1px 6px rgba(0,0,0,0.4)",
                     }}
                   >
@@ -201,7 +201,7 @@ const LinkHub = () => {
           target="_blank"
           rel="noopener noreferrer"
           className="text-white/80 text-[13px] font-semibold underline underline-offset-2 decoration-white/20 active:opacity-60 transition-opacity"
-          style={{ fontFamily: "'Space Grotesk', monospace" }}
+          style={{ fontFamily: "'Space Mono', monospace" }}
         >
           join whatsapp
         </a>
@@ -211,7 +211,7 @@ const LinkHub = () => {
           target="_blank"
           rel="noopener noreferrer"
           className="text-white/80 text-[13px] font-semibold underline underline-offset-2 decoration-white/20 active:opacity-60 transition-opacity"
-          style={{ fontFamily: "'Space Grotesk', monospace" }}
+          style={{ fontFamily: "'Space Mono', monospace" }}
         >
           book
         </a>
