@@ -1,11 +1,12 @@
 import { motion } from "framer-motion";
-import { Zap, Trophy, User } from "lucide-react";
+import { Zap, Trophy, User, Swords } from "lucide-react";
 
-type Tab = "feed" | "ranking" | "profile";
+type Tab = "feed" | "ranking" | "crews" | "profile";
 
 const tabs: { key: Tab; label: string; icon: typeof Zap }[] = [
   { key: "feed", label: "Feed", icon: Zap },
   { key: "ranking", label: "Ranking", icon: Trophy },
+  { key: "crews", label: "Crews", icon: Swords },
   { key: "profile", label: "Profil", icon: User },
 ];
 

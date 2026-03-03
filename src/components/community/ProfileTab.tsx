@@ -3,8 +3,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Loader2, LogOut, Trophy, Target, Flame, Star, TrendingUp } from "lucide-react";
+import { Loader2, LogOut, Trophy, Target, Flame, Star, TrendingUp, Swords } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { CrewBadge } from "./CrewBadge";
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
 const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } };
@@ -62,11 +63,36 @@ const achievements = [
   { key: "hundred_matches", label: "100 matcher", icon: Flame, check: (p: any) => (p.total_matches || 0) >= 100 },
 ];
 
+function usePlayerCrew() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["my-crew", user?.id],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data: profile } = await supabase
+        .from("player_profiles")
+        .select("id")
+        .eq("auth_user_id", user!.id)
+        .single();
+      if (!profile) return null;
+
+      const { data } = await supabase
+        .from("crew_members")
+        .select("crew_id, role, crews(id, name, badge_emoji, badge_color)")
+        .eq("player_profile_id", profile.id)
+        .limit(1)
+        .single();
+      return data;
+    },
+  });
+}
+
 export function ProfileTab() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const { data: profile, isLoading } = usePlayerProfile();
   const { data: myFeed } = useMyFeed();
+  const { data: myCrew } = usePlayerCrew();
 
   if (!user) {
     return (
@@ -137,6 +163,27 @@ export function ProfileTab() {
             </div>
           ))}
         </div>
+
+        {/* Crew badge */}
+        {myCrew && (
+          <div
+            className="flex items-center gap-3 mt-3 rounded-xl p-3"
+            style={{ background: "rgba(232,108,36,0.06)", border: "1px solid rgba(232,108,36,0.15)" }}
+          >
+            <CrewBadge
+              emoji={(myCrew as any).crews?.badge_emoji || "⚡"}
+              color={(myCrew as any).crews?.badge_color || "#E86C24"}
+              size="sm"
+            />
+            <div className="flex-1">
+              <p className="text-[10px] font-semibold" style={{ color: "rgba(62,61,57,0.4)" }}>Crew</p>
+              <p className="text-sm font-bold" style={{ color: "#3E3D39" }}>
+                {(myCrew as any).crews?.name}
+              </p>
+            </div>
+            <Swords className="w-4 h-4" style={{ color: "#E86C24" }} />
+          </div>
+        )}
       </motion.div>
 
       {/* Achievements */}
