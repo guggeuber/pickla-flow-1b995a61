@@ -292,7 +292,7 @@ const LinkHub = () => {
 
       {/* Floating event stickers — fixed on screen */}
       {upcomingEvents && upcomingEvents.length > 0 && (
-        <div className="fixed left-0 top-[65%] z-30 flex flex-col gap-2">
+        <div className="fixed left-0 top-[65%] z-30 flex flex-col items-start gap-2">
           {upcomingEvents.map((evt) => {
             const logo = evt.logo_url || catLogos?.[evt.category];
             return (
