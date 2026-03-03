@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAdminLinks, useAdminMutation } from "@/hooks/useAdmin";
-import { Loader2, Plus, Link2, GripVertical } from "lucide-react";
+import { Loader2, Plus, Link2, GripVertical, Image } from "lucide-react";
 import { toast } from "sonner";
 
 const iconOptions = ["message-circle", "instagram", "bot", "calendar", "ticket", "gamepad2", "link"];
@@ -15,6 +15,7 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
   const [icon, setIcon] = useState("link");
   const [color, setColor] = useState("primary");
   const [memberCount, setMemberCount] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
@@ -24,9 +25,10 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
       title, url, description: description || undefined,
       icon, color,
       member_count: memberCount || undefined,
+      image_url: imageUrl || undefined,
       sort_order: (links?.length || 0) + 1,
     }, {
-      onSuccess: () => { toast.success("Länk tillagd!"); setTitle(""); setUrl(""); setDescription(""); setMemberCount(""); },
+      onSuccess: () => { toast.success("Länk tillagd!"); setTitle(""); setUrl(""); setDescription(""); setMemberCount(""); setImageUrl(""); },
       onError: (e) => toast.error(e.message),
     });
   };
@@ -44,6 +46,15 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
         <input placeholder="Titel" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={title} onChange={(e) => setTitle(e.target.value)} />
         <input placeholder="URL" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={url} onChange={(e) => setUrl(e.target.value)} />
         <input placeholder="Beskrivning" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={description} onChange={(e) => setDescription(e.target.value)} />
+        <div className="flex items-center gap-2">
+          <Image className="w-4 h-4 text-muted-foreground shrink-0" />
+          <input placeholder="Bild-URL (t.ex. Instagram-bild)" className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
+        </div>
+        {imageUrl && (
+          <div className="rounded-xl overflow-hidden border" style={{ borderColor: "hsl(var(--border))" }}>
+            <img src={imageUrl} alt="Preview" className="w-full h-32 object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          </div>
+        )}
         <div className="grid grid-cols-3 gap-2">
           <select value={icon} onChange={(e) => setIcon(e.target.value)} className="rounded-xl px-3 py-2.5 text-sm outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}>
             {iconOptions.map((i) => <option key={i} value={i}>{i}</option>)}
@@ -63,9 +74,15 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
         {(links || []).map((link: any) => (
           <div key={link.id} className="glass-card rounded-2xl p-4 flex items-center gap-3">
             <GripVertical className="w-4 h-4 text-muted-foreground/40" />
-            <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Link2 className="w-4 h-4 text-primary" />
-            </div>
+            {link.image_url ? (
+              <div className="w-9 h-9 rounded-xl overflow-hidden shrink-0">
+                <img src={link.image_url} alt="" className="w-full h-full object-cover" />
+              </div>
+            ) : (
+              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
+                <Link2 className="w-4 h-4 text-primary" />
+              </div>
+            )}
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold truncate">{link.title}</p>
               <p className="text-[10px] text-muted-foreground truncate">{link.url}</p>
