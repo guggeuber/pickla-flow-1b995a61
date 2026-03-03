@@ -166,7 +166,10 @@ const LinkHub = () => {
               Svetsarvägen 22, Solna
             </span>
             <span className="text-[11px] text-white/50" style={{ fontFamily: "'Space Mono', monospace" }}>
-              hello@picklaparks.com · 08-83 33 63
+              hello@picklaparks.com
+            </span>
+            <span className="text-[11px] text-white/50" style={{ fontFamily: "'Space Mono', monospace" }}>
+              08-83 33 63
             </span>
           </div>
         </div>
