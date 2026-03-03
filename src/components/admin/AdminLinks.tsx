@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { useAdminLinks, useAdminMutation } from "@/hooks/useAdmin";
-import { Loader2, Plus, Link2, Image, Pencil, X, Check, Trash2, GripVertical, MapPin } from "lucide-react";
+import { Loader2, Plus, Link2, Image, Pencil, X, Check, Trash2, GripVertical, MapPin, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 
 const iconOptions = ["message-circle", "instagram", "bot", "calendar", "ticket", "gamepad2", "link", "map-pin"];
@@ -103,11 +103,6 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // Drag state
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [overIndex, setOverIndex] = useState<number | null>(null);
-  const dragItemRef = useRef<number | null>(null);
-
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
   const sortedLinks = [...(links || [])].sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -154,30 +149,17 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
     });
   };
 
-  // Touch drag handlers
-  const handleDragStart = (index: number) => {
-    dragItemRef.current = index;
-    setDragIndex(index);
-  };
-
-  const handleDragEnter = (index: number) => {
-    setOverIndex(index);
-  };
-
-  const handleDragEnd = () => {
-    if (dragItemRef.current !== null && overIndex !== null && dragItemRef.current !== overIndex) {
-      const reordered = [...sortedLinks];
-      const [moved] = reordered.splice(dragItemRef.current, 1);
-      reordered.splice(overIndex, 0, moved);
-      const orderedIds = reordered.map((l: any) => l.id);
-      reorderLinks.mutate(orderedIds, {
-        onSuccess: () => toast.success("Ordning sparad!"),
-        onError: (e) => toast.error(e.message),
-      });
-    }
-    setDragIndex(null);
-    setOverIndex(null);
-    dragItemRef.current = null;
+  const moveLink = (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= sortedLinks.length) return;
+    const reordered = [...sortedLinks];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+    const orderedIds = reordered.map((l: any) => l.id);
+    reorderLinks.mutate(orderedIds, {
+      onSuccess: () => toast.success("Ordning sparad!"),
+      onError: (e) => toast.error(e.message),
+    });
   };
 
   return (
@@ -197,24 +179,25 @@ const AdminLinks = ({ venueId }: { venueId: string }) => {
       {/* Existing links */}
       <div className="space-y-2">
         {sortedLinks.map((link: any, index: number) => (
-          <div
-            key={link.id}
-            className={`glass-card rounded-2xl overflow-hidden transition-all ${
-              dragIndex === index ? "opacity-50 scale-95" : ""
-            } ${overIndex === index && dragIndex !== index ? "ring-2 ring-primary" : ""}`}
-            draggable
-            onDragStart={() => handleDragStart(index)}
-            onDragEnter={() => handleDragEnter(index)}
-            onDragOver={(e) => e.preventDefault()}
-            onDragEnd={handleDragEnd}
-          >
+          <div key={link.id} className="glass-card rounded-2xl overflow-hidden">
             {/* Summary row */}
             <div className="p-3 sm:p-4 flex items-center gap-2 sm:gap-3">
-              <div
-                className="cursor-grab active:cursor-grabbing touch-none p-1"
-                onTouchStart={() => handleDragStart(index)}
-              >
-                <GripVertical className="w-4 h-4 text-muted-foreground/40" />
+              {/* Move up/down buttons */}
+              <div className="flex flex-col gap-0.5 shrink-0">
+                <button
+                  onClick={() => moveLink(index, "up")}
+                  disabled={index === 0 || reorderLinks.isPending}
+                  className="p-1 rounded-md hover:bg-accent disabled:opacity-20 transition-colors"
+                >
+                  <ArrowUp className="w-3.5 h-3.5 text-muted-foreground" />
+                </button>
+                <button
+                  onClick={() => moveLink(index, "down")}
+                  disabled={index === sortedLinks.length - 1 || reorderLinks.isPending}
+                  className="p-1 rounded-md hover:bg-accent disabled:opacity-20 transition-colors"
+                >
+                  <ArrowDown className="w-3.5 h-3.5 text-muted-foreground" />
+                </button>
               </div>
               {link.image_url ? (
                 <div className="w-9 h-9 rounded-xl overflow-hidden shrink-0">
