@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
-import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -31,6 +32,7 @@ interface EventRow {
   registration_fields?: string[];
   whatsapp_url?: string | null;
   slug?: string | null;
+  logo_url?: string | null;
 }
 
 function useVenueEvents(venueId?: string) {
@@ -153,6 +155,7 @@ function CreateEventDialog({ venueId, onCreated }: { venueId: string; onCreated:
 /* ── Event Detail Editor ── */
 function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: string; onBack: () => void }) {
   const qc = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [showOnSticker, setShowOnSticker] = useState(event.show_on_sticker);
   const [isPublic, setIsPublic] = useState(event.is_public !== false);
   const [displayName, setDisplayName] = useState(event.display_name || "");
@@ -163,6 +166,8 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
   const [whatsappUrl, setWhatsappUrl] = useState(event.whatsapp_url || "");
   const [slug, setSlug] = useState(event.slug || "");
   const [regFields, setRegFields] = useState<string[]>(event.registration_fields || ["name", "phone"]);
+  const [logoUrl, setLogoUrl] = useState(event.logo_url || "");
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const toggleRegField = (field: string) => {
@@ -180,6 +185,39 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
     toast.success("Länk kopierad!");
   };
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Välj en bildfil");
+      return;
+    }
+    setUploading(true);
+    try {
+      const ext = file.name.split(".").pop() || "png";
+      const path = `${event.id}/logo.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("event-logos")
+        .upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage
+        .from("event-logos")
+        .getPublicUrl(path);
+      const url = urlData.publicUrl + `?t=${Date.now()}`;
+      setLogoUrl(url);
+      toast.success("Logga uppladdad!");
+    } catch (err: any) {
+      toast.error(err.message || "Uppladdning misslyckades");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const removeLogo = () => {
+    setLogoUrl("");
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -195,6 +233,7 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
         whatsappUrl: whatsappUrl.trim() || null,
         slug: slug.trim() || null,
         registrationFields: regFields,
+        logoUrl: logoUrl.trim() || null,
       });
       toast.success("Event uppdaterat!");
       qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
@@ -237,6 +276,38 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
             </a>
           </Button>
         </div>
+      </div>
+
+      {/* Logo upload */}
+      <div className="glass-card rounded-2xl p-4 space-y-3">
+        <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Event-logga</Label>
+        <input ref={fileInputRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+        {logoUrl ? (
+          <div className="flex items-center gap-3">
+            <img src={logoUrl} alt="Event logo" className="w-16 h-16 rounded-2xl object-cover border border-border" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-muted-foreground truncate">{logoUrl.split("/").pop()?.split("?")[0]}</p>
+            </div>
+            <div className="flex gap-1">
+              <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                <Upload className="w-4 h-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={removeLogo}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+          >
+            {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
+            Ladda upp logga
+          </Button>
+        )}
       </div>
 
       <div className="glass-card rounded-2xl p-4 space-y-4">
@@ -395,6 +466,13 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
             onClick={() => setSelectedEvent(evt)}
             className="w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all hover:border-primary/20"
           >
+            {evt.logo_url ? (
+              <img src={evt.logo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
+            ) : (
+              <div className="w-10 h-10 rounded-xl flex-shrink-0 bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
+                {(evt.display_name || evt.name || "?")[0].toUpperCase()}
+              </div>
+            )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <p className="text-sm font-bold text-foreground truncate">{evt.display_name || evt.name}</p>
