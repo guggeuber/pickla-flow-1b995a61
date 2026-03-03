@@ -1151,27 +1151,36 @@ export type Database = {
       membership_tier_pricing: {
         Row: {
           created_at: string | null
+          discount_percent: number | null
           fixed_price: number | null
           id: string
+          label: string | null
           pricing_rule_id: string | null
           product_type: string
           tier_id: string
+          vat_rate: number | null
         }
         Insert: {
           created_at?: string | null
+          discount_percent?: number | null
           fixed_price?: number | null
           id?: string
+          label?: string | null
           pricing_rule_id?: string | null
           product_type: string
           tier_id: string
+          vat_rate?: number | null
         }
         Update: {
           created_at?: string | null
+          discount_percent?: number | null
           fixed_price?: number | null
           id?: string
+          label?: string | null
           pricing_rule_id?: string | null
           product_type?: string
           tier_id?: string
+          vat_rate?: number | null
         }
         Relationships: [
           {
@@ -1455,6 +1464,7 @@ export type Database = {
           updated_at: string | null
           valid_from: string | null
           valid_to: string | null
+          vat_rate: number | null
           venue_id: string
         }
         Insert: {
@@ -1472,6 +1482,7 @@ export type Database = {
           updated_at?: string | null
           valid_from?: string | null
           valid_to?: string | null
+          vat_rate?: number | null
           venue_id: string
         }
         Update: {
@@ -1489,6 +1500,7 @@ export type Database = {
           updated_at?: string | null
           valid_from?: string | null
           valid_to?: string | null
+          vat_rate?: number | null
           venue_id?: string
         }
         Relationships: [

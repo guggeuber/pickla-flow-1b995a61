@@ -117,10 +117,14 @@ const BookScreen = () => {
     queryFn: () => apiGet("api-memberships", "user", { userId: selectedCustomerAuthId!, venueId: venueId! }),
   });
 
-  const membershipDiscount = customerMembership?.membership_tiers?.discount_percent || 0;
+  // Get membership pricing for court_hourly product
+  const courtTierPricing = (customerMembership?.tier_pricing || []).find((tp: any) => tp.product_type === "court_hourly");
+  const membershipDiscount = courtTierPricing?.discount_percent || 0;
+  const membershipFixedPrice = courtTierPricing?.fixed_price ?? null;
+  const vatRate = courtTierPricing?.vat_rate ?? 6;
 
   const currentPrice = getPrice(selectedTime);
-  const isPeak = currentPrice > 300; // Dynamic peak detection based on price
+  const isPeak = currentPrice > 300;
 
   // Fetch recent customers
   const { data: recentProfiles } = useQuery({
@@ -166,8 +170,16 @@ const BookScreen = () => {
 
   const durationMultiplier = selectedDuration === "30 min" ? 0.5 : selectedDuration === "90 min" ? 1.5 : 1;
   const baseTotal = Math.round(currentPrice * durationMultiplier);
-  const discountAmount = membershipDiscount > 0 ? Math.round(baseTotal * membershipDiscount / 100) : 0;
-  const totalPrice = baseTotal - discountAmount;
+  // Apply membership: fixed price overrides base, or percentage discount
+  const memberPrice = membershipFixedPrice != null
+    ? Math.round(membershipFixedPrice * durationMultiplier)
+    : membershipDiscount > 0
+      ? Math.round(baseTotal * (1 - membershipDiscount / 100))
+      : baseTotal;
+  const discountAmount = baseTotal - memberPrice;
+  const totalPrice = memberPrice;
+  // VAT calculation (price is inkl moms)
+  const vatAmount = Math.round(totalPrice * vatRate / (100 + vatRate));
 
   const createBooking = useMutation({
     mutationFn: async () => {
@@ -393,20 +405,29 @@ const BookScreen = () => {
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tid</span><span className="font-semibold">{selectedTime} · {selectedDuration}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bana</span><span className="font-semibold">{selectedCourtData?.name}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Kund</span><span className="font-semibold">{selectedCustomer}</span></div>
-              {membershipDiscount > 0 && customerMembership?.membership_tiers && (
+              {discountAmount > 0 && customerMembership?.membership_tiers && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Crown className="w-3 h-3" style={{ color: customerMembership.membership_tiers.color }} />
                     {customerMembership.membership_tiers.name}
                   </span>
-                  <span className="font-semibold text-court-free">−{discountAmount} kr ({membershipDiscount}%)</span>
+                  <span className="font-semibold text-court-free">
+                    −{discountAmount} kr
+                    {membershipFixedPrice != null ? " (fast pris)" : ` (${membershipDiscount}%)`}
+                  </span>
                 </div>
               )}
-              <div className="border-t border-border pt-3 flex justify-between items-center">
-                <span className="text-sm font-semibold">Total</span>
-                <div className="flex items-center gap-2">
-                  {discountAmount > 0 && <span className="text-sm text-muted-foreground line-through">{baseTotal} kr</span>}
-                  <span className="text-xl font-display font-bold text-primary">{totalPrice} kr</span>
+              <div className="border-t border-border pt-3 space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-semibold">Total</span>
+                  <div className="flex items-center gap-2">
+                    {discountAmount > 0 && <span className="text-sm text-muted-foreground line-through">{baseTotal} kr</span>}
+                    <span className="text-xl font-display font-bold text-primary">{totalPrice} kr</span>
+                  </div>
+                </div>
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>varav moms ({vatRate}%)</span>
+                  <span>{vatAmount} kr</span>
                 </div>
               </div>
               {isPeak && (
