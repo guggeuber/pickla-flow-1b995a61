@@ -51,8 +51,8 @@ export default function BookingPage() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [selectedCourts, setSelectedCourts] = useState<string[]>([]);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [name, setName] = useState(searchParams.get("name") || "");
+  const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [confirmed, setConfirmed] = useState(false);
 
   const dateStr = format(selectedDate, "yyyy-MM-dd");
