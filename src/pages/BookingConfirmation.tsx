@@ -253,7 +253,7 @@ export default function BookingConfirmation() {
       {venue?.slug && (
         <div className="px-5 mt-8 text-center">
           <Link
-            to={`/book?v=${venue.slug}`}
+            to={`/book?v=${venue.slug}${customerName ? `&name=${encodeURIComponent(customerName)}` : ""}${customerPhone ? `&phone=${encodeURIComponent(customerPhone)}` : ""}`}
             className="text-[12px] text-neutral-400 underline underline-offset-4"
             style={{ fontFamily: FONT_MONO }}
           >
