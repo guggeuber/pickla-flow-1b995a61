@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost, apiPatch } from "@/lib/api";
+import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 
 export function useAdminCheck() {
   return useQuery({
@@ -144,6 +144,21 @@ export function useAdminMutation(venueId: string | undefined) {
     onSuccess: invalidate("links"),
   });
 
+  const deleteLink = useMutation({
+    mutationFn: (linkId: string) =>
+      apiDelete("api-admin", "links", { linkId }),
+    onSuccess: invalidate("links"),
+  });
+
+  const reorderLinks = useMutation({
+    mutationFn: async (orderedIds: string[]) => {
+      await Promise.all(orderedIds.map((id, i) =>
+        apiPatch("api-admin", "links", { linkId: id, sort_order: i })
+      ));
+    },
+    onSuccess: invalidate("links"),
+  });
+
   const updateVenue = useMutation({
     mutationFn: (body: Record<string, any>) =>
       apiPatch("api-admin", "venue", body),
@@ -163,7 +178,7 @@ export function useAdminMutation(venueId: string | undefined) {
     addCourt, updateCourt,
     saveHours,
     addPricing, updatePricing,
-    addLink, updateLink,
+    addLink, updateLink, deleteLink, reorderLinks,
     updateVenue, createVenue,
   };
 }

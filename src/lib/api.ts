@@ -67,3 +67,21 @@ export async function apiPatch<T = any>(
   }
   return res.json();
 }
+
+export async function apiDelete<T = any>(
+  fn: string,
+  endpoint: string,
+  params?: Record<string, string>
+): Promise<T> {
+  const headers = await getAuthHeaders();
+  const url = new URL(`${BASE_URL}/${fn}/${endpoint}`);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  }
+  const res = await fetch(url.toString(), { method: "DELETE", headers });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `API error ${res.status}`);
+  }
+  return res.json();
+}
