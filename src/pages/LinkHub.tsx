@@ -6,6 +6,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { format } from "date-fns";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -50,6 +51,31 @@ function useStories() {
   });
 }
 
+interface UpcomingEvent {
+  id: string;
+  name: string;
+  display_name: string | null;
+  start_date: string | null;
+}
+
+function useUpcomingEvents(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["upcoming-events", venueId],
+    enabled: !!venueId,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("events")
+        .select("id, name, display_name, start_date")
+        .eq("venue_id", venueId!)
+        .gte("start_date", new Date().toISOString().slice(0, 10))
+        .order("start_date", { ascending: true })
+        .limit(4);
+      return (data || []) as UpcomingEvent[];
+    },
+  });
+}
+
 function isOpenNow(openingHours: any[]): boolean {
   if (!openingHours?.length) return false;
   const now = new Date();
@@ -79,6 +105,7 @@ const LinkHub = () => {
   const { data: stories } = useStories();
 
   const venue = data?.venue;
+  const { data: upcomingEvents } = useUpcomingEvents(venue?.id);
   const openingHours = data?.openingHours || [];
   const open = useMemo(() => isOpenNow(openingHours), [openingHours]);
   const hoursStr = useMemo(() => getTodayHoursString(openingHours), [openingHours]);
@@ -151,8 +178,33 @@ const LinkHub = () => {
                 style={{ minHeight: "60vh", objectFit: "contain" }}
                 loading={i > 0 ? "lazy" : "eager"}
               />
+              {/* Event sticker overlays */}
+              {i === 0 && upcomingEvents && upcomingEvents.length > 0 && (
+                <div className="absolute bottom-8 left-5 flex flex-col gap-2.5">
+                  {upcomingEvents.map((evt) => (
+                    <button
+                      key={evt.id}
+                      onClick={() => navigate(`/event-ops?eventId=${evt.id}`)}
+                      className="px-4 py-2 active:scale-95 transition-transform"
+                      style={{
+                        background: "rgba(255,255,255,0.92)",
+                        backdropFilter: "blur(8px)",
+                        fontFamily: "'Space Mono', monospace",
+                      }}
+                    >
+                      <span
+                        className="text-[15px] font-bold underline underline-offset-4"
+                        style={{ color: "#2a3a8f" }}
+                      >
+                        {(evt.display_name || evt.name).toLowerCase()}{" "}
+                        {evt.start_date ? format(new Date(evt.start_date), "d/M") : ""}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* Caption overlay at bottom of each image */}
-              {img.caption && (
+              {img.caption && i !== 0 && (
                 <div
                   className="absolute bottom-0 left-0 right-0 px-5 pb-5 pt-16"
                   style={{
