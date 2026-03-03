@@ -1294,11 +1294,14 @@ export type Database = {
         Row: {
           created_at: string | null
           currency: string | null
+          days_of_week: number[] | null
           description: string | null
           id: string
           is_active: boolean | null
           name: string
           price: number
+          time_from: string | null
+          time_to: string | null
           type: string
           updated_at: string | null
           valid_from: string | null
@@ -1308,11 +1311,14 @@ export type Database = {
         Insert: {
           created_at?: string | null
           currency?: string | null
+          days_of_week?: number[] | null
           description?: string | null
           id?: string
           is_active?: boolean | null
           name: string
           price: number
+          time_from?: string | null
+          time_to?: string | null
           type: string
           updated_at?: string | null
           valid_from?: string | null
@@ -1322,11 +1328,14 @@ export type Database = {
         Update: {
           created_at?: string | null
           currency?: string | null
+          days_of_week?: number[] | null
           description?: string | null
           id?: string
           is_active?: boolean | null
           name?: string
           price?: number
+          time_from?: string | null
+          time_to?: string | null
           type?: string
           updated_at?: string | null
           valid_from?: string | null

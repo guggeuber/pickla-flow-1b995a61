@@ -121,7 +121,7 @@ export function useAdminMutation(venueId: string | undefined) {
   });
 
   const addPricing = useMutation({
-    mutationFn: (body: { name: string; type: string; price: number; description?: string }) =>
+    mutationFn: (body: { name: string; type: string; price: number; description?: string; days_of_week?: number[]; time_from?: string; time_to?: string }) =>
       apiPost("api-admin", "pricing", { ...body, venueId }),
     onSuccess: invalidate("pricing"),
   });
@@ -129,6 +129,12 @@ export function useAdminMutation(venueId: string | undefined) {
   const updatePricing = useMutation({
     mutationFn: (body: { ruleId: string; [key: string]: any }) =>
       apiPatch("api-admin", "pricing", body),
+    onSuccess: invalidate("pricing"),
+  });
+
+  const deletePricing = useMutation({
+    mutationFn: (ruleId: string) =>
+      apiDelete("api-admin", `pricing?ruleId=${ruleId}`),
     onSuccess: invalidate("pricing"),
   });
 
@@ -177,7 +183,7 @@ export function useAdminMutation(venueId: string | undefined) {
     addStaff, updateStaff,
     addCourt, updateCourt,
     saveHours,
-    addPricing, updatePricing,
+    addPricing, updatePricing, deletePricing,
     addLink, updateLink, deleteLink, reorderLinks,
     updateVenue, createVenue,
   };
