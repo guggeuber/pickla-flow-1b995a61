@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
-    // ── TIER PRICING OVERRIDES ──
+    // ── TIER PRICING ──
 
     // GET /api-memberships/tier-pricing?tierId=X
     if (req.method === 'GET' && path === 'tier-pricing') {
@@ -84,14 +84,16 @@ Deno.serve(async (req) => {
     // POST /api-memberships/tier-pricing
     if (req.method === 'POST' && path === 'tier-pricing') {
       const body = await req.json();
-      const { tierId, product_type, pricing_rule_id, fixed_price } = body;
+      const { tierId, product_type, fixed_price, discount_percent, vat_rate, label } = body;
       if (!tierId || !product_type) return errorResponse('Missing tierId or product_type');
 
       const { data, error: iErr } = await admin.from('membership_tier_pricing').insert({
         tier_id: tierId,
         product_type,
-        pricing_rule_id: pricing_rule_id || null,
         fixed_price: fixed_price ?? null,
+        discount_percent: discount_percent ?? null,
+        vat_rate: vat_rate ?? 6,
+        label: label || null,
       }).select().single();
       if (iErr) return errorResponse(iErr.message);
       return jsonResponse(data, 201);
@@ -108,7 +110,7 @@ Deno.serve(async (req) => {
 
     // ── MEMBERSHIPS (user assignments) ──
 
-    // GET /api-memberships/venue?venueId=X  (all active memberships for venue)
+    // GET /api-memberships/venue?venueId=X
     if (req.method === 'GET' && path === 'venue') {
       const venueId = url.searchParams.get('venueId');
       if (!venueId) return errorResponse('Missing venueId');
@@ -121,18 +123,27 @@ Deno.serve(async (req) => {
       return jsonResponse(data, 200, 10);
     }
 
-    // GET /api-memberships/user?userId=X&venueId=Y  (active membership for a user at a venue)
+    // GET /api-memberships/user?userId=X&venueId=Y
     if (req.method === 'GET' && path === 'user') {
       const targetUserId = url.searchParams.get('userId');
       const venueId = url.searchParams.get('venueId');
       if (!targetUserId || !venueId) return errorResponse('Missing userId or venueId');
 
-      const { data, error: qErr } = await client.from('memberships')
+      const { data: membership, error: qErr } = await client.from('memberships')
         .select('*, membership_tiers(id, name, color, discount_percent, monthly_price)')
         .eq('user_id', targetUserId).eq('venue_id', venueId).eq('status', 'active')
         .maybeSingle();
       if (qErr) return errorResponse(qErr.message);
-      return jsonResponse(data, 200, 10);
+
+      // Also fetch tier pricing if membership exists
+      let tierPricing: any[] = [];
+      if (membership?.tier_id) {
+        const { data: tp } = await client.from('membership_tier_pricing')
+          .select('*').eq('tier_id', membership.tier_id);
+        tierPricing = tp || [];
+      }
+
+      return jsonResponse({ ...membership, tier_pricing: tierPricing }, 200, 10);
     }
 
     // POST /api-memberships/assign
@@ -141,7 +152,6 @@ Deno.serve(async (req) => {
       const { venueId, customerUserId, tierId, expiresAt, notes } = body;
       if (!venueId || !customerUserId || !tierId) return errorResponse('Missing fields');
 
-      // Cancel any existing active membership for this user at this venue
       await admin.from('memberships')
         .update({ status: 'cancelled' })
         .eq('user_id', customerUserId).eq('venue_id', venueId).eq('status', 'active');
