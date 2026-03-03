@@ -392,6 +392,36 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
+    // ── EVENT CATEGORIES ──
+    if (req.method === 'GET' && path === 'event-categories') {
+      const { data, error: e } = await admin.from('venue_event_categories')
+        .select('*').eq('venue_id', venueId).order('category_key');
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 200, 15);
+    }
+
+    if (req.method === 'POST' && path === 'event-categories') {
+      const body = await req.json();
+      if (!body.categoryKey || !body.displayName) return errorResponse('Missing categoryKey or displayName');
+      const { data, error: e } = await admin.from('venue_event_categories').upsert({
+        venue_id: venueId,
+        category_key: body.categoryKey,
+        display_name: body.displayName,
+        logo_url: body.logoUrl || null,
+        whatsapp_url: body.whatsappUrl || null,
+      }, { onConflict: 'venue_id,category_key' }).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 201);
+    }
+
+    if (req.method === 'DELETE' && path === 'event-categories') {
+      const catId = url.searchParams.get('id');
+      if (!catId) return errorResponse('Missing id');
+      const { error: e } = await admin.from('venue_event_categories').delete().eq('id', catId);
+      if (e) return errorResponse(e.message);
+      return jsonResponse({ ok: true });
+    }
+
     return errorResponse('Not found', 404);
   } catch (e) {
     return errorResponse((e as Error).message, 500);

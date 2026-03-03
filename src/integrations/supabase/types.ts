@@ -1592,6 +1592,47 @@ export type Database = {
           },
         ]
       }
+      venue_event_categories: {
+        Row: {
+          category_key: string
+          created_at: string | null
+          display_name: string
+          id: string
+          logo_url: string | null
+          updated_at: string | null
+          venue_id: string
+          whatsapp_url: string | null
+        }
+        Insert: {
+          category_key: string
+          created_at?: string | null
+          display_name: string
+          id?: string
+          logo_url?: string | null
+          updated_at?: string | null
+          venue_id: string
+          whatsapp_url?: string | null
+        }
+        Update: {
+          category_key?: string
+          created_at?: string | null
+          display_name?: string
+          id?: string
+          logo_url?: string | null
+          updated_at?: string | null
+          venue_id?: string
+          whatsapp_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "venue_event_categories_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       venue_links: {
         Row: {
           color: string | null
