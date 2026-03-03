@@ -2,10 +2,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion } from "framer-motion";
-import { Loader2, ArrowLeft, Swords, LogOut, UserPlus } from "lucide-react";
+import { Loader2, ArrowLeft, Swords, LogOut, UserPlus, Plus } from "lucide-react";
 import { CrewBadge } from "./CrewBadge";
 import { ChallengesList } from "./ChallengesList";
 import { CreateChallengeModal } from "./CreateChallengeModal";
+import { CrewSessionsList } from "./CrewSessionsList";
+import { CreateSessionModal } from "./CreateSessionModal";
 import { toast } from "sonner";
 import { useState } from "react";
 
@@ -22,6 +24,7 @@ export function CrewDetailView({ crewId, onBack }: Props) {
   const qc = useQueryClient();
   const [joining, setJoining] = useState(false);
   const [showChallenge, setShowChallenge] = useState(false);
+  const [showCreateSession, setShowCreateSession] = useState(false);
 
   const { data: crew, isLoading } = useQuery({
     queryKey: ["crew-detail", crewId],
@@ -222,14 +225,24 @@ export function CrewDetailView({ crewId, onBack }: Props) {
         {myMembership && (
           <div className="flex gap-2">
             {isLeader && (
-              <button
-                onClick={() => setShowChallenge(true)}
-                className="flex-1 rounded-xl py-3 text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
-                style={{ background: "#E86C24", color: "#fff" }}
-              >
-                <Swords className="w-4 h-4" />
-                Clash
-              </button>
+              <>
+                <button
+                  onClick={() => setShowChallenge(true)}
+                  className="flex-1 rounded-xl py-3 text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
+                  style={{ background: "#E86C24", color: "#fff" }}
+                >
+                  <Swords className="w-4 h-4" />
+                  Clash
+                </button>
+                <button
+                  onClick={() => setShowCreateSession(true)}
+                  className="flex-1 rounded-xl py-3 text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
+                  style={{ background: "rgba(62,61,57,0.08)", color: "#3E3D39", border: "1px solid rgba(62,61,57,0.1)" }}
+                >
+                  <Plus className="w-4 h-4" />
+                  Ny träning
+                </button>
+              </>
             )}
             {!isLeader && (
               <button
@@ -298,6 +311,17 @@ export function CrewDetailView({ crewId, onBack }: Props) {
           })}
         </div>
       </motion.div>
+      {/* Sessions / Träningar */}
+      <motion.div variants={item}>
+        <h3
+          className="text-sm font-semibold mb-2 flex items-center gap-2"
+          style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#3E3D39" }}
+        >
+          🎾 Träningar
+        </h3>
+        <CrewSessionsList crewId={crewId} isMember={!!myMembership} />
+      </motion.div>
+
       {/* Challenges */}
       <motion.div variants={item}>
         <h3
@@ -315,6 +339,12 @@ export function CrewDetailView({ crewId, onBack }: Props) {
         onClose={() => setShowChallenge(false)}
         myCrewId={crewId}
         myCrewName={crew.name}
+      />
+
+      <CreateSessionModal
+        open={showCreateSession}
+        onClose={() => setShowCreateSession(false)}
+        crewId={crewId}
       />
     </motion.div>
   );

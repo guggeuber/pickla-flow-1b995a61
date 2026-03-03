@@ -257,6 +257,128 @@ export type Database = {
           },
         ]
       }
+      crew_session_signups: {
+        Row: {
+          crew_session_id: string
+          id: string
+          player_profile_id: string
+          signed_up_at: string
+          status: string
+        }
+        Insert: {
+          crew_session_id: string
+          id?: string
+          player_profile_id: string
+          signed_up_at?: string
+          status?: string
+        }
+        Update: {
+          crew_session_id?: string
+          id?: string
+          player_profile_id?: string
+          signed_up_at?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "crew_session_signups_crew_session_id_fkey"
+            columns: ["crew_session_id"]
+            isOneToOne: false
+            referencedRelation: "crew_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "crew_session_signups_player_profile_id_fkey"
+            columns: ["player_profile_id"]
+            isOneToOne: false
+            referencedRelation: "player_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      crew_sessions: {
+        Row: {
+          booking_id: string | null
+          created_at: string
+          created_by: string
+          crew_id: string
+          description: string | null
+          end_time: string
+          id: string
+          max_participants: number | null
+          session_date: string
+          start_time: string
+          status: string
+          title: string
+          updated_at: string
+          venue_court_id: string | null
+          venue_id: string | null
+        }
+        Insert: {
+          booking_id?: string | null
+          created_at?: string
+          created_by: string
+          crew_id: string
+          description?: string | null
+          end_time: string
+          id?: string
+          max_participants?: number | null
+          session_date: string
+          start_time: string
+          status?: string
+          title: string
+          updated_at?: string
+          venue_court_id?: string | null
+          venue_id?: string | null
+        }
+        Update: {
+          booking_id?: string | null
+          created_at?: string
+          created_by?: string
+          crew_id?: string
+          description?: string | null
+          end_time?: string
+          id?: string
+          max_participants?: number | null
+          session_date?: string
+          start_time?: string
+          status?: string
+          title?: string
+          updated_at?: string
+          venue_court_id?: string | null
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "crew_sessions_booking_id_fkey"
+            columns: ["booking_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "crew_sessions_crew_id_fkey"
+            columns: ["crew_id"]
+            isOneToOne: false
+            referencedRelation: "crews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "crew_sessions_venue_court_id_fkey"
+            columns: ["venue_court_id"]
+            isOneToOne: false
+            referencedRelation: "venue_courts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "crew_sessions_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       crews: {
         Row: {
           badge_color: string | null
