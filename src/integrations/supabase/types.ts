@@ -687,6 +687,7 @@ export type Database = {
           secondary_color: string | null
           semifinals_generated: boolean | null
           show_on_sticker: boolean
+          slug: string | null
           start_date: string | null
           status: string | null
           third_place_enabled: boolean | null
@@ -733,6 +734,7 @@ export type Database = {
           secondary_color?: string | null
           semifinals_generated?: boolean | null
           show_on_sticker?: boolean
+          slug?: string | null
           start_date?: string | null
           status?: string | null
           third_place_enabled?: boolean | null
@@ -779,6 +781,7 @@ export type Database = {
           secondary_color?: string | null
           semifinals_generated?: boolean | null
           show_on_sticker?: boolean
+          slug?: string | null
           start_date?: string | null
           status?: string | null
           third_place_enabled?: boolean | null
