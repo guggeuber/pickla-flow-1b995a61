@@ -97,15 +97,23 @@ Deno.serve(async (req) => {
       if (evErr || !event) return errorResponse('Event not found', 404);
       if (event.status === 'completed') return errorResponse('Event is completed');
 
-      // Check duplicate by phone if provided
-      if (phone) {
+      // Check duplicate registration
+      const identifier = phone?.trim() || email?.trim() || null;
+      if (identifier) {
         const { data: existing } = await client.from('players')
           .select('id')
           .eq('event_id', eventId)
-          .eq('email', phone)
+          .eq('email', identifier)
           .maybeSingle();
-
-        if (existing) return errorResponse('Redan anmäld med detta nummer');
+        if (existing) return errorResponse('Redan anmäld');
+      } else {
+        // No phone/email — check by exact name
+        const { data: existing } = await client.from('players')
+          .select('id')
+          .eq('event_id', eventId)
+          .eq('name', name.trim())
+          .maybeSingle();
+        if (existing) return errorResponse('Redan anmäld med detta namn');
       }
 
       // Auto-create auth account with phone as identifier
