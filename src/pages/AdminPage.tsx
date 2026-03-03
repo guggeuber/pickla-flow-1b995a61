@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Building2, Users, LayoutGrid, Clock, Tag, Link2,
   Loader2, ShieldAlert, ChevronDown, TrendingUp, TrendingDown, Minus,
-  Ticket, CalendarCheck, ChevronRight, Plus, Camera,
+  Ticket, CalendarCheck, ChevronRight, Plus, Camera, Trophy,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAdminCheck, useAdminVenues, useAdminStats, useAdminHistory } from "@/hooks/useAdmin";
@@ -15,12 +15,13 @@ import AdminPricing from "@/components/admin/AdminPricing";
 import AdminLinks from "@/components/admin/AdminLinks";
 import AdminVenue from "@/components/admin/AdminVenue";
 import AdminStories from "@/components/admin/AdminStories";
+import AdminEvents from "@/components/admin/AdminEvents";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | null;
+type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | "events" | null;
 
 /* ── Sparkline SVG ── */
 function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
@@ -193,6 +194,7 @@ const AdminPage = () => {
       pricing: { label: "Priser", icon: Tag },
       links: { label: "Länkar", icon: Link2 },
       stories: { label: "Stories", icon: Camera },
+      events: { label: "Events", icon: Trophy },
     };
     const s = sectionLabels[activeSection];
 
@@ -220,6 +222,7 @@ const AdminPage = () => {
           {activeSection === "pricing" && <AdminPricing venueId={venueId} />}
           {activeSection === "links" && <AdminLinks venueId={venueId} />}
           {activeSection === "stories" && <AdminStories venueId={venueId} />}
+          {activeSection === "events" && <AdminEvents venueId={venueId} />}
         </div>
       </div>
     );
@@ -233,6 +236,7 @@ const AdminPage = () => {
     { id: "links" as SectionId, icon: Link2, label: "Länkar", stat: `${stats?.linksCount || 0} aktiva`, color: "var(--badge-vip)" },
     { id: "venue" as SectionId, icon: Building2, label: "Venue", stat: "Inställningar", color: "var(--muted-foreground)" },
     { id: "stories" as SectionId, icon: Camera, label: "Stories", stat: "Community", color: "var(--primary)" },
+    { id: "events" as SectionId, icon: Trophy, label: "Events", stat: "Turneringar", color: "var(--sell)" },
   ];
 
   return (
