@@ -1,26 +1,20 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, AlertTriangle, ChevronRight, ShoppingBag, Timer, Gift, Crown } from "lucide-react";
+import { Zap, AlertTriangle, ChevronRight, ShoppingBag, Timer, Gift, Crown, CalendarDays } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useVenueForStaff, useVenueCourts } from "@/hooks/useDesk";
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
-
-function generateDates() {
-  const dates: Date[] = [];
-  const today = new Date();
-  for (let i = 0; i < 14; i++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() + i);
-    dates.push(d);
-  }
-  return dates;
-}
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import { format } from "date-fns";
+import { sv } from "date-fns/locale";
 
 const dayNames = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"];
-const timeSlots = ["Nu", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"];
+const timeSlots = ["Nu", "07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"];
 
 const upsells = [
   { title: "Förläng till 90 min", sub: "+120 kr — 68% accepterar", icon: Timer, tag: "Populär" },
@@ -28,6 +22,28 @@ const upsells = [
   { title: "First-timer pass", sub: "990 kr/mån — visa besparingar", icon: Gift, tag: "Konvertera" },
   { title: "VIP Upgrade", sub: "Bana 5 — premium upplevelse", icon: Crown, tag: "Premium" },
 ];
+
+function generateQuickDates() {
+  const dates: Date[] = [];
+  const today = new Date();
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    dates.push(d);
+  }
+  return dates;
+}
+
+interface PricingRule {
+  id: string;
+  name: string;
+  type: string;
+  price: number;
+  days_of_week: number[] | null;
+  time_from: string | null;
+  time_to: string | null;
+  is_active: boolean | null;
+}
 
 const BookScreen = () => {
   const { user } = useAuth();
@@ -44,18 +60,44 @@ const BookScreen = () => {
   const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
   const [addedUpsells, setAddedUpsells] = useState<string[]>([]);
   const [confirmed, setConfirmed] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
 
-  const dates = generateDates();
+  const quickDates = generateQuickDates();
   const isToday = selectedDate.toDateString() === new Date().toDateString();
-  const isPeak = ["17:00", "18:00", "19:00"].includes(selectedTime);
 
-  // Fetch recent customers (player_profiles)
+  // Fetch pricing rules
+  const { data: pricingRules } = useQuery<PricingRule[]>({
+    queryKey: ["pricing-rules", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-bookings", "pricing", { venueId: venueId! }),
+  });
+
+  // Get price for a given time based on pricing rules
+  const getPrice = (time: string): number => {
+    if (!pricingRules?.length) return 350; // fallback
+    const t = time === "Nu" ? `${new Date().getHours().toString().padStart(2, "0")}:00` : time;
+    const dayOfWeek = selectedDate.getDay();
+
+    const matchingRule = pricingRules.find((r) => {
+      if (!r.is_active || r.type !== "hourly") return false;
+      const daysMatch = !r.days_of_week?.length || r.days_of_week.includes(dayOfWeek);
+      const timeMatch = (!r.time_from || t >= r.time_from) && (!r.time_to || t < r.time_to);
+      return daysMatch && timeMatch;
+    });
+
+    return matchingRule?.price ?? 350;
+  };
+
+  const currentPrice = getPrice(selectedTime);
+  const isPeak = currentPrice > 300; // Dynamic peak detection based on price
+
+  // Fetch recent customers
   const { data: recentProfiles } = useQuery({
     queryKey: ["recent-customers"],
     queryFn: () => apiGet("api-customers", "recent", { limit: "10" }),
   });
 
-  // Fetch existing bookings for the selected date to determine court availability
+  // Fetch existing bookings for the selected date
   const { data: dateBookings } = useQuery({
     queryKey: ["date-bookings", venueId, selectedDate.toDateString(), selectedTime],
     enabled: !!venueId,
@@ -78,8 +120,8 @@ const BookScreen = () => {
     const durationMs = selectedDuration === "30 min" ? 30 * 60000 : selectedDuration === "90 min" ? 90 * 60000 : 60 * 60000;
     const endTime = new Date(bookingTime.getTime() + durationMs);
 
-    return venueCourts.map((court) => {
-      const isBooked = (dateBookings || []).some((b) => {
+    return venueCourts.map((court: any) => {
+      const isBooked = (dateBookings || []).some((b: any) => {
         if (b.venue_court_id !== court.id) return false;
         const bs = new Date(b.start_time).getTime();
         const be = new Date(b.end_time).getTime();
@@ -89,7 +131,10 @@ const BookScreen = () => {
     });
   }, [venueCourts, dateBookings, selectedDate, selectedTime, selectedDuration]);
 
-  const selectedCourtData = courtsWithAvailability.find((c) => c.id === selectedCourt);
+  const selectedCourtData = courtsWithAvailability.find((c: any) => c.id === selectedCourt);
+
+  const durationMultiplier = selectedDuration === "30 min" ? 0.5 : selectedDuration === "90 min" ? 1.5 : 1;
+  const totalPrice = Math.round(currentPrice * durationMultiplier);
 
   const createBooking = useMutation({
     mutationFn: async () => {
@@ -104,16 +149,13 @@ const BookScreen = () => {
       })();
       const durationMs = selectedDuration === "30 min" ? 30 * 60000 : selectedDuration === "90 min" ? 90 * 60000 : 60 * 60000;
       const endTime = new Date(bookingTime.getTime() + durationMs);
-      const price = selectedCourtData?.hourly_rate
-        ? selectedCourtData.hourly_rate * (durationMs / 3600000)
-        : 350 * (durationMs / 3600000);
 
       await apiPost("api-bookings", "create", {
         venueId,
         venueCourtId: selectedCourt,
         startTime: bookingTime.toISOString(),
         endTime: endTime.toISOString(),
-        totalPrice: price,
+        totalPrice,
         bookedBy: selectedCustomer || "Walk-in",
       });
     },
@@ -173,9 +215,34 @@ const BookScreen = () => {
         {step === 0 && (
           <motion.div key="s0" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
             <div>
-              <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Datum</h2>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Datum</h2>
+                <Popover open={showCalendar} onOpenChange={setShowCalendar}>
+                  <PopoverTrigger asChild>
+                    <motion.button whileTap={{ scale: 0.9 }} className="flex items-center gap-1 text-primary text-xs font-semibold">
+                      <CalendarDays className="w-3.5 h-3.5" />
+                      <span>Fler datum</span>
+                    </motion.button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="end">
+                    <Calendar
+                      mode="single"
+                      selected={selectedDate}
+                      onSelect={(date) => {
+                        if (date) {
+                          setSelectedDate(date);
+                          setShowCalendar(false);
+                        }
+                      }}
+                      disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
+                      initialFocus
+                      className={cn("p-3 pointer-events-auto")}
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
               <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory" style={{ scrollbarWidth: "none" }}>
-                {dates.map((date, i) => {
+                {quickDates.map((date, i) => {
                   const isSelected = date.toDateString() === selectedDate.toDateString();
                   const isTodayDate = date.toDateString() === new Date().toDateString();
                   return (
@@ -186,13 +253,26 @@ const BookScreen = () => {
                     </motion.button>
                   );
                 })}
+                {/* Show selected date if it's beyond quick dates */}
+                {!quickDates.some(d => d.toDateString() === selectedDate.toDateString()) && (
+                  <motion.button
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="flex-shrink-0 snap-center w-[56px] py-2.5 rounded-2xl flex flex-col items-center gap-0.5 bg-primary text-primary-foreground shadow-lg shadow-primary/25"
+                  >
+                    <span className="text-[9px] font-bold uppercase text-primary-foreground/70">{dayNames[selectedDate.getDay()]}</span>
+                    <span className="text-xl font-display font-bold">{selectedDate.getDate()}</span>
+                    <span className="text-[8px] font-medium text-primary-foreground/60">{monthNames[selectedDate.getMonth()]}</span>
+                  </motion.button>
+                )}
               </div>
             </div>
             <div>
               <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Tid</h2>
               <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
                 {(isToday ? timeSlots : timeSlots.filter((t) => t !== "Nu")).map((time) => {
-                  const isTimePeak = ["17:00", "18:00", "19:00"].includes(time);
+                  const timePrice = getPrice(time);
+                  const isTimePeak = timePrice > 300;
                   return (
                     <motion.button key={time} whileTap={{ scale: 0.92 }} onClick={() => setSelectedTime(time)} className={`flex-shrink-0 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-colors relative ${selectedTime === time ? "bg-primary text-primary-foreground" : "text-secondary-foreground"}`} style={selectedTime !== time ? { background: "hsl(var(--surface-1))" } : undefined}>
                       {time}
@@ -212,6 +292,11 @@ const BookScreen = () => {
                 ))}
               </div>
             </div>
+            {/* Price preview */}
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs text-muted-foreground">Pris per timme</span>
+              <span className="text-sm font-display font-bold text-primary">{currentPrice} kr/h</span>
+            </div>
             <motion.button whileTap={{ scale: 0.96 }} onClick={() => setStep(1)} className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm">Välj bana →</motion.button>
           </motion.div>
         )}
@@ -222,10 +307,10 @@ const BookScreen = () => {
             <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Välj bana</h2>
             {courtsWithAvailability.length > 0 ? (
               <div className="grid grid-cols-3 gap-2">
-                {courtsWithAvailability.map((court) => (
+                {courtsWithAvailability.map((court: any) => (
                   <motion.button key={court.id} whileTap={court.available ? { scale: 0.92 } : undefined} onClick={() => court.available && setSelectedCourt(court.id)} disabled={!court.available} className={`court-cell min-h-[80px] relative ${!court.available ? "opacity-25 bg-muted border border-border cursor-not-allowed" : selectedCourt === court.id ? "bg-primary/15 border-2 border-primary text-primary" : "court-free"}`}>
                     <span className="text-[10px] font-bold">{court.name}</span>
-                    <span className="text-base font-display font-bold">{court.hourly_rate || 350} kr</span>
+                    <span className="text-base font-display font-bold">{totalPrice} kr</span>
                     {isPeak && court.available && <span className="text-[9px] text-court-active font-bold">Peak ⚡</span>}
                   </motion.button>
                 ))}
@@ -251,8 +336,8 @@ const BookScreen = () => {
                 <span className="status-chip bg-accent text-accent-foreground text-[9px]">Ny</span>
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
               </motion.button>
-              {(recentProfiles || []).map((p, i) => {
-                const initials = (p.display_name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+              {(recentProfiles || []).map((p: any, i: number) => {
+                const initials = (p.display_name || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
                 return (
                   <motion.button key={p.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer(p.display_name || "Gäst"); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">{initials}</div>
@@ -270,20 +355,18 @@ const BookScreen = () => {
         {step === 3 && (
           <motion.div key="s3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
             <div className="glass-card rounded-2xl p-4 space-y-3">
-              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Datum</span><span className="font-semibold">{isToday ? "Idag" : selectedDate.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Datum</span><span className="font-semibold">{isToday ? "Idag" : format(selectedDate, "EEE d MMM", { locale: sv })}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tid</span><span className="font-semibold">{selectedTime} · {selectedDuration}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bana</span><span className="font-semibold">{selectedCourtData?.name}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Kund</span><span className="font-semibold">{selectedCustomer}</span></div>
               <div className="border-t border-border pt-3 flex justify-between items-center">
                 <span className="text-sm font-semibold">Total</span>
-                <span className="text-xl font-display font-bold text-primary">
-                  {selectedCourtData ? Math.round((selectedCourtData.hourly_rate || 350) * (selectedDuration === "30 min" ? 0.5 : selectedDuration === "90 min" ? 1.5 : 1)) : 0} kr
-                </span>
+                <span className="text-xl font-display font-bold text-primary">{totalPrice} kr</span>
               </div>
               {isPeak && (
                 <div className="flex items-center gap-2 bg-court-active/10 rounded-xl p-2.5">
                   <AlertTriangle className="w-3.5 h-3.5 text-court-active" />
-                  <span className="text-xs text-court-active font-medium">Peak-tid</span>
+                  <span className="text-xs text-court-active font-medium">Peak-tid · {currentPrice} kr/h</span>
                 </div>
               )}
             </div>

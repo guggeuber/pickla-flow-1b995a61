@@ -315,6 +315,19 @@ Deno.serve(async (req) => {
       }, 200, 15);
     }
 
+    // GET /api-bookings/pricing?venueId=X
+    if (req.method === 'GET' && path === 'pricing') {
+      const venueId = url.searchParams.get('venueId');
+      if (!venueId) return errorResponse('Missing venueId');
+
+      const { data, error: qErr } = await client.from('pricing_rules')
+        .select('id, name, type, price, days_of_week, time_from, time_to, is_active')
+        .eq('venue_id', venueId).eq('is_active', true).order('price');
+      if (qErr) return errorResponse(qErr.message);
+
+      return jsonResponse(data, 200, 30);
+    }
+
     // GET /api-bookings/courts?venueId=X
     if (req.method === 'GET' && path === 'courts') {
       const venueId = url.searchParams.get('venueId');
