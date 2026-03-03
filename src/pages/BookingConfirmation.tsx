@@ -109,7 +109,9 @@ export default function BookingConfirmation() {
       {/* Top bar */}
       <div className="px-5 pt-12 pb-3 flex items-center justify-between">
         <span className="text-[11px] text-neutral-300" style={{ fontFamily: FONT_MONO }}>bokning</span>
-        <img src={picklaLogo} alt="Pickla" className="h-6 w-auto opacity-20" />
+        <Link to={venue?.slug ? `/links/${venue.slug}` : "/"}>
+          <img src={picklaLogo} alt="Pickla" className="h-6 w-auto opacity-20 hover:opacity-40 transition-opacity" />
+        </Link>
       </div>
 
       {/* Status */}
@@ -196,6 +198,15 @@ export default function BookingConfirmation() {
           </span>
         </div>
       </div>
+
+      {/* Check-in notice */}
+      {!isCancelled && (
+        <div className="mx-5 mt-1 mb-2 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200/60">
+          <p className="text-[12px] text-amber-800 leading-relaxed" style={{ fontFamily: FONT_MONO }}>
+            betalning &amp; incheckning sker i desken – kom minst 15 min innan din tid
+          </p>
+        </div>
+      )}
 
       <div className="h-px bg-neutral-100 mx-5" />
 
