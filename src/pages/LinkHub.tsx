@@ -1,22 +1,22 @@
 import { motion } from "framer-motion";
 import {
+  ChevronRight,
+  Loader2,
+  User,
+  type LucideIcon,
   MessageCircle,
   Instagram,
+  Bot,
   Calendar,
   Ticket,
   Gamepad2,
-  Bot,
-  ChevronRight,
-  MapPin,
-  Loader2,
   Link as LinkIcon,
-  User,
-  type LucideIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import picklaLogo from "@/assets/pickla-logo.svg";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -39,18 +39,17 @@ function usePublicVenue(slug: string) {
 function isOpenNow(openingHours: any[]): boolean {
   if (!openingHours?.length) return false;
   const now = new Date();
-  const day = now.getDay(); // 0=Sun
+  const day = now.getDay();
   const todayHours = openingHours.find((h: any) => h.day_of_week === day);
   if (!todayHours || todayHours.is_closed) return false;
   const timeStr = now.toTimeString().slice(0, 5);
   return timeStr >= todayHours.open_time.slice(0, 5) && timeStr < todayHours.close_time.slice(0, 5);
 }
 
-/* ── Quick actions (high-priority CTAs) ── */
 const quickActions = [
-  { title: "Boka Bana", icon: Calendar, url: "https://pickla.xyz/book", color: "primary" as const },
-  { title: "Dagspass", icon: Ticket, url: "https://pickla.xyz/daypass", color: "sell" as const },
-  { title: "Live Games", icon: Gamepad2, url: "https://games.pickla.xyz", color: "success" as const },
+  { title: "BOKA BANA", url: "https://pickla.xyz/book" },
+  { title: "DAGSPASS", url: "https://pickla.xyz/daypass" },
+  { title: "EVENTS", url: "https://games.pickla.xyz" },
 ];
 
 const iconMap: Record<string, LucideIcon> = {
@@ -66,13 +65,6 @@ const iconMap: Record<string, LucideIcon> = {
 function resolveIcon(name: string): LucideIcon {
   return iconMap[name] || LinkIcon;
 }
-
-const colorMap: Record<string, { bg: string; border: string; icon: string; solid: string }> = {
-  primary: { bg: "hsl(var(--primary) / 0.1)", border: "hsl(var(--primary) / 0.3)", icon: "hsl(var(--primary))", solid: "hsl(var(--primary))" },
-  sell: { bg: "hsl(var(--sell) / 0.1)", border: "hsl(var(--sell) / 0.3)", icon: "hsl(var(--sell))", solid: "hsl(var(--sell))" },
-  success: { bg: "hsl(var(--success) / 0.1)", border: "hsl(var(--success) / 0.3)", icon: "hsl(var(--success))", solid: "hsl(var(--success))" },
-  "court-vip": { bg: "hsl(var(--court-vip) / 0.1)", border: "hsl(var(--court-vip) / 0.3)", icon: "hsl(var(--court-vip))", solid: "hsl(var(--court-vip))" },
-};
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.06, delayChildren: 0.15 } } };
 const item = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 26 } } };
@@ -91,32 +83,28 @@ const LinkHub = () => {
   const dynamicLinks = data?.links || [];
   const open = useMemo(() => isOpenNow(openingHours), [openingHours]);
 
-  const venueName = venue?.name || "PICKLA";
-  const venueAddress = venue?.address ? `${venue.address}, ${venue.city || "Stockholm"}` : "Solna Business Park, Stockholm";
+  const today = new Date().toLocaleDateString("sv-SE", { day: "numeric", month: "numeric", year: "numeric" }).replace(/-/g, ".");
 
-  // Featured event from DB (first active event) or fallback
   const featuredEvent = events.length > 0 ? {
     tag: events[0].event_type?.toUpperCase() || "EVENT",
     title: events[0].display_name || events[0].name,
     subtitle: events[0].status === "live" ? "Pågår nu!" : events[0].start_date ? new Date(events[0].start_date).toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "short" }) : "",
-    emoji: "🏆",
   } : {
     tag: "FREDAGSKLUBBEN",
-    title: "OASEN",
+    title: "oasen fredagsklubben",
     subtitle: "Happy Hour varje fredag 16–LATE",
-    emoji: "🍻",
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "#F5D5D5" }}>
+        <Loader2 className="w-6 h-6 animate-spin" style={{ color: "#3E3D39" }} />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center px-4 pt-6 pb-12 relative">
+    <div className="min-h-screen flex flex-col items-center px-5 pt-8 pb-16 relative" style={{ background: "#F5D5D5", color: "#3E3D39" }}>
       {/* ── Account button ── */}
       <motion.button
         initial={{ opacity: 0 }}
@@ -132,138 +120,168 @@ const LinkHub = () => {
         }}
         className="absolute top-4 right-4 z-10 flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors"
         style={{
-          background: user ? "hsl(var(--primary) / 0.15)" : "hsl(var(--surface-1))",
-          color: user ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))",
-          border: `1px solid ${user ? "hsl(var(--primary) / 0.25)" : "hsl(var(--border))"}`,
+          background: user ? "rgba(62,61,57,0.1)" : "rgba(62,61,57,0.06)",
+          color: "#3E3D39",
+          border: "1px solid rgba(62,61,57,0.15)",
         }}
       >
         <User className="w-3.5 h-3.5" />
         {user ? "Mitt konto" : "Logga in"}
       </motion.button>
 
-      {/* ── Header ── */}
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, type: "spring" }} className="flex flex-col items-center mb-6 mt-4">
-        {/* Logo circle */}
-        <div
-          className="w-20 h-20 rounded-full flex items-center justify-center mb-3 shadow-lg overflow-hidden"
-          style={{
-            background: venue?.logo_url ? "transparent" : "linear-gradient(135deg, hsl(var(--primary)), hsl(var(--sell)))",
-            boxShadow: "0 8px 32px hsl(var(--primary) / 0.3)",
-          }}
-        >
-          {venue?.logo_url ? (
-            <img src={venue.logo_url} alt={venueName} className="w-full h-full object-cover" />
-          ) : (
-            <span className="text-3xl font-black text-primary-foreground" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-              {venueName.charAt(0)}
-            </span>
-          )}
-        </div>
-
-        <h1 className="text-2xl font-black tracking-tight text-foreground" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-          {venueName.toUpperCase()}
-        </h1>
-        <div className="flex items-center gap-1.5 mt-1 text-muted-foreground">
-          <MapPin className="w-3 h-3" />
-          <span className="text-xs">{venueAddress}</span>
-        </div>
-
-        {/* Open/closed badge */}
-        <div
-          className="flex items-center gap-2 mt-3 px-3 py-1 rounded-full"
-          style={{
-            background: open ? "hsl(var(--success) / 0.1)" : "hsl(var(--destructive) / 0.1)",
-            border: `1px solid ${open ? "hsl(var(--success) / 0.2)" : "hsl(var(--destructive) / 0.2)"}`,
-          }}
-        >
-          <span className={`w-2 h-2 rounded-full ${open ? "bg-success pulse-live" : "bg-destructive"}`} />
-          <span className={`text-xs font-semibold tracking-wide ${open ? "text-success" : "text-destructive"}`}>
-            {open ? "ÖPPET NU" : "STÄNGT"}
-          </span>
-        </div>
+      {/* ── Pickla Logo ── */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, type: "spring" }}
+        className="mb-8 mt-4"
+      >
+        <img src={picklaLogo} alt="Pickla" className="h-16 w-auto" />
       </motion.div>
 
-      <motion.div variants={container} initial="hidden" animate="show" className="w-full max-w-sm flex flex-col gap-4">
+      <motion.div variants={container} initial="hidden" animate="show" className="w-full max-w-sm flex flex-col gap-6">
+        {/* ── Quick Action Buttons ── */}
+        <motion.div variants={item} className="flex gap-3 justify-center">
+          {quickActions.map((action) => (
+            <a
+              key={action.title}
+              href={action.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-5 py-3 rounded-lg text-xs font-bold tracking-wider transition-all duration-200 active:scale-95 text-center"
+              style={{
+                background: "rgba(62,61,57,0.04)",
+                border: "1.5px solid rgba(62,61,57,0.2)",
+                color: "#3E3D39",
+                fontFamily: "'Space Grotesk', monospace",
+              }}
+            >
+              {action.title}
+            </a>
+          ))}
+        </motion.div>
+
+        {/* ── Date ── */}
+        <motion.div variants={item} className="px-1">
+          <p className="text-lg font-bold tracking-tight" style={{ fontFamily: "'Space Grotesk', monospace", color: "#3E3D39" }}>
+            {today}
+          </p>
+        </motion.div>
+
         {/* ── Featured Event Card ── */}
         <motion.div
           variants={item}
-          className="relative rounded-2xl overflow-hidden p-5"
+          className="relative rounded-2xl overflow-hidden"
           style={{
-            background: "linear-gradient(135deg, hsl(var(--primary) / 0.15), hsl(var(--sell) / 0.1), hsl(var(--court-vip) / 0.08))",
-            border: "1.5px solid hsl(var(--primary) / 0.25)",
+            background: "#fff",
+            border: "1.5px solid rgba(62,61,57,0.1)",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
           }}
         >
-          <div className="absolute inset-0 opacity-20 animate-sell-shimmer pointer-events-none" style={{ background: "linear-gradient(90deg, transparent 0%, hsl(var(--primary) / 0.4) 50%, transparent 100%)", backgroundSize: "200% auto" }} />
-          <div className="relative z-10">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-primary text-primary-foreground">{featuredEvent.tag}</span>
+          {venue?.cover_image_url ? (
+            <img
+              src={venue.cover_image_url}
+              alt={featuredEvent.title}
+              className="w-full aspect-square object-cover"
+            />
+          ) : (
+            <div className="w-full aspect-square flex items-center justify-center" style={{ background: "rgba(62,61,57,0.05)" }}>
+              <p
+                className="text-2xl font-black opacity-60"
+                style={{ fontFamily: "'Space Grotesk', monospace" }}
+              >
+                {featuredEvent.title}
+              </p>
             </div>
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-3xl font-black text-foreground tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{featuredEvent.title}</h2>
-              <span className="text-2xl">{featuredEvent.emoji}</span>
-            </div>
-            <p className="text-sm text-foreground/80 font-medium mt-1">{featuredEvent.subtitle}</p>
+          )}
+          {/* Overlay text at bottom of image */}
+          <div className="absolute bottom-0 left-0 right-0 p-4" style={{ background: "linear-gradient(transparent, rgba(0,0,0,0.4))" }}>
+            <p className="text-white text-lg font-bold" style={{ fontFamily: "'Space Grotesk', monospace" }}>
+              {featuredEvent.title}
+            </p>
           </div>
+          {/* Decorative swooshes */}
+          <svg className="absolute -top-4 -right-4 w-24 h-24 opacity-30 pointer-events-none" viewBox="0 0 100 100" fill="none">
+            <path d="M20 80 Q50 20 80 60" stroke="#E8A0A0" strokeWidth="3" strokeLinecap="round" fill="none" />
+            <path d="M30 90 Q60 30 90 70" stroke="#E8A0A0" strokeWidth="2" strokeLinecap="round" fill="none" />
+          </svg>
+          <svg className="absolute -bottom-4 -left-4 w-24 h-24 opacity-30 pointer-events-none" viewBox="0 0 100 100" fill="none">
+            <path d="M80 20 Q50 80 20 40" stroke="#E8A0A0" strokeWidth="3" strokeLinecap="round" fill="none" />
+            <path d="M70 10 Q40 70 10 30" stroke="#E8A0A0" strokeWidth="2" strokeLinecap="round" fill="none" />
+          </svg>
         </motion.div>
 
-        {/* ── Quick Action Buttons ── */}
-        <motion.div variants={item} className="grid grid-cols-3 gap-2">
-          {quickActions.map((action) => {
-            const colors = colorMap[action.color];
-            return (
-              <a key={action.title} href={action.url} target="_blank" rel="noopener noreferrer" className="flex flex-col items-center gap-2 rounded-2xl p-4 transition-all duration-200 active:scale-95" style={{ background: colors.bg, border: `1.5px solid ${colors.border}` }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `${colors.solid}20` }}>
-                  <action.icon className="w-5 h-5" style={{ color: colors.icon }} />
-                </div>
-                <span className="text-xs font-semibold text-foreground text-center leading-tight">{action.title}</span>
-              </a>
-            );
-          })}
-        </motion.div>
-
-        {/* ── Section label ── */}
-        <motion.div variants={item} className="flex items-center gap-2 mt-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Community</span>
-          <div className="flex-1 h-px bg-border" />
+        {/* ── Open/closed status ── */}
+        <motion.div variants={item} className="flex items-center gap-2 px-1">
+          <span
+            className={`w-2 h-2 rounded-full ${open ? "pulse-live" : ""}`}
+            style={{ background: open ? "#4CAF50" : "#E53935" }}
+          />
+          <span className="text-xs font-semibold tracking-wide" style={{ color: open ? "#4CAF50" : "#E53935" }}>
+            {open ? "ÖPPET NU" : "STÄNGT"}
+          </span>
         </motion.div>
 
         {/* ── Community Links (dynamic from DB) ── */}
-        {dynamicLinks.map((link: any) => {
-          const colors = colorMap[link.color] || colorMap.primary;
-          const Icon = resolveIcon(link.icon);
-          return (
-            <motion.a key={link.id} variants={item} href={link.url} target="_blank" rel="noopener noreferrer" className="group relative rounded-2xl p-4 flex items-center gap-3.5 transition-all duration-200 active:scale-[0.97]" style={{ background: colors.bg, border: `1.5px solid ${colors.border}` }} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${colors.solid}15` }}>
-                <Icon className="w-5 h-5" style={{ color: colors.icon }} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-foreground font-semibold text-sm">{link.title}</span>
-                  {link.member_count && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: `${colors.solid}20`, color: colors.icon }}>{link.member_count}</span>}
-                </div>
-                <span className="text-muted-foreground text-xs mt-0.5 block">{link.description}</span>
-              </div>
-              <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />
-            </motion.a>
-          );
-        })}
+        {dynamicLinks.length > 0 && (
+          <>
+            <motion.div variants={item} className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "rgba(62,61,57,0.5)" }}>Community</span>
+              <div className="flex-1 h-px" style={{ background: "rgba(62,61,57,0.12)" }} />
+            </motion.div>
 
-        {/* ── Upcoming events ── */}
-        <motion.div variants={item} className="rounded-2xl p-4 text-center" style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}>
-          <span className="text-lg mb-1 block">🏆</span>
-          <p className="text-xs font-semibold text-foreground">Pickla Open</p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">Turneringar & events — kommer snart</p>
-          <a href="https://games.pickla.xyz" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 mt-2 text-[11px] font-semibold text-primary hover:underline">
-            Se kommande events <ChevronRight className="w-3 h-3" />
-          </a>
-        </motion.div>
+            {dynamicLinks.map((link: any) => {
+              const Icon = resolveIcon(link.icon);
+              return (
+                <motion.a
+                  key={link.id}
+                  variants={item}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group rounded-xl p-4 flex items-center gap-3.5 transition-all duration-200 active:scale-[0.97]"
+                  style={{
+                    background: "rgba(255,255,255,0.6)",
+                    border: "1.5px solid rgba(62,61,57,0.1)",
+                  }}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.97 }}
+                >
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(62,61,57,0.06)" }}>
+                    <Icon className="w-5 h-5" style={{ color: "#3E3D39" }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="font-semibold text-sm" style={{ color: "#3E3D39" }}>{link.title}</span>
+                    {link.member_count && (
+                      <span className="ml-2 px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "rgba(62,61,57,0.08)", color: "#3E3D39" }}>
+                        {link.member_count}
+                      </span>
+                    )}
+                    {link.description && (
+                      <span className="text-xs mt-0.5 block" style={{ color: "rgba(62,61,57,0.5)" }}>{link.description}</span>
+                    )}
+                  </div>
+                  <ChevronRight className="w-4 h-4 shrink-0" style={{ color: "rgba(62,61,57,0.3)" }} />
+                </motion.a>
+              );
+            })}
+          </>
+        )}
       </motion.div>
 
-      {/* ── Footer ── */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.7 }} className="mt-8 text-center">
-        <p className="text-muted-foreground text-[10px] tracking-wide">
-          {venue?.website_url?.replace(/https?:\/\//, '') || "picklaparks.com"} ⚡ {venue?.city || "Solna"}, Stockholm
-        </p>
+      {/* ── Footer — green pickla logo ── */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.7 }}
+        className="mt-12"
+      >
+        <img
+          src={picklaLogo}
+          alt="Pickla"
+          className="h-20 w-auto"
+          style={{ filter: "brightness(0) saturate(100%) invert(73%) sepia(41%) saturate(632%) hue-rotate(92deg) brightness(96%) contrast(87%)" }}
+        />
       </motion.div>
     </div>
   );
