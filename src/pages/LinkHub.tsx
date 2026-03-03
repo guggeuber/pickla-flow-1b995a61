@@ -162,15 +162,15 @@ const LinkHub = () => {
             </span>
           </div>
           <div className="mt-1 flex flex-col gap-0.5">
-            <span className="text-[11px] text-white/50" style={{ fontFamily: "'Space Mono', monospace" }}>
+            <a href="https://maps.google.com/?q=Svetsarvägen+22,+171+41+Solna" target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/50 underline underline-offset-2 decoration-white/20 active:opacity-60 transition-opacity" style={{ fontFamily: "'Space Mono', monospace" }}>
               Svetsarvägen 22, Solna
-            </span>
-            <span className="text-[11px] text-white/50" style={{ fontFamily: "'Space Mono', monospace" }}>
+            </a>
+            <a href="mailto:hello@picklaparks.com" className="text-[11px] text-white/50 active:opacity-60 transition-opacity" style={{ fontFamily: "'Space Mono', monospace" }}>
               hello@picklaparks.com
-            </span>
-            <span className="text-[11px] text-white/50" style={{ fontFamily: "'Space Mono', monospace" }}>
+            </a>
+            <a href="tel:+46883363" className="text-[11px] text-white/50 active:opacity-60 transition-opacity" style={{ fontFamily: "'Space Mono', monospace" }}>
               08-83 33 63
-            </span>
+            </a>
           </div>
         </div>
       </header>
