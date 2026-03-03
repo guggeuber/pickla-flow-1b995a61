@@ -170,6 +170,146 @@ export type Database = {
           },
         ]
       }
+      crew_challenges: {
+        Row: {
+          challenged_crew_id: string
+          challenger_crew_id: string
+          completed_at: string | null
+          created_at: string
+          id: string
+          message: string | null
+          result: Json | null
+          status: string
+        }
+        Insert: {
+          challenged_crew_id: string
+          challenger_crew_id: string
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          message?: string | null
+          result?: Json | null
+          status?: string
+        }
+        Update: {
+          challenged_crew_id?: string
+          challenger_crew_id?: string
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          message?: string | null
+          result?: Json | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "crew_challenges_challenged_crew_id_fkey"
+            columns: ["challenged_crew_id"]
+            isOneToOne: false
+            referencedRelation: "crews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "crew_challenges_challenger_crew_id_fkey"
+            columns: ["challenger_crew_id"]
+            isOneToOne: false
+            referencedRelation: "crews"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      crew_members: {
+        Row: {
+          crew_id: string
+          id: string
+          joined_at: string
+          player_profile_id: string
+          role: string
+        }
+        Insert: {
+          crew_id: string
+          id?: string
+          joined_at?: string
+          player_profile_id: string
+          role?: string
+        }
+        Update: {
+          crew_id?: string
+          id?: string
+          joined_at?: string
+          player_profile_id?: string
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "crew_members_crew_id_fkey"
+            columns: ["crew_id"]
+            isOneToOne: false
+            referencedRelation: "crews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "crew_members_player_profile_id_fkey"
+            columns: ["player_profile_id"]
+            isOneToOne: false
+            referencedRelation: "player_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      crews: {
+        Row: {
+          badge_color: string | null
+          badge_emoji: string | null
+          created_at: string
+          created_by: string
+          crew_type: string
+          description: string | null
+          id: string
+          max_members: number
+          min_rating: number
+          name: string
+          updated_at: string
+          venue_id: string | null
+        }
+        Insert: {
+          badge_color?: string | null
+          badge_emoji?: string | null
+          created_at?: string
+          created_by: string
+          crew_type?: string
+          description?: string | null
+          id?: string
+          max_members?: number
+          min_rating?: number
+          name: string
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Update: {
+          badge_color?: string | null
+          badge_emoji?: string | null
+          created_at?: string
+          created_by?: string
+          crew_type?: string
+          description?: string | null
+          id?: string
+          max_members?: number
+          min_rating?: number
+          name?: string
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "crews_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       day_passes: {
         Row: {
           created_at: string | null
@@ -1439,12 +1579,17 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_player_profile_id: { Args: { _user_id: string }; Returns: string }
       get_venue_id_for_event: { Args: { _event_id: string }; Returns: string }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
+        Returns: boolean
+      }
+      is_crew_leader: {
+        Args: { _crew_id: string; _user_id: string }
         Returns: boolean
       }
       is_super_admin: { Args: never; Returns: boolean }

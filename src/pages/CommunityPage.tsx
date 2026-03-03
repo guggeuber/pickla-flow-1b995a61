@@ -3,10 +3,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { CommunityNav } from "@/components/community/CommunityNav";
 import { FeedTab } from "@/components/community/FeedTab";
 import { LeaderboardTab } from "@/components/community/LeaderboardTab";
+import { CrewsTab } from "@/components/community/CrewsTab";
 import { ProfileTab } from "@/components/community/ProfileTab";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
-type Tab = "feed" | "ranking" | "profile";
+type Tab = "feed" | "ranking" | "crews" | "profile";
 
 const CommunityPage = () => {
   const [activeTab, setActiveTab] = useState<Tab>("feed");
@@ -44,6 +45,7 @@ const CommunityPage = () => {
           >
             {activeTab === "feed" && <FeedTab />}
             {activeTab === "ranking" && <LeaderboardTab />}
+            {activeTab === "crews" && <CrewsTab />}
             {activeTab === "profile" && <ProfileTab />}
           </motion.div>
         </AnimatePresence>
