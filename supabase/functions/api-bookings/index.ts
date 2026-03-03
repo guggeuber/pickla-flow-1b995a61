@@ -52,6 +52,112 @@ Deno.serve(async (req) => {
     return jsonResponse({ venue, openingHours: hours || [], events: events || [], links: links || [] }, 200, 60);
   }
 
+  // ── Public endpoint: available courts for a venue ──
+  if (req.method === 'GET' && path === 'public-courts') {
+    const venueSlug = url.searchParams.get('slug');
+    const date = url.searchParams.get('date'); // YYYY-MM-DD
+    if (!venueSlug || !date) return errorResponse('Missing slug or date');
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const admin = createClient(supabaseUrl, serviceKey);
+
+    const { data: venue } = await admin.from('venues')
+      .select('id, name').eq('slug', venueSlug).eq('is_public', true).single();
+    if (!venue) return errorResponse('Venue not found', 404);
+
+    // Get courts
+    const { data: courts } = await admin.from('venue_courts')
+      .select('id, name, court_number, court_type, hourly_rate, is_available')
+      .eq('venue_id', venue.id).eq('is_available', true).order('court_number');
+
+    // Get opening hours for requested day
+    const dayOfWeek = new Date(date + 'T12:00:00Z').getUTCDay();
+    const { data: hours } = await admin.from('opening_hours')
+      .select('open_time, close_time, is_closed')
+      .eq('venue_id', venue.id).eq('day_of_week', dayOfWeek).maybeSingle();
+
+    // Get existing bookings for the date
+    const start = `${date}T00:00:00.000Z`;
+    const end = `${date}T23:59:59.999Z`;
+    const { data: bookings } = await admin.from('bookings')
+      .select('venue_court_id, start_time, end_time')
+      .eq('venue_id', venue.id)
+      .neq('status', 'cancelled')
+      .gte('start_time', start).lte('start_time', end);
+
+    return jsonResponse({
+      venue: { id: venue.id, name: venue.name },
+      courts: courts || [],
+      openingHours: hours || null,
+      bookings: (bookings || []).map((b: any) => ({
+        court_id: b.venue_court_id,
+        start: b.start_time,
+        end: b.end_time,
+      })),
+    }, 200, 10);
+  }
+
+  // ── Public endpoint: create booking (no auth) ──
+  if (req.method === 'POST' && path === 'public-book') {
+    const body = await req.json();
+    const { slug, courtIds, date, startTime, endTime, name, phone } = body;
+    if (!slug || !courtIds?.length || !date || !startTime || !endTime || !name) {
+      return errorResponse('Fyll i alla fält');
+    }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const admin = createClient(supabaseUrl, serviceKey);
+
+    const { data: venue } = await admin.from('venues')
+      .select('id').eq('slug', slug).eq('is_public', true).single();
+    if (!venue) return errorResponse('Venue not found', 404);
+
+    // Build ISO timestamps
+    const startISO = `${date}T${startTime}:00.000Z`;
+    const endISO = `${date}T${endTime}:00.000Z`;
+
+    // Check conflicts for all courts
+    for (const courtId of courtIds) {
+      const { data: conflicts } = await admin.from('bookings')
+        .select('id').eq('venue_court_id', courtId)
+        .neq('status', 'cancelled')
+        .lt('start_time', endISO).gt('end_time', startISO);
+      if (conflicts && conflicts.length > 0) {
+        return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
+      }
+    }
+
+    // Find or create a dummy user for walk-in public bookings
+    // Use a service-level insert (bypasses RLS)
+    const bookings = [];
+    for (const courtId of courtIds) {
+      const { data: court } = await admin.from('venue_courts')
+        .select('hourly_rate').eq('id', courtId).single();
+      const hourlyRate = court?.hourly_rate || 350;
+      const durationHours = (new Date(endISO).getTime() - new Date(startISO).getTime()) / 3600000;
+      const price = Math.round(hourlyRate * durationHours);
+
+      const { data: booking, error: bErr } = await admin.from('bookings').insert({
+        venue_id: venue.id,
+        venue_court_id: courtId,
+        user_id: '00000000-0000-0000-0000-000000000000', // public placeholder
+        booked_by: name,
+        start_time: startISO,
+        end_time: endISO,
+        total_price: price,
+        status: 'confirmed',
+        notes: phone ? `Tel: ${phone}` : null,
+      }).select().single();
+
+      if (bErr) return errorResponse(bErr.message);
+      bookings.push(booking);
+    }
+
+    return jsonResponse({ bookings, count: bookings.length }, 201);
+  }
+
   try {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);

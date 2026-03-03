@@ -266,15 +266,13 @@ const LinkHub = () => {
           join whatsapp
         </a>
 
-        <a
-          href="https://pickla.xyz/book"
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={() => navigate(`/book?v=${slug}`)}
           className="text-white/90 text-[15px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Mono', monospace" }}
         >
           book
-        </a>
+        </button>
 
         <button
           onClick={() => {
