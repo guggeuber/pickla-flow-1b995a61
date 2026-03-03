@@ -275,7 +275,7 @@ const LinkHub = () => {
           {upcomingEvents.map((evt) => (
             <button
               key={evt.id}
-              onClick={() => navigate(`/event-ops?eventId=${evt.id}`)}
+              onClick={() => navigate(`/event/${evt.id}`)}
               className="px-4 py-2 active:scale-95 transition-transform text-left"
               style={{
                 background: "rgba(255,255,255,0.92)",
