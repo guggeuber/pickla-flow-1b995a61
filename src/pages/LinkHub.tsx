@@ -103,12 +103,12 @@ const LinkHub = () => {
   }
 
   return (
-    <div className="min-h-screen bg-black">
+    <div className="min-h-screen" style={{ background: "#1a1e2e" }}>
       {/* ═══ STICKY TOP: Logo + Status ═══ */}
       <header
         className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
         style={{
-          background: "linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)",
+          background: "linear-gradient(to bottom, rgba(26,30,46,0.8) 0%, rgba(26,30,46,0.4) 50%, transparent 100%)",
         }}
       >
         <div className="pt-2">
@@ -156,7 +156,7 @@ const LinkHub = () => {
                 <div
                   className="absolute bottom-0 left-0 right-0 px-5 pb-5 pt-16"
                   style={{
-                    background: "linear-gradient(to top, rgba(0,0,0,0.5), transparent)",
+                    background: "linear-gradient(to top, rgba(26,30,46,0.6), transparent)",
                   }}
                 >
                   <p
@@ -191,9 +191,9 @@ const LinkHub = () => {
 
       {/* ═══ FIXED BOTTOM NAV ═══ */}
       <nav
-        className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-[env(safe-area-inset-bottom,16px)] pt-3"
+        className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-8 pt-12"
         style={{
-          background: "linear-gradient(to top, rgba(0,0,0,0.85) 50%, transparent 100%)",
+          background: "linear-gradient(to top, rgba(26,30,46,0.95) 0%, rgba(26,30,46,0.7) 40%, rgba(26,30,46,0.3) 70%, transparent 100%)",
         }}
       >
         <a
