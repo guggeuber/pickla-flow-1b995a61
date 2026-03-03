@@ -170,7 +170,7 @@ export default function EventPage() {
       {/* Event header */}
       <div className="px-5 pb-5">
         {eventLogo && (
-          <img src={eventLogo} alt="" className="w-14 h-14 rounded-2xl object-cover mb-5" />
+          <img src={eventLogo} alt="" className="h-12 max-w-[160px] object-contain mb-5" />
         )}
 
         <h1 className="text-[28px] font-bold text-neutral-900 tracking-tight leading-tight" style={{ fontFamily: FONT_GROTESK }}>
@@ -381,7 +381,9 @@ export default function EventPage() {
                   className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl bg-neutral-50 active:bg-neutral-100 transition-colors text-left"
                 >
                   {evt.logo_url ? (
-                    <img src={evt.logo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
+                    <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center overflow-hidden">
+                      <img src={evt.logo_url} alt="" className="max-w-full max-h-full object-contain" />
+                    </div>
                   ) : (
                     <div
                       className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-[12px] font-bold text-white"
