@@ -2,6 +2,32 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+async function getOrCreatePublicBookingUserId(admin: any): Promise<string> {
+  const publicEmail = 'guest-booking@pickla.local';
+
+  for (let page = 1; page <= 10; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) break;
+
+    const found = data?.users?.find((u: any) => u.email?.toLowerCase() === publicEmail);
+    if (found?.id) return found.id;
+
+    if (!data?.users || data.users.length < 200) break;
+  }
+
+  const { data, error } = await admin.auth.admin.createUser({
+    email: publicEmail,
+    email_confirm: true,
+    user_metadata: { display_name: 'Public Booking Guest' },
+  });
+
+  if (error || !data?.user?.id) {
+    throw new Error('Kunde inte skapa gästanvändare för bokning');
+  }
+
+  return data.user.id;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -139,12 +165,20 @@ Deno.serve(async (req) => {
     }, 200, 10);
   }
 
-  // ── Public endpoint: create booking (no auth) ──
   if (req.method === 'POST' && path === 'public-book') {
     const body = await req.json();
     const { slug, courtIds, date, startTime, endTime, name, phone } = body;
-    if (!slug || !courtIds?.length || !date || !startTime || !endTime || !name || !phone) {
+
+    const safeName = typeof name === 'string' ? name.trim() : '';
+    const safePhone = typeof phone === 'string'
+      ? phone.replace(/[^\d+()\-\s]/g, '').trim()
+      : '';
+
+    if (!slug || !courtIds?.length || !date || !startTime || !endTime || !safeName || !safePhone) {
       return errorResponse('Fyll i alla fält');
+    }
+    if (safeName.length > 100 || safePhone.length < 6 || safePhone.length > 20) {
+      return errorResponse('Ogiltiga uppgifter', 400);
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -170,8 +204,8 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Find or create a dummy user for walk-in public bookings
-    // Use a service-level insert (bypasses RLS)
+    const publicUserId = await getOrCreatePublicBookingUserId(admin);
+
     const bookings = [];
     for (const courtId of courtIds) {
       const { data: court } = await admin.from('venue_courts')
@@ -183,13 +217,13 @@ Deno.serve(async (req) => {
       const { data: booking, error: bErr } = await admin.from('bookings').insert({
         venue_id: venue.id,
         venue_court_id: courtId,
-        user_id: '00000000-0000-0000-0000-000000000000',
+        user_id: publicUserId,
         booked_by: null,
         start_time: startISO,
         end_time: endISO,
         total_price: price,
         status: 'confirmed',
-        notes: `${name.trim()} | ${phone.trim()}`,
+        notes: `${safeName} | ${safePhone}`,
       }).select().single();
 
       if (bErr) return errorResponse(bErr.message);
