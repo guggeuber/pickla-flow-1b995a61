@@ -102,7 +102,7 @@ Deno.serve(async (req) => {
   if (req.method === 'POST' && path === 'public-book') {
     const body = await req.json();
     const { slug, courtIds, date, startTime, endTime, name, phone } = body;
-    if (!slug || !courtIds?.length || !date || !startTime || !endTime || !name) {
+    if (!slug || !courtIds?.length || !date || !startTime || !endTime || !name || !phone) {
       return errorResponse('Fyll i alla fält');
     }
 
@@ -142,13 +142,13 @@ Deno.serve(async (req) => {
       const { data: booking, error: bErr } = await admin.from('bookings').insert({
         venue_id: venue.id,
         venue_court_id: courtId,
-        user_id: '00000000-0000-0000-0000-000000000000', // public placeholder
-        booked_by: name,
+        user_id: '00000000-0000-0000-0000-000000000000',
+        booked_by: null,
         start_time: startISO,
         end_time: endISO,
         total_price: price,
         status: 'confirmed',
-        notes: phone ? `Tel: ${phone}` : null,
+        notes: `${name.trim()} | ${phone.trim()}`,
       }).select().single();
 
       if (bErr) return errorResponse(bErr.message);

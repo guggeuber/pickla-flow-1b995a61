@@ -151,7 +151,7 @@ export default function BookingPage() {
 
   const handleBook = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !selectedTime || !selectedCourts.length) return;
+    if (!name.trim() || !phone.trim() || !selectedTime || !selectedCourts.length) return;
     bookMutation.mutate();
   };
 
@@ -430,9 +430,10 @@ export default function BookingPage() {
                 />
                 <input
                   type="tel"
-                  placeholder="telefon (valfritt)"
+                  placeholder="telefon"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  required
                   maxLength={20}
                   className="w-full px-4 py-3.5 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
                   style={{ fontFamily: FONT_MONO }}
@@ -442,7 +443,7 @@ export default function BookingPage() {
           )}
 
           {/* Summary + Book button */}
-          {selectedCourts.length > 0 && name.trim() && (
+          {selectedCourts.length > 0 && name.trim() && phone.trim() && (
             <div>
               <div className="h-px bg-neutral-100 mb-4" />
               <div className="space-y-2 mb-4">
