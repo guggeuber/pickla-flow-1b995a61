@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useState, useMemo, useEffect } from "react";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiPost } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { Loader2, Calendar, Clock, MapPin } from "lucide-react";
+import { Loader2, Calendar, Clock, MapPin, Users } from "lucide-react";
 import { format, addDays, addMinutes, parseISO } from "date-fns";
 import { sv } from "date-fns/locale";
 
@@ -30,7 +30,6 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
   const [maxParticipants, setMaxParticipants] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
-  // Generate next 14 dates
   const dates = useMemo(() => {
     const today = new Date();
     return Array.from({ length: 14 }, (_, i) => {
@@ -39,7 +38,6 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
     });
   }, []);
 
-  // Time slots from 06:00 to 22:00
   const timeSlots = useMemo(() => {
     const slots: string[] = [];
     for (let h = 6; h <= 21; h++) {
@@ -49,7 +47,6 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
     return slots;
   }, []);
 
-  // Fetch venues
   const { data: venues } = useQuery({
     queryKey: ["venues-list"],
     queryFn: async () => {
@@ -58,7 +55,6 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
     },
   });
 
-  // Fetch courts for selected venue
   const { data: courts } = useQuery({
     queryKey: ["venue-courts", venueId],
     enabled: !!venueId,
@@ -73,10 +69,10 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
     },
   });
 
-  // Auto-select first venue
-  if (venues?.length && !venueId) {
-    setVenueId(venues[0].id);
-  }
+  // Auto-select first venue via effect (avoids render-loop setState)
+  useEffect(() => {
+    if (venues?.length && !venueId) setVenueId(venues[0].id);
+  }, [venues, venueId]);
 
   const handleSubmit = async () => {
     if (!user || !selectedTime || !venueId || !courtId) {
@@ -89,7 +85,6 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
       const startTime = `${selectedDate}T${selectedTime}:00`;
       const endTime = format(addMinutes(parseISO(startTime), duration), "yyyy-MM-dd'T'HH:mm:ss");
 
-      // 1. Create real booking via api-bookings
       const court = courts?.find((c) => c.id === courtId);
       const hourlyRate = court?.hourly_rate || 0;
       const totalPrice = hourlyRate * (duration / 60);
@@ -104,7 +99,6 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
         notes: `Crew-träning`,
       });
 
-      // 2. Create crew_session linked to booking
       const { error: sessionErr } = await supabase.from("crew_sessions" as any).insert({
         crew_id: crewId,
         title,
@@ -139,192 +133,243 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
     setDuration(60);
   };
 
+  const canSubmit = !!selectedTime && !!courtId && !!venueId;
+
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle
-            className="text-lg font-bold"
+    <Drawer open={open} onOpenChange={(v) => !v && onClose()}>
+      <DrawerContent className="max-h-[92vh] flex flex-col">
+        {/* Drag handle is built-in from vaul */}
+        <DrawerHeader className="pb-2 px-5">
+          <DrawerTitle
+            className="text-lg font-bold text-left"
             style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#3E3D39" }}
           >
             Ny träning
-          </DialogTitle>
-        </DialogHeader>
+          </DrawerTitle>
+        </DrawerHeader>
 
-        <div className="flex flex-col gap-4 mt-2">
-          {/* Title */}
-          <div>
-            <Label className="text-xs font-semibold" style={{ color: "rgba(62,61,57,0.6)" }}>
-              Titel
-            </Label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="T.ex. Tisdagsträning"
-              className="mt-1"
-            />
-          </div>
-
-          {/* Date picker */}
-          <div>
-            <Label className="text-xs font-semibold flex items-center gap-1.5" style={{ color: "rgba(62,61,57,0.6)" }}>
-              <Calendar className="w-3.5 h-3.5" /> Datum
-            </Label>
-            <div className="flex gap-1.5 overflow-x-auto mt-1.5 pb-1 -mx-1 px-1">
-              {dates.map((d) => {
-                const dateObj = parseISO(d);
-                const isSelected = d === selectedDate;
-                return (
-                  <button
-                    key={d}
-                    onClick={() => setSelectedDate(d)}
-                    className="shrink-0 rounded-xl px-3 py-2 text-center transition-all"
-                    style={{
-                      background: isSelected ? "#E86C24" : "rgba(62,61,57,0.04)",
-                      color: isSelected ? "#fff" : "#3E3D39",
-                      border: isSelected ? "none" : "1px solid rgba(62,61,57,0.08)",
-                      minWidth: 56,
-                    }}
-                  >
-                    <span className="text-[10px] uppercase block" style={{ opacity: isSelected ? 0.8 : 0.4 }}>
-                      {format(dateObj, "EEE", { locale: sv })}
-                    </span>
-                    <span className="text-sm font-bold block">{format(dateObj, "d")}</span>
-                    <span className="text-[10px] block" style={{ opacity: isSelected ? 0.8 : 0.4 }}>
-                      {format(dateObj, "MMM", { locale: sv })}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Time picker */}
-          <div>
-            <Label className="text-xs font-semibold flex items-center gap-1.5" style={{ color: "rgba(62,61,57,0.6)" }}>
-              <Clock className="w-3.5 h-3.5" /> Tid
-            </Label>
-            <div className="grid grid-cols-4 gap-1.5 mt-1.5 max-h-32 overflow-y-auto">
-              {timeSlots.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setSelectedTime(t)}
-                  className="rounded-lg py-1.5 text-xs font-medium transition-all"
-                  style={{
-                    background: t === selectedTime ? "#E86C24" : "rgba(62,61,57,0.04)",
-                    color: t === selectedTime ? "#fff" : "#3E3D39",
-                    border: t === selectedTime ? "none" : "1px solid rgba(62,61,57,0.06)",
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Duration */}
-          <div>
-            <Label className="text-xs font-semibold" style={{ color: "rgba(62,61,57,0.6)" }}>
-              Längd
-            </Label>
-            <div className="flex gap-2 mt-1.5">
-              {([60, 90] as const).map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDuration(d)}
-                  className="flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all"
-                  style={{
-                    background: d === duration ? "#E86C24" : "rgba(62,61,57,0.04)",
-                    color: d === duration ? "#fff" : "#3E3D39",
-                    border: d === duration ? "none" : "1px solid rgba(62,61,57,0.08)",
-                  }}
-                >
-                  {d} min
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Venue */}
-          <div>
-            <Label className="text-xs font-semibold flex items-center gap-1.5" style={{ color: "rgba(62,61,57,0.6)" }}>
-              <MapPin className="w-3.5 h-3.5" /> Venue
-            </Label>
-            <select
-              value={venueId}
-              onChange={(e) => {
-                setVenueId(e.target.value);
-                setCourtId("");
-              }}
-              className="w-full mt-1.5 rounded-xl border px-3 py-2.5 text-sm"
-              style={{ borderColor: "rgba(62,61,57,0.12)", color: "#3E3D39" }}
-            >
-              <option value="">Välj venue</option>
-              {venues?.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Court */}
-          {venueId && (
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto px-5 pb-4">
+          <div className="flex flex-col gap-5">
+            {/* Title */}
             <div>
-              <Label className="text-xs font-semibold" style={{ color: "rgba(62,61,57,0.6)" }}>
-                Bana
+              <Label className="text-xs font-semibold mb-1.5 block" style={{ color: "rgba(62,61,57,0.6)" }}>
+                Titel
               </Label>
-              <div className="flex gap-1.5 flex-wrap mt-1.5">
-                {courts?.map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => setCourtId(c.id)}
-                    className="rounded-xl px-4 py-2 text-sm font-medium transition-all"
-                    style={{
-                      background: c.id === courtId ? "#E86C24" : "rgba(62,61,57,0.04)",
-                      color: c.id === courtId ? "#fff" : "#3E3D39",
-                      border: c.id === courtId ? "none" : "1px solid rgba(62,61,57,0.08)",
-                    }}
-                  >
-                    {c.name}
-                  </button>
-                ))}
-                {courts?.length === 0 && (
-                  <p className="text-xs" style={{ color: "rgba(62,61,57,0.4)" }}>
-                    Inga banor tillgängliga
-                  </p>
-                )}
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="T.ex. Tisdagsträning"
+                className="h-12 rounded-xl text-base"
+              />
+            </div>
+
+            {/* Date picker – horizontal scroll */}
+            <div>
+              <Label className="text-xs font-semibold mb-1.5 flex items-center gap-1.5" style={{ color: "rgba(62,61,57,0.6)" }}>
+                <Calendar className="w-3.5 h-3.5" /> Datum
+              </Label>
+              <div className="flex gap-2 overflow-x-auto pb-2 -mx-5 px-5 snap-x snap-mandatory scrollbar-none">
+                {dates.map((d) => {
+                  const dateObj = parseISO(d);
+                  const isSelected = d === selectedDate;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setSelectedDate(d)}
+                      className="shrink-0 rounded-2xl text-center transition-all active:scale-95 snap-start"
+                      style={{
+                        background: isSelected ? "#E86C24" : "rgba(62,61,57,0.04)",
+                        color: isSelected ? "#fff" : "#3E3D39",
+                        border: isSelected ? "2px solid #E86C24" : "1.5px solid rgba(62,61,57,0.08)",
+                        width: 64,
+                        padding: "10px 0",
+                      }}
+                    >
+                      <span className="text-[10px] uppercase font-semibold block" style={{ opacity: isSelected ? 0.9 : 0.4 }}>
+                        {format(dateObj, "EEE", { locale: sv })}
+                      </span>
+                      <span className="text-lg font-black block leading-tight">{format(dateObj, "d")}</span>
+                      <span className="text-[10px] font-medium block" style={{ opacity: isSelected ? 0.85 : 0.4 }}>
+                        {format(dateObj, "MMM", { locale: sv })}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          )}
 
-          {/* Max participants */}
-          <div>
-            <Label className="text-xs font-semibold" style={{ color: "rgba(62,61,57,0.6)" }}>
-              Max deltagare (valfritt)
-            </Label>
-            <Input
-              type="number"
-              value={maxParticipants}
-              onChange={(e) => setMaxParticipants(e.target.value)}
-              placeholder="Obegränsat"
-              className="mt-1"
-              min={2}
-            />
+            {/* Time picker – 5 cols, larger tap targets */}
+            <div>
+              <Label className="text-xs font-semibold mb-1.5 flex items-center gap-1.5" style={{ color: "rgba(62,61,57,0.6)" }}>
+                <Clock className="w-3.5 h-3.5" /> Tid
+              </Label>
+              <div className="grid grid-cols-5 gap-1.5 max-h-40 overflow-y-auto rounded-xl p-1">
+                {timeSlots.map((t) => {
+                  const isSelected = t === selectedTime;
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setSelectedTime(t)}
+                      className="rounded-xl py-2.5 text-sm font-semibold transition-all active:scale-95"
+                      style={{
+                        background: isSelected ? "#E86C24" : "rgba(62,61,57,0.04)",
+                        color: isSelected ? "#fff" : "#3E3D39",
+                        border: isSelected ? "2px solid #E86C24" : "1px solid rgba(62,61,57,0.06)",
+                        minHeight: 44,
+                      }}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Duration – pill toggle */}
+            <div>
+              <Label className="text-xs font-semibold mb-1.5 block" style={{ color: "rgba(62,61,57,0.6)" }}>
+                Längd
+              </Label>
+              <div
+                className="flex gap-0 rounded-2xl overflow-hidden"
+                style={{ border: "1.5px solid rgba(62,61,57,0.1)" }}
+              >
+                {([60, 90] as const).map((d) => {
+                  const isSelected = d === duration;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setDuration(d)}
+                      className="flex-1 py-3.5 text-sm font-bold transition-all active:scale-[0.97]"
+                      style={{
+                        background: isSelected ? "#E86C24" : "transparent",
+                        color: isSelected ? "#fff" : "rgba(62,61,57,0.5)",
+                        minHeight: 48,
+                      }}
+                    >
+                      {d} min
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Venue */}
+            <div>
+              <Label className="text-xs font-semibold mb-1.5 flex items-center gap-1.5" style={{ color: "rgba(62,61,57,0.6)" }}>
+                <MapPin className="w-3.5 h-3.5" /> Venue
+              </Label>
+              <select
+                value={venueId}
+                onChange={(e) => {
+                  setVenueId(e.target.value);
+                  setCourtId("");
+                }}
+                className="w-full rounded-2xl border px-4 py-3.5 text-base appearance-none bg-white"
+                style={{
+                  borderColor: "rgba(62,61,57,0.12)",
+                  color: "#3E3D39",
+                  minHeight: 48,
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%233E3D39' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: "right 16px center",
+                }}
+              >
+                <option value="">Välj venue</option>
+                {venues?.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Court – large tappable cards */}
+            {venueId && (
+              <div>
+                <Label className="text-xs font-semibold mb-1.5 block" style={{ color: "rgba(62,61,57,0.6)" }}>
+                  Bana
+                </Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {courts?.map((c) => {
+                    const isSelected = c.id === courtId;
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => setCourtId(c.id)}
+                        className="rounded-2xl p-3.5 text-left transition-all active:scale-95"
+                        style={{
+                          background: isSelected ? "#E86C24" : "rgba(62,61,57,0.04)",
+                          color: isSelected ? "#fff" : "#3E3D39",
+                          border: isSelected ? "2px solid #E86C24" : "1.5px solid rgba(62,61,57,0.08)",
+                          minHeight: 56,
+                        }}
+                      >
+                        <span className="text-sm font-bold block">{c.name}</span>
+                        {c.hourly_rate ? (
+                          <span
+                            className="text-[11px] mt-0.5 block"
+                            style={{ opacity: isSelected ? 0.85 : 0.4 }}
+                          >
+                            {c.hourly_rate} kr/h
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                  {courts?.length === 0 && (
+                    <p className="text-xs col-span-2 py-3 text-center" style={{ color: "rgba(62,61,57,0.4)" }}>
+                      Inga banor tillgängliga
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Max participants */}
+            <div>
+              <Label className="text-xs font-semibold mb-1.5 flex items-center gap-1.5" style={{ color: "rgba(62,61,57,0.6)" }}>
+                <Users className="w-3.5 h-3.5" /> Max deltagare (valfritt)
+              </Label>
+              <Input
+                type="number"
+                value={maxParticipants}
+                onChange={(e) => setMaxParticipants(e.target.value)}
+                placeholder="Obegränsat"
+                className="h-12 rounded-xl text-base"
+                min={2}
+              />
+            </div>
+
+            {/* Spacer for sticky button */}
+            <div className="h-20" />
           </div>
+        </div>
 
-          {/* Submit */}
+        {/* Sticky submit button at bottom */}
+        <div
+          className="sticky bottom-0 px-5 pb-6 pt-3"
+          style={{
+            background: "linear-gradient(to top, hsl(var(--background)) 70%, transparent)",
+          }}
+        >
           <button
             onClick={handleSubmit}
-            disabled={submitting || !selectedTime || !courtId}
-            className="w-full rounded-xl py-3 text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
-            style={{ background: "#E86C24", color: "#fff" }}
+            disabled={submitting || !canSubmit}
+            className="w-full rounded-2xl py-4 text-base font-bold transition-all active:scale-[0.97] flex items-center justify-center gap-2.5 disabled:opacity-40"
+            style={{
+              background: canSubmit ? "#E86C24" : "rgba(62,61,57,0.15)",
+              color: canSubmit ? "#fff" : "rgba(62,61,57,0.4)",
+              minHeight: 56,
+              boxShadow: canSubmit ? "0 8px 24px rgba(232,108,36,0.3)" : "none",
+            }}
           >
-            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-            {submitting ? "Bokar..." : "Boka träning"}
+            {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
+            {submitting ? "Bokar..." : "Boka träning 🎾"}
           </button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </DrawerContent>
+    </Drawer>
   );
 }
