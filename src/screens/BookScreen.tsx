@@ -59,6 +59,7 @@ const BookScreen = () => {
   const [selectedDuration, setSelectedDuration] = useState("60 min");
   const [selectedCourt, setSelectedCourt] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
+  const [selectedCustomerAuthId, setSelectedCustomerAuthId] = useState<string | null>(null);
   const [addedUpsells, setAddedUpsells] = useState<string[]>([]);
   const [confirmed, setConfirmed] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
@@ -109,6 +110,15 @@ const BookScreen = () => {
     return matchingRule?.price ?? 350;
   };
 
+  // Fetch membership for selected customer
+  const { data: customerMembership } = useQuery({
+    queryKey: ["customer-membership", selectedCustomerAuthId, venueId],
+    enabled: !!selectedCustomerAuthId && !!venueId,
+    queryFn: () => apiGet("api-memberships", "user", { userId: selectedCustomerAuthId!, venueId: venueId! }),
+  });
+
+  const membershipDiscount = customerMembership?.membership_tiers?.discount_percent || 0;
+
   const currentPrice = getPrice(selectedTime);
   const isPeak = currentPrice > 300; // Dynamic peak detection based on price
 
@@ -155,7 +165,9 @@ const BookScreen = () => {
   const selectedCourtData = courtsWithAvailability.find((c: any) => c.id === selectedCourt);
 
   const durationMultiplier = selectedDuration === "30 min" ? 0.5 : selectedDuration === "90 min" ? 1.5 : 1;
-  const totalPrice = Math.round(currentPrice * durationMultiplier);
+  const baseTotal = Math.round(currentPrice * durationMultiplier);
+  const discountAmount = membershipDiscount > 0 ? Math.round(baseTotal * membershipDiscount / 100) : 0;
+  const totalPrice = baseTotal - discountAmount;
 
   const createBooking = useMutation({
     mutationFn: async () => {
@@ -190,6 +202,7 @@ const BookScreen = () => {
         setStep(0);
         setSelectedCourt(null);
         setSelectedCustomer(null);
+        setSelectedCustomerAuthId(null);
         setAddedUpsells([]);
       }, 2000);
     },
@@ -351,7 +364,7 @@ const BookScreen = () => {
           <motion.div key="s2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
             <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Kund</h2>
             <div className="space-y-1.5">
-              <motion.button whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer("Walk-in Gäst"); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
+              <motion.button whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer("Walk-in Gäst"); setSelectedCustomerAuthId(null); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">+</div>
                 <div className="flex-1 text-left"><span className="text-sm font-semibold">Walk-in Gäst</span></div>
                 <span className="status-chip bg-accent text-accent-foreground text-[9px]">Ny</span>
@@ -360,7 +373,7 @@ const BookScreen = () => {
               {(recentProfiles || []).map((p: any, i: number) => {
                 const initials = (p.display_name || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
                 return (
-                  <motion.button key={p.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer(p.display_name || "Gäst"); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
+                  <motion.button key={p.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileTap={{ scale: 0.97 }} onClick={() => { setSelectedCustomer(p.display_name || "Gäst"); setSelectedCustomerAuthId(p.auth_user_id || null); setStep(3); }} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center text-sm font-display font-bold">{initials}</div>
                     <div className="flex-1 text-left"><span className="text-sm font-semibold">{p.display_name || "Unnamed"}</span></div>
                     <ChevronRight className="w-4 h-4 text-muted-foreground" />
@@ -380,9 +393,21 @@ const BookScreen = () => {
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tid</span><span className="font-semibold">{selectedTime} · {selectedDuration}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bana</span><span className="font-semibold">{selectedCourtData?.name}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Kund</span><span className="font-semibold">{selectedCustomer}</span></div>
+              {membershipDiscount > 0 && customerMembership?.membership_tiers && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground flex items-center gap-1">
+                    <Crown className="w-3 h-3" style={{ color: customerMembership.membership_tiers.color }} />
+                    {customerMembership.membership_tiers.name}
+                  </span>
+                  <span className="font-semibold text-court-free">−{discountAmount} kr ({membershipDiscount}%)</span>
+                </div>
+              )}
               <div className="border-t border-border pt-3 flex justify-between items-center">
                 <span className="text-sm font-semibold">Total</span>
-                <span className="text-xl font-display font-bold text-primary">{totalPrice} kr</span>
+                <div className="flex items-center gap-2">
+                  {discountAmount > 0 && <span className="text-sm text-muted-foreground line-through">{baseTotal} kr</span>}
+                  <span className="text-xl font-display font-bold text-primary">{totalPrice} kr</span>
+                </div>
               </div>
               {isPeak && (
                 <div className="flex items-center gap-2 bg-court-active/10 rounded-xl p-2.5">

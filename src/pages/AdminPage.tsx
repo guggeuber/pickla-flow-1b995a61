@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Building2, Users, LayoutGrid, Clock, Tag, Link2,
   Loader2, ShieldAlert, ChevronDown, TrendingUp, TrendingDown, Minus,
-  Ticket, CalendarCheck, ChevronRight, Plus, Camera, Trophy,
+  Ticket, CalendarCheck, ChevronRight, Plus, Camera, Trophy, Crown,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAdminCheck, useAdminVenues, useAdminStats, useAdminHistory } from "@/hooks/useAdmin";
@@ -16,12 +16,13 @@ import AdminLinks from "@/components/admin/AdminLinks";
 import AdminVenue from "@/components/admin/AdminVenue";
 import AdminStories from "@/components/admin/AdminStories";
 import AdminEvents from "@/components/admin/AdminEvents";
+import AdminMemberships from "@/components/admin/AdminMemberships";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | "events" | null;
+type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | "events" | "memberships" | null;
 
 /* ── Sparkline SVG ── */
 function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
@@ -195,6 +196,7 @@ const AdminPage = () => {
       links: { label: "Länkar", icon: Link2 },
       stories: { label: "Stories", icon: Camera },
       events: { label: "Events", icon: Trophy },
+      memberships: { label: "Medlemskap", icon: Crown },
     };
     const s = sectionLabels[activeSection];
 
@@ -223,6 +225,7 @@ const AdminPage = () => {
           {activeSection === "links" && <AdminLinks venueId={venueId} />}
           {activeSection === "stories" && <AdminStories venueId={venueId} />}
           {activeSection === "events" && <AdminEvents venueId={venueId} />}
+          {activeSection === "memberships" && <AdminMemberships venueId={venueId} />}
         </div>
       </div>
     );
@@ -237,6 +240,7 @@ const AdminPage = () => {
     { id: "venue" as SectionId, icon: Building2, label: "Venue", stat: "Inställningar", color: "var(--muted-foreground)" },
     { id: "stories" as SectionId, icon: Camera, label: "Stories", stat: "Community", color: "var(--primary)" },
     { id: "events" as SectionId, icon: Trophy, label: "Events", stat: "Turneringar", color: "var(--sell)" },
+    { id: "memberships" as SectionId, icon: Crown, label: "Medlemskap", stat: "Nivåer & rabatter", color: "var(--badge-vip)" },
   ];
 
   return (

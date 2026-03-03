@@ -1,8 +1,9 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Phone, Star, Calendar, CreditCard, ChevronRight, UserPlus, Edit3, MessageSquarePlus, Check, ArrowLeft, Zap, TrendingUp } from "lucide-react";
+import { Search, Phone, Star, Calendar, CreditCard, ChevronRight, UserPlus, Edit3, MessageSquarePlus, Check, ArrowLeft, Zap, TrendingUp, Crown, X } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { useVenueForStaff } from "@/hooks/useDesk";
 import type { Tables } from "@/integrations/supabase/types";
 
 type PlayerProfile = Tables<"player_profiles">;
@@ -26,7 +27,10 @@ const CustomersScreen = () => {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
+  const [showMembershipModal, setShowMembershipModal] = useState(false);
   const queryClient = useQueryClient();
+  const { data: staffVenue } = useVenueForStaff();
+  const venueId = staffVenue?.venue_id;
 
   const { data: profiles, isLoading } = useQuery({
     queryKey: ["player-profiles"],
@@ -43,19 +47,57 @@ const CustomersScreen = () => {
   });
 
   const filtered = (profiles || []).filter(
-    (p) =>
+    (p: any) =>
       (p.display_name || "").toLowerCase().includes(search.toLowerCase()) ||
       (p.phone || "").includes(search)
   );
 
-  const selected = profiles?.find((p) => p.id === selectedId);
+  const selected = profiles?.find((p: any) => p.id === selectedId);
+
+  // Fetch membership tiers for venue
+  const { data: membershipTiers } = useQuery({
+    queryKey: ["membership-tiers", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-memberships", "tiers", { venueId: venueId! }),
+  });
+
+  // Fetch current membership for selected customer
+  const { data: currentMembership } = useQuery({
+    queryKey: ["customer-membership", selected?.auth_user_id, venueId],
+    enabled: !!selected?.auth_user_id && !!venueId,
+    queryFn: () => apiGet("api-memberships", "user", { userId: selected!.auth_user_id, venueId: venueId! }),
+  });
+
+  const assignMembership = useMutation({
+    mutationFn: (tierId: string) =>
+      apiPost("api-memberships", "assign", {
+        venueId,
+        customerUserId: selected!.auth_user_id,
+        tierId,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer-membership"] });
+      setShowMembershipModal(false);
+      import("sonner").then(({ toast }) => toast.success("Medlemskap tilldelat!"));
+    },
+    onError: (e: any) => import("sonner").then(({ toast }) => toast.error(e.message)),
+  });
+
+  const cancelMembership = useMutation({
+    mutationFn: (membershipId: string) =>
+      apiPatch("api-memberships", "update", { membershipId, status: "cancelled" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customer-membership"] });
+      import("sonner").then(({ toast }) => toast.success("Medlemskap avslutat"));
+    },
+  });
 
   if (selected) {
     const tier = tierFromRating(selected.pickla_rating);
     const t = tierConfig[tier];
     const initials = (selected.display_name || "?")
       .split(" ")
-      .map((w) => w[0])
+      .map((w: string) => w[0])
       .join("")
       .slice(0, 2)
       .toUpperCase();
@@ -72,6 +114,8 @@ const CustomersScreen = () => {
         phone: editPhone,
       });
     };
+
+    const memberTier = currentMembership?.membership_tiers;
 
     return (
       <div className="pb-24 px-4 pt-2 space-y-4">
@@ -99,6 +143,15 @@ const CustomersScreen = () => {
               <div className="flex items-center gap-2 mt-2">
                 <span className={`status-chip ${t.bg} ${t.text}`}>{tier}</span>
                 <span className="text-[10px] text-muted-foreground">Rating: {selected.pickla_rating}</span>
+                {memberTier && (
+                  <span
+                    className="status-chip text-white text-[10px] font-bold flex items-center gap-1"
+                    style={{ background: memberTier.color }}
+                  >
+                    <Crown className="w-3 h-3" />
+                    {memberTier.name}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -122,6 +175,37 @@ const CustomersScreen = () => {
           ))}
         </div>
 
+        {/* Membership Card */}
+        {memberTier ? (
+          <div className="glass-card rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Crown className="w-4 h-4" style={{ color: memberTier.color }} />
+                <p className="text-sm font-bold">{memberTier.name}</p>
+              </div>
+              <span className="text-[10px] text-muted-foreground">
+                {memberTier.discount_percent > 0 && `${memberTier.discount_percent}% rabatt`}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowMembershipModal(true)}
+                className="flex-1 bg-primary/10 text-primary rounded-xl py-2 text-xs font-semibold"
+              >
+                Byt nivå
+              </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={() => currentMembership?.id && cancelMembership.mutate(currentMembership.id)}
+                className="flex-1 bg-destructive/10 text-destructive rounded-xl py-2 text-xs font-semibold"
+              >
+                Avsluta
+              </motion.button>
+            </div>
+          </div>
+        ) : null}
+
         {selected.bio && (
           <div className="glass-card rounded-2xl p-4">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-1">Bio</p>
@@ -131,8 +215,20 @@ const CustomersScreen = () => {
 
         {/* CTA Actions */}
         <div className="space-y-2">
-          <motion.button whileTap={{ scale: 0.97 }} className="w-full sell-block rounded-2xl p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3"><Star className="w-5 h-5 text-sell" /><div className="text-left"><span className="text-sm font-bold">Sälj medlemskap</span><p className="text-[10px] text-muted-foreground">Uppgradera till Play eller VIP</p></div></div>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={() => setShowMembershipModal(true)}
+            className="w-full sell-block rounded-2xl p-4 flex items-center justify-between"
+          >
+            <div className="flex items-center gap-3">
+              <Crown className="w-5 h-5 text-sell" />
+              <div className="text-left">
+                <span className="text-sm font-bold">{memberTier ? "Ändra medlemskap" : "Sälj medlemskap"}</span>
+                <p className="text-[10px] text-muted-foreground">
+                  {memberTier ? `Nuvarande: ${memberTier.name}` : "Tilldela medlemskapsnivå"}
+                </p>
+              </div>
+            </div>
             <ChevronRight className="w-4 h-4 text-sell" />
           </motion.button>
           {[
@@ -145,6 +241,72 @@ const CustomersScreen = () => {
             </motion.button>
           ))}
         </div>
+
+        {/* Membership assignment modal */}
+        <AnimatePresence>
+          {showMembershipModal && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 bg-black/50 flex items-end justify-center"
+              onClick={() => setShowMembershipModal(false)}
+            >
+              <motion.div
+                initial={{ y: 200 }}
+                animate={{ y: 0 }}
+                exit={{ y: 200 }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-lg rounded-t-3xl p-5 space-y-4"
+                style={{ background: "hsl(var(--background))" }}
+              >
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-display font-bold">Välj medlemskapsnivå</h2>
+                  <button onClick={() => setShowMembershipModal(false)}>
+                    <X className="w-5 h-5 text-muted-foreground" />
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {(membershipTiers || []).filter((t: any) => t.is_active).map((mt: any) => (
+                    <motion.button
+                      key={mt.id}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => assignMembership.mutate(mt.id)}
+                      disabled={assignMembership.isPending}
+                      className={`w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all ${
+                        memberTier?.id === mt.id ? "ring-2 ring-primary" : ""
+                      }`}
+                    >
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center"
+                        style={{ background: `${mt.color}20` }}
+                      >
+                        <Crown className="w-5 h-5" style={{ color: mt.color }} />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-bold">{mt.name}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {mt.discount_percent > 0 && `${mt.discount_percent}% rabatt`}
+                          {mt.discount_percent > 0 && mt.monthly_price > 0 && " · "}
+                          {mt.monthly_price > 0 && `${mt.monthly_price} kr/mån`}
+                        </p>
+                      </div>
+                      {memberTier?.id === mt.id && (
+                        <span className="text-[10px] px-2 py-1 rounded-full bg-primary/15 text-primary font-bold">Aktiv</span>
+                      )}
+                    </motion.button>
+                  ))}
+                  {(!membershipTiers || membershipTiers.filter((t: any) => t.is_active).length === 0) && (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      Inga medlemskapsnivåer skapade. Gå till Admin → Medlemskap för att skapa nivåer.
+                    </p>
+                  )}
+                </div>
+                <div className="h-6" />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     );
   }
@@ -169,12 +331,12 @@ const CustomersScreen = () => {
         <p className="text-sm text-muted-foreground text-center py-8">Inga kunder hittades</p>
       ) : (
         <div className="space-y-1.5">
-          {filtered.map((profile, i) => {
+          {filtered.map((profile: any, i: number) => {
             const tier = tierFromRating(profile.pickla_rating);
             const t = tierConfig[tier];
             const initials = (profile.display_name || "?")
               .split(" ")
-              .map((w) => w[0])
+              .map((w: string) => w[0])
               .join("")
               .slice(0, 2)
               .toUpperCase();
