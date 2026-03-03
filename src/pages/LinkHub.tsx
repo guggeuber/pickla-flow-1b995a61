@@ -179,31 +179,6 @@ const LinkHub = () => {
                 style={{ minHeight: "60vh", objectFit: "contain" }}
                 loading={i > 0 ? "lazy" : "eager"}
               />
-              {/* Event sticker overlays */}
-              {i === 0 && upcomingEvents && upcomingEvents.length > 0 && (
-                <div className="absolute top-[70%] left-5 flex flex-col gap-2.5">
-                  {upcomingEvents.map((evt) => (
-                    <button
-                      key={evt.id}
-                      onClick={() => navigate(`/event-ops?eventId=${evt.id}`)}
-                      className="px-4 py-2 active:scale-95 transition-transform"
-                      style={{
-                        background: "rgba(255,255,255,0.92)",
-                        backdropFilter: "blur(8px)",
-                        fontFamily: "'Space Mono', monospace",
-                      }}
-                    >
-                      <span
-                        className="text-[15px] font-bold underline underline-offset-4"
-                        style={{ color: "#2a3a8f" }}
-                      >
-                        {(evt.display_name || evt.name).toLowerCase()}{" "}
-                        {evt.start_date ? format(new Date(evt.start_date), "d/M") : ""}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
               {/* Caption overlay at bottom of each image */}
               {img.caption && i !== 0 && (
                 <div
@@ -282,6 +257,32 @@ const LinkHub = () => {
           <User className="w-6 h-6" />
         </button>
       </nav>
+
+      {/* Floating event stickers — fixed on screen */}
+      {upcomingEvents && upcomingEvents.length > 0 && (
+        <div className="fixed left-5 z-30 flex flex-col gap-2.5" style={{ bottom: "calc(80px + env(safe-area-inset-bottom, 0px))" }}>
+          {upcomingEvents.map((evt) => (
+            <button
+              key={evt.id}
+              onClick={() => navigate(`/event-ops?eventId=${evt.id}`)}
+              className="px-4 py-2 active:scale-95 transition-transform text-left"
+              style={{
+                background: "rgba(255,255,255,0.92)",
+                backdropFilter: "blur(8px)",
+                fontFamily: "'Space Mono', monospace",
+              }}
+            >
+              <span
+                className="text-[15px] font-bold underline underline-offset-4"
+                style={{ color: "#2a3a8f" }}
+              >
+                {(evt.display_name || evt.name).toLowerCase()}{" "}
+                {evt.start_date ? format(new Date(evt.start_date), "d/M") : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
