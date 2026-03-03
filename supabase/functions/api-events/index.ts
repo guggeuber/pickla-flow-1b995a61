@@ -121,6 +121,7 @@ Deno.serve(async (req) => {
         primaryColor: 'primary_color', secondaryColor: 'secondary_color',
         playerInfoGeneral: 'player_info_general',
         thirdPlaceEnabled: 'third_place_enabled',
+        showOnSticker: 'show_on_sticker',
       };
 
       const dbUpdates: Record<string, any> = {};

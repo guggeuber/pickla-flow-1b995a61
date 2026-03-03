@@ -66,8 +66,9 @@ function useUpcomingEvents(venueId: string | undefined) {
     queryFn: async () => {
       const { data } = await supabase
         .from("events")
-        .select("id, name, display_name, start_date")
+        .select("id, name, display_name, start_date, show_on_sticker")
         .eq("venue_id", venueId!)
+        .eq("show_on_sticker", true)
         .gte("start_date", new Date().toISOString().slice(0, 10))
         .order("start_date", { ascending: true })
         .limit(4);
