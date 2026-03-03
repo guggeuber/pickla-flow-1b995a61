@@ -328,6 +328,19 @@ Deno.serve(async (req) => {
       return jsonResponse(data, 200, 30);
     }
 
+    // GET /api-bookings/hours?venueId=X
+    if (req.method === 'GET' && path === 'hours') {
+      const venueId = url.searchParams.get('venueId');
+      if (!venueId) return errorResponse('Missing venueId');
+
+      const { data, error: qErr } = await client.from('opening_hours')
+        .select('day_of_week, open_time, close_time, is_closed')
+        .eq('venue_id', venueId).order('day_of_week');
+      if (qErr) return errorResponse(qErr.message);
+
+      return jsonResponse(data, 200, 60);
+    }
+
     // GET /api-bookings/courts?venueId=X
     if (req.method === 'GET' && path === 'courts') {
       const venueId = url.searchParams.get('venueId');

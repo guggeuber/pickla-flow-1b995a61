@@ -14,6 +14,7 @@ import { sv } from "date-fns/locale";
 
 const dayNames = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"];
+const ALL_TIME_SLOTS = ["07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00"];
 const timeSlots = ["Nu", "07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"];
 
 const upsells = [
@@ -64,6 +65,26 @@ const BookScreen = () => {
 
   const quickDates = generateQuickDates();
   const isToday = selectedDate.toDateString() === new Date().toDateString();
+
+  // Fetch opening hours
+  const { data: openingHours } = useQuery({
+    queryKey: ["opening-hours", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-bookings", "hours", { venueId: venueId! }),
+  });
+
+  // Filter time slots based on opening hours for selected day
+  const timeSlots = useMemo(() => {
+    const dayOfWeek = selectedDate.getDay();
+    const hours = (openingHours || []).find((h: any) => h.day_of_week === dayOfWeek);
+    if (!hours || hours.is_closed) return [];
+
+    const openTime = hours.open_time?.slice(0, 5) || "00:00";
+    const closeTime = hours.close_time?.slice(0, 5) || "23:59";
+
+    const filtered = ALL_TIME_SLOTS.filter((t) => t >= openTime && t < closeTime);
+    return isToday ? ["Nu", ...filtered] : filtered;
+  }, [selectedDate, openingHours, isToday]);
 
   // Fetch pricing rules
   const { data: pricingRules } = useQuery<PricingRule[]>({
