@@ -77,6 +77,61 @@ export type Database = {
           },
         ]
       }
+      community_feed: {
+        Row: {
+          content: Json | null
+          created_at: string
+          event_id: string | null
+          feed_type: string
+          id: string
+          player_profile_id: string | null
+          title: string
+          venue_id: string | null
+        }
+        Insert: {
+          content?: Json | null
+          created_at?: string
+          event_id?: string | null
+          feed_type: string
+          id?: string
+          player_profile_id?: string | null
+          title: string
+          venue_id?: string | null
+        }
+        Update: {
+          content?: Json | null
+          created_at?: string
+          event_id?: string | null
+          feed_type?: string
+          id?: string
+          player_profile_id?: string | null
+          title?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "community_feed_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "community_feed_player_profile_id_fkey"
+            columns: ["player_profile_id"]
+            isOneToOne: false
+            referencedRelation: "player_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "community_feed_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       courts: {
         Row: {
           court_number: number
@@ -426,6 +481,35 @@ export type Database = {
             columns: ["winner_team_id"]
             isOneToOne: false
             referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      feed_likes: {
+        Row: {
+          auth_user_id: string
+          created_at: string
+          feed_item_id: string
+          id: string
+        }
+        Insert: {
+          auth_user_id: string
+          created_at?: string
+          feed_item_id: string
+          id?: string
+        }
+        Update: {
+          auth_user_id?: string
+          created_at?: string
+          feed_item_id?: string
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "feed_likes_feed_item_id_fkey"
+            columns: ["feed_item_id"]
+            isOneToOne: false
+            referencedRelation: "community_feed"
             referencedColumns: ["id"]
           },
         ]
