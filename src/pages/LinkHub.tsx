@@ -11,6 +11,7 @@ import {
   Ticket,
   Gamepad2,
   Link as LinkIcon,
+  Swords,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useEffect } from "react";
@@ -285,6 +286,26 @@ const LinkHub = () => {
             {open ? "ÖPPET NU" : "STÄNGT"}
           </span>
         </motion.div>
+
+        {/* ── Community Hub link ── */}
+        <motion.button
+          variants={item}
+          onClick={() => navigate("/community")}
+          className="group rounded-xl p-4 flex items-center gap-3.5 transition-all duration-200 active:scale-[0.97]"
+          style={{
+            background: "linear-gradient(135deg, rgba(232,108,36,0.08), rgba(156,39,176,0.06))",
+            border: "1.5px solid rgba(232,108,36,0.2)",
+          }}
+        >
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(232,108,36,0.12)" }}>
+            <Swords className="w-5 h-5" style={{ color: "#E86C24" }} />
+          </div>
+          <div className="flex-1 min-w-0 text-left">
+            <span className="font-semibold text-sm" style={{ color: "#3E3D39" }}>Community</span>
+            <span className="text-xs mt-0.5 block" style={{ color: "rgba(62,61,57,0.5)" }}>Ranking, Crews & Clash</span>
+          </div>
+          <ChevronRight className="w-4 h-4 shrink-0" style={{ color: "rgba(232,108,36,0.5)" }} />
+        </motion.button>
 
         {/* ── Community Links (dynamic from DB) ── */}
         {dynamicLinks.length > 0 && (
