@@ -299,7 +299,7 @@ const LinkHub = () => {
               <button
                 key={evt.id}
                 onClick={() => navigate(evt.slug ? `/e/${evt.slug}` : `/event/${evt.id}`)}
-                className="flex items-center gap-2.5 pl-3 pr-4 py-2 active:scale-95 transition-transform text-left rounded-r-xl"
+                className="inline-flex items-center gap-2.5 pl-3 pr-2.5 py-2 active:scale-95 transition-transform text-left"
                 style={{
                   background: "rgba(255,255,255,0.92)",
                   backdropFilter: "blur(8px)",
