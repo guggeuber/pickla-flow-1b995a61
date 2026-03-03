@@ -1148,6 +1148,155 @@ export type Database = {
           },
         ]
       }
+      membership_tier_pricing: {
+        Row: {
+          created_at: string | null
+          fixed_price: number | null
+          id: string
+          pricing_rule_id: string | null
+          product_type: string
+          tier_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          fixed_price?: number | null
+          id?: string
+          pricing_rule_id?: string | null
+          product_type: string
+          tier_id: string
+        }
+        Update: {
+          created_at?: string | null
+          fixed_price?: number | null
+          id?: string
+          pricing_rule_id?: string | null
+          product_type?: string
+          tier_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "membership_tier_pricing_pricing_rule_id_fkey"
+            columns: ["pricing_rule_id"]
+            isOneToOne: false
+            referencedRelation: "pricing_rules"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "membership_tier_pricing_tier_id_fkey"
+            columns: ["tier_id"]
+            isOneToOne: false
+            referencedRelation: "membership_tiers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      membership_tiers: {
+        Row: {
+          color: string | null
+          created_at: string | null
+          description: string | null
+          discount_percent: number | null
+          id: string
+          is_active: boolean | null
+          monthly_price: number | null
+          name: string
+          sort_order: number | null
+          updated_at: string | null
+          venue_id: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string | null
+          description?: string | null
+          discount_percent?: number | null
+          id?: string
+          is_active?: boolean | null
+          monthly_price?: number | null
+          name: string
+          sort_order?: number | null
+          updated_at?: string | null
+          venue_id: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string | null
+          description?: string | null
+          discount_percent?: number | null
+          id?: string
+          is_active?: boolean | null
+          monthly_price?: number | null
+          name?: string
+          sort_order?: number | null
+          updated_at?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "membership_tiers_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      memberships: {
+        Row: {
+          assigned_by: string | null
+          created_at: string | null
+          expires_at: string | null
+          id: string
+          notes: string | null
+          starts_at: string
+          status: string
+          tier_id: string
+          updated_at: string | null
+          user_id: string
+          venue_id: string
+        }
+        Insert: {
+          assigned_by?: string | null
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string
+          notes?: string | null
+          starts_at?: string
+          status?: string
+          tier_id: string
+          updated_at?: string | null
+          user_id: string
+          venue_id: string
+        }
+        Update: {
+          assigned_by?: string | null
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string
+          notes?: string | null
+          starts_at?: string
+          status?: string
+          tier_id?: string
+          updated_at?: string | null
+          user_id?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "memberships_tier_id_fkey"
+            columns: ["tier_id"]
+            isOneToOne: false
+            referencedRelation: "membership_tiers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memberships_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       opening_hours: {
         Row: {
           close_time: string
