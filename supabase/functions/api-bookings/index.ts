@@ -52,6 +52,47 @@ Deno.serve(async (req) => {
     return jsonResponse({ venue, openingHours: hours || [], events: events || [], links: links || [] }, 200, 60);
   }
 
+  // ── Public endpoint: booking by ref ──
+  if (req.method === 'GET' && path === 'public-booking') {
+    const ref = url.searchParams.get('ref');
+    if (!ref) return errorResponse('Missing ref');
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const admin = createClient(supabaseUrl, serviceKey);
+
+    // Get all bookings with same notes (grouped booking) or single
+    const { data: booking } = await admin.from('bookings')
+      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, venue_courts(name, court_number)')
+      .eq('booking_ref', ref).single();
+
+    if (!booking) return errorResponse('Booking not found', 404);
+
+    // Get venue info
+    const { data: venue } = await admin.from('venues')
+      .select('name, slug, address, city, logo_url').eq('id', booking.venue_id).single();
+
+    // Find sibling bookings (same time + same notes = same group booking)
+    const { data: siblings } = await admin.from('bookings')
+      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, venue_courts(name, court_number)')
+      .eq('venue_id', booking.venue_id)
+      .eq('start_time', booking.start_time)
+      .eq('end_time', booking.end_time)
+      .eq('notes', booking.notes)
+      .neq('status', 'cancelled');
+
+    return jsonResponse({
+      booking,
+      venue,
+      courts: (siblings || [booking]).map((b: any) => ({
+        ref: b.booking_ref,
+        court_name: b.venue_courts?.name,
+        price: b.total_price,
+      })),
+      totalPrice: (siblings || [booking]).reduce((s: number, b: any) => s + (b.total_price || 0), 0),
+    }, 200, 30);
+  }
+
   // ── Public endpoint: available courts for a venue ──
   if (req.method === 'GET' && path === 'public-courts') {
     const venueSlug = url.searchParams.get('slug');

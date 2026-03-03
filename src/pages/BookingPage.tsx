@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useSearchParams, Link } from "react-router-dom";
+import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin } from "lucide-react";
 import { toast } from "sonner";
@@ -46,6 +46,7 @@ interface CourtData {
 export default function BookingPage() {
   const [searchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
+  const navigate = useNavigate();
 
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
@@ -140,9 +141,14 @@ export default function BookingPage() {
       }
       return res.json();
     },
-    onSuccess: () => {
-      setConfirmed(true);
-      toast.success("Bokad! 🎾");
+    onSuccess: (data) => {
+      const firstRef = data?.bookings?.[0]?.booking_ref;
+      if (firstRef) {
+        navigate(`/b/${firstRef}`);
+      } else {
+        setConfirmed(true);
+        toast.success("Bokad! 🎾");
+      }
     },
     onError: (err: Error) => {
       toast.error(err.message);

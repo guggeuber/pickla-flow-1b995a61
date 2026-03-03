@@ -17,6 +17,7 @@ export type Database = {
       bookings: {
         Row: {
           booked_by: string | null
+          booking_ref: string | null
           created_at: string | null
           currency: string | null
           end_time: string
@@ -32,6 +33,7 @@ export type Database = {
         }
         Insert: {
           booked_by?: string | null
+          booking_ref?: string | null
           created_at?: string | null
           currency?: string | null
           end_time: string
@@ -47,6 +49,7 @@ export type Database = {
         }
         Update: {
           booked_by?: string | null
+          booking_ref?: string | null
           created_at?: string | null
           currency?: string | null
           end_time?: string
