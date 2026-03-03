@@ -143,12 +143,12 @@ const LinkHub = () => {
             <div
               key={img.id}
               className="relative w-full"
-              style={{ height: "80vh" }}
             >
               <img
                 src={img.url}
                 alt={img.caption || ""}
-                className="w-full h-full object-cover"
+                className="w-full block"
+                style={{ minHeight: "60vh", objectFit: "cover" }}
                 loading={i > 0 ? "lazy" : "eager"}
               />
               {/* Caption overlay at bottom of each image */}
