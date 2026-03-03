@@ -134,26 +134,26 @@ export function useAdminMutation(venueId: string | undefined) {
 
   const addLink = useMutation({
     mutationFn: (body: { title: string; url: string; icon?: string; color?: string; description?: string; member_count?: string; image_url?: string; sort_order?: number }) =>
-      apiPost("api-admin", "links", { ...body, venueId }),
+      apiPost("api-admin", venueId ? `links?venueId=${venueId}` : "links", { ...body, venueId }),
     onSuccess: invalidate("links"),
   });
 
   const updateLink = useMutation({
     mutationFn: (body: { linkId: string; [key: string]: any }) =>
-      apiPatch("api-admin", "links", body),
+      apiPatch("api-admin", venueId ? `links?venueId=${venueId}` : "links", body),
     onSuccess: invalidate("links"),
   });
 
   const deleteLink = useMutation({
     mutationFn: (linkId: string) =>
-      apiDelete("api-admin", "links", { linkId }),
+      apiDelete("api-admin", venueId ? `links?venueId=${venueId}` : "links", { linkId }),
     onSuccess: invalidate("links"),
   });
 
   const reorderLinks = useMutation({
     mutationFn: async (orderedIds: string[]) => {
       await Promise.all(orderedIds.map((id, i) =>
-        apiPatch("api-admin", "links", { linkId: id, sort_order: i })
+        apiPatch("api-admin", venueId ? `links?venueId=${venueId}` : "links", { linkId: id, sort_order: i })
       ));
     },
     onSuccess: invalidate("links"),
