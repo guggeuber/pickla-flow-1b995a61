@@ -126,7 +126,7 @@ export default function EventPage() {
   const venue = event.venues;
   const fields: string[] = event.registration_fields || ["name", "phone"];
   const whatsapp = event.whatsapp_url || WHATSAPP_GROUPS[event.category]?.url;
-  const whatsappLabel = WHATSAPP_GROUPS[event.category]?.label || "WhatsApp-grupp";
+  const whatsappLabel = event.display_name || event.name || WHATSAPP_GROUPS[event.category]?.label || "WhatsApp-grupp";
 
   const shareUrl = event.slug
     ? `${window.location.origin}/e/${event.slug}`
