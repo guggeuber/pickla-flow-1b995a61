@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion } from "framer-motion";
-import { Loader2, Crown, Medal, Award } from "lucide-react";
+import { Loader2, Crown, Medal, Award, Users } from "lucide-react";
+import { CrewBadge } from "./CrewBadge";
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05 } } };
 const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } };
@@ -10,9 +12,40 @@ const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } };
 const podiumIcons = [Crown, Medal, Award];
 const podiumColors = ["#FFD700", "#C0C0C0", "#CD7F32"];
 
+type SubTab = "players" | "crews";
+
 export function LeaderboardTab() {
   const { user } = useAuth();
+  const [subTab, setSubTab] = useState<SubTab>("players");
 
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Sub-tab switcher */}
+      <div className="flex gap-2">
+        {([
+          { key: "players" as SubTab, label: "Spelare" },
+          { key: "crews" as SubTab, label: "Crews" },
+        ]).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setSubTab(t.key)}
+            className="px-4 py-2 rounded-xl text-xs font-bold transition-all"
+            style={{
+              background: subTab === t.key ? "#E86C24" : "rgba(255,255,255,0.5)",
+              color: subTab === t.key ? "#fff" : "rgba(62,61,57,0.5)",
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === "players" ? <PlayersLeaderboard user={user} /> : <CrewsLeaderboard />}
+    </div>
+  );
+}
+
+function PlayersLeaderboard({ user }: { user: any }) {
   const { data: players, isLoading } = useQuery({
     queryKey: ["leaderboard"],
     staleTime: 30000,
@@ -40,7 +73,7 @@ export function LeaderboardTab() {
   const rest = players?.slice(3) || [];
 
   return (
-    <div className="flex flex-col gap-4">
+    <>
       {/* Top 3 podium */}
       {top3.length > 0 && (
         <div className="flex items-end justify-center gap-3 pt-4 pb-2">
@@ -136,6 +169,117 @@ export function LeaderboardTab() {
           );
         })}
       </motion.div>
-    </div>
+    </>
+  );
+}
+
+function CrewsLeaderboard() {
+  const { data: crews, isLoading } = useQuery({
+    queryKey: ["crews-leaderboard"],
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data: crewsData, error } = await supabase
+        .from("crews")
+        .select("id, name, badge_emoji, badge_color, max_members");
+      if (error) throw error;
+      if (!crewsData || crewsData.length === 0) return [];
+
+      const { data: members } = await supabase
+        .from("crew_members")
+        .select("crew_id, player_profiles(pickla_rating)")
+        .in("crew_id", crewsData.map((c) => c.id));
+
+      const stats = new Map<string, { count: number; score: number }>();
+      members?.forEach((m: any) => {
+        const s = stats.get(m.crew_id) || { count: 0, score: 0 };
+        s.count++;
+        s.score += m.player_profiles?.pickla_rating || 0;
+        stats.set(m.crew_id, s);
+      });
+
+      return crewsData
+        .map((c) => ({ ...c, member_count: stats.get(c.id)?.count || 0, crew_score: stats.get(c.id)?.score || 0 }))
+        .sort((a, b) => b.crew_score - a.crew_score);
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-5 h-5 animate-spin" style={{ color: "#3E3D39" }} />
+      </div>
+    );
+  }
+
+  if (!crews || crews.length === 0) {
+    return (
+      <div className="flex flex-col items-center py-12 gap-2">
+        <Users className="w-6 h-6" style={{ color: "rgba(62,61,57,0.2)" }} />
+        <p className="text-xs" style={{ color: "rgba(62,61,57,0.4)" }}>Inga crews ännu</p>
+      </div>
+    );
+  }
+
+  const top3 = crews.slice(0, 3);
+  const rest = crews.slice(3);
+
+  return (
+    <>
+      {/* Top 3 crew podium */}
+      <div className="flex items-end justify-center gap-3 pt-4 pb-2">
+        {[1, 0, 2].map((idx) => {
+          const c = top3[idx];
+          if (!c) return <div key={idx} className="flex-1" />;
+          const PodiumIcon = podiumIcons[idx];
+          const isFirst = idx === 0;
+          return (
+            <motion.div
+              key={c.id}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: idx * 0.1 }}
+              className="flex flex-col items-center gap-1.5"
+              style={{ flex: 1 }}
+            >
+              <PodiumIcon className="w-5 h-5" style={{ color: podiumColors[idx] }} />
+              <CrewBadge emoji={c.badge_emoji || "⚡"} color={c.badge_color || "#E86C24"} size={isFirst ? "lg" : "md"} />
+              <p className="text-xs font-semibold text-center truncate max-w-[80px]" style={{ color: "#3E3D39" }}>
+                {c.name}
+              </p>
+              <p className="text-base font-black" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#E86C24" }}>
+                {c.crew_score.toLocaleString()}
+              </p>
+              <p className="text-[9px]" style={{ color: "rgba(62,61,57,0.4)" }}>
+                {c.member_count} medlemmar
+              </p>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {/* Rest */}
+      <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-1">
+        {rest.map((c, i) => (
+          <motion.div
+            key={c.id}
+            variants={item}
+            className="rounded-xl p-3 flex items-center gap-3"
+            style={{ background: "rgba(255,255,255,0.5)", border: "1px solid rgba(62,61,57,0.06)" }}
+          >
+            <span className="text-xs font-bold w-6 text-center" style={{ color: "rgba(62,61,57,0.4)" }}>
+              {i + 4}
+            </span>
+            <CrewBadge emoji={c.badge_emoji || "⚡"} color={c.badge_color || "#E86C24"} size="sm" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate" style={{ color: "#3E3D39" }}>{c.name}</p>
+              <p className="text-[10px]" style={{ color: "rgba(62,61,57,0.4)" }}>{c.member_count} medlemmar</p>
+            </div>
+            <span className="text-sm font-black" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#E86C24" }}>
+              {c.crew_score.toLocaleString()}
+            </span>
+          </motion.div>
+        ))}
+      </motion.div>
+    </>
   );
 }
