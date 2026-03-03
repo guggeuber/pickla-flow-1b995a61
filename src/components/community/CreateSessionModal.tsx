@@ -26,7 +26,7 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
   const [selectedTime, setSelectedTime] = useState<string>("");
   const [duration, setDuration] = useState<60 | 90>(60);
   const [venueId, setVenueId] = useState<string>("");
-  const [courtId, setCourtId] = useState<string>("");
+  const [courtIds, setCourtIds] = useState<string[]>([]);
   const [maxParticipants, setMaxParticipants] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -75,7 +75,7 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
   }, [venues, venueId]);
 
   const handleSubmit = async () => {
-    if (!user || !selectedTime || !venueId || !courtId) {
+    if (!user || !selectedTime || !venueId || courtIds.length === 0) {
       toast.error("Fyll i alla obligatoriska fält");
       return;
     }
@@ -85,37 +85,43 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
       const startTime = `${selectedDate}T${selectedTime}:00`;
       const endTime = format(addMinutes(parseISO(startTime), duration), "yyyy-MM-dd'T'HH:mm:ss");
 
-      const court = courts?.find((c) => c.id === courtId);
-      const hourlyRate = court?.hourly_rate || 0;
-      const totalPrice = hourlyRate * (duration / 60);
+      // Create one booking per selected court
+      const bookingIds: string[] = [];
+      for (const cId of courtIds) {
+        const court = courts?.find((c) => c.id === cId);
+        const hourlyRate = court?.hourly_rate || 0;
+        const totalPrice = hourlyRate * (duration / 60);
 
-      const booking = await apiPost("api-bookings", "create", {
-        venueId,
-        venueCourtId: courtId,
-        startTime,
-        endTime,
-        totalPrice,
-        bookedBy: title,
-        notes: `Crew-träning`,
-      });
+        const booking = await apiPost("api-bookings", "create", {
+          venueId,
+          venueCourtId: cId,
+          startTime,
+          endTime,
+          totalPrice,
+          notes: `Crew-träning: ${title}`,
+        });
+        bookingIds.push(booking.id);
+      }
 
-      const { error: sessionErr } = await supabase.from("crew_sessions" as any).insert({
+      // Create one crew_session per booking/court
+      const sessionInserts = courtIds.map((cId, i) => ({
         crew_id: crewId,
-        title,
+        title: courtIds.length > 1 ? `${title} (${courts?.find(c => c.id === cId)?.name || `Bana ${i+1}`})` : title,
         session_date: selectedDate,
         start_time: startTime,
         end_time: endTime,
         venue_id: venueId,
-        venue_court_id: courtId,
-        booking_id: booking.id,
+        venue_court_id: cId,
+        booking_id: bookingIds[i],
         max_participants: maxParticipants ? parseInt(maxParticipants) : null,
         status: "booked",
         created_by: user.id,
-      });
+      }));
 
+      const { error: sessionErr } = await supabase.from("crew_sessions" as any).insert(sessionInserts);
       if (sessionErr) throw sessionErr;
 
-      toast.success("Träning bokad! 🎾");
+      toast.success(`${courtIds.length > 1 ? `${courtIds.length} banor bokade` : "Träning bokad"}! 🎾`);
       qc.invalidateQueries({ queryKey: ["crew-sessions", crewId] });
       onClose();
       resetForm();
@@ -131,9 +137,10 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
     setSelectedTime("");
     setMaxParticipants("");
     setDuration(60);
+    setCourtIds([]);
   };
 
-  const canSubmit = !!selectedTime && !!courtId && !!venueId;
+  const canSubmit = !!selectedTime && courtIds.length > 0 && !!venueId;
 
   return (
     <Drawer open={open} onOpenChange={(v) => !v && onClose()}>
@@ -264,7 +271,7 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
                 value={venueId}
                 onChange={(e) => {
                   setVenueId(e.target.value);
-                  setCourtId("");
+                  setCourtIds([]);
                 }}
                 className="w-full rounded-2xl border px-4 py-3.5 text-base appearance-none bg-white"
                 style={{
@@ -289,15 +296,19 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
             {venueId && (
               <div>
                 <Label className="text-xs font-semibold mb-1.5 block" style={{ color: "rgba(62,61,57,0.6)" }}>
-                  Bana
+                  Banor {courtIds.length > 0 && <span style={{ color: "#E86C24" }}>({courtIds.length} valda)</span>}
                 </Label>
                 <div className="grid grid-cols-2 gap-2">
                   {courts?.map((c) => {
-                    const isSelected = c.id === courtId;
+                    const isSelected = courtIds.includes(c.id);
                     return (
                       <button
                         key={c.id}
-                        onClick={() => setCourtId(c.id)}
+                        onClick={() => {
+                          setCourtIds((prev) =>
+                            prev.includes(c.id) ? prev.filter((id) => id !== c.id) : [...prev, c.id]
+                          );
+                        }}
                         className="rounded-2xl p-3.5 text-left transition-all active:scale-95"
                         style={{
                           background: isSelected ? "#E86C24" : "rgba(62,61,57,0.04)",
@@ -308,10 +319,7 @@ export function CreateSessionModal({ open, onClose, crewId }: Props) {
                       >
                         <span className="text-sm font-bold block">{c.name}</span>
                         {c.hourly_rate ? (
-                          <span
-                            className="text-[11px] mt-0.5 block"
-                            style={{ opacity: isSelected ? 0.85 : 0.4 }}
-                          >
+                          <span className="text-[11px] mt-0.5 block" style={{ opacity: isSelected ? 0.85 : 0.4 }}>
                             {c.hourly_rate} kr/h
                           </span>
                         ) : null}
