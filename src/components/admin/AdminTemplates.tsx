@@ -51,20 +51,31 @@ function CreateTemplateDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [eventType, setEventType] = useState("tournament");
-  const [eventFormat, setEventFormat] = useState("round_robin");
+  const [category, setCategory] = useState("open_play");
   const [entryFee, setEntryFee] = useState("0");
   const [isPending, setIsPending] = useState(false);
+
+  // Map category to sensible event_type/format defaults
+  const categoryDefaults: Record<string, { eventType: string; format: string }> = {
+    open_play: { eventType: "tournament", format: "round_robin" },
+    training: { eventType: "corporate_event", format: "round_robin" },
+    social: { eventType: "mini_cup", format: "amerikano" },
+    tournament: { eventType: "tournament", format: "round_robin" },
+    league: { eventType: "team_competition", format: "round_robin" },
+    corporate: { eventType: "corporate_event", format: "team_vs_team" },
+  };
 
   const handleCreate = async () => {
     if (!name.trim()) return;
     setIsPending(true);
+    const defaults = categoryDefaults[category] || categoryDefaults.open_play;
     try {
       await apiPost("api-event-templates", "create", {
         name: name.trim(),
         displayName: displayName.trim() || undefined,
-        eventType,
-        format: eventFormat,
+        eventType: defaults.eventType,
+        format: defaults.format,
+        category,
         entryFee: Number(entryFee) || 0,
       });
       toast.success("Mall skapad!");
@@ -103,30 +114,22 @@ function CreateTemplateDialog({ onCreated }: { onCreated: () => void }) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Typ</Label>
-              <Select value={eventType} onValueChange={setEventType}>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Kategori</Label>
+              <Select value={category} onValueChange={setCategory}>
                 <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="open_play">Open Play</SelectItem>
+                  <SelectItem value="training">Träning</SelectItem>
+                  <SelectItem value="social">Social / Klubb</SelectItem>
                   <SelectItem value="tournament">Turnering</SelectItem>
-                  <SelectItem value="team_competition">Lagtävling</SelectItem>
-                  <SelectItem value="corporate_event">Företagsevent</SelectItem>
-                  <SelectItem value="mini_cup">Mini Cup</SelectItem>
+                  <SelectItem value="league">Liga / Stege</SelectItem>
+                  <SelectItem value="corporate">Företagsevent</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Format</Label>
-              <Select value={eventFormat} onValueChange={setEventFormat}>
-                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="round_robin">Round Robin</SelectItem>
-                  <SelectItem value="knockout">Knockout</SelectItem>
-                  <SelectItem value="amerikano">Amerikano</SelectItem>
-                  <SelectItem value="ladder">Stege</SelectItem>
-                  <SelectItem value="mini_cup_2h">Mini Cup 2h</SelectItem>
-                  <SelectItem value="team_vs_team">Team vs Team</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Deltagaravgift (SEK)</Label>
+              <Input className="mt-1" type="number" value={entryFee} onChange={(e) => setEntryFee(e.target.value)} placeholder="0" />
             </div>
           </div>
           <div>
@@ -263,15 +266,11 @@ function TemplateDetail({ template, onBack }: { template: TemplateRow; onBack: (
           <Textarea className="mt-1 min-h-[80px]" value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Typ</Label>
-            <p className="text-sm font-semibold mt-1 capitalize">{template.event_type.replace(/_/g, " ")}</p>
-          </div>
-          <div>
-            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Format</Label>
-            <p className="text-sm font-semibold mt-1 capitalize">{template.format.replace(/_/g, " ")}</p>
-          </div>
+        <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Kategori</Label>
+          <p className="text-sm font-semibold mt-1 capitalize">
+            {{ open_play: "Open Play", training: "Träning", social: "Social / Klubb", tournament: "Turnering", league: "Liga / Stege", corporate: "Företagsevent" }[template.category] || template.category}
+          </p>
         </div>
       </div>
 
@@ -395,7 +394,7 @@ const AdminTemplates = () => {
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-foreground truncate">{t.display_name || t.name}</p>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[10px] text-muted-foreground capitalize">{t.format.replace(/_/g, " ")}</span>
+                <span className="text-[10px] text-muted-foreground capitalize">{{ open_play: "Open Play", training: "Träning", social: "Social", tournament: "Turnering", league: "Liga", corporate: "Företag" }[t.category] || t.category}</span>
                 {t.entry_fee > 0 && (
                   <span className="text-[10px] font-semibold text-primary">{t.entry_fee} {t.currency}</span>
                 )}
