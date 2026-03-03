@@ -35,6 +35,45 @@ interface EventRow {
   logo_url?: string | null;
 }
 
+interface CategoryOption {
+  key: string;
+  label: string;
+}
+
+const DEFAULT_CATEGORIES: CategoryOption[] = [
+  { key: "tournament", label: "Turnering" },
+  { key: "open_play", label: "Open Play" },
+  { key: "training", label: "Träning" },
+  { key: "social", label: "Social / Klubb" },
+];
+
+function useVenueCategories(venueId?: string) {
+  return useQuery<CategoryOption[]>({
+    queryKey: ["venue-categories", venueId],
+    enabled: !!venueId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("venue_event_categories")
+        .select("category_key, display_name")
+        .eq("venue_id", venueId!);
+      if (!data || data.length === 0) return DEFAULT_CATEGORIES;
+      // Merge: use DB display_name where available, fill in defaults for missing keys
+      const dbMap = new Map(data.map((d) => [d.category_key, d.display_name]));
+      const merged = DEFAULT_CATEGORIES.map((c) => ({
+        key: c.key,
+        label: dbMap.get(c.key) || c.label,
+      }));
+      // Add any extra DB categories not in defaults
+      data.forEach((d) => {
+        if (!DEFAULT_CATEGORIES.find((c) => c.key === d.category_key)) {
+          merged.push({ key: d.category_key, label: d.display_name });
+        }
+      });
+      return merged;
+    },
+  });
+}
+
 function useVenueEvents(venueId?: string) {
   return useQuery<EventRow[]>({
     queryKey: ["admin-events", venueId],
@@ -54,7 +93,7 @@ function generateSlug(name: string): string {
 }
 
 /* ── Create Event Dialog ── */
-function CreateEventDialog({ venueId, onCreated }: { venueId: string; onCreated: () => void }) {
+function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string; onCreated: () => void; categories: CategoryOption[] }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -153,7 +192,7 @@ function CreateEventDialog({ venueId, onCreated }: { venueId: string; onCreated:
 }
 
 /* ── Event Detail Editor ── */
-function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: string; onBack: () => void }) {
+function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; venueId: string; onBack: () => void; categories: CategoryOption[] }) {
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showOnSticker, setShowOnSticker] = useState(event.show_on_sticker);
@@ -335,10 +374,9 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
           <Select value={category} onValueChange={setCategory}>
             <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="tournament">Turnering</SelectItem>
-              <SelectItem value="open_play">Open Play</SelectItem>
-              <SelectItem value="training">Träning</SelectItem>
-              <SelectItem value="social">Social / Klubb</SelectItem>
+              {categories.map((c) => (
+                <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -439,13 +477,15 @@ function EventDetail({ event, venueId, onBack }: { event: EventRow; venueId: str
 /* ── Main Component ── */
 const AdminEvents = ({ venueId }: { venueId: string }) => {
   const { data: events, isLoading } = useVenueEvents(venueId);
+  const { data: categories } = useVenueCategories(venueId);
+  const cats = categories || DEFAULT_CATEGORIES;
   const [selectedEvent, setSelectedEvent] = useState<EventRow | null>(null);
   const qc = useQueryClient();
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
   if (selectedEvent) {
-    return <EventDetail event={selectedEvent} venueId={venueId} onBack={() => setSelectedEvent(null)} />;
+    return <EventDetail event={selectedEvent} venueId={venueId} onBack={() => setSelectedEvent(null)} categories={cats} />;
   }
 
   const statusColors: Record<string, string> = {
@@ -457,7 +497,7 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
 
   return (
     <div className="space-y-3">
-      <CreateEventDialog venueId={venueId} onCreated={() => qc.invalidateQueries({ queryKey: ["admin-events", venueId] })} />
+      <CreateEventDialog venueId={venueId} onCreated={() => qc.invalidateQueries({ queryKey: ["admin-events", venueId] })} categories={cats} />
 
       {events && events.length > 0 ? (
         events.map((evt) => (
