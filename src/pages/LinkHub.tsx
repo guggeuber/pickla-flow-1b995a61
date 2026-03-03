@@ -260,7 +260,7 @@ const LinkHub = () => {
 
       {/* Floating event stickers — fixed on screen */}
       {upcomingEvents && upcomingEvents.length > 0 && (
-        <div className="fixed left-5 bottom-[40%] z-30 flex flex-col gap-2.5">
+        <div className="fixed left-5 top-[65%] z-30 flex flex-col gap-2.5">
           {upcomingEvents.map((evt) => (
             <button
               key={evt.id}
