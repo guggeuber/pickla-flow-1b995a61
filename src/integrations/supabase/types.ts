@@ -305,6 +305,7 @@ export type Database = {
           description: string | null
           end_time: string
           id: string
+          is_private: boolean
           max_participants: number | null
           session_date: string
           start_time: string
@@ -322,6 +323,7 @@ export type Database = {
           description?: string | null
           end_time: string
           id?: string
+          is_private?: boolean
           max_participants?: number | null
           session_date: string
           start_time: string
@@ -339,6 +341,7 @@ export type Database = {
           description?: string | null
           end_time?: string
           id?: string
+          is_private?: boolean
           max_participants?: number | null
           session_date?: string
           start_time?: string

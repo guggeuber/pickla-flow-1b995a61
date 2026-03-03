@@ -1,9 +1,12 @@
 import { motion } from "framer-motion";
-import { Heart, Share2, Trophy, UserCheck, CalendarPlus, Star, Swords } from "lucide-react";
+import { Heart, Share2, Trophy, UserCheck, CalendarPlus, Star, Swords, Dumbbell, Check, X, Users } from "lucide-react";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { format, parseISO } from "date-fns";
+import { sv } from "date-fns/locale";
+import { toast } from "sonner";
 
 interface FeedItem {
   id: string;
@@ -26,6 +29,7 @@ const feedTypeConfig: Record<string, { icon: typeof Trophy; label: string; color
   crew_challenge_created: { icon: Swords, label: "Clash", color: "#9C27B0" },
   crew_challenge_accepted: { icon: Swords, label: "Clash accepterad", color: "#4CAF50" },
   crew_challenge_completed: { icon: Swords, label: "Clash avslutad", color: "#E86C24" },
+  crew_session: { icon: Dumbbell, label: "Träning", color: "#2196F3" },
 };
 
 function timeAgo(dateStr: string): string {
@@ -37,6 +41,124 @@ function timeAgo(dateStr: string): string {
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   return `${days}d`;
+}
+
+function SessionSignupButton({ sessionId }: { sessionId: string }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const [loading, setLoading] = useState(false);
+
+  const { data: myProfile } = useQuery({
+    queryKey: ["my-profile-id"],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("player_profiles")
+        .select("id")
+        .eq("auth_user_id", user!.id)
+        .single();
+      return data;
+    },
+  });
+
+  const { data: signups } = useQuery({
+    queryKey: ["session-signups", sessionId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("crew_session_signups" as any)
+        .select("id, player_profile_id, player_profiles(display_name, avatar_url)")
+        .eq("crew_session_id", sessionId)
+        .eq("status", "signed_up");
+      return data || [];
+    },
+  });
+
+  const mySignup = (signups as any[])?.find((s: any) => s.player_profile_id === myProfile?.id);
+  const signupCount = (signups as any[])?.length || 0;
+
+  const handleToggle = async () => {
+    if (!user || !myProfile) return;
+    setLoading(true);
+    try {
+      if (mySignup) {
+        await supabase.from("crew_session_signups" as any).delete().eq("id", mySignup.id);
+        toast.success("Avanmäld");
+      } else {
+        const { error } = await supabase.from("crew_session_signups" as any).insert({
+          crew_session_id: sessionId,
+          player_profile_id: myProfile.id,
+          status: "signed_up",
+        });
+        if (error) {
+          if (error.code === "23505") toast.error("Du är redan anmäld");
+          else throw error;
+          return;
+        }
+        toast.success("Anmäld! ✅");
+      }
+      qc.invalidateQueries({ queryKey: ["session-signups", sessionId] });
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte ändra anmälan");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="mt-2">
+      {/* Avatars of signed up */}
+      {signupCount > 0 && (
+        <div className="flex items-center gap-1 mb-2 flex-wrap">
+          {(signups || []).slice(0, 8).map((s: any) => {
+            const name = s.player_profiles?.display_name || "?";
+            const avatarUrl = s.player_profiles?.avatar_url;
+            return (
+              <div
+                key={s.id}
+                className="flex items-center gap-1 rounded-full px-1.5 py-0.5"
+                style={{ background: "rgba(62,61,57,0.06)" }}
+                title={name}
+              >
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt={name} className="w-4 h-4 rounded-full object-cover" />
+                ) : (
+                  <div
+                    className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shrink-0"
+                    style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}
+                  >
+                    {name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <span className="text-[10px] font-medium truncate max-w-[60px]" style={{ color: "#3E3D39" }}>
+                  {name}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1 text-[11px]" style={{ color: "rgba(62,61,57,0.5)" }}>
+          <Users className="w-3 h-3" />
+          {signupCount} anmälda
+        </span>
+        {user && (
+          <button
+            onClick={handleToggle}
+            disabled={loading}
+            className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all active:scale-95 flex items-center gap-1 disabled:opacity-50"
+            style={{
+              background: mySignup ? "rgba(62,61,57,0.06)" : "#E86C24",
+              color: mySignup ? "rgba(62,61,57,0.6)" : "#fff",
+              border: mySignup ? "1px solid rgba(62,61,57,0.1)" : "none",
+            }}
+          >
+            {mySignup ? (<><X className="w-3 h-3" /> Avanmäl</>) : (<><Check className="w-3 h-3" /> Anmäl dig</>)}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function FeedCard({ item }: { item: FeedItem }) {
@@ -80,6 +202,25 @@ export function FeedCard({ item }: { item: FeedItem }) {
   };
 
   const renderContent = () => {
+    if (item.feed_type === "crew_session" && item.content) {
+      const c = item.content;
+      return (
+        <div className="mt-2">
+          <div className="rounded-xl p-3" style={{ background: "rgba(33,150,243,0.06)" }}>
+            <div className="flex items-center gap-3 text-[11px]" style={{ color: "rgba(62,61,57,0.6)" }}>
+              <span>📅 {c.session_date ? format(parseISO(c.session_date), "EEE d MMM", { locale: sv }) : ""}</span>
+              <span>🕐 {c.start_time ? format(parseISO(c.start_time), "HH:mm") : ""}–{c.end_time ? format(parseISO(c.end_time), "HH:mm") : ""}</span>
+            </div>
+            {(c.venue_name || c.court_name) && (
+              <p className="text-[11px] mt-1" style={{ color: "rgba(62,61,57,0.5)" }}>
+                📍 {[c.venue_name, c.court_name].filter(Boolean).join(" · ")}
+              </p>
+            )}
+          </div>
+          {c.session_id && <SessionSignupButton sessionId={c.session_id} />}
+        </div>
+      );
+    }
     if (item.feed_type === "match_result" && item.content) {
       const c = item.content;
       return (
