@@ -1,94 +1,60 @@
 
 
-# Crew-traning med direkt bokning
+## Visa Community direkt -- Stories-karusell + Feed-preview
 
-## Oversikt
+Användaren vill att Picklas community-känsla ska synas direkt -- inte gömmas bakom en länk. Bilden visar Instagram Stories-liknande vertikala kort med foton från anläggningen. Planen är att bygga ut detta i tre delar:
 
-Nar en crew-ledare **eller co-leader** skapar ett traningstillfalle sa gors en riktig bokning i systemet direkt -- inget separat steg. Medlemmar kan sedan anmala sig till traningen.
+### 1. Ny tabell: `community_stories`
+En enkel stories-tabell för kortlivat visuellt innehåll (foton/bilder) som personal eller admins laddar upp via Supabase Storage.
 
-## Flode
+Kolumner: `id`, `venue_id`, `image_url` (text), `caption` (text, nullable), `created_at`, `expires_at` (auto 24h), `created_by` (uuid).
+
+RLS: Alla kan läsa, bara autentiserade staff/admins kan skapa.
+
+### 2. Stories-karusell på LinkHub (förstasidan)
+Horisontellt scrollbar rad med vertikala kort högst upp på `/links`-sidan, likt Instagram Stories:
+- Varje kort: vertikal bild med Pickla-logotyp + text-overlay (plats, datum)
+- Rounded corners, liten skugga, 3:4 aspect ratio
+- Klick öppnar bilden i en fullskärms-overlay med swipe mellan stories
+- Om inga stories finns visas inget (graceful fallback)
+- Hämtar från `community_stories` WHERE `expires_at > now()`
+
+### 3. Community Feed-preview på LinkHub
+Under stories-karusellen, visa de 3 senaste community_feed-posterna (träningar, matcher, clashes) med kompakt layout och "Se mer →"-knapp som navigerar till `/community`.
+
+### 4. Community Feed-preview på Index (desk-sidan)
+Liten sektion i TodayScreen eller som separat widget som visar senaste community-aktiviteten för personalen att se engagement.
+
+### Teknisk sammanfattning
 
 ```text
-1. Leader/co-leader klickar "Ny traning" i crew-vyn
-2. Valjer datum, tid, langd, venue och bana
-3. Klickar "Boka traning"
-4. -> Riktig bokning skapas via api-bookings/create
-5. -> crew_sessions-rad skapas med booking_id kopplat
-6. -> Status = "booked" direkt
-7. Medlemmar ser traningen och kan anmala sig
+┌─────────────────────────────┐
+│  LinkHub (/links)           │
+│                             │
+│  [Stories ○ ○ ○ ○ ○ ] ←scroll
+│                             │
+│  [Boka] [Dagspass] [Events] │
+│                             │
+│  ── Community ──            │
+│  [FeedCard compact]         │
+│  [FeedCard compact]         │
+│  [FeedCard compact]         │
+│  [Se mer →]                 │
+│                             │
+│  ── Länkar ──               │
+│  ...existing links...       │
+└─────────────────────────────┘
 ```
 
-## Databasandringar
+**Nya filer:**
+- Migration: `community_stories` tabell + Storage bucket
+- `src/components/community/StoriesCarousel.tsx` -- horisontell karusell
+- `src/components/community/StoryViewer.tsx` -- fullskärms story-overlay
+- `src/components/community/FeedPreview.tsx` -- kompakt feed-preview med 3 items
 
-### Ny tabell: `crew_sessions`
+**Ändrade filer:**
+- `src/pages/LinkHub.tsx` -- lägg till StoriesCarousel + FeedPreview
+- `src/screens/TodayScreen.tsx` -- lägg till en kompakt community-widget (valfritt)
 
-| Kolumn | Typ | Beskrivning |
-|---|---|---|
-| id | uuid PK | |
-| crew_id | uuid FK -> crews | |
-| title | text | T.ex. "Tisdagstraning" |
-| description | text (nullable) | Valfri beskrivning |
-| session_date | date | |
-| start_time | timestamptz | |
-| end_time | timestamptz | |
-| venue_id | uuid (nullable) | |
-| venue_court_id | uuid (nullable) | |
-| booking_id | uuid (nullable) | Kopplas till bookings |
-| max_participants | integer (nullable) | null = obegransat |
-| status | text | "booked", "completed", "cancelled" |
-| created_by | uuid | auth user id |
-| created_at / updated_at | timestamptz | |
-
-### Ny tabell: `crew_session_signups`
-
-| Kolumn | Typ | Beskrivning |
-|---|---|---|
-| id | uuid PK | |
-| crew_session_id | uuid FK -> crew_sessions | |
-| player_profile_id | uuid FK -> player_profiles | |
-| status | text | "signed_up" / "cancelled" |
-| signed_up_at | timestamptz | |
-
-### RLS-policyer
-
-- **crew_sessions**: Publikt lasbara. Leader **och co-leader** kan INSERT/UPDATE/DELETE (via `is_crew_leader` som redan inkluderar bade leader och co_leader). Samma funktion anvands for bokningsknappen.
-- **crew_session_signups**: Publikt lasbara. Crew-medlemmar kan INSERT sin egen rad. Kan DELETE sin egen rad.
-
-Befintlig `is_crew_leader()` kontrollerar redan `role IN ('leader', 'co_leader')` -- ingen andring behovs dar.
-
-## Nya komponenter
-
-### `CreateSessionModal.tsx`
-Modal som leader/co-leader oppnar:
-- Titel-falt
-- Datumvaljare
-- Tidvaljare (klickbara tidsluckor)
-- Langdvaljare (60/90 min)
-- Venue + bana-val (hamtar venues och venue_courts)
-- Max deltagare (valfritt)
-- "Boka traning"-knapp som:
-  1. Anropar `api-bookings/create` for att skapa riktig bokning
-  2. Skapar `crew_sessions`-rad med `booking_id` och status `booked`
-
-### `CrewSessionsList.tsx`
-Visas i `CrewDetailView` under medlemmar:
-- Listar kommande traningar med datum, tid, bana, antal anmalda
-- "Anmal dig" / "Avanmal"-knapp for crew-medlemmar
-- Badge som visar "Bokad" (gron)
-
-## Andringar i befintliga filer
-
-### `CrewDetailView.tsx`
-- Importera `CrewSessionsList` och `CreateSessionModal`
-- Lagg till "Ny traning"-knapp synlig for leader och co-leader
-- Visa sessionslistan i crew-detaljvyn
-
-## Sammanfattning av filer
-
-| Vad | Fil |
-|---|---|
-| DB-migrering | `supabase/migrations/xxx_crew_sessions.sql` |
-| Skapa session + boka | `src/components/community/CreateSessionModal.tsx` |
-| Sessionslista + anmalan | `src/components/community/CrewSessionsList.tsx` |
-| Andrad | `src/components/community/CrewDetailView.tsx` |
+Stories kan sedan laddas upp via admin-panelen eller direkt i databasen till att börja med. Bilderna lagras i Supabase Storage (`community-stories` bucket).
 
