@@ -132,6 +132,44 @@ export type Database = {
           },
         ]
       }
+      community_stories: {
+        Row: {
+          caption: string | null
+          created_at: string
+          created_by: string
+          expires_at: string
+          id: string
+          image_url: string
+          venue_id: string | null
+        }
+        Insert: {
+          caption?: string | null
+          created_at?: string
+          created_by: string
+          expires_at?: string
+          id?: string
+          image_url: string
+          venue_id?: string | null
+        }
+        Update: {
+          caption?: string | null
+          created_at?: string
+          created_by?: string
+          expires_at?: string
+          id?: string
+          image_url?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "community_stories_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       courts: {
         Row: {
           court_number: number
