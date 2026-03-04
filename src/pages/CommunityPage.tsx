@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { CommunityNav } from "@/components/community/CommunityNav";
 import { FeedTab } from "@/components/community/FeedTab";
@@ -9,7 +10,14 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 type Tab = "chat" | "play" | "profile";
 
 const CommunityPage = () => {
-  const [activeTab, setActiveTab] = useState<Tab>("chat");
+  const [searchParams] = useSearchParams();
+  const initialTab = (searchParams.get("tab") as Tab) || "chat";
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+
+  useEffect(() => {
+    const t = searchParams.get("tab") as Tab;
+    if (t && ["chat", "play", "profile"].includes(t)) setActiveTab(t);
+  }, [searchParams]);
 
   return (
     <div
