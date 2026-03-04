@@ -3,10 +3,10 @@ import { MessageCircle, Play, User } from "lucide-react";
 
 type Tab = "chat" | "play" | "profile";
 
-const tabs: { key: Tab; label: string; icon: typeof MessageCircle }[] = [
-  { key: "chat", label: "Community Chat", icon: MessageCircle },
-  { key: "play", label: "Play Now", icon: Play },
-  { key: "profile", label: "Profile", icon: User },
+const tabs: { key: Tab; label: string; icon: typeof MessageCircle; href?: string }[] = [
+  { key: "chat", label: "Chat", icon: MessageCircle, href: "https://chat.whatsapp.com/HL1XcYaNFSuE56q7MqCpdw" },
+  { key: "play", label: "Play", icon: Play },
+  { key: "profile", label: "Me", icon: User },
 ];
 
 export function CommunityNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
@@ -25,7 +25,13 @@ export function CommunityNav({ active, onChange }: { active: Tab; onChange: (t: 
         return (
           <button
             key={tab.key}
-            onClick={() => onChange(tab.key)}
+            onClick={() => {
+              if (tab.href) {
+                window.open(tab.href, "_blank", "noopener,noreferrer");
+              } else {
+                onChange(tab.key);
+              }
+            }}
             className="flex flex-col items-center gap-0.5 py-2 px-4 rounded-xl transition-all relative min-w-[64px]"
           >
             {isActive && (
