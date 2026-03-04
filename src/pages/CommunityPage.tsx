@@ -10,7 +10,14 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 type Tab = "chat" | "play" | "profile";
 
 const CommunityPage = () => {
-  const [activeTab, setActiveTab] = useState<Tab>("chat");
+  const [searchParams] = useSearchParams();
+  const initialTab = (searchParams.get("tab") as Tab) || "chat";
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+
+  useEffect(() => {
+    const t = searchParams.get("tab") as Tab;
+    if (t && ["chat", "play", "profile"].includes(t)) setActiveTab(t);
+  }, [searchParams]);
 
   return (
     <div
