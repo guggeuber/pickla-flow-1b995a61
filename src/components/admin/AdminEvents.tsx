@@ -406,6 +406,9 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
   const [logoUrl, setLogoUrl] = useState(event.logo_url || "");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Date fields
+  const [startDate, setStartDate] = useState(event.start_date ? new Date(event.start_date).toISOString().slice(0, 10) : "");
+  const [endDate, setEndDate] = useState(event.end_date ? new Date(event.end_date).toISOString().slice(0, 10) : "");
   // New fields
   const [startTime, setStartTime] = useState(event.start_time || "");
   const [endTime, setEndTime] = useState(event.end_time || "");
@@ -472,12 +475,21 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Auto-derive status from date
+      let derivedStatus = status;
+      if (startDate) {
+        const today = new Date().toISOString().slice(0, 10);
+        if (startDate > today) derivedStatus = "upcoming";
+        else if (startDate === today) derivedStatus = "active";
+        else if (startDate < today) derivedStatus = "completed";
+      }
+
       await apiPatch("api-events", "update", {
         id: event.id,
         displayName: displayName.trim() || null,
         isPublic,
         showOnSticker,
-        status,
+        status: derivedStatus,
         description: description.trim() || null,
         category,
         isDropIn: isDropIn,
@@ -485,7 +497,8 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
         slug: slug.trim() || null,
         registrationFields: regFields,
         logoUrl: logoUrl.trim() || null,
-        // New fields
+        startDate: startDate || null,
+        endDate: endDate || null,
         startTime: startTime || null,
         endTime: endTime || null,
         entryFee: entryFee ? Number(entryFee) : null,
@@ -611,6 +624,23 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
             </SelectContent>
           </Select>
         </div>
+
+        {/* Date fields */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Startdatum</Label>
+            <Input className="mt-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Slutdatum</Label>
+            <Input className="mt-1" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </div>
+        </div>
+        {startDate && (
+          <p className="text-[10px] text-muted-foreground">
+            Status sätts automatiskt: {startDate > new Date().toISOString().slice(0, 10) ? "Upcoming" : startDate === new Date().toISOString().slice(0, 10) ? "Aktiv" : "Avslutad"}
+          </p>
+        )}
 
         {/* Time fields */}
         <div className="grid grid-cols-2 gap-3">
