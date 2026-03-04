@@ -1824,6 +1824,59 @@ export type Database = {
         }
         Relationships: []
       }
+      venue_checkins: {
+        Row: {
+          checked_in_at: string
+          checked_in_by: string | null
+          checked_out_at: string | null
+          created_at: string | null
+          entitlement_id: string | null
+          entry_type: string
+          id: string
+          player_name: string | null
+          player_phone: string | null
+          session_date: string
+          user_id: string | null
+          venue_id: string
+        }
+        Insert: {
+          checked_in_at?: string
+          checked_in_by?: string | null
+          checked_out_at?: string | null
+          created_at?: string | null
+          entitlement_id?: string | null
+          entry_type?: string
+          id?: string
+          player_name?: string | null
+          player_phone?: string | null
+          session_date?: string
+          user_id?: string | null
+          venue_id: string
+        }
+        Update: {
+          checked_in_at?: string
+          checked_in_by?: string | null
+          checked_out_at?: string | null
+          created_at?: string | null
+          entitlement_id?: string | null
+          entry_type?: string
+          id?: string
+          player_name?: string | null
+          player_phone?: string | null
+          session_date?: string
+          user_id?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "venue_checkins_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       venue_courts: {
         Row: {
           court_number: number

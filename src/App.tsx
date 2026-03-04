@@ -44,9 +44,9 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
-            <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
-            <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
-            <Route path="/links" element={<LinkHub />} />
+            <Route path="/" element={<LinkHub />} />
+            <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+            <Route path="/hub" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/my" element={<MyPage />} />
             <Route path="/community" element={<CommunityPage />} />
             <Route path="/play" element={<PlayPage />} />
