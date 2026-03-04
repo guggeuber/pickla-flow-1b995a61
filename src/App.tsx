@@ -12,6 +12,7 @@ import AdminPage from "./pages/AdminPage";
 import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
 import CommunityPage from "./pages/CommunityPage";
+import PlayPage from "./pages/PlayPage";
 import EventPage from "./pages/EventPage";
 import BookingPage from "./pages/BookingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
@@ -48,6 +49,7 @@ const App = () => (
             <Route path="/links" element={<LinkHub />} />
             <Route path="/my" element={<MyPage />} />
             <Route path="/community" element={<CommunityPage />} />
+            <Route path="/play" element={<PlayPage />} />
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="/event/:id" element={<EventPage />} />
             <Route path="/e/:slug" element={<EventPage />} />
