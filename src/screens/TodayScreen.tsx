@@ -1,9 +1,7 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, Search, UserCheck, Loader2 } from "lucide-react";
+import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
 
 // Define types for court status and display
 type CourtStatus = "free" | "active" | "soon" | "vip";
@@ -52,195 +50,6 @@ function getVenueStatus(occupancy: number) {
   if (occupancy >= 50) return { label: "Live", color: "bg-court-free", textColor: "text-court-free" };
   return { label: "Quiet", color: "bg-court-soon", textColor: "text-court-soon" };
 }
-
-// ═══ CHECK-IN WIDGET ═══
-interface CheckinResult {
-  profile_id: string;
-  user_id: string;
-  display_name: string;
-  phone: string | null;
-  avatar_url: string | null;
-  entitlements: { type: string; id: string; label: string; color?: string }[];
-  already_checked_in: boolean;
-}
-
-const CheckInWidget = ({ venueId }: { venueId: string }) => {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<CheckinResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [checkingIn, setCheckingIn] = useState<string | null>(null);
-
-  const handleSearch = async () => {
-    if (!query.trim()) return;
-    setSearching(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { toast.error("Inte inloggad"); return; }
-
-      const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const res = await fetch(
-        `https://${PROJECT_ID}.supabase.co/functions/v1/api-checkins/validate-checkin`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ venue_id: venueId, search_query: query }),
-        }
-      );
-      if (!res.ok) throw new Error("Sökning misslyckades");
-      const data = await res.json();
-      setResults(data.results || []);
-    } catch (err: any) {
-      toast.error(err.message);
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const handleCheckin = async (result: CheckinResult, entitlement?: any) => {
-    setCheckingIn(result.user_id);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { toast.error("Inte inloggad"); return; }
-
-      const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const res = await fetch(
-        `https://${PROJECT_ID}.supabase.co/functions/v1/api-checkins/checkin`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            venue_id: venueId,
-            target_user_id: result.user_id,
-            entry_type: entitlement?.type || "manual",
-            entitlement_id: entitlement?.id || null,
-            player_name: result.display_name,
-          }),
-        }
-      );
-      if (!res.ok) throw new Error("Incheckning misslyckades");
-      toast.success(`${result.display_name} incheckad! ✅`);
-      // Mark as checked in locally
-      setResults((prev) =>
-        prev.map((r) =>
-          r.user_id === result.user_id ? { ...r, already_checked_in: true } : r
-        )
-      );
-    } catch (err: any) {
-      toast.error(err.message);
-    } finally {
-      setCheckingIn(null);
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between mb-1">
-        <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Check In</h2>
-        <UserCheck className="w-4 h-4 text-primary" />
-      </div>
-
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Sök namn eller telefon..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="w-full pl-9 pr-3 py-2.5 rounded-xl text-sm bg-background border border-border focus:outline-none focus:border-primary transition-colors"
-          />
-        </div>
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={handleSearch}
-          disabled={searching || !query.trim()}
-          className="px-4 rounded-xl bg-primary text-primary-foreground text-sm font-bold disabled:opacity-40"
-        >
-          {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : "Sök"}
-        </motion.button>
-      </div>
-
-      {/* Results */}
-      {results.length > 0 && (
-        <div className="space-y-2">
-          {results.map((r) => (
-            <motion.div
-              key={r.user_id}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="glass-card rounded-2xl p-3 space-y-2"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/10 text-primary font-bold text-sm">
-                  {(r.display_name || "?").charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate">{r.display_name}</p>
-                  {r.phone && <p className="text-[11px] text-muted-foreground">{r.phone}</p>}
-                </div>
-                {r.already_checked_in ? (
-                  <span className="status-chip text-[10px] bg-badge-paid/15 text-badge-paid font-bold">
-                    ✅ Incheckad
-                  </span>
-                ) : r.entitlements.length === 0 ? (
-                  <motion.button
-                    whileTap={{ scale: 0.9 }}
-                    onClick={() => handleCheckin(r)}
-                    disabled={checkingIn === r.user_id}
-                    className="tap-target rounded-xl bg-muted text-foreground px-3 py-2 text-[11px] font-bold"
-                  >
-                    {checkingIn === r.user_id ? <Loader2 className="w-3 h-3 animate-spin" /> : "Manuell"}
-                  </motion.button>
-                ) : null}
-              </div>
-
-              {/* Entitlements */}
-              {!r.already_checked_in && r.entitlements.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {r.entitlements.map((ent) => (
-                    <motion.button
-                      key={ent.id}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => handleCheckin(r, ent)}
-                      disabled={checkingIn === r.user_id}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all active:scale-95"
-                      style={{
-                        background: ent.type === "membership"
-                          ? `${ent.color || "#4CAF50"}22`
-                          : ent.type === "day_pass"
-                            ? "rgba(232,108,36,0.12)"
-                            : "rgba(33,150,243,0.12)",
-                        color: ent.type === "membership"
-                          ? ent.color || "#4CAF50"
-                          : ent.type === "day_pass"
-                            ? "#E86C24"
-                            : "#2196F3",
-                      }}
-                    >
-                      <Check className="w-3 h-3" />
-                      {ent.label}
-                    </motion.button>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          ))}
-        </div>
-      )}
-
-      {results.length === 0 && query.trim() && !searching && (
-        <p className="text-xs text-muted-foreground text-center py-3">Inga resultat</p>
-      )}
-    </div>
-  );
-};
 
 const TodayScreen = () => {
   const now = useRealtimeClock();
@@ -347,9 +156,6 @@ const TodayScreen = () => {
           </span>
         </div>
       </div>
-
-      {/* ═══ CHECK-IN WIDGET ═══ */}
-      {venueId && <CheckInWidget venueId={venueId} />}
 
       {/* Revenue Strip */}
       <div className="revenue-hero rounded-2xl p-4">
@@ -463,12 +269,6 @@ const TodayScreen = () => {
                   <span className={`status-chip text-[9px] ${booking.status === "confirmed" ? "bg-badge-paid/15 text-badge-paid" : "bg-badge-unpaid/15 text-badge-unpaid"}`}>
                     {booking.status === "confirmed" ? "Paid" : booking.status}
                   </span>
-                  <motion.button
-                    whileTap={{ scale: 0.85 }}
-                    className="tap-target rounded-xl bg-primary text-primary-foreground w-9 h-9 flex items-center justify-center"
-                  >
-                    <Check className="w-4 h-4" />
-                  </motion.button>
                 </motion.div>
               );
             })}
