@@ -6,6 +6,9 @@ import { Navigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
+const FONT_GROTESK = "'Space Grotesk', sans-serif";
+const FONT_MONO = "'Space Mono', monospace";
+
 const Auth = () => {
   const { user, loading, signIn, signUp } = useAuth();
   const [searchParams] = useSearchParams();
@@ -18,8 +21,8 @@ const Auth = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="w-5 h-5 animate-spin text-primary" />
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <Loader2 className="w-5 h-5 animate-spin text-neutral-300" />
       </div>
     );
   }
@@ -55,22 +58,14 @@ const Auth = () => {
   const isDesk = !redirectTo.startsWith("/my");
 
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-6">
-      {/* Subtle gradient overlay */}
-      <div
-        className="fixed inset-0 pointer-events-none"
-        style={{
-          background: "radial-gradient(ellipse at 50% 0%, hsl(var(--primary) / 0.06) 0%, transparent 60%)",
-        }}
-      />
-
+    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-[340px] space-y-8 relative z-10"
+        className="w-full max-w-[340px] space-y-8"
       >
-        {/* Logo */}
+        {/* Logo + heading */}
         <div className="text-center space-y-3">
           <motion.img
             src={picklaLogo}
@@ -81,10 +76,16 @@ const Auth = () => {
             transition={{ delay: 0.1, duration: 0.4 }}
           />
           <div>
-            <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+            <h1
+              className="text-[28px] font-bold text-neutral-900 tracking-tight"
+              style={{ fontFamily: FONT_GROTESK }}
+            >
               {isDesk ? "Pickla Desk" : "Pickla"}
             </h1>
-            <p className="text-xs text-muted-foreground mt-1" style={{ fontFamily: "'Space Mono', monospace" }}>
+            <p
+              className="text-[11px] text-neutral-400 mt-1 uppercase tracking-widest"
+              style={{ fontFamily: FONT_MONO }}
+            >
               {mode === "login"
                 ? isDesk ? "STAFF LOGIN" : "LOGGA IN"
                 : "SKAPA KONTO"}
@@ -93,17 +94,17 @@ const Auth = () => {
         </div>
 
         {/* Mode Switcher */}
-        <div className="glass-card rounded-xl p-1 flex">
+        <div className="bg-neutral-50 rounded-2xl p-1 flex">
           {(["login", "signup"] as const).map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
-              className="flex-1 relative py-2.5 rounded-lg text-xs font-semibold transition-all"
-              style={{
-                fontFamily: "'Space Mono', monospace",
-                color: mode === m ? "hsl(var(--primary-foreground))" : "hsl(var(--muted-foreground))",
-                background: mode === m ? "hsl(var(--primary))" : "transparent",
-              }}
+              className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all ${
+                mode === m
+                  ? "bg-neutral-900 text-white"
+                  : "text-neutral-400"
+              }`}
+              style={{ fontFamily: FONT_MONO }}
             >
               {m === "login" ? "LOGGA IN" : "REGISTRERA"}
             </button>
@@ -123,49 +124,51 @@ const Auth = () => {
           >
             {mode === "signup" && (
               <div className="relative">
-                <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-300" />
                 <input
                   type="text"
-                  placeholder="Ditt namn"
+                  placeholder="ditt namn"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full glass-card rounded-xl py-3.5 pl-11 pr-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 transition-all"
+                  className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                  style={{ fontFamily: FONT_MONO }}
                   required
                 />
               </div>
             )}
 
             <div className="relative">
-              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-300" />
               <input
                 type="email"
-                placeholder="E-post"
+                placeholder="e-post"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full glass-card rounded-xl py-3.5 pl-11 pr-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 transition-all"
+                className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                style={{ fontFamily: FONT_MONO }}
                 required
               />
             </div>
 
             <div className="relative">
-              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-300" />
               <input
                 type="password"
-                placeholder="Lösenord"
+                placeholder="lösenord"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full glass-card rounded-xl py-3.5 pl-11 pr-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 transition-all"
+                className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                style={{ fontFamily: FONT_MONO }}
                 required
                 minLength={6}
               />
             </div>
 
-            <motion.button
+            <button
               type="submit"
               disabled={submitting}
-              whileTap={{ scale: 0.97 }}
-              className="w-full bg-primary text-primary-foreground rounded-xl py-4 font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50 mt-2 transition-all active:scale-[0.97]"
-              style={{ fontFamily: "'Space Mono', monospace" }}
+              className="w-full py-3.5 rounded-2xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-2 mt-2"
+              style={{ fontFamily: FONT_MONO }}
             >
               {submitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -178,12 +181,15 @@ const Auth = () => {
                   <UserPlus className="w-4 h-4" /> SKAPA KONTO
                 </>
               )}
-            </motion.button>
+            </button>
           </motion.form>
         </AnimatePresence>
 
         {/* Footer */}
-        <p className="text-center text-[10px] text-muted-foreground" style={{ fontFamily: "'Space Mono', monospace" }}>
+        <p
+          className="text-center text-[10px] text-neutral-300 uppercase tracking-widest"
+          style={{ fontFamily: FONT_MONO }}
+        >
           PICKLA © 2025
         </p>
       </motion.div>
