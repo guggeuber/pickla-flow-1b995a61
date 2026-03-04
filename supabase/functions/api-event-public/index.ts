@@ -19,7 +19,7 @@ Deno.serve(async (req) => {
       const slug = url.searchParams.get('slug');
       if (!id && !slug) return errorResponse('Missing id or slug');
 
-      const selectFields = 'id, name, display_name, description, event_type, format, category, start_date, end_date, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, whatsapp_url, is_drop_in, registration_fields, slug, venue_id, template_id, venues(id, name, address, city)';
+      const selectFields = 'id, name, display_name, description, event_type, format, category, start_date, end_date, start_time, end_time, entry_fee, entry_fee_type, status, logo_url, background_url, primary_color, secondary_color, number_of_courts, points_to_win, best_of, scoring_type, competition_type, player_info_general, whatsapp_url, is_drop_in, registration_fields, slug, venue_id, template_id, venues(id, name, address, city)';
 
       let query = client.from('events').select(selectFields).eq('is_public', true);
       if (slug) {
@@ -31,8 +31,8 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await query.single();
       if (qErr) return errorResponse('Event not found', 404);
 
-      // Get player count, category config, event pricing, and template in parallel
-      const [playerResult, catResult, pricingResult, templateResult] = await Promise.all([
+      // Get player count, category config, event pricing, template, courts, and tier pricing in parallel
+      const [playerResult, catResult, pricingResult, templateResult, courtsResult, tierPricingResult] = await Promise.all([
         client.from('players')
           .select('id', { count: 'exact', head: true })
           .eq('event_id', data.id),
@@ -58,6 +58,14 @@ Deno.serve(async (req) => {
               .eq('id', data.template_id)
               .maybeSingle()
           : Promise.resolve({ data: null }),
+        client.from('event_courts')
+          .select('venue_court_id, venue_courts(id, name, court_number)')
+          .eq('event_id', data.id),
+        data.venue_id
+          ? client.from('membership_tier_pricing')
+              .select('tier_id, product_type, fixed_price, discount_percent, label, membership_tiers(id, name, color, sort_order)')
+              .in('product_type', ['event_fee', 'day_pass'])
+          : Promise.resolve({ data: null }),
       ]);
 
       const categoryConfig = catResult.data || null;
@@ -67,9 +75,23 @@ Deno.serve(async (req) => {
       // Template pricing takes precedence over venue pricing rules
       const effectivePricing = template && template.entry_fee != null && template.entry_fee > 0
         ? { price: template.entry_fee, vat_rate: template.vat_rate || 6, source: 'template', currency: template.currency || 'SEK' }
-        : eventPricing
-          ? { ...eventPricing, source: 'venue_rule' }
-          : null;
+        : data.entry_fee != null && data.entry_fee > 0
+          ? { price: data.entry_fee, vat_rate: 6, source: 'event', currency: 'SEK' }
+          : eventPricing
+            ? { ...eventPricing, source: 'venue_rule' }
+            : null;
+
+      // Build tier pricing map
+      const tierPricing = (tierPricingResult.data || []).map((tp: any) => ({
+        tier_id: tp.tier_id,
+        tier_name: tp.membership_tiers?.name || '',
+        tier_color: tp.membership_tiers?.color || '#666',
+        sort_order: tp.membership_tiers?.sort_order || 0,
+        product_type: tp.product_type,
+        fixed_price: tp.fixed_price,
+        discount_percent: tp.discount_percent,
+        label: tp.label,
+      }));
 
       return jsonResponse({
         ...data,
@@ -77,6 +99,8 @@ Deno.serve(async (req) => {
         category_config: categoryConfig,
         event_pricing: effectivePricing,
         template,
+        event_courts: (courtsResult.data || []).map((c: any) => c.venue_courts || { id: c.venue_court_id }),
+        tier_pricing: tierPricing,
       }, 200, 5);
     }
 
@@ -85,13 +109,14 @@ Deno.serve(async (req) => {
       const venueId = url.searchParams.get('venueId');
       const category = url.searchParams.get('category');
       const excludeId = url.searchParams.get('excludeId');
+      const today = url.searchParams.get('today'); // pass 'true' to filter today's events
 
       let query = client.from('events')
-        .select('id, name, display_name, category, start_date, status, logo_url, primary_color, is_drop_in, format, venue_id, venues(id, name)')
+        .select('id, name, display_name, category, start_date, end_date, start_time, end_time, entry_fee, entry_fee_type, status, logo_url, primary_color, is_drop_in, format, venue_id, venues(id, name)')
         .eq('is_public', true)
         .in('status', ['active', 'upcoming', 'in_progress'])
         .order('start_date', { ascending: true })
-        .limit(10);
+        .limit(20);
 
       if (venueId) query = query.eq('venue_id', venueId);
       if (category) query = query.eq('category', category);
@@ -133,7 +158,6 @@ Deno.serve(async (req) => {
           .maybeSingle();
         if (existing) return errorResponse('Redan anmäld');
       } else {
-        // No phone/email — check by exact name
         const { data: existing } = await client.from('players')
           .select('id')
           .eq('event_id', eventId)
@@ -145,7 +169,6 @@ Deno.serve(async (req) => {
       // Auto-create auth account with phone as identifier
       let authUserId: string | null = null;
       if (phone) {
-        // Check if user already exists by looking at player_profiles with this phone
         const { data: existingProfile } = await client.from('player_profiles')
           .select('auth_user_id')
           .eq('phone', phone)
@@ -154,7 +177,6 @@ Deno.serve(async (req) => {
         if (existingProfile) {
           authUserId = existingProfile.auth_user_id;
         } else if (email) {
-          // Create new account with email + phone
           const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
           const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
           const adminClient = createClient(supabaseUrl, serviceKey, {
@@ -170,7 +192,6 @@ Deno.serve(async (req) => {
 
           if (!authErr && newUser?.user) {
             authUserId = newUser.user.id;
-            // Update player_profile with phone
             await client.from('player_profiles')
               .update({ phone: phone.trim(), display_name: name.trim() })
               .eq('auth_user_id', authUserId);
@@ -182,7 +203,7 @@ Deno.serve(async (req) => {
         .insert({
           event_id: eventId,
           name: name.trim(),
-          email: phone?.trim() || email?.trim() || null, // store phone in email field for now
+          email: phone?.trim() || email?.trim() || null,
           auth_user_id: authUserId,
         })
         .select()

@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Loader2, Zap, Ticket, Check } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Zap, Ticket, Check, Clock, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -15,16 +15,87 @@ const FONT_MONO = "'Space Mono', monospace";
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
 const item = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 26 } } };
 
-const DAY_PASS_PRICE = 165;
+// Fetch today's and upcoming public events with tier pricing
+function useTodayEvents() {
+  return useQuery({
+    queryKey: ["play-events-today"],
+    staleTime: 15000,
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+      const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
+      const res = await fetch(`${BASE_URL}/api-event-public/list`);
+      if (!res.ok) return [];
+      const events = await res.json();
+      return events || [];
+    },
+  });
+}
+
+function useTierPricing() {
+  return useQuery({
+    queryKey: ["play-tier-pricing"],
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("membership_tier_pricing")
+        .select("tier_id, product_type, fixed_price, discount_percent, label, membership_tiers(id, name, color, sort_order)")
+        .in("product_type", ["event_fee", "day_pass"]);
+      return data || [];
+    },
+  });
+}
+
+function EventPriceBadges({ event, tierPricing }: { event: any; tierPricing: any[] }) {
+  const basePrice = event.entry_fee || 0;
+  const isDayPass = event.entry_fee_type === 'day_pass';
+  const productType = isDayPass ? 'day_pass' : 'event_fee';
+
+  // Find tier-specific prices
+  const relevantTiers = tierPricing
+    .filter((tp: any) => tp.product_type === productType)
+    .sort((a: any, b: any) => (a.membership_tiers?.sort_order || 0) - (b.membership_tiers?.sort_order || 0));
+
+  if (basePrice === 0 && relevantTiers.length === 0) {
+    return <span className="text-[11px] font-semibold" style={{ color: "#4CAF50", fontFamily: FONT_MONO }}>Gratis</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1.5">
+      {relevantTiers.map((tp: any) => {
+        const price = tp.fixed_price != null ? tp.fixed_price : (tp.discount_percent ? basePrice * (1 - tp.discount_percent / 100) : basePrice);
+        return (
+          <span
+            key={tp.tier_id}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold"
+            style={{
+              background: `${tp.membership_tiers?.color || '#666'}15`,
+              color: tp.membership_tiers?.color || '#666',
+              fontFamily: FONT_MONO,
+            }}
+          >
+            {tp.label || tp.membership_tiers?.name}: {price === 0 ? 'Gratis' : `${Math.round(price)} kr`}
+          </span>
+        );
+      })}
+      {/* Guest/base price */}
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold"
+        style={{
+          background: "rgba(62,61,57,0.06)",
+          color: "rgba(62,61,57,0.6)",
+          fontFamily: FONT_MONO,
+        }}
+      >
+        Gäst: {basePrice === 0 ? 'Gratis' : `${Math.round(basePrice)} kr`}
+      </span>
+    </div>
+  );
+}
 
 const PlayPage = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [showDayPassForm, setShowDayPassForm] = useState(false);
-  const [dpName, setDpName] = useState("");
-  const [dpPhone, setDpPhone] = useState("");
-  const [dpSubmitting, setDpSubmitting] = useState(false);
-  const [dpRef, setDpRef] = useState<string | null>(null);
 
   const bgColor = user ? "#F5D5D5" : "#FFFFFF";
 
@@ -47,47 +118,20 @@ const PlayPage = () => {
 
   const hasMembership = !!activeMembership;
 
-  // Load real membership tiers
-  const { data: tiers } = useQuery({
-    queryKey: ["membership-tiers"],
-    staleTime: 60000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("membership_tiers")
-        .select("id, name, description, monthly_price, color, sort_order")
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true });
-      return data || [];
-    },
+  const { data: events, isLoading: eventsLoading } = useTodayEvents();
+  const { data: tierPricing } = useTierPricing();
+
+  // Split events into today and upcoming
+  const today = new Date().toISOString().slice(0, 10);
+  const todayEvents = (events || []).filter((e: any) => {
+    if (!e.start_date) return false;
+    const eventDate = new Date(e.start_date).toISOString().slice(0, 10);
+    return eventDate === today;
   });
-
-  // Today's checkins + open play
-  const { data: checkinData } = useQuery({
-    queryKey: ["play-checkins"],
-    staleTime: 15000,
-    refetchInterval: 30000,
-    queryFn: async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const { data: events } = await supabase
-        .from("events")
-        .select("id, name, display_name, is_drop_in, number_of_courts")
-        .eq("status", "active");
-      if (!events?.length) return { count: 0, openPlay: null };
-
-      const eventIds = events.map((e: any) => e.id);
-      const { count } = await supabase
-        .from("event_checkins")
-        .select("id", { count: "exact", head: true })
-        .in("event_id", eventIds)
-        .eq("session_date", today)
-        .eq("checked_in", true);
-
-      const dropIn = events.find((e: any) => e.is_drop_in);
-      return {
-        count: count || 0,
-        openPlay: dropIn ? { name: dropIn.display_name || dropIn.name, courts: dropIn.number_of_courts || 0 } : null,
-      };
-    },
+  const upcomingEvents = (events || []).filter((e: any) => {
+    if (!e.start_date) return true; // no date = show in upcoming
+    const eventDate = new Date(e.start_date).toISOString().slice(0, 10);
+    return eventDate > today;
   });
 
   // Community feed
@@ -125,42 +169,8 @@ const PlayPage = () => {
     },
   });
 
-  const handleDayPassPurchase = async () => {
-    if (!dpName.trim() || !dpPhone.trim()) {
-      toast.error("Fyll i namn och telefon");
-      return;
-    }
-    setDpSubmitting(true);
-    try {
-      const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
-      const res = await fetch(`${BASE_URL}/api-day-passes/public-purchase`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: dpName.trim(),
-          phone: dpPhone.trim(),
-          price: DAY_PASS_PRICE,
-          user_id: user?.id || null,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Kunde inte skapa dagspass");
-      }
-      const result = await res.json();
-      setDpRef(result.ref || result.id?.slice(0, 8)?.toUpperCase());
-      toast.success("Dagspass skapat!");
-    } catch (err: any) {
-      toast.error(err.message || "Något gick fel");
-    } finally {
-      setDpSubmitting(false);
-    }
-  };
-
   const handleFeedCardClick = (fi: any) => {
     if (fi.event_id) {
-      // Try to find slug from content
       const slug = fi.content?.slug;
       if (slug) {
         navigate(`/e/${slug}`);
@@ -169,6 +179,66 @@ const PlayPage = () => {
       }
     }
   };
+
+  const handleEventClick = (evt: any) => {
+    if (evt.slug) {
+      navigate(`/e/${evt.slug}`);
+    } else {
+      navigate(`/event/${evt.id}`);
+    }
+  };
+
+  const renderEventCard = (evt: any) => (
+    <motion.button
+      key={evt.id}
+      variants={item}
+      onClick={() => handleEventClick(evt)}
+      className="w-full rounded-2xl p-4 text-left transition-all active:scale-[0.98]"
+      style={{
+        background: "rgba(255,255,255,0.8)",
+        border: "1.5px solid rgba(62,61,57,0.08)",
+        boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
+      }}
+    >
+      <div className="flex items-start gap-3">
+        {evt.logo_url ? (
+          <img src={evt.logo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
+        ) : (
+          <div
+            className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-bold"
+            style={{ background: evt.primary_color || "rgba(232,108,36,0.1)", color: "#fff" }}
+          >
+            {(evt.display_name || evt.name || "?")[0].toUpperCase()}
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className="text-[15px] font-bold tracking-tight truncate" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
+            {evt.display_name || evt.name}
+          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            {evt.start_time && (
+              <span className="text-[11px] flex items-center gap-0.5" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
+                <Clock className="w-3 h-3" />
+                {evt.start_time.slice(0, 5)}{evt.end_time ? `–${evt.end_time.slice(0, 5)}` : ''}
+              </span>
+            )}
+            {evt.is_drop_in && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold" style={{ background: "rgba(76,175,80,0.1)", color: "#4CAF50", fontFamily: FONT_MONO }}>
+                Drop-in
+              </span>
+            )}
+            {evt.entry_fee_type === 'day_pass' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold" style={{ background: "rgba(232,108,36,0.1)", color: "#E86C24", fontFamily: FONT_MONO }}>
+                Dagspass
+              </span>
+            )}
+          </div>
+          <EventPriceBadges event={evt} tierPricing={tierPricing || []} />
+        </div>
+        <ArrowRight className="w-4 h-4 flex-shrink-0 mt-1" style={{ color: "rgba(62,61,57,0.3)" }} />
+      </div>
+    </motion.button>
+  );
 
   return (
     <div className="min-h-screen" style={{ background: bgColor, color: "#3E3D39" }}>
@@ -192,157 +262,64 @@ const PlayPage = () => {
           </h1>
         </motion.div>
 
-        {/* Open Play section */}
-        <motion.div variants={item} className="text-center">
-          <h2 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_HEADING }}>
-            {checkinData?.openPlay
-              ? `${checkinData.openPlay.courts} banor Open Play`
-              : "Open Play Today"}
-          </h2>
-          <p className="text-sm" style={{ color: "rgba(62,61,57,0.6)", fontFamily: FONT_MONO }}>
-            {checkinData?.count
-              ? `🏓 ${checkinData.count} spelare just nu`
-              : "Join games, rotate courts, meet players."}
-          </p>
-        </motion.div>
-
-        {/* Day Pass — always visible */}
+        {/* Today's activities */}
         <motion.div variants={item}>
-          {dpRef ? (
-            // Confirmation state
-            <div
-              className="rounded-2xl p-6 text-center"
-              style={{ background: "rgba(76,175,80,0.08)", border: "1.5px solid rgba(76,175,80,0.2)" }}
-            >
-              <div className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center" style={{ background: "rgba(76,175,80,0.15)" }}>
-                <Check className="w-6 h-6" style={{ color: "#4CAF50" }} />
-              </div>
-              <p className="text-sm font-bold mb-1" style={{ fontFamily: FONT_HEADING }}>Dagspass klart!</p>
-              <p className="text-2xl font-black tracking-tight mb-2" style={{ fontFamily: FONT_MONO, color: "#3E3D39" }}>
-                {dpRef}
-              </p>
-              <p className="text-xs" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
-                Visa koden i kassan och betala innan du spelar
-              </p>
+          <h2 className="text-base font-bold mb-3 uppercase tracking-tight" style={{ fontFamily: FONT_HEADING }}>
+            🏓 Idag
+          </h2>
+          {eventsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-5 h-5 animate-spin" style={{ color: "#3E3D39" }} />
             </div>
-          ) : showDayPassForm ? (
-            // Purchase form
-            <div
-              className="rounded-2xl p-5"
-              style={{ background: "rgba(255,255,255,0.8)", border: "1.5px solid rgba(62,61,57,0.1)" }}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <Ticket className="w-5 h-5" style={{ color: "#E86C24" }} />
-                <p className="text-[15px] font-bold" style={{ fontFamily: FONT_HEADING }}>
-                  Day Pass – {DAY_PASS_PRICE} kr
-                </p>
-              </div>
-              <div className="flex flex-col gap-3">
-                <input
-                  type="text"
-                  placeholder="Namn"
-                  value={dpName}
-                  onChange={(e) => setDpName(e.target.value)}
-                  className="w-full rounded-xl px-4 py-3 text-sm outline-none"
-                  style={{
-                    background: "rgba(62,61,57,0.04)",
-                    border: "1.5px solid rgba(62,61,57,0.1)",
-                    fontFamily: FONT_MONO,
-                  }}
-                />
-                <input
-                  type="tel"
-                  placeholder="Telefon"
-                  value={dpPhone}
-                  onChange={(e) => setDpPhone(e.target.value)}
-                  className="w-full rounded-xl px-4 py-3 text-sm outline-none"
-                  style={{
-                    background: "rgba(62,61,57,0.04)",
-                    border: "1.5px solid rgba(62,61,57,0.1)",
-                    fontFamily: FONT_MONO,
-                  }}
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowDayPassForm(false)}
-                    className="flex-1 rounded-xl px-4 py-3 text-sm font-semibold transition-all active:scale-95"
-                    style={{ background: "rgba(62,61,57,0.06)", color: "#3E3D39", fontFamily: FONT_MONO }}
-                  >
-                    Avbryt
-                  </button>
-                  <button
-                    onClick={handleDayPassPurchase}
-                    disabled={dpSubmitting}
-                    className="flex-1 rounded-xl px-4 py-3 text-sm font-bold transition-all active:scale-95 disabled:opacity-50"
-                    style={{ background: "#E86C24", color: "#fff", fontFamily: FONT_MONO }}
-                  >
-                    {dpSubmitting ? "…" : `Köp – ${DAY_PASS_PRICE} kr`}
-                  </button>
-                </div>
-              </div>
-              <p className="text-[10px] mt-3 text-center" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
-                Du betalar i kassan. Visa din referenskod vid incheckning.
-              </p>
+          ) : todayEvents.length > 0 ? (
+            <div className="flex flex-col gap-3">
+              {todayEvents.map(renderEventCard)}
             </div>
           ) : (
-            // Day pass button
-            <motion.button
-              onClick={() => setShowDayPassForm(true)}
-              className="w-full rounded-2xl p-5 text-left transition-all active:scale-[0.98]"
-              style={{
-                background: "rgba(255,255,255,0.7)",
-                border: "1.5px solid rgba(62,61,57,0.1)",
-                boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
-              }}
+            <div
+              className="rounded-2xl p-5 text-center"
+              style={{ background: "rgba(62,61,57,0.03)", border: "1.5px dashed rgba(62,61,57,0.1)" }}
             >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[15px] font-bold tracking-tight" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
-                    Day Pass – {DAY_PASS_PRICE} kr
-                  </p>
-                  <p className="text-xs mt-0.5" style={{ fontFamily: FONT_MONO, color: "rgba(62,61,57,0.5)" }}>
-                    Play today
-                  </p>
-                </div>
-                <Ticket className="w-5 h-5" style={{ color: "#E86C24" }} />
-              </div>
-            </motion.button>
+              <p className="text-sm" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
+                Inga aktiviteter idag
+              </p>
+            </div>
           )}
         </motion.div>
 
-        {/* Membership cards — only if no active membership */}
-        {!hasMembership && (
-          <div className="flex flex-col gap-3">
-            {(tiers || []).map((tier: any, i: number) => (
-              <motion.button
-                key={tier.id}
-                variants={item}
-                className="w-full rounded-2xl p-5 text-left transition-all active:scale-[0.98]"
-                style={{
-                  background: i === 0 ? "#3E3D39" : "rgba(255,255,255,0.7)",
-                  border: i === 0 ? "none" : "1.5px solid rgba(62,61,57,0.1)",
-                  boxShadow: i === 0 ? "0 8px 32px rgba(62,61,57,0.2)" : "0 2px 12px rgba(0,0,0,0.04)",
-                }}
-              >
-                <p
-                  className="text-[15px] font-bold tracking-tight"
-                  style={{ fontFamily: FONT_HEADING, color: i === 0 ? "#fff" : "#3E3D39" }}
-                >
-                  {tier.name} – {tier.monthly_price || 0} kr / mån
-                </p>
-                <p
-                  className="text-xs mt-0.5"
-                  style={{ fontFamily: FONT_MONO, color: i === 0 ? "rgba(255,255,255,0.6)" : "rgba(62,61,57,0.5)" }}
-                >
-                  {tier.description || "Bli medlem"}
-                </p>
-              </motion.button>
-            ))}
-          </div>
+        {/* Upcoming events */}
+        {upcomingEvents.length > 0 && (
+          <motion.div variants={item}>
+            <h2 className="text-base font-bold mb-3 uppercase tracking-tight" style={{ fontFamily: FONT_HEADING }}>
+              📅 Kommande
+            </h2>
+            <div className="flex flex-col gap-3">
+              {upcomingEvents.slice(0, 5).map(renderEventCard)}
+            </div>
+          </motion.div>
         )}
 
-        {/* Active membership badge */}
-        {hasMembership && (
+        {/* Book a court CTA */}
+        <motion.div
+          variants={item}
+          className="rounded-2xl p-5 text-center"
+          style={{ background: "rgba(232,108,36,0.06)", border: "1.5px solid rgba(232,108,36,0.15)" }}
+        >
+          <p className="text-sm mb-3" style={{ fontFamily: FONT_HEADING, color: "#3E3D39", fontWeight: 600 }}>
+            Boka egen bana
+          </p>
+          <button
+            onClick={() => navigate("/book")}
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all active:scale-95"
+            style={{ background: "#E86C24", color: "#fff", fontFamily: FONT_MONO }}
+          >
+            Boka bana
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </motion.div>
+
+        {/* Active membership badge or small membership link */}
+        {hasMembership ? (
           <motion.div
             variants={item}
             className="rounded-2xl p-4 flex items-center gap-3"
@@ -360,26 +337,21 @@ const PlayPage = () => {
               </p>
             </div>
           </motion.div>
-        )}
-
-        {/* Book a court CTA */}
-        <motion.div
-          variants={item}
-          className="rounded-2xl p-5 text-center"
-          style={{ background: "rgba(232,108,36,0.06)", border: "1.5px solid rgba(232,108,36,0.15)" }}
-        >
-          <p className="text-sm mb-3" style={{ fontFamily: FONT_HEADING, color: "#3E3D39", fontWeight: 600 }}>
-            Prefer a private court?
-          </p>
-          <button
-            onClick={() => navigate("/book")}
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all active:scale-95"
-            style={{ background: "#E86C24", color: "#fff", fontFamily: FONT_MONO }}
+        ) : (
+          <motion.button
+            variants={item}
+            onClick={() => navigate("/community")}
+            className="rounded-2xl p-4 flex items-center gap-3 text-left transition-all active:scale-[0.98]"
+            style={{ background: "rgba(62,61,57,0.03)", border: "1.5px solid rgba(62,61,57,0.08)" }}
           >
-            Book a court
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </motion.div>
+            <Users className="w-5 h-5" style={{ color: "rgba(62,61,57,0.4)" }} />
+            <div>
+              <p className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>Bli medlem</p>
+              <p className="text-[11px]" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>Se medlemskap & förmåner</p>
+            </div>
+            <ArrowRight className="w-4 h-4 ml-auto" style={{ color: "rgba(62,61,57,0.3)" }} />
+          </motion.button>
+        )}
 
         {/* Community Feed */}
         <motion.div variants={item}>
