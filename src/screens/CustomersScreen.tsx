@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Phone, Star, Calendar, CreditCard, ChevronRight, UserPlus, Edit3, MessageSquarePlus, Check, ArrowLeft, Zap, TrendingUp, Crown, X, UserCheck, Loader2 } from "lucide-react";
+import { Search, Phone, Calendar, ChevronRight, UserPlus, Edit3, Check, ArrowLeft, Crown, X, UserCheck, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -23,191 +23,32 @@ const tierConfig: Record<string, { bg: string; text: string; dot: string }> = {
   "Drop-in": { bg: "bg-muted", text: "text-muted-foreground", dot: "bg-muted-foreground" },
 };
 
-// ═══ CHECK-IN WIDGET ═══
-interface CheckinResult {
-  profile_id: string;
-  user_id: string;
-  display_name: string;
-  phone: string | null;
-  avatar_url: string | null;
-  entitlements: { type: string; id: string; label: string; color?: string }[];
-  already_checked_in: boolean;
-}
+// ═══ Inline check-in helper ═══
+async function performCheckin(venueId: string, profile: any, entryType = "manual", entitlementId: string | null = null) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error("Inte inloggad");
 
-const CheckInWidget = ({ venueId }: { venueId: string }) => {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<CheckinResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [checkingIn, setCheckingIn] = useState<string | null>(null);
-
-  const handleSearch = async () => {
-    if (!query.trim()) return;
-    setSearching(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { toast.error("Inte inloggad"); return; }
-
-      const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const res = await fetch(
-        `https://${PROJECT_ID}.supabase.co/functions/v1/api-checkins/validate-checkin`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ venue_id: venueId, search_query: query }),
-        }
-      );
-      if (!res.ok) throw new Error("Sökning misslyckades");
-      const data = await res.json();
-      setResults(data.results || []);
-    } catch (err: any) {
-      toast.error(err.message);
-    } finally {
-      setSearching(false);
+  const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+  const res = await fetch(
+    `https://${PROJECT_ID}.supabase.co/functions/v1/api-checkins/checkin`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        venue_id: venueId,
+        target_user_id: profile.auth_user_id,
+        entry_type: entryType,
+        entitlement_id: entitlementId,
+        player_name: profile.display_name,
+      }),
     }
-  };
-
-  const handleCheckin = async (result: CheckinResult, entitlement?: any) => {
-    setCheckingIn(result.user_id);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { toast.error("Inte inloggad"); return; }
-
-      const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const res = await fetch(
-        `https://${PROJECT_ID}.supabase.co/functions/v1/api-checkins/checkin`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            venue_id: venueId,
-            target_user_id: result.user_id,
-            entry_type: entitlement?.type || "manual",
-            entitlement_id: entitlement?.id || null,
-            player_name: result.display_name,
-          }),
-        }
-      );
-      if (!res.ok) throw new Error("Incheckning misslyckades");
-      toast.success(`${result.display_name} incheckad! ✅`);
-      setResults((prev) =>
-        prev.map((r) =>
-          r.user_id === result.user_id ? { ...r, already_checked_in: true } : r
-        )
-      );
-    } catch (err: any) {
-      toast.error(err.message);
-    } finally {
-      setCheckingIn(null);
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between mb-1">
-        <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Check In</h2>
-        <UserCheck className="w-4 h-4 text-primary" />
-      </div>
-
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Sök namn eller telefon..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="w-full pl-9 pr-3 py-2.5 rounded-xl text-sm bg-background border border-border focus:outline-none focus:border-primary transition-colors"
-          />
-        </div>
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={handleSearch}
-          disabled={searching || !query.trim()}
-          className="px-4 rounded-xl bg-primary text-primary-foreground text-sm font-bold disabled:opacity-40"
-        >
-          {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : "Sök"}
-        </motion.button>
-      </div>
-
-      {results.length > 0 && (
-        <div className="space-y-2">
-          {results.map((r) => (
-            <motion.div
-              key={r.user_id}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="glass-card rounded-2xl p-3 space-y-2"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary/10 text-primary font-bold text-sm">
-                  {(r.display_name || "?").charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate">{r.display_name}</p>
-                  {r.phone && <p className="text-[11px] text-muted-foreground">{r.phone}</p>}
-                </div>
-                {r.already_checked_in ? (
-                  <span className="status-chip text-[10px] bg-badge-paid/15 text-badge-paid font-bold">
-                    ✅ Incheckad
-                  </span>
-                ) : r.entitlements.length === 0 ? (
-                  <motion.button
-                    whileTap={{ scale: 0.9 }}
-                    onClick={() => handleCheckin(r)}
-                    disabled={checkingIn === r.user_id}
-                    className="tap-target rounded-xl bg-muted text-foreground px-3 py-2 text-[11px] font-bold"
-                  >
-                    {checkingIn === r.user_id ? <Loader2 className="w-3 h-3 animate-spin" /> : "Manuell"}
-                  </motion.button>
-                ) : null}
-              </div>
-
-              {!r.already_checked_in && r.entitlements.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {r.entitlements.map((ent) => (
-                    <motion.button
-                      key={ent.id}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => handleCheckin(r, ent)}
-                      disabled={checkingIn === r.user_id}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all active:scale-95"
-                      style={{
-                        background: ent.type === "membership"
-                          ? `${ent.color || "#4CAF50"}22`
-                          : ent.type === "day_pass"
-                            ? "rgba(232,108,36,0.12)"
-                            : "rgba(33,150,243,0.12)",
-                        color: ent.type === "membership"
-                          ? ent.color || "#4CAF50"
-                          : ent.type === "day_pass"
-                            ? "#E86C24"
-                            : "#2196F3",
-                      }}
-                    >
-                      <Check className="w-3 h-3" />
-                      {ent.label}
-                    </motion.button>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          ))}
-        </div>
-      )}
-
-      {results.length === 0 && query.trim() && !searching && (
-        <p className="text-xs text-muted-foreground text-center py-3">Inga resultat</p>
-      )}
-    </div>
   );
-};
+  if (!res.ok) throw new Error("Incheckning misslyckades");
+  return res.json();
+}
 
 // ═══ CREATE CUSTOMER MODAL ═══
 const CreateCustomerModal = ({ venueId, onClose, onCreated }: { venueId: string; onClose: () => void; onCreated: () => void }) => {
@@ -257,35 +98,11 @@ const CreateCustomerModal = ({ venueId, onClose, onCreated }: { venueId: string;
           <button onClick={onClose}><X className="w-5 h-5 text-muted-foreground" /></button>
         </div>
         <div className="space-y-3">
-          <input
-            type="text"
-            placeholder="Namn *"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full bg-secondary rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-            autoFocus
-          />
-          <input
-            type="tel"
-            placeholder="Telefon"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            className="w-full bg-secondary rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-          />
-          <input
-            type="email"
-            placeholder="E-post"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full bg-secondary rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-          />
+          <input type="text" placeholder="Namn *" value={name} onChange={(e) => setName(e.target.value)} className="w-full bg-secondary rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" autoFocus />
+          <input type="tel" placeholder="Telefon" value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full bg-secondary rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
+          <input type="email" placeholder="E-post" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full bg-secondary rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
         </div>
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={handleCreate}
-          disabled={creating || !name.trim()}
-          className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm disabled:opacity-40 flex items-center justify-center gap-2"
-        >
+        <motion.button whileTap={{ scale: 0.96 }} onClick={handleCreate} disabled={creating || !name.trim()} className="w-full bg-primary text-primary-foreground rounded-2xl py-4 font-semibold text-sm disabled:opacity-40 flex items-center justify-center gap-2">
           {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
           Skapa kund
         </motion.button>
@@ -303,6 +120,8 @@ const CustomersScreen = () => {
   const [editPhone, setEditPhone] = useState("");
   const [showMembershipModal, setShowMembershipModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [checkingInId, setCheckingInId] = useState<string | null>(null);
+  const [checkedInIds, setCheckedInIds] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
   const { data: staffVenue } = useVenueForStaff();
   const venueId = staffVenue?.venue_id;
@@ -365,6 +184,22 @@ const CustomersScreen = () => {
     },
   });
 
+  // One-tap check-in handler for any profile
+  const handleQuickCheckin = async (profile: any, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!venueId || checkingInId === profile.id) return;
+    setCheckingInId(profile.id);
+    try {
+      await performCheckin(venueId, profile);
+      toast.success(`${profile.display_name} incheckad! ✅`);
+      setCheckedInIds((prev) => new Set(prev).add(profile.id));
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setCheckingInId(null);
+    }
+  };
+
   // ═══ CUSTOMER DETAIL VIEW ═══
   if (selected) {
     const tier = tierFromRating(selected.pickla_rating);
@@ -390,6 +225,7 @@ const CustomersScreen = () => {
     };
 
     const memberTier = currentMembership?.membership_tiers;
+    const isCheckedIn = checkedInIds.has(selected.id);
 
     return (
       <div className="pb-24 px-4 pt-2 space-y-4">
@@ -397,10 +233,24 @@ const CustomersScreen = () => {
           <ArrowLeft className="w-4 h-4" /> Tillbaka
         </motion.button>
 
-        {/* ═══ CHECK-IN for this customer ═══ */}
-        {venueId && (
-          <CheckInWidget venueId={venueId} />
-        )}
+        {/* ═══ BIG CHECK-IN BUTTON ═══ */}
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={() => !isCheckedIn && handleQuickCheckin(selected)}
+          disabled={isCheckedIn || checkingInId === selected.id}
+          className={`w-full rounded-2xl py-4 font-bold text-sm flex items-center justify-center gap-2.5 transition-all ${
+            isCheckedIn
+              ? "bg-court-free/15 text-court-free"
+              : "bg-court-free text-white shadow-lg shadow-court-free/25"
+          }`}
+        >
+          {checkingInId === selected.id ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <UserCheck className="w-5 h-5" />
+          )}
+          {isCheckedIn ? "✅ Incheckad" : "Checka in"}
+        </motion.button>
 
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-3xl p-5 space-y-4">
           <div className="flex items-start gap-4">
@@ -423,10 +273,7 @@ const CustomersScreen = () => {
                 <span className={`status-chip ${t.bg} ${t.text}`}>{tier}</span>
                 <span className="text-[10px] text-muted-foreground">Rating: {selected.pickla_rating}</span>
                 {memberTier && (
-                  <span
-                    className="status-chip text-white text-[10px] font-bold flex items-center gap-1"
-                    style={{ background: memberTier.color }}
-                  >
+                  <span className="status-chip text-white text-[10px] font-bold flex items-center gap-1" style={{ background: memberTier.color }}>
                     <Crown className="w-3 h-3" />
                     {memberTier.name}
                   </span>
@@ -467,18 +314,10 @@ const CustomersScreen = () => {
               </span>
             </div>
             <div className="flex gap-2">
-              <motion.button
-                whileTap={{ scale: 0.95 }}
-                onClick={() => setShowMembershipModal(true)}
-                className="flex-1 bg-primary/10 text-primary rounded-xl py-2 text-xs font-semibold"
-              >
+              <motion.button whileTap={{ scale: 0.95 }} onClick={() => setShowMembershipModal(true)} className="flex-1 bg-primary/10 text-primary rounded-xl py-2 text-xs font-semibold">
                 Byt nivå
               </motion.button>
-              <motion.button
-                whileTap={{ scale: 0.95 }}
-                onClick={() => currentMembership?.id && cancelMembership.mutate(currentMembership.id)}
-                className="flex-1 bg-destructive/10 text-destructive rounded-xl py-2 text-xs font-semibold"
-              >
+              <motion.button whileTap={{ scale: 0.95 }} onClick={() => currentMembership?.id && cancelMembership.mutate(currentMembership.id)} className="flex-1 bg-destructive/10 text-destructive rounded-xl py-2 text-xs font-semibold">
                 Avsluta
               </motion.button>
             </div>
@@ -494,27 +333,17 @@ const CustomersScreen = () => {
 
         {/* CTA Actions */}
         <div className="space-y-2">
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            onClick={() => setShowMembershipModal(true)}
-            className="w-full sell-block rounded-2xl p-4 flex items-center justify-between"
-          >
+          <motion.button whileTap={{ scale: 0.97 }} onClick={() => setShowMembershipModal(true)} className="w-full sell-block rounded-2xl p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Crown className="w-5 h-5 text-sell" />
               <div className="text-left">
                 <span className="text-sm font-bold">{memberTier ? "Ändra medlemskap" : "Sälj medlemskap"}</span>
-                <p className="text-[10px] text-muted-foreground">
-                  {memberTier ? `Nuvarande: ${memberTier.name}` : "Tilldela medlemskapsnivå"}
-                </p>
+                <p className="text-[10px] text-muted-foreground">{memberTier ? `Nuvarande: ${memberTier.name}` : "Tilldela medlemskapsnivå"}</p>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-sell" />
           </motion.button>
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            onClick={() => toast.info("Boka åt kund — kommer snart!")}
-            className="w-full glass-card rounded-2xl p-4 flex items-center justify-between"
-          >
+          <motion.button whileTap={{ scale: 0.97 }} onClick={() => toast.info("Boka åt kund — kommer snart!")} className="w-full glass-card rounded-2xl p-4 flex items-center justify-between">
             <div className="flex items-center gap-3"><Calendar className="w-4 h-4 text-primary" /><span className="text-sm font-semibold">Boka åt kund</span></div>
             <ChevronRight className="w-4 h-4 text-muted-foreground" />
           </motion.button>
@@ -523,42 +352,16 @@ const CustomersScreen = () => {
         {/* Membership assignment modal */}
         <AnimatePresence>
           {showMembershipModal && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 bg-black/50 flex items-end justify-center"
-              onClick={() => setShowMembershipModal(false)}
-            >
-              <motion.div
-                initial={{ y: 200 }}
-                animate={{ y: 0 }}
-                exit={{ y: 200 }}
-                onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-lg rounded-t-3xl p-5 space-y-4"
-                style={{ background: "hsl(var(--background))" }}
-              >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/50 flex items-end justify-center" onClick={() => setShowMembershipModal(false)}>
+              <motion.div initial={{ y: 200 }} animate={{ y: 0 }} exit={{ y: 200 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-lg rounded-t-3xl p-5 space-y-4" style={{ background: "hsl(var(--background))" }}>
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-display font-bold">Välj medlemskapsnivå</h2>
-                  <button onClick={() => setShowMembershipModal(false)}>
-                    <X className="w-5 h-5 text-muted-foreground" />
-                  </button>
+                  <button onClick={() => setShowMembershipModal(false)}><X className="w-5 h-5 text-muted-foreground" /></button>
                 </div>
                 <div className="space-y-2">
                   {(membershipTiers || []).filter((t: any) => t.is_active).map((mt: any) => (
-                    <motion.button
-                      key={mt.id}
-                      whileTap={{ scale: 0.97 }}
-                      onClick={() => assignMembership.mutate(mt.id)}
-                      disabled={assignMembership.isPending}
-                      className={`w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all ${
-                        memberTier?.id === mt.id ? "ring-2 ring-primary" : ""
-                      }`}
-                    >
-                      <div
-                        className="w-10 h-10 rounded-xl flex items-center justify-center"
-                        style={{ background: `${mt.color}20` }}
-                      >
+                    <motion.button key={mt.id} whileTap={{ scale: 0.97 }} onClick={() => assignMembership.mutate(mt.id)} disabled={assignMembership.isPending} className={`w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all ${memberTier?.id === mt.id ? "ring-2 ring-primary" : ""}`}>
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `${mt.color}20` }}>
                         <Crown className="w-5 h-5" style={{ color: mt.color }} />
                       </div>
                       <div className="flex-1">
@@ -569,15 +372,11 @@ const CustomersScreen = () => {
                           {mt.monthly_price > 0 && `${mt.monthly_price} kr/mån`}
                         </p>
                       </div>
-                      {memberTier?.id === mt.id && (
-                        <span className="text-[10px] px-2 py-1 rounded-full bg-primary/15 text-primary font-bold">Aktiv</span>
-                      )}
+                      {memberTier?.id === mt.id && <span className="text-[10px] px-2 py-1 rounded-full bg-primary/15 text-primary font-bold">Aktiv</span>}
                     </motion.button>
                   ))}
                   {(!membershipTiers || membershipTiers.filter((t: any) => t.is_active).length === 0) && (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      Inga medlemskapsnivåer skapade. Gå till Hub → Medlemskap för att skapa nivåer.
-                    </p>
+                    <p className="text-sm text-muted-foreground text-center py-4">Inga medlemskapsnivåer skapade.</p>
                   )}
                 </div>
                 <div className="h-6" />
@@ -594,17 +393,10 @@ const CustomersScreen = () => {
     <div className="pb-24 px-4 pt-2 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-display font-bold tracking-tight">Kunder</h1>
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={() => setShowCreateModal(true)}
-          className="tap-target rounded-xl bg-primary text-primary-foreground w-9 h-9 flex items-center justify-center"
-        >
+        <motion.button whileTap={{ scale: 0.9 }} onClick={() => setShowCreateModal(true)} className="tap-target rounded-xl bg-primary text-primary-foreground w-9 h-9 flex items-center justify-center">
           <UserPlus className="w-4 h-4" />
         </motion.button>
       </div>
-
-      {/* Check-in widget at the top of customers */}
-      {venueId && <CheckInWidget venueId={venueId} />}
 
       <div className="relative">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -616,11 +408,7 @@ const CustomersScreen = () => {
       ) : filtered.length === 0 ? (
         <div className="text-center py-8 space-y-3">
           <p className="text-sm text-muted-foreground">Inga kunder hittades</p>
-          <motion.button
-            whileTap={{ scale: 0.95 }}
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-semibold"
-          >
+          <motion.button whileTap={{ scale: 0.95 }} onClick={() => setShowCreateModal(true)} className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-semibold">
             <UserPlus className="w-4 h-4" />
             Skapa ny kund
           </motion.button>
@@ -630,6 +418,7 @@ const CustomersScreen = () => {
           {filtered.map((profile: any, i: number) => {
             const tier = tierFromRating(profile.pickla_rating);
             const t = tierConfig[tier];
+            const isCheckedIn = checkedInIds.has(profile.id);
             const initials = (profile.display_name || "?")
               .split(" ")
               .map((w: string) => w[0])
@@ -638,19 +427,47 @@ const CustomersScreen = () => {
               .toUpperCase();
 
             return (
-              <motion.button key={profile.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} whileTap={{ scale: 0.97 }} onClick={() => setSelectedId(profile.id)} className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3 text-left">
-                <div className={`w-10 h-10 rounded-xl ${t.bg} ${t.text} flex items-center justify-center text-sm font-display font-bold flex-shrink-0`}>{initials}</div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold truncate">{profile.display_name || "Unnamed"}</p>
-                    <span className={`w-1.5 h-1.5 rounded-full ${t.dot} flex-shrink-0`} />
+              <motion.div
+                key={profile.id}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04 }}
+                className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3"
+              >
+                {/* Tap name area to go to detail */}
+                <button onClick={() => setSelectedId(profile.id)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+                  <div className={`w-10 h-10 rounded-xl ${t.bg} ${t.text} flex items-center justify-center text-sm font-display font-bold flex-shrink-0`}>{initials}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold truncate">{profile.display_name || "Unnamed"}</p>
+                      <span className={`w-1.5 h-1.5 rounded-full ${t.dot} flex-shrink-0`} />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {profile.total_matches || 0} matcher · Rating {profile.pickla_rating || 0}
+                    </p>
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    {profile.total_matches || 0} matcher · Rating {profile.pickla_rating || 0}
-                  </p>
-                </div>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${t.bg} ${t.text}`}>{tier}</span>
-              </motion.button>
+                </button>
+
+                {/* One-tap check-in button */}
+                <motion.button
+                  whileTap={{ scale: 0.85 }}
+                  onClick={(e) => !isCheckedIn && handleQuickCheckin(profile, e)}
+                  disabled={isCheckedIn || checkingInId === profile.id}
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all ${
+                    isCheckedIn
+                      ? "bg-court-free/15 text-court-free"
+                      : "bg-court-free text-white shadow-md shadow-court-free/20"
+                  }`}
+                >
+                  {checkingInId === profile.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : isCheckedIn ? (
+                    <Check className="w-4 h-4" />
+                  ) : (
+                    <UserCheck className="w-4 h-4" />
+                  )}
+                </motion.button>
+              </motion.div>
             );
           })}
         </div>
