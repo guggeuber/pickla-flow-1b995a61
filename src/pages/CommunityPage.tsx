@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { CommunityNav } from "@/components/community/CommunityNav";
 import { FeedTab } from "@/components/community/FeedTab";
