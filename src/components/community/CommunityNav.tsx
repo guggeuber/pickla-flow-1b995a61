@@ -1,13 +1,12 @@
 import { motion } from "framer-motion";
-import { Zap, Trophy, User, Swords } from "lucide-react";
+import { MessageCircle, Play, User } from "lucide-react";
 
-type Tab = "feed" | "ranking" | "crews" | "profile";
+type Tab = "chat" | "play" | "profile";
 
-const tabs: { key: Tab; label: string; icon: typeof Zap }[] = [
-  { key: "feed", label: "Feed", icon: Zap },
-  { key: "ranking", label: "Ranking", icon: Trophy },
-  { key: "crews", label: "Crews", icon: Swords },
-  { key: "profile", label: "Profil", icon: User },
+const tabs: { key: Tab; label: string; icon: typeof MessageCircle }[] = [
+  { key: "chat", label: "Community Chat", icon: MessageCircle },
+  { key: "play", label: "Play Now", icon: Play },
+  { key: "profile", label: "Profile", icon: User },
 ];
 
 export function CommunityNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
