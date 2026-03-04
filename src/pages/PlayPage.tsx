@@ -47,7 +47,7 @@ function useTierPricing() {
 }
 
 function EventPriceBadges({ event, tierPricing }: { event: any; tierPricing: any[] }) {
-  const basePrice = event.entry_fee || 0;
+  const basePrice = event.entry_fee != null ? Number(event.entry_fee) : null;
   const isDayPass = event.entry_fee_type === 'day_pass';
   const productType = isDayPass ? 'day_pass' : 'event_fee';
 
@@ -56,14 +56,27 @@ function EventPriceBadges({ event, tierPricing }: { event: any; tierPricing: any
     .filter((tp: any) => tp.product_type === productType)
     .sort((a: any, b: any) => (a.membership_tiers?.sort_order || 0) - (b.membership_tiers?.sort_order || 0));
 
-  if (basePrice === 0 && relevantTiers.length === 0) {
+  // If no base price set and no tier pricing, show nothing special
+  if ((basePrice === null || basePrice === 0) && relevantTiers.length === 0) {
     return <span className="text-[11px] font-semibold" style={{ color: "#4CAF50", fontFamily: FONT_MONO }}>Gratis</span>;
+  }
+
+  // If base price is set but no tier pricing configured, just show the base price
+  if (relevantTiers.length === 0 && basePrice && basePrice > 0) {
+    return <span className="text-[11px] font-semibold" style={{ color: "#3E3D39", fontFamily: FONT_MONO }}>{Math.round(basePrice)} kr</span>;
   }
 
   return (
     <div className="flex flex-wrap gap-1.5 mt-1.5">
       {relevantTiers.map((tp: any) => {
-        const price = tp.fixed_price != null ? tp.fixed_price : (tp.discount_percent ? basePrice * (1 - tp.discount_percent / 100) : basePrice);
+        let price: number;
+        if (tp.fixed_price != null) {
+          price = tp.fixed_price;
+        } else if (tp.discount_percent && basePrice && basePrice > 0) {
+          price = basePrice * (1 - tp.discount_percent / 100);
+        } else {
+          price = basePrice || 0;
+        }
         return (
           <span
             key={tp.tier_id}
@@ -78,17 +91,19 @@ function EventPriceBadges({ event, tierPricing }: { event: any; tierPricing: any
           </span>
         );
       })}
-      {/* Guest/base price */}
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold"
-        style={{
-          background: "rgba(62,61,57,0.06)",
-          color: "rgba(62,61,57,0.6)",
-          fontFamily: FONT_MONO,
-        }}
-      >
-        Gäst: {basePrice === 0 ? 'Gratis' : `${Math.round(basePrice)} kr`}
-      </span>
+      {/* Guest/base price - only show if basePrice > 0 */}
+      {basePrice != null && basePrice > 0 && (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold"
+          style={{
+            background: "rgba(62,61,57,0.06)",
+            color: "rgba(62,61,57,0.6)",
+            fontFamily: FONT_MONO,
+          }}
+        >
+          Gäst: {`${Math.round(basePrice)} kr`}
+        </span>
+      )}
     </div>
   );
 }
@@ -134,7 +149,7 @@ const PlayPage = () => {
     return eventDate > today;
   });
 
-  // Community feed
+  // Community feed - exclude event_created to avoid duplicates
   const { data: feedItems, isLoading: feedLoading } = useQuery({
     queryKey: ["community-feed"],
     staleTime: 15000,
@@ -142,8 +157,9 @@ const PlayPage = () => {
       const { data: feed, error } = await (supabase as any)
         .from("community_feed")
         .select("*, venues(name, slug)")
+        .neq("feed_type", "event_created")
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(30);
       if (error) throw error;
 
       const feedIds = (feed || []).map((f: any) => f.id);
@@ -215,7 +231,12 @@ const PlayPage = () => {
           <p className="text-[15px] font-bold tracking-tight truncate" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
             {evt.display_name || evt.name}
           </p>
-          <div className="flex items-center gap-2 mt-0.5">
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            {evt.start_date && (
+              <span className="text-[11px] flex items-center gap-0.5" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
+                📅 {new Date(evt.start_date).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' })}
+              </span>
+            )}
             {evt.start_time && (
               <span className="text-[11px] flex items-center gap-0.5" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
                 <Clock className="w-3 h-3" />
