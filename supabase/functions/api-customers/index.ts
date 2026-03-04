@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient } from '../_shared/auth.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -71,6 +72,63 @@ Deno.serve(async (req) => {
       if (qErr) return errorResponse(qErr.message);
 
       return jsonResponse(data, 200, 10);
+    }
+
+    // POST /api-customers/create — Create a new customer (player_profile) by staff
+    if (req.method === 'POST' && path === 'create') {
+      const body = await req.json();
+      const { display_name, phone, email, venue_id } = body;
+      if (!display_name) return errorResponse('display_name is required');
+
+      // Use service role to create profile without requiring auth signup
+      const serviceClient = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+      );
+
+      // If email provided, create an auth user first, then a profile is auto-created via trigger
+      if (email) {
+        // Generate a random password — the user can reset later
+        const tempPassword = crypto.randomUUID();
+        const { data: authUser, error: authErr } = await serviceClient.auth.admin.createUser({
+          email,
+          password: tempPassword,
+          email_confirm: true,
+          user_metadata: { display_name },
+        });
+        if (authErr) return errorResponse(authErr.message);
+
+        // Update the auto-created profile with phone
+        if (phone && authUser.user) {
+          await serviceClient.from('player_profiles')
+            .update({ phone, display_name })
+            .eq('auth_user_id', authUser.user.id);
+        }
+
+        return jsonResponse({ id: authUser.user?.id, display_name, phone, email });
+      }
+
+      // No email — create a "guest" profile (no auth user)
+      // We create a profile with a placeholder auth_user_id (the staff user's id is NOT the customer)
+      // Instead, generate a UUID for tracking
+      const guestId = crypto.randomUUID();
+      const { data: profile, error: profErr } = await serviceClient.from('player_profiles')
+        .insert({
+          auth_user_id: guestId,
+          display_name,
+          phone: phone || null,
+        })
+        .select()
+        .single();
+      if (profErr) return errorResponse(profErr.message);
+
+      // Also insert a customer role
+      await serviceClient.from('user_roles').insert({
+        user_id: guestId,
+        role: 'customer',
+      });
+
+      return jsonResponse(profile);
     }
 
     return errorResponse('Not found', 404);
