@@ -256,35 +256,34 @@ const LinkHub = () => {
           background: "linear-gradient(to top, rgba(26,30,46,0.95) 0%, rgba(26,30,46,0.7) 40%, rgba(26,30,46,0.3) 70%, transparent 100%)",
         }}
       >
-        <a
-          href="https://chat.whatsapp.com/pickla"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-white/90 text-[15px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
+        <button
+          onClick={() => navigate("/community?tab=chat")}
+          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Mono', monospace" }}
         >
-          join whatsapp
-        </a>
+          community chat
+        </button>
 
         <button
-          onClick={() => navigate(`/book?v=${slug}`)}
-          className="text-white/90 text-[15px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
+          onClick={() => navigate("/community?tab=play")}
+          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Mono', monospace" }}
         >
-          book
+          play now
         </button>
 
         <button
           onClick={() => {
             if (user) {
-              navigate(`/my?v=${slug}`);
+              navigate("/community?tab=profile");
             } else {
-              navigate(`/auth?redirect=/my&v=${slug}`);
+              navigate(`/auth?redirect=/community`);
             }
           }}
-          className="text-white/90 active:opacity-60 transition-opacity p-1"
+          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
+          style={{ fontFamily: "'Space Mono', monospace" }}
         >
-          <User className="w-6 h-6" />
+          profile
         </button>
       </nav>
 
