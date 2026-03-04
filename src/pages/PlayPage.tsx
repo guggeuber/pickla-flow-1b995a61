@@ -61,6 +61,35 @@ const PlayPage = () => {
     },
   });
 
+  // Today's checkins + open play
+  const { data: checkinData } = useQuery({
+    queryKey: ["play-checkins"],
+    staleTime: 15000,
+    refetchInterval: 30000,
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: events } = await supabase
+        .from("events")
+        .select("id, name, display_name, is_drop_in, number_of_courts")
+        .eq("status", "active");
+      if (!events?.length) return { count: 0, openPlay: null };
+
+      const eventIds = events.map((e: any) => e.id);
+      const { count } = await supabase
+        .from("event_checkins")
+        .select("id", { count: "exact", head: true })
+        .in("event_id", eventIds)
+        .eq("session_date", today)
+        .eq("checked_in", true);
+
+      const dropIn = events.find((e: any) => e.is_drop_in);
+      return {
+        count: count || 0,
+        openPlay: dropIn ? { name: dropIn.display_name || dropIn.name, courts: dropIn.number_of_courts || 0 } : null,
+      };
+    },
+  });
+
   // Community feed
   const { data: feedItems, isLoading: feedLoading } = useQuery({
     queryKey: ["community-feed"],
@@ -166,10 +195,14 @@ const PlayPage = () => {
         {/* Open Play section */}
         <motion.div variants={item} className="text-center">
           <h2 className="text-lg font-bold mb-1" style={{ fontFamily: FONT_HEADING }}>
-            Open Play Today
+            {checkinData?.openPlay
+              ? `${checkinData.openPlay.courts} banor Open Play`
+              : "Open Play Today"}
           </h2>
           <p className="text-sm" style={{ color: "rgba(62,61,57,0.6)", fontFamily: FONT_MONO }}>
-            Join games, rotate courts, meet players.
+            {checkinData?.count
+              ? `🏓 ${checkinData.count} spelare just nu`
+              : "Join games, rotate courts, meet players."}
           </p>
         </motion.div>
 

@@ -97,6 +97,41 @@ function useCategoryLogos(venueId: string | undefined) {
   });
 }
 
+function useTodayCheckins(venueId: string | undefined) {
+  const today = new Date().toISOString().slice(0, 10);
+  return useQuery({
+    queryKey: ["today-checkins", venueId, today],
+    enabled: !!venueId,
+    staleTime: 15000,
+    refetchInterval: 30000,
+    queryFn: async () => {
+      // Get all events for this venue
+      const { data: events } = await supabase
+        .from("events")
+        .select("id, name, display_name, is_drop_in, number_of_courts")
+        .eq("venue_id", venueId!)
+        .eq("status", "active");
+      if (!events?.length) return { count: 0, openPlay: null };
+
+      const eventIds = events.map((e: any) => e.id);
+      const { count } = await supabase
+        .from("event_checkins")
+        .select("id", { count: "exact", head: true })
+        .in("event_id", eventIds)
+        .eq("session_date", today)
+        .eq("checked_in", true);
+
+      // Find open play / drop-in event
+      const dropIn = events.find((e: any) => e.is_drop_in);
+
+      return {
+        count: count || 0,
+        openPlay: dropIn ? { name: dropIn.display_name || dropIn.name, courts: dropIn.number_of_courts || 0 } : null,
+      };
+    },
+  });
+}
+
 function isOpenNow(openingHours: any[]): boolean {
   if (!openingHours?.length) return false;
   const now = new Date();
@@ -128,6 +163,7 @@ const LinkHub = () => {
   const venue = data?.venue;
   const { data: upcomingEvents } = useUpcomingEvents(venue?.id);
   const { data: catLogos } = useCategoryLogos(venue?.id);
+  const { data: checkinData } = useTodayCheckins(venue?.id);
   const openingHours = data?.openingHours || [];
   const open = useMemo(() => isOpenNow(openingHours), [openingHours]);
   const hoursStr = useMemo(() => getTodayHoursString(openingHours), [openingHours]);
@@ -179,9 +215,24 @@ const LinkHub = () => {
                 fontFamily: "'Space Mono', monospace",
               }}
             >
-              {open ? "öppet" : "stängt"} {hoursStr}
+             {open ? "öppet" : "stängt"} {hoursStr}
             </span>
           </div>
+          {/* Checkin count + open play */}
+          {open && checkinData && (
+            <div className="mt-1.5 flex flex-col gap-0.5">
+              {checkinData.count > 0 && (
+                <span className="text-[11px] text-white/50" style={{ fontFamily: "'Space Mono', monospace" }}>
+                  🏓 {checkinData.count} spelare just nu
+                </span>
+              )}
+              {checkinData.openPlay && (
+                <span className="text-[11px] text-white/50" style={{ fontFamily: "'Space Mono', monospace" }}>
+                  ⚡ {checkinData.openPlay.courts} banor open play
+                </span>
+              )}
+            </div>
+          )}
           <div className="mt-1 flex flex-col gap-0.5">
             <a href="https://maps.google.com/?q=Svetsarvägen+22,+171+41+Solna" target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/50 underline underline-offset-2 decoration-white/20 active:opacity-60 transition-opacity" style={{ fontFamily: "'Space Mono', monospace" }}>
               Svetsarvägen 22, Solna
@@ -277,9 +328,9 @@ const LinkHub = () => {
         <button
           onClick={() => {
             if (user) {
-              navigate("/community?tab=profile");
+              navigate("/my");
             } else {
-              navigate(`/auth?redirect=/community`);
+              navigate(`/auth?redirect=/my`);
             }
           }}
           className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
