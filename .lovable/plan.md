@@ -1,88 +1,47 @@
 
 
-## Plan: Open Play, Event-prissättning och Dagspass-modell
+## Plan: Fix Event Admin & Play Page Issues
 
-### Problemanalys
+### Problems identified
 
-1. **Events saknar start/sluttid** — `start_date` och `end_date` är `timestamptz` i DB men admin-UI:t hanterar dem bara som datum, inte klockslag.
-2. **Inga banval per event** — events har `number_of_courts` (antal) men kopplar inte till specifika `venue_courts`.
-3. **Play-sidan visar medlemskap först** — borde istället visa dagens aktiviteter/event med priser per kundtyp.
-4. **Dagspass som "valuta"** — ett event kan kosta "1 dagspass". Köper du dagspass för t.ex. Pickla Open får du även Open Play hela dagen.
+1. **No date field in event detail editor** -- The detail view has time fields but no date picker for `start_date`/`end_date`. The create dialog has a date field, but once created you can't change it.
 
-### Designförslag: Dagspass-modellen
+2. **Status should auto-derive from date** -- If an event has a future date it should default to "upcoming", if today then "active", if past then "completed". Currently status is only manual.
 
-```text
-Dagspass = en heldags-token för anläggningen
+3. **Duplicate event lists on Play page** -- The Play page shows events in "Idag" and "Kommande" sections, then the community feed at bottom also shows event feed cards, creating repetition.
 
-Event-prissättning:
-┌─────────────────────────────────────────────┐
-│ Pickla Open (Open Play)                     │
-│ Medlem: Gratis  |  Play: 120kr  |  Gäst: 165kr │
-│ (= 1 dagspass)                              │
-└─────────────────────────────────────────────┘
+4. **All events show "Gratis"** -- The `EventPriceBadges` component checks `entry_fee` but events likely have no `entry_fee` set yet (null/0). The tier pricing query fetches globally but doesn't match against the event's actual base price. If `entry_fee` is 0 or null, everything shows "Gratis".
 
-Logik:
-- Event har entry_fee_type: 'fixed' | 'day_pass'
-- Om 'day_pass': priset = dagspaspriset (styrt av membership tier)
-- Köp av dagspass → giltigt hela dagen → inkluderar alla drop-in event
-- Medlem med "fri entry" behöver inget dagspass
-```
+5. **Play page should show tier prices inline** -- Like the screenshot shows: each event card should display the price directly (e.g. "Gratis" for members, specific prices for others), not just badges.
 
-### Ändringar
+### Changes
 
-#### 1. Events-tabellen: Lägg till tider och bankoppling
+#### 1. Add date fields to EventDetail editor
+- Add `startDate` and `endDate` state from `event.start_date`
+- Add date input fields in the detail form (before time fields)
+- Include `startDate`/`endDate` in the save payload
 
-**DB-migration:**
-- Ny kolumn `start_time TIME` och `end_time TIME` på `events` (separata från datum)
-- Ny kopplingstabell `event_courts` (event_id → venue_court_id) för vilka banor eventet använder
-- Ny kolumn `entry_fee_type TEXT DEFAULT 'fixed'` på `events` (`'fixed'` eller `'day_pass'`)
-- Ny kolumn `entry_fee NUMERIC` på `events` (direktpris per event istället för att förlita sig på pricing_rules)
+#### 2. Auto-set status based on date
+- When saving, if `startDate` is in the future -> suggest "upcoming"
+- If `startDate` is today -> suggest "active"  
+- If `startDate` is past -> suggest "completed"
+- Keep manual override possible but show a hint
 
-#### 2. Play-sidan: Event-fokuserad istället för medlemskapsfokuserad
+#### 3. Fix Play page: single event list, no duplicate feed
+- Remove the separate "Idag" / "Kommande" split if it duplicates content
+- Keep one clean list matching the screenshot: "Inga aktiviteter idag" empty state, then "KOMMANDE" section with event cards
+- Each event card shows the relevant price for the user's tier (not just "Gratis" for everything)
 
-Ny struktur för `/play`:
-1. **Dagens aktiviteter** — lista publika event idag med priser per kundtyp (gratis/medlem/play/gäst)
-2. **Kommande event** — nästa vecka
-3. **Boka bana** — CTA
-4. **Medlemskap** — liten badge/länk längst ner (inte kort)
-5. **Community feed** — som idag
+#### 4. Fix price display logic
+- The `EventPriceBadges` must handle: if event has `entry_fee_type = 'day_pass'`, look up day_pass tier pricing; if `fixed`, use `entry_fee` as base
+- If `entry_fee` is null/0, show "Gratis" 
+- If `entry_fee` > 0, calculate tier-specific prices and show the user's applicable price prominently
+- In the event list on Play page: show single price relevant to user (member price if member, guest price if not) instead of all tier badges
 
-Priser visas direkt på event-kortet:
-- Hämta användarens membership tier
-- Beräkna pris via `membership_tier_pricing` (product_type = 'event_fee' eller 'day_pass')
-- Visa: "Medlem: 0 kr | Play: 120 kr | Gäst: 165 kr"
+### Files to change
 
-#### 3. AdminEvents: Tider och banval i event-formuläret
-
-- Lägg till `start_time` / `end_time` fält (time-picker)
-- Lägg till multi-select för venue_courts (vilka banor)
-- Lägg till `entry_fee` och `entry_fee_type` (dropdown: fast pris / dagspass)
-
-#### 4. api-events och api-event-public: Hantera nya fält
-
-- Uppdatera `create` och `update` endpoints med nya fält
-- Uppdatera `detail` endpoint att returnera kopplade banor
-- Uppdatera `list` endpoint att returnera tider och prisinfo
-
-#### 5. Incheckning + Dagspass-koppling
-
-Nuvarande `venue_checkins.entry_type` stödjer redan `'day_pass'`. Logiken:
-- Vid incheckning: om kund har aktivt dagspass idag → entry_type = 'day_pass'
-- Om kund registrerar sig till event med `entry_fee_type = 'day_pass'` → skapa ett dagspass automatiskt
-- Dagspasset gäller hela dagen, inklusive alla drop-in event
-
-### Filer att ändra/skapa
-
-| Fil | Ändring |
-|-----|---------|
-| DB-migration | Nya kolumner på `events`, ny `event_courts` tabell |
-| `src/pages/PlayPage.tsx` | Omdesign: event-lista först, medlemskap nedtonat |
-| `src/components/admin/AdminEvents.tsx` | Tider, banval, entry_fee_type |
-| `supabase/functions/api-events/index.ts` | Nya fält i create/update |
-| `supabase/functions/api-event-public/index.ts` | Returnera tider, banor, tier-priser |
-| `supabase/functions/api-checkins/index.ts` | Dagspass-koppling vid incheckning |
-
-### Pickla Event Hub-projektet
-
-Det andra projektet ([Pickla Event Hub](/projects/242423e3-f089-4b74-82fe-b3b4924fa4b7)) har bara `generate-team-names` och `parse-event` edge functions — ingen API att koppla till direkt. All event-logik lever redan i detta projekts `api-events` och `api-event-public`. Vi bygger vidare på dessa.
+| File | Change |
+|------|--------|
+| `src/components/admin/AdminEvents.tsx` | Add date picker fields to EventDetail, include in save |
+| `src/pages/PlayPage.tsx` | Fix price display, clean up duplicate sections, match screenshot layout |
 
