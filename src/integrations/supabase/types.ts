@@ -568,6 +568,42 @@ export type Database = {
           },
         ]
       }
+      event_courts: {
+        Row: {
+          created_at: string | null
+          event_id: string
+          id: string
+          venue_court_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          event_id: string
+          id?: string
+          venue_court_id: string
+        }
+        Update: {
+          created_at?: string | null
+          event_id?: string
+          id?: string
+          venue_court_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "event_courts_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "event_courts_venue_court_id_fkey"
+            columns: ["venue_court_id"]
+            isOneToOne: false
+            referencedRelation: "venue_courts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       event_likes: {
         Row: {
           auth_user_id: string
@@ -758,6 +794,9 @@ export type Database = {
           description: string | null
           display_name: string | null
           end_date: string | null
+          end_time: string | null
+          entry_fee: number | null
+          entry_fee_type: string
           event_type: Database["public"]["Enums"]["event_type"]
           final_generated: boolean | null
           format: Database["public"]["Enums"]["event_format"]
@@ -785,6 +824,7 @@ export type Database = {
           show_on_sticker: boolean
           slug: string | null
           start_date: string | null
+          start_time: string | null
           status: string | null
           template_id: string | null
           third_place_enabled: boolean | null
@@ -806,6 +846,9 @@ export type Database = {
           description?: string | null
           display_name?: string | null
           end_date?: string | null
+          end_time?: string | null
+          entry_fee?: number | null
+          entry_fee_type?: string
           event_type: Database["public"]["Enums"]["event_type"]
           final_generated?: boolean | null
           format: Database["public"]["Enums"]["event_format"]
@@ -833,6 +876,7 @@ export type Database = {
           show_on_sticker?: boolean
           slug?: string | null
           start_date?: string | null
+          start_time?: string | null
           status?: string | null
           template_id?: string | null
           third_place_enabled?: boolean | null
@@ -854,6 +898,9 @@ export type Database = {
           description?: string | null
           display_name?: string | null
           end_date?: string | null
+          end_time?: string | null
+          entry_fee?: number | null
+          entry_fee_type?: string
           event_type?: Database["public"]["Enums"]["event_type"]
           final_generated?: boolean | null
           format?: Database["public"]["Enums"]["event_format"]
@@ -881,6 +928,7 @@ export type Database = {
           show_on_sticker?: boolean
           slug?: string | null
           start_date?: string | null
+          start_time?: string | null
           status?: string | null
           template_id?: string | null
           third_place_enabled?: boolean | null

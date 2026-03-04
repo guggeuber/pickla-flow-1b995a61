@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText } from "lucide-react";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -24,6 +24,10 @@ interface EventRow {
   status: string | null;
   start_date: string | null;
   end_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  entry_fee: number | null;
+  entry_fee_type: string;
   is_public: boolean | null;
   show_on_sticker: boolean;
   number_of_courts: number | null;
@@ -34,6 +38,13 @@ interface EventRow {
   whatsapp_url?: string | null;
   slug?: string | null;
   logo_url?: string | null;
+  event_courts?: { id: string; name: string; court_number: number }[];
+}
+
+interface CourtOption {
+  id: string;
+  name: string;
+  court_number: number;
 }
 
 interface CategoryOption {
@@ -58,19 +69,33 @@ function useVenueCategories(venueId?: string) {
         .select("category_key, display_name")
         .eq("venue_id", venueId!);
       if (!data || data.length === 0) return DEFAULT_CATEGORIES;
-      // Merge: use DB display_name where available, fill in defaults for missing keys
       const dbMap = new Map(data.map((d) => [d.category_key, d.display_name]));
       const merged = DEFAULT_CATEGORIES.map((c) => ({
         key: c.key,
         label: dbMap.get(c.key) || c.label,
       }));
-      // Add any extra DB categories not in defaults
       data.forEach((d) => {
         if (!DEFAULT_CATEGORIES.find((c) => c.key === d.category_key)) {
           merged.push({ key: d.category_key, label: d.display_name });
         }
       });
       return merged;
+    },
+  });
+}
+
+function useVenueCourts(venueId?: string) {
+  return useQuery<CourtOption[]>({
+    queryKey: ["venue-courts-list", venueId],
+    enabled: !!venueId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("venue_courts")
+        .select("id, name, court_number")
+        .eq("venue_id", venueId!)
+        .eq("is_available", true)
+        .order("court_number");
+      return (data || []) as CourtOption[];
     },
   });
 }
@@ -113,17 +138,23 @@ function useTemplates() {
   });
 }
 
-/* ── Create Event Dialog — now with template support ── */
+/* ── Create Event Dialog ── */
 function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string; onCreated: () => void; categories: CategoryOption[] }) {
   const [open, setOpen] = useState(false);
   const { data: templates } = useTemplates();
+  const { data: venueCourts } = useVenueCourts(venueId);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [eventType, setEventType] = useState("tournament");
   const [eventFormat, setEventFormat] = useState("round_robin");
   const [startDate, setStartDate] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
   const [numberOfCourts, setNumberOfCourts] = useState("1");
+  const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>([]);
+  const [entryFee, setEntryFee] = useState("");
+  const [entryFeeType, setEntryFeeType] = useState("fixed");
   const [isPending, setIsPending] = useState(false);
 
   const activeTemplates = (templates || []).filter(t => t.is_active);
@@ -135,6 +166,12 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
     setDisplayName(tpl.display_name || "");
     setEventType(tpl.event_type);
     setEventFormat(tpl.format);
+  };
+
+  const toggleCourt = (courtId: string) => {
+    setSelectedCourtIds(prev =>
+      prev.includes(courtId) ? prev.filter(id => id !== courtId) : [...prev, courtId]
+    );
   };
 
   const handleCreate = async () => {
@@ -151,14 +188,17 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
         numberOfCourts: Number(numberOfCourts) || 1,
         isPublic: true,
         templateId: selectedTemplateId || undefined,
+        startTime: startTime || undefined,
+        endTime: endTime || undefined,
+        entryFee: entryFee ? Number(entryFee) : undefined,
+        entryFeeType,
+        courtIds: selectedCourtIds.length > 0 ? selectedCourtIds : undefined,
       });
       toast.success("Event skapat!");
       setOpen(false);
-      setName("");
-      setDisplayName("");
-      setStartDate("");
-      setSelectedTemplateId(null);
-      setNumberOfCourts("1");
+      setName(""); setDisplayName(""); setStartDate(""); setStartTime(""); setEndTime("");
+      setSelectedTemplateId(null); setNumberOfCourts("1"); setSelectedCourtIds([]);
+      setEntryFee(""); setEntryFeeType("fixed");
       onCreated();
     } catch (e: any) {
       toast.error(e.message);
@@ -277,16 +317,68 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
               </div>
             </>
           )}
-          <div className="grid grid-cols-2 gap-3">
+
+          {/* Date + Time */}
+          <div className="grid grid-cols-3 gap-2">
             <div>
-              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Startdatum</Label>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Datum</Label>
               <Input className="mt-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div>
-              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Antal banor</Label>
-              <Input className="mt-1" type="number" value={numberOfCourts} onChange={(e) => setNumberOfCourts(e.target.value)} />
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Start</Label>
+              <Input className="mt-1" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Slut</Label>
+              <Input className="mt-1" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
             </div>
           </div>
+
+          {/* Entry fee */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Pristyp</Label>
+              <Select value={entryFeeType} onValueChange={setEntryFeeType}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fixed">Fast pris</SelectItem>
+                  <SelectItem value="day_pass">Dagspass</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Pris (kr)</Label>
+              <Input className="mt-1" type="number" value={entryFee} onChange={(e) => setEntryFee(e.target.value)} placeholder="0" />
+            </div>
+          </div>
+
+          {/* Court selection */}
+          {(venueCourts || []).length > 0 && (
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Banor</Label>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {(venueCourts || []).map((court) => (
+                  <button
+                    key={court.id}
+                    onClick={() => toggleCourt(court.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                      selectedCourtIds.includes(court.id)
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:border-primary/30"
+                    }`}
+                  >
+                    {court.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Antal banor (fallback)</Label>
+            <Input className="mt-1" type="number" value={numberOfCourts} onChange={(e) => setNumberOfCourts(e.target.value)} />
+          </div>
+
           <Button onClick={handleCreate} disabled={!name.trim() || isPending} className="w-full">
             {isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Skapa"}
           </Button>
@@ -300,6 +392,7 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
 function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; venueId: string; onBack: () => void; categories: CategoryOption[] }) {
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { data: venueCourts } = useVenueCourts(venueId);
   const [showOnSticker, setShowOnSticker] = useState(event.show_on_sticker);
   const [isPublic, setIsPublic] = useState(event.is_public !== false);
   const [displayName, setDisplayName] = useState(event.display_name || "");
@@ -313,10 +406,24 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
   const [logoUrl, setLogoUrl] = useState(event.logo_url || "");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // New fields
+  const [startTime, setStartTime] = useState(event.start_time || "");
+  const [endTime, setEndTime] = useState(event.end_time || "");
+  const [entryFee, setEntryFee] = useState(event.entry_fee != null ? String(event.entry_fee) : "");
+  const [entryFeeType, setEntryFeeType] = useState(event.entry_fee_type || "fixed");
+  const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>(
+    (event.event_courts || []).map(c => c.id)
+  );
 
   const toggleRegField = (field: string) => {
     setRegFields((prev) =>
       prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field]
+    );
+  };
+
+  const toggleCourt = (courtId: string) => {
+    setSelectedCourtIds(prev =>
+      prev.includes(courtId) ? prev.filter(id => id !== courtId) : [...prev, courtId]
     );
   };
 
@@ -378,6 +485,12 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
         slug: slug.trim() || null,
         registrationFields: regFields,
         logoUrl: logoUrl.trim() || null,
+        // New fields
+        startTime: startTime || null,
+        endTime: endTime || null,
+        entryFee: entryFee ? Number(entryFee) : null,
+        entryFeeType,
+        courtIds: selectedCourtIds,
       });
       toast.success("Event uppdaterat!");
       qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
@@ -498,6 +611,58 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
             </SelectContent>
           </Select>
         </div>
+
+        {/* Time fields */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Starttid</Label>
+            <Input className="mt-1" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+          </div>
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Sluttid</Label>
+            <Input className="mt-1" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+          </div>
+        </div>
+
+        {/* Entry fee */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Pristyp</Label>
+            <Select value={entryFeeType} onValueChange={setEntryFeeType}>
+              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fixed">Fast pris</SelectItem>
+                <SelectItem value="day_pass">Dagspass</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Pris (kr)</Label>
+            <Input className="mt-1" type="number" value={entryFee} onChange={(e) => setEntryFee(e.target.value)} placeholder="0" />
+          </div>
+        </div>
+
+        {/* Court selection */}
+        {(venueCourts || []).length > 0 && (
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Banor</Label>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {(venueCourts || []).map((court) => (
+                <button
+                  key={court.id}
+                  onClick={() => toggleCourt(court.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                    selectedCourtIds.includes(court.id)
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:border-primary/30"
+                  }`}
+                >
+                  {court.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div>
           <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Beskrivning</Label>
@@ -632,6 +797,13 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
                 {evt.start_date && (
                   <span className="text-[10px] text-muted-foreground">
                     · {format(new Date(evt.start_date), "d MMM yyyy")}
+                  </span>
+                )}
+                {evt.start_time && (
+                  <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                    <Clock className="w-2.5 h-2.5" />
+                    {evt.start_time.slice(0, 5)}
+                    {evt.end_time ? `–${evt.end_time.slice(0, 5)}` : ''}
                   </span>
                 )}
               </div>

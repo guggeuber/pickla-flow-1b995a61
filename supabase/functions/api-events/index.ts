@@ -28,6 +28,24 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await query;
       if (qErr) return errorResponse(qErr.message);
 
+      // Fetch event_courts for all events
+      if (data && data.length > 0) {
+        const eventIds = data.map((e: any) => e.id);
+        const { data: courts } = await client.from('event_courts')
+          .select('event_id, venue_court_id, venue_courts(id, name, court_number)')
+          .in('event_id', eventIds);
+
+        const courtsMap: Record<string, any[]> = {};
+        (courts || []).forEach((c: any) => {
+          if (!courtsMap[c.event_id]) courtsMap[c.event_id] = [];
+          courtsMap[c.event_id].push(c.venue_courts || { id: c.venue_court_id });
+        });
+
+        data.forEach((e: any) => {
+          e.event_courts = courtsMap[e.id] || [];
+        });
+      }
+
       return jsonResponse(data, 200, 10);
     }
 
@@ -36,13 +54,22 @@ Deno.serve(async (req) => {
       const id = url.searchParams.get('id');
       if (!id) return errorResponse('Missing id');
 
-      const { data, error: qErr } = await client.from('events')
-        .select('*, venues(id, name, slug)')
-        .eq('id', id)
-        .single();
-      if (qErr) return errorResponse(qErr.message);
+      const [eventResult, courtsResult] = await Promise.all([
+        client.from('events')
+          .select('*, venues(id, name, slug)')
+          .eq('id', id)
+          .single(),
+        client.from('event_courts')
+          .select('venue_court_id, venue_courts(id, name, court_number)')
+          .eq('event_id', id),
+      ]);
 
-      return jsonResponse(data, 200, 10);
+      if (eventResult.error) return errorResponse(eventResult.error.message);
+
+      return jsonResponse({
+        ...eventResult.data,
+        event_courts: (courtsResult.data || []).map((c: any) => c.venue_courts || { id: c.venue_court_id }),
+      }, 200, 10);
     }
 
     // GET /api-events/teams?eventId=X
@@ -76,7 +103,7 @@ Deno.serve(async (req) => {
     // POST /api-events/create
     if (req.method === 'POST' && path === 'create') {
       const body = await req.json();
-      const { name, eventType, format, venueId, startDate, endDate, numberOfCourts, pointsToWin, bestOf, winByTwo, matchDurationDefault, isPublic, scoringType, scoringFormat, competitionType, templateId } = body;
+      const { name, eventType, format, venueId, startDate, endDate, numberOfCourts, pointsToWin, bestOf, winByTwo, matchDurationDefault, isPublic, scoringType, scoringFormat, competitionType, templateId, startTime, endTime, entryFee, entryFeeType, courtIds } = body;
 
       if (!name || !eventType || !format) return errorResponse('Missing name, eventType, or format');
 
@@ -127,9 +154,8 @@ Deno.serve(async (req) => {
         scoring_format: scoringFormat || null,
         competition_type: competitionType || null,
         status: 'upcoming',
-        // Template fields override defaults but manual fields take precedence
         ...templateFields,
-        // Always use the user-provided name
+        // Always use the user-provided name and core fields
         name,
         event_type: eventType,
         format,
@@ -137,16 +163,28 @@ Deno.serve(async (req) => {
         start_date: startDate || null,
         end_date: endDate || null,
         number_of_courts: numberOfCourts || 1,
+        // New fields
+        start_time: startTime || null,
+        end_time: endTime || null,
+        entry_fee: entryFee != null ? Number(entryFee) : null,
+        entry_fee_type: entryFeeType || 'fixed',
       }).select().single();
 
       if (insertErr) return errorResponse(insertErr.message);
+
+      // Insert event_courts if provided
+      if (courtIds && Array.isArray(courtIds) && courtIds.length > 0 && data) {
+        const courtRows = courtIds.map((cid: string) => ({ event_id: data.id, venue_court_id: cid }));
+        await client.from('event_courts').insert(courtRows);
+      }
+
       return jsonResponse(data, 201);
     }
 
     // PATCH /api-events/update
     if (req.method === 'PATCH' && path === 'update') {
       const body = await req.json();
-      const { id, ...updates } = body;
+      const { id, courtIds, ...updates } = body;
       if (!id) return errorResponse('Missing id');
 
       // Map camelCase to snake_case for allowed fields
@@ -165,6 +203,9 @@ Deno.serve(async (req) => {
         description: 'description', category: 'category',
         isDropIn: 'is_drop_in', registrationFields: 'registration_fields',
         whatsappUrl: 'whatsapp_url', slug: 'slug',
+        // New fields
+        startTime: 'start_time', endTime: 'end_time',
+        entryFee: 'entry_fee', entryFeeType: 'entry_fee_type',
       };
 
       const dbUpdates: Record<string, any> = {};
@@ -173,13 +214,27 @@ Deno.serve(async (req) => {
         if (dbKey) dbUpdates[dbKey] = val;
       }
 
-      if (Object.keys(dbUpdates).length === 0) return errorResponse('No valid fields to update');
+      if (Object.keys(dbUpdates).length === 0 && !courtIds) return errorResponse('No valid fields to update');
 
-      const { data, error: upErr } = await client.from('events')
-        .update(dbUpdates).eq('id', id).select().single();
-      if (upErr) return errorResponse(upErr.message);
+      let data: any = null;
+      if (Object.keys(dbUpdates).length > 0) {
+        const { data: updated, error: upErr } = await client.from('events')
+          .update(dbUpdates).eq('id', id).select().single();
+        if (upErr) return errorResponse(upErr.message);
+        data = updated;
+      }
 
-      return jsonResponse(data);
+      // Update event_courts if provided
+      if (courtIds && Array.isArray(courtIds)) {
+        // Delete existing and re-insert
+        await client.from('event_courts').delete().eq('event_id', id);
+        if (courtIds.length > 0) {
+          const courtRows = courtIds.map((cid: string) => ({ event_id: id, venue_court_id: cid }));
+          await client.from('event_courts').insert(courtRows);
+        }
+      }
+
+      return jsonResponse(data || { id });
     }
 
     // DELETE /api-events/delete?id=X
