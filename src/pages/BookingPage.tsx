@@ -192,7 +192,7 @@ export default function BookingPage() {
       {/* Top bar */}
       <div className="px-5 pt-12 pb-3 flex items-center justify-between">
         <Link
-          to={`/links?v=${slug}`}
+          to={`/?v=${slug}`}
           className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
           style={{ fontFamily: FONT_MONO }}
         >

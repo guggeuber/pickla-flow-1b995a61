@@ -131,7 +131,7 @@ const MyPage = () => {
           whileTap={{ scale: 0.9 }}
           onClick={async () => {
             await signOut();
-            navigate(`/links?v=${venueSlug}`);
+            navigate(`/?v=${venueSlug}`);
           }}
           className="w-9 h-9 rounded-xl flex items-center justify-center mb-1"
           style={{ background: "rgba(255,255,255,0.1)" }}

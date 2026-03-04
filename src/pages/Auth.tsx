@@ -55,7 +55,7 @@ const Auth = () => {
     setSubmitting(false);
   };
 
-  const isDesk = !redirectTo.startsWith("/my");
+  const isDesk = redirectTo.startsWith("/desk") || redirectTo.startsWith("/hub");
 
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">

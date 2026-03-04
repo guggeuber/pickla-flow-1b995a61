@@ -109,7 +109,7 @@ export default function BookingConfirmation() {
       {/* Top bar */}
       <div className="px-5 pt-12 pb-3 flex items-center justify-between">
         <span className="text-[11px] text-neutral-300" style={{ fontFamily: FONT_MONO }}>bokning</span>
-        <Link to={venue?.slug ? `/links?v=${venue.slug}` : "/"}>
+        <Link to={venue?.slug ? `/?v=${venue.slug}` : "/"}>
           <img src={picklaLogo} alt="Pickla" className="h-6 w-auto opacity-20 hover:opacity-40 transition-opacity" />
         </Link>
       </div>

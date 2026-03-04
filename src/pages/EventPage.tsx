@@ -123,7 +123,7 @@ export default function EventPage() {
         <p className="text-neutral-400" style={{ fontFamily: FONT_MONO }}>
           eventet hittades inte
         </p>
-        <Link to="/links" className="text-neutral-500 underline text-xs" style={{ fontFamily: FONT_MONO }}>
+        <Link to="/" className="text-neutral-500 underline text-xs" style={{ fontFamily: FONT_MONO }}>
           ← tillbaka
         </Link>
       </div>
@@ -161,7 +161,7 @@ export default function EventPage() {
       {/* Top bar */}
       <div className="px-5 pt-12 pb-3 flex items-center justify-between">
         <Link
-          to="/links"
+          to="/"
           className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
           style={{ fontFamily: FONT_MONO }}
         >
