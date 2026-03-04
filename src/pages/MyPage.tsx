@@ -1,10 +1,13 @@
 import { motion } from "framer-motion";
-import { Calendar, Ticket, LogOut, ArrowLeft, Loader2 } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
+
+const FONT_HEADING = "'Space Grotesk', sans-serif";
+const FONT_MONO = "'Space Mono', monospace";
 
 function usePlayerProfile() {
   const { user } = useAuth();
@@ -59,6 +62,25 @@ function useMyDayPasses() {
   });
 }
 
+function useActiveMembership() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["my-membership", user?.id],
+    enabled: !!user,
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("memberships")
+        .select("id, tier_id, status, starts_at, expires_at, membership_tiers(name, color, description)")
+        .eq("user_id", user!.id)
+        .eq("status", "active")
+        .limit(1)
+        .maybeSingle();
+      return data;
+    },
+  });
+}
+
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
 const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } };
 
@@ -68,14 +90,15 @@ const MyPage = () => {
   const [searchParams] = useSearchParams();
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
 
-  const { data: profile, isLoading: profileLoading } = usePlayerProfile();
+  const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
   const { data: dayPasses } = useMyDayPasses();
+  const { data: activeMembership } = useActiveMembership();
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#F5D5D5" }}>
-        <Loader2 className="w-6 h-6 animate-spin" style={{ color: "#3E3D39" }} />
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "#1a1e2e" }}>
+        <Loader2 className="w-6 h-6 animate-spin text-white" />
       </div>
     );
   }
@@ -85,177 +108,219 @@ const MyPage = () => {
   const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
   const activeBookings = bookings?.filter((b) => b.status === "confirmed" || b.status === "pending") || [];
   const activePasses = dayPasses?.filter((p) => p.status === "active") || [];
+  const membershipTier = (activeMembership as any)?.membership_tiers;
 
   return (
-    <div className="min-h-screen flex flex-col items-center px-5 pt-8 pb-16" style={{ background: "#F5D5D5", color: "#3E3D39" }}>
-      {/* Header */}
-      <div className="w-full max-w-sm flex items-center justify-between mb-6">
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={() => navigate(`/links?v=${venueSlug}`)}
-          className="w-9 h-9 rounded-xl flex items-center justify-center transition-colors"
-          style={{ background: "rgba(62,61,57,0.06)", border: "1px solid rgba(62,61,57,0.15)" }}
-        >
-          <ArrowLeft className="w-4 h-4" style={{ color: "#3E3D39" }} />
-        </motion.button>
-        <h1 className="text-lg font-bold tracking-tight" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#3E3D39" }}>
-          Mitt konto
-        </h1>
+    <div className="min-h-screen" style={{ background: "#1a1e2e" }}>
+      {/* ═══ STICKY TOP: Logo ═══ */}
+      <header
+        className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
+        style={{
+          background: "linear-gradient(to bottom, rgba(26,30,46,0.8) 0%, rgba(26,30,46,0.4) 50%, transparent 100%)",
+        }}
+      >
+        <div className="pt-2">
+          <img
+            src={picklaLogo}
+            alt="Pickla"
+            className="h-14 w-auto"
+            style={{ filter: "brightness(0) invert(1)" }}
+          />
+        </div>
         <motion.button
           whileTap={{ scale: 0.9 }}
           onClick={async () => {
             await signOut();
             navigate(`/links?v=${venueSlug}`);
           }}
-          className="w-9 h-9 rounded-xl flex items-center justify-center transition-colors"
-          style={{ background: "rgba(62,61,57,0.06)", border: "1px solid rgba(62,61,57,0.15)" }}
+          className="w-9 h-9 rounded-xl flex items-center justify-center mb-1"
+          style={{ background: "rgba(255,255,255,0.1)" }}
         >
-          <LogOut className="w-4 h-4" style={{ color: "#3E3D39" }} />
+          <LogOut className="w-4 h-4 text-white/70" />
         </motion.button>
-      </div>
+      </header>
 
-      <motion.div variants={container} initial="hidden" animate="show" className="w-full max-w-sm flex flex-col gap-4">
-        {/* Profile card */}
-        <motion.div
-          variants={item}
-          className="rounded-2xl p-5"
-          style={{
-            background: "rgba(255,255,255,0.6)",
-            border: "1.5px solid rgba(62,61,57,0.1)",
-            boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
-          }}
-        >
-          <div className="flex items-center gap-3">
-            <div
-              className="w-12 h-12 rounded-full flex items-center justify-center"
-              style={{ background: "rgba(62,61,57,0.1)" }}
-            >
-              <span className="text-lg font-bold" style={{ color: "#3E3D39" }}>
-                {displayName.charAt(0).toUpperCase()}
-              </span>
-            </div>
-            <div>
-              <p className="font-semibold" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#3E3D39" }}>{displayName}</p>
-              <p className="text-xs" style={{ color: "rgba(62,61,57,0.5)" }}>{user.email}</p>
-            </div>
-          </div>
-          {profile && (
-            <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: "1px solid rgba(62,61,57,0.12)" }}>
-              <div className="text-center flex-1">
-                <p className="text-lg font-bold" style={{ color: "#3E3D39" }}>{profile.total_matches || 0}</p>
-                <p className="text-[10px] uppercase tracking-wide" style={{ color: "rgba(62,61,57,0.5)" }}>Matcher</p>
+      {/* ═══ MAIN CONTENT ═══ */}
+      <main className="pt-28 px-5 pb-28">
+        <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
+          {/* Profile card */}
+          <motion.div
+            variants={item}
+            className="rounded-2xl p-5"
+            style={{
+              background: "rgba(255,255,255,0.06)",
+              border: "1.5px solid rgba(255,255,255,0.08)",
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className="w-12 h-12 rounded-full flex items-center justify-center"
+                style={{ background: "rgba(255,255,255,0.1)" }}
+              >
+                <span className="text-lg font-bold text-white">
+                  {displayName.charAt(0).toUpperCase()}
+                </span>
               </div>
-              <div className="text-center flex-1">
-                <p className="text-lg font-bold" style={{ color: "#3E3D39" }}>{profile.total_wins || 0}</p>
-                <p className="text-[10px] uppercase tracking-wide" style={{ color: "rgba(62,61,57,0.5)" }}>Vinster</p>
-              </div>
-              <div className="text-center flex-1">
-                <p className="text-lg font-bold" style={{ color: "#E86C24" }}>{profile.pickla_rating || 1000}</p>
-                <p className="text-[10px] uppercase tracking-wide" style={{ color: "rgba(62,61,57,0.5)" }}>Rating</p>
+              <div>
+                <p className="font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>{displayName}</p>
+                <p className="text-xs text-white/40">{user.email}</p>
               </div>
             </div>
-          )}
-        </motion.div>
-
-        {/* Active bookings */}
-        <motion.div variants={item}>
-          <div className="flex items-center gap-2 mb-2">
-            <Calendar className="w-4 h-4" style={{ color: "#E86C24" }} />
-            <span className="text-sm font-semibold" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#3E3D39" }}>Mina bokningar</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>{activeBookings.length}</span>
-          </div>
-          {activeBookings.length === 0 ? (
-            <div
-              className="rounded-2xl p-4 text-center"
-              style={{ background: "rgba(255,255,255,0.6)", border: "1.5px solid rgba(62,61,57,0.1)" }}
-            >
-              <p className="text-xs" style={{ color: "rgba(62,61,57,0.5)" }}>Inga aktiva bokningar</p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {activeBookings.slice(0, 5).map((b) => (
-                <div
-                  key={b.id}
-                  className="rounded-xl p-3 flex items-center justify-between"
-                  style={{ background: "rgba(255,255,255,0.6)", border: "1.5px solid rgba(62,61,57,0.1)" }}
-                >
-                  <div>
-                    <p className="text-sm font-medium" style={{ color: "#3E3D39" }}>
-                      {(b as any).venue_courts?.name || "Bana"}
-                    </p>
-                    <p className="text-xs" style={{ color: "rgba(62,61,57,0.5)" }}>
-                      {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
-                      {" "}
-                      {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
-                      –
-                      {new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
-                    </p>
-                  </div>
-                  <span
-                    className="px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                    style={{
-                      background: b.status === "confirmed" ? "rgba(76,175,80,0.15)" : "rgba(232,108,36,0.15)",
-                      color: b.status === "confirmed" ? "#4CAF50" : "#E86C24",
-                    }}
-                  >
-                    {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
-                  </span>
+            {profile && (
+              <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                <div className="text-center flex-1">
+                  <p className="text-lg font-bold text-white">{profile.total_matches || 0}</p>
+                  <p className="text-[10px] uppercase tracking-wide text-white/40">Matcher</p>
                 </div>
-              ))}
-            </div>
-          )}
-        </motion.div>
-
-        {/* Day passes */}
-        <motion.div variants={item}>
-          <div className="flex items-center gap-2 mb-2">
-            <Ticket className="w-4 h-4" style={{ color: "#E86C24" }} />
-            <span className="text-sm font-semibold" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "#3E3D39" }}>Mina dagspass</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>{activePasses.length}</span>
-          </div>
-          {activePasses.length === 0 ? (
-            <div
-              className="rounded-2xl p-4 text-center"
-              style={{ background: "rgba(255,255,255,0.6)", border: "1.5px solid rgba(62,61,57,0.1)" }}
-            >
-              <p className="text-xs" style={{ color: "rgba(62,61,57,0.5)" }}>Inga aktiva dagspass</p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {activePasses.map((p) => (
-                <div
-                  key={p.id}
-                  className="rounded-xl p-3 flex items-center justify-between"
-                  style={{ background: "rgba(255,255,255,0.6)", border: "1.5px solid rgba(62,61,57,0.1)" }}
-                >
-                  <div>
-                    <p className="text-sm font-medium" style={{ color: "#3E3D39" }}>Dagspass</p>
-                    <p className="text-xs" style={{ color: "rgba(62,61,57,0.5)" }}>
-                      {new Date(p.valid_date).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
-                    </p>
-                  </div>
-                  <span className="text-sm font-bold" style={{ color: "#3E3D39" }}>{p.price || 0} SEK</span>
+                <div className="text-center flex-1">
+                  <p className="text-lg font-bold text-white">{profile.total_wins || 0}</p>
+                  <p className="text-[10px] uppercase tracking-wide text-white/40">Vinster</p>
                 </div>
-              ))}
-            </div>
-          )}
-        </motion.div>
-      </motion.div>
+                <div className="text-center flex-1">
+                  <p className="text-lg font-bold" style={{ color: "#E86C24" }}>{profile.pickla_rating || 1000}</p>
+                  <p className="text-[10px] uppercase tracking-wide text-white/40">Rating</p>
+                </div>
+              </div>
+            )}
+          </motion.div>
 
-      {/* Footer — green pickla logo */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.5 }}
-        className="mt-12"
+          {/* Membership */}
+          {activeMembership ? (
+            <motion.div
+              variants={item}
+              className="rounded-2xl p-5"
+              style={{
+                background: membershipTier?.color
+                  ? `${membershipTier.color}22`
+                  : "rgba(76,175,80,0.08)",
+                border: `1.5px solid ${membershipTier?.color || "rgba(76,175,80,0.2)"}44`,
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: `${membershipTier?.color || "#4CAF50"}33` }}>
+                  <Check className="w-5 h-5" style={{ color: membershipTier?.color || "#4CAF50" }} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-white" style={{ fontFamily: FONT_HEADING }}>
+                    {membershipTier?.name || "Medlem"}
+                  </p>
+                  <p className="text-[11px] text-white/40" style={{ fontFamily: FONT_MONO }}>
+                    {membershipTier?.description || "Aktivt medlemskap"}
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.button
+              variants={item}
+              onClick={() => navigate("/play")}
+              className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
+              style={{
+                background: "rgba(232,108,36,0.1)",
+                border: "1.5px solid rgba(232,108,36,0.2)",
+              }}
+            >
+              <p className="text-sm font-bold text-white" style={{ fontFamily: FONT_HEADING }}>
+                Bli medlem
+              </p>
+              <p className="text-[11px] text-white/40" style={{ fontFamily: FONT_MONO }}>
+                Se medlemskap och priser →
+              </p>
+            </motion.button>
+          )}
+
+          {/* Active bookings */}
+          <motion.div variants={item}>
+            <div className="flex items-center gap-2 mb-2">
+              <Calendar className="w-4 h-4" style={{ color: "#E86C24" }} />
+              <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Mina bokningar</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>{activeBookings.length}</span>
+            </div>
+            {activeBookings.length === 0 ? (
+              <div className="rounded-2xl p-4 text-center" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+                <p className="text-xs text-white/30">Inga aktiva bokningar</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {activeBookings.slice(0, 5).map((b) => (
+                  <div key={b.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+                    <div>
+                      <p className="text-sm font-medium text-white">{(b as any).venue_courts?.name || "Bana"}</p>
+                      <p className="text-xs text-white/40">
+                        {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
+                        {" "}
+                        {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? "rgba(76,175,80,0.15)" : "rgba(232,108,36,0.15)", color: b.status === "confirmed" ? "#4CAF50" : "#E86C24" }}>
+                      {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+
+          {/* Day passes */}
+          <motion.div variants={item}>
+            <div className="flex items-center gap-2 mb-2">
+              <Ticket className="w-4 h-4" style={{ color: "#E86C24" }} />
+              <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Mina dagspass</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>{activePasses.length}</span>
+            </div>
+            {activePasses.length === 0 ? (
+              <div className="rounded-2xl p-4 text-center" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+                <p className="text-xs text-white/30">Inga aktiva dagspass</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {activePasses.map((p) => (
+                  <div key={p.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+                    <div>
+                      <p className="text-sm font-medium text-white">Dagspass</p>
+                      <p className="text-xs text-white/40">
+                        {new Date(p.valid_date).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
+                      </p>
+                    </div>
+                    <span className="text-sm font-bold text-white">{p.price || 0} SEK</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        </motion.div>
+      </main>
+
+      {/* ═══ FIXED BOTTOM NAV — same as LinkHub ═══ */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-8 pt-12"
+        style={{
+          background: "linear-gradient(to top, rgba(26,30,46,0.95) 0%, rgba(26,30,46,0.7) 40%, rgba(26,30,46,0.3) 70%, transparent 100%)",
+        }}
       >
-        <img
-          src={picklaLogo}
-          alt="Pickla"
-          className="h-20 w-auto"
-          style={{ filter: "brightness(0) saturate(100%) invert(73%) sepia(41%) saturate(632%) hue-rotate(92deg) brightness(96%) contrast(87%)" }}
-        />
-      </motion.div>
+        <a
+          href="https://chat.whatsapp.com/HL1XcYaNFSuE56q7MqCpdw"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
+          style={{ fontFamily: FONT_MONO }}
+        >
+          chat
+        </a>
+        <button
+          onClick={() => navigate("/play")}
+          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
+          style={{ fontFamily: FONT_MONO }}
+        >
+          play
+        </button>
+        <span
+          className="text-white text-[13px] font-bold underline underline-offset-4 decoration-white/60"
+          style={{ fontFamily: FONT_MONO }}
+        >
+          me
+        </span>
+      </nav>
     </div>
   );
 };
