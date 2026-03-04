@@ -267,7 +267,7 @@ const LinkHub = () => {
         </a>
 
         <button
-          onClick={() => navigate("/community?tab=play")}
+          onClick={() => navigate("/play")}
           className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Mono', monospace" }}
         >
