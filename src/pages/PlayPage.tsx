@@ -96,7 +96,7 @@ const PlayPage = () => {
     try {
       const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
       const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
-      const res = await fetch(`${BASE_URL}/api-day-passes`, {
+      const res = await fetch(`${BASE_URL}/api-day-passes/public-purchase`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
