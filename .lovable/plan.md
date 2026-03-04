@@ -1,60 +1,104 @@
 
 
-## Visa Community direkt -- Stories-karusell + Feed-preview
+## Plan: Route-omstrukturering, Desk-routing och Incheckning
 
-Användaren vill att Picklas community-känsla ska synas direkt -- inte gömmas bakom en länk. Bilden visar Instagram Stories-liknande vertikala kort med foton från anläggningen. Planen är att bygga ut detta i tre delar:
+### 1. Omstrukturering av routes
 
-### 1. Ny tabell: `community_stories`
-En enkel stories-tabell för kortlivat visuellt innehåll (foton/bilder) som personal eller admins laddar upp via Supabase Storage.
+**Nuvarande problem:** LinkHub (`/links`) borde vara startsidan (`/`), och Desk-appen (`/` idag) + Admin (`/admin`) behöver egna routes med mindre uppenbara namn.
 
-Kolumner: `id`, `venue_id`, `image_url` (text), `caption` (text, nullable), `created_at`, `expires_at` (auto 24h), `created_by` (uuid).
+**Ny route-struktur:**
 
-RLS: Alla kan läsa, bara autentiserade staff/admins kan skapa.
+| Route | Komponent | Beskrivning |
+|-------|-----------|-------------|
+| `/` | LinkHub | Publik startsida (stories, status, nav) |
+| `/play` | PlayPage | Medlemskap, dagspass, feed |
+| `/my` | MyPage | Konto, bokningar, medlemskap |
+| `/auth` | Auth | Login/signup |
+| `/desk` | Index (Desk-appen) | Personal: Today, Customers, Book, Sell, Ops |
+| `/hub` | AdminPage | Venue-admin (istället för `/admin`) |
+| `/event-ops` | EventOps | Event-styrning |
+| `/event/:id`, `/e/:slug` | EventPage | Event-detalj |
+| `/book` | BookingPage | Banbokning |
+| `/b/:ref` | BookingConfirmation | Bekräftelse |
 
-### 2. Stories-karusell på LinkHub (förstasidan)
-Horisontellt scrollbar rad med vertikala kort högst upp på `/links`-sidan, likt Instagram Stories:
-- Varje kort: vertikal bild med Pickla-logotyp + text-overlay (plats, datum)
-- Rounded corners, liten skugga, 3:4 aspect ratio
-- Klick öppnar bilden i en fullskärms-overlay med swipe mellan stories
-- Om inga stories finns visas inget (graceful fallback)
-- Hämtar från `community_stories` WHERE `expires_at > now()`
+**Ändringar i `App.tsx`:**
+- `/` → LinkHub (publik, ingen auth)
+- `/desk` → ProtectedRoute + Index (desk)
+- `/hub` → ProtectedRoute + AdminPage
+- Ta bort `/links`
+- Uppdatera alla `navigate("/links")` till `navigate("/")`
 
-### 3. Community Feed-preview på LinkHub
-Under stories-karusellen, visa de 3 senaste community_feed-posterna (träningar, matcher, clashes) med kompakt layout och "Se mer →"-knapp som navigerar till `/community`.
+**Uppdatera navigering i:**
+- `MyPage.tsx`: signOut → `navigate("/")`
+- `Index.tsx` (Desk): admin-knapp → `/hub`
+- `Auth.tsx`: default redirect för personal → `/desk`, kunder → `/play`
 
-### 4. Community Feed-preview på Index (desk-sidan)
-Liten sektion i TodayScreen eller som separat widget som visar senaste community-aktiviteten för personalen att se engagement.
+### 2. Incheckning — datamodell och logik
 
-### Teknisk sammanfattning
+**Koncept:** När en kund kommer till anläggningen måste de checkas in. Incheckningen validerar att kunden har rätt att spela (aktivt medlemskap, dagspass, eller banbookning).
+
+**Entitlement-logik (ny edge function `api-checkins`):**
+
+Ny endpoint: `POST /validate-checkin`
 
 ```text
-┌─────────────────────────────┐
-│  LinkHub (/links)           │
-│                             │
-│  [Stories ○ ○ ○ ○ ○ ] ←scroll
-│                             │
-│  [Boka] [Dagspass] [Events] │
-│                             │
-│  ── Community ──            │
-│  [FeedCard compact]         │
-│  [FeedCard compact]         │
-│  [FeedCard compact]         │
-│  [Se mer →]                 │
-│                             │
-│  ── Länkar ──               │
-│  ...existing links...       │
-└─────────────────────────────┘
+Input: { user_id eller phone/namn, venue_id }
+Logik:
+  1. Kolla memberships → aktiv? ✅ entry_type = "membership"
+  2. Kolla day_passes → giltigt dagspass idag? ✅ entry_type = "day_pass"  
+  3. Kolla bookings → aktiv bokning just nu? ✅ entry_type = "booking"
+  4. Inget hittat → ❌ "Ingen giltig entitlement"
+Output: { allowed: bool, entry_type, details }
 ```
 
-**Nya filer:**
-- Migration: `community_stories` tabell + Storage bucket
-- `src/components/community/StoriesCarousel.tsx` -- horisontell karusell
-- `src/components/community/StoryViewer.tsx` -- fullskärms story-overlay
-- `src/components/community/FeedPreview.tsx` -- kompakt feed-preview med 3 items
+**DB-migration:** Lägg till kolumner på `event_checkins` eller skapa ny tabell `venue_checkins`:
 
-**Ändrade filer:**
-- `src/pages/LinkHub.tsx` -- lägg till StoriesCarousel + FeedPreview
-- `src/screens/TodayScreen.tsx` -- lägg till en kompakt community-widget (valfritt)
+```sql
+CREATE TABLE venue_checkins (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  venue_id UUID NOT NULL,
+  user_id UUID,
+  player_name TEXT,
+  player_phone TEXT,
+  entry_type TEXT NOT NULL, -- 'membership', 'day_pass', 'booking', 'manual'
+  entitlement_id UUID,     -- FK till membership/day_pass/booking
+  checked_in_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  checked_out_at TIMESTAMPTZ,
+  checked_in_by UUID,      -- staff user
+  session_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+```
 
-Stories kan sedan laddas upp via admin-panelen eller direkt i databasen till att börja med. Bilderna lagras i Supabase Storage (`community-stories` bucket).
+RLS: Staff kan läsa/skriva för sin venue. Publik kan räkna (för spelarräknaren).
+
+### 3. Incheckning via Desk
+
+**Ny flik eller integration i TodayScreen:**
+- "Check In"-knapp prominent i Desk-vyn
+- Söker kund via namn/telefon/email
+- Visar automatiskt kundens entitlement (medlemskap, dagspass, bokning)
+- One-tap check-in om entitlement finns
+- Om ingen entitlement: erbjud att skapa dagspass direkt
+
+### 4. QR-kod för självincheckning (framtida fas)
+
+- Generera en QR-kod per kund (baserat på user_id eller booking_ref)
+- Kunden visar QR i desken, personal skannar
+- Eller: en iPad vid ingången med kamera som skannar
+
+**Rekommendation:** Börja med desk-baserad incheckning (steg 2-3), QR som nästa iteration.
+
+### Sammanfattning av filer att ändra/skapa
+
+| Fil | Ändring |
+|-----|---------|
+| `src/App.tsx` | Ny route-mappning |
+| `src/pages/MyPage.tsx` | Navigering till `/` |
+| `src/pages/Index.tsx` | Admin-knapp → `/hub` |
+| `src/pages/Auth.tsx` | Redirect-logik desk vs kund |
+| `src/pages/PlayPage.tsx` | Navigering till `/` |
+| DB-migration | Ny `venue_checkins`-tabell |
+| `supabase/functions/api-checkins/index.ts` | Validate + create checkin |
+| `src/screens/TodayScreen.tsx` | Check-in widget |
 
