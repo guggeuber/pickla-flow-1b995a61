@@ -25,7 +25,13 @@ export function CommunityNav({ active, onChange }: { active: Tab; onChange: (t: 
         return (
           <button
             key={tab.key}
-            onClick={() => onChange(tab.key)}
+            onClick={() => {
+              if (tab.href) {
+                window.open(tab.href, "_blank", "noopener,noreferrer");
+              } else {
+                onChange(tab.key);
+              }
+            }}
             className="flex flex-col items-center gap-0.5 py-2 px-4 rounded-xl transition-all relative min-w-[64px]"
           >
             {isActive && (
