@@ -17,11 +17,6 @@ const item = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transiti
 
 const DAY_PASS_PRICE = 165;
 
-const plans = [
-  { title: "Pickla Member – 399 kr / month", subtitle: "Join the community", accent: true },
-  { title: "Unlimited – 799 kr / month", subtitle: "Play anytime", accent: false },
-];
-
 const PlayPage = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -51,6 +46,20 @@ const PlayPage = () => {
   });
 
   const hasMembership = !!activeMembership;
+
+  // Load real membership tiers
+  const { data: tiers } = useQuery({
+    queryKey: ["membership-tiers"],
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("membership_tiers")
+        .select("id, name, description, monthly_price, color, sort_order")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+      return data || [];
+    },
+  });
 
   // Community feed
   const { data: feedItems, isLoading: feedLoading } = useQuery({
@@ -271,28 +280,28 @@ const PlayPage = () => {
         {/* Membership cards — only if no active membership */}
         {!hasMembership && (
           <div className="flex flex-col gap-3">
-            {plans.map((plan) => (
+            {(tiers || []).map((tier: any, i: number) => (
               <motion.button
-                key={plan.title}
+                key={tier.id}
                 variants={item}
                 className="w-full rounded-2xl p-5 text-left transition-all active:scale-[0.98]"
                 style={{
-                  background: plan.accent ? "#3E3D39" : "rgba(255,255,255,0.7)",
-                  border: plan.accent ? "none" : "1.5px solid rgba(62,61,57,0.1)",
-                  boxShadow: plan.accent ? "0 8px 32px rgba(62,61,57,0.2)" : "0 2px 12px rgba(0,0,0,0.04)",
+                  background: i === 0 ? "#3E3D39" : "rgba(255,255,255,0.7)",
+                  border: i === 0 ? "none" : "1.5px solid rgba(62,61,57,0.1)",
+                  boxShadow: i === 0 ? "0 8px 32px rgba(62,61,57,0.2)" : "0 2px 12px rgba(0,0,0,0.04)",
                 }}
               >
                 <p
                   className="text-[15px] font-bold tracking-tight"
-                  style={{ fontFamily: FONT_HEADING, color: plan.accent ? "#fff" : "#3E3D39" }}
+                  style={{ fontFamily: FONT_HEADING, color: i === 0 ? "#fff" : "#3E3D39" }}
                 >
-                  {plan.title}
+                  {tier.name} – {tier.monthly_price || 0} kr / mån
                 </p>
                 <p
                   className="text-xs mt-0.5"
-                  style={{ fontFamily: FONT_MONO, color: plan.accent ? "rgba(255,255,255,0.6)" : "rgba(62,61,57,0.5)" }}
+                  style={{ fontFamily: FONT_MONO, color: i === 0 ? "rgba(255,255,255,0.6)" : "rgba(62,61,57,0.5)" }}
                 >
-                  {plan.subtitle}
+                  {tier.description || "Bli medlem"}
                 </p>
               </motion.button>
             ))}
