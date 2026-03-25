@@ -1,47 +1,39 @@
 
 
-## Plan: Fix Event Admin & Play Page Issues
+## Plan: Fix "Bli medlem" och bokningsvisning i admin
 
-### Problems identified
+### Problem 1: "Bli medlem" visar inga erbjudanden
+- PlayPage:s "Bli medlem"-knapp navigerar till `/community` som visar **FeedTab** (inte membership)
+- `PlayNowTab` (community "play" tab) har **hårdkodade** planer istället för att hämta från databasens `membership_tiers`
+- Det finns inga faktiska membership tiers synliga för användaren
 
-1. **No date field in event detail editor** -- The detail view has time fields but no date picker for `start_date`/`end_date`. The create dialog has a date field, but once created you can't change it.
+**Lösning:** Ändra "Bli medlem" på PlayPage att navigera till `/community?tab=play` och uppdatera `PlayNowTab` att hämta tiers + pricing från DB istället för hårdkodad data.
 
-2. **Status should auto-derive from date** -- If an event has a future date it should default to "upcoming", if today then "active", if past then "completed". Currently status is only manual.
+### Problem 2: Bokningar syns inte i admin
+- Bokningarna **finns i databasen** (senaste: 2026-03-25, för datum 2026-03-26)
+- `TodayScreen` filtrerar **bara dagens datum** — om du bokade för imorgon syns det inte
+- Admin-panelen (`/hub`) har **ingen bokningssektion** — bara TodayScreen (som visar banstatus) och BookScreen (för att skapa nya bokningar)
 
-3. **Duplicate event lists on Play page** -- The Play page shows events in "Idag" and "Kommande" sections, then the community feed at bottom also shows event feed cards, creating repetition.
+**Lösning:** Lägg till en bokningsöversikt i admin/desk som visar bokningar per dag med datumväljare, inte bara "idag".
 
-4. **All events show "Gratis"** -- The `EventPriceBadges` component checks `entry_fee` but events likely have no `entry_fee` set yet (null/0). The tier pricing query fetches globally but doesn't match against the event's actual base price. If `entry_fee` is 0 or null, everything shows "Gratis".
+### Filer att ändra
 
-5. **Play page should show tier prices inline** -- Like the screenshot shows: each event card should display the price directly (e.g. "Gratis" for members, specific prices for others), not just badges.
-
-### Changes
-
-#### 1. Add date fields to EventDetail editor
-- Add `startDate` and `endDate` state from `event.start_date`
-- Add date input fields in the detail form (before time fields)
-- Include `startDate`/`endDate` in the save payload
-
-#### 2. Auto-set status based on date
-- When saving, if `startDate` is in the future -> suggest "upcoming"
-- If `startDate` is today -> suggest "active"  
-- If `startDate` is past -> suggest "completed"
-- Keep manual override possible but show a hint
-
-#### 3. Fix Play page: single event list, no duplicate feed
-- Remove the separate "Idag" / "Kommande" split if it duplicates content
-- Keep one clean list matching the screenshot: "Inga aktiviteter idag" empty state, then "KOMMANDE" section with event cards
-- Each event card shows the relevant price for the user's tier (not just "Gratis" for everything)
-
-#### 4. Fix price display logic
-- The `EventPriceBadges` must handle: if event has `entry_fee_type = 'day_pass'`, look up day_pass tier pricing; if `fixed`, use `entry_fee` as base
-- If `entry_fee` is null/0, show "Gratis" 
-- If `entry_fee` > 0, calculate tier-specific prices and show the user's applicable price prominently
-- In the event list on Play page: show single price relevant to user (member price if member, guest price if not) instead of all tier badges
-
-### Files to change
-
-| File | Change |
+| Fil | Ändring |
 |------|--------|
-| `src/components/admin/AdminEvents.tsx` | Add date picker fields to EventDetail, include in save |
-| `src/pages/PlayPage.tsx` | Fix price display, clean up duplicate sections, match screenshot layout |
+| `src/pages/PlayPage.tsx` | Ändra "Bli medlem" → navigera `/community?tab=play` |
+| `src/components/community/PlayNowTab.tsx` | Hämta `membership_tiers` + `membership_tier_pricing` från DB istället för hårdkodad data |
+| `src/screens/TodayScreen.tsx` | Lägg till en "Bokningar"-sektion med datumväljare som visar alla bokningar, inte bara dagens banstatus |
+
+### Detaljer
+
+**PlayNowTab** omskrivs till att:
+1. Hämta aktiva `membership_tiers` via supabase-klienten
+2. Hämta `membership_tier_pricing` med `product_type = 'day_pass'` för att visa dagspaspris per tier
+3. Rendera tiers dynamiskt med namn, pris, färg från DB
+
+**TodayScreen** bokningsvy:
+1. Lägg till expanderbar sektion "Bokningar" under befintliga stats
+2. Datumväljare (quickdates + kalender) — defaultar till idag
+3. Lista bokningar för valt datum med bana, tid, status, kundinfo (från notes)
+4. Möjlighet att avboka (PATCH status → cancelled)
 
