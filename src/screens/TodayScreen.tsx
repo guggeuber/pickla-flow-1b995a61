@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle } from "lucide-react";
+import { BookingsSection } from "@/components/desk/BookingsSection";
 import { useState, useEffect, useMemo } from "react";
 import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
 
