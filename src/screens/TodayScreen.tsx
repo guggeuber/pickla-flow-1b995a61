@@ -242,6 +242,9 @@ const TodayScreen = () => {
         )}
       </div>
 
+      {/* All Bookings with date picker */}
+      <BookingsSection venueId={venueId} />
+
       {/* Upcoming Bookings */}
       <div>
         <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">Upcoming</h2>
