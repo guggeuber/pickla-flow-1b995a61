@@ -361,7 +361,7 @@ const PlayPage = () => {
         ) : (
           <motion.button
             variants={item}
-            onClick={() => navigate("/community")}
+            onClick={() => navigate("/community?tab=play")}
             className="rounded-2xl p-4 flex items-center gap-3 text-left transition-all active:scale-[0.98]"
             style={{ background: "rgba(62,61,57,0.03)", border: "1.5px solid rgba(62,61,57,0.08)" }}
           >
