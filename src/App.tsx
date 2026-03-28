@@ -61,6 +61,8 @@ const App = () => (
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
             <Route path="/pass/:token" element={<ClaimPassPage />} />
+            <Route path="/corp/join" element={<CorporateJoinPage />} />
+            <Route path="/corp/dashboard" element={<ProtectedRoute><CorporateDashboard /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
