@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle } from "lucide-react";
+import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine } from "lucide-react";
+import QrScanner from "@/components/desk/QrScanner";
 import { BookingsSection } from "@/components/desk/BookingsSection";
 import { useState, useEffect, useMemo } from "react";
 import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
@@ -55,6 +56,7 @@ function getVenueStatus(occupancy: number) {
 const TodayScreen = () => {
   const now = useRealtimeClock();
   const [selectedCourt, setSelectedCourt] = useState<CourtDisplay | null>(null);
+  const [showScanner, setShowScanner] = useState(false);
 
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
   const venueId = staffVenue?.venue_id;
@@ -157,6 +159,18 @@ const TodayScreen = () => {
           </span>
         </div>
       </div>
+
+      {/* Scan QR Button */}
+      {venueId && (
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={() => setShowScanner(true)}
+          className="w-full bg-court-free text-white rounded-2xl py-4 font-bold text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-court-free/25"
+        >
+          <ScanLine className="w-5 h-5" />
+          Skanna incheckning
+        </motion.button>
+      )}
 
       {/* Revenue Strip */}
       <div className="revenue-hero rounded-2xl p-4">
@@ -281,6 +295,13 @@ const TodayScreen = () => {
           <p className="text-sm text-muted-foreground text-center py-4">Inga kommande bokningar idag</p>
         )}
       </div>
+
+      {/* QR Scanner */}
+      <AnimatePresence>
+        {showScanner && venueId && (
+          <QrScanner venueId={venueId} onClose={() => setShowScanner(false)} />
+        )}
+      </AnimatePresence>
 
       {/* Court Action Sheet */}
       <AnimatePresence>

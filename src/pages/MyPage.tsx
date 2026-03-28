@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, Plus, ShoppingBag } from "lucide-react";
+import QrCodeCard from "@/components/my/QrCodeCard";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -554,6 +555,9 @@ const MyPage = () => {
               </div>
             )}
           </motion.div>
+
+          {/* QR Code for check-in */}
+          <QrCodeCard userId={user.id} displayName={displayName} />
 
           {/* Unified day pass section */}
           <DayPassSection />
