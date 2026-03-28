@@ -87,6 +87,22 @@ export default function BookingPage() {
   const dateStr = format(selectedDate, "yyyy-MM-dd");
   const dates = useMemo(() => generateDates(), []);
 
+  // Fetch corporate packages for logged-in user
+  const { data: corpData } = useQuery({
+    queryKey: ["my-corporate-booking", user?.id],
+    enabled: !!user,
+    staleTime: 30000,
+    queryFn: () => apiGet("api-corporate", "my"),
+  });
+
+  const activePackages = useMemo(() => {
+    if (!corpData?.packages?.length) return [];
+    return corpData.packages.filter((p: any) => p.status === 'active' && p.total_hours - p.used_hours > 0).map((p: any) => {
+      const membership = corpData.memberships?.find((m: any) => m.corporate_accounts?.id === p.corporate_account_id);
+      return { ...p, company_name: membership?.corporate_accounts?.company_name || 'Företag' };
+    });
+  }, [corpData]);
+
   // Fetch courts + availability
   const { data, isLoading } = useQuery({
     queryKey: ["public-courts", slug, dateStr],
