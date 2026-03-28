@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin } from "lucide-react";
+import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
