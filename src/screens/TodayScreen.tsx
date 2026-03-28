@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle } from "lucide-react";
+import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine } from "lucide-react";
+import QrScanner from "@/components/desk/QrScanner";
 import { BookingsSection } from "@/components/desk/BookingsSection";
 import { useState, useEffect, useMemo } from "react";
 import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
