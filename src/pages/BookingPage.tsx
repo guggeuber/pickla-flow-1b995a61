@@ -1,13 +1,14 @@
 import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin } from "lucide-react";
+import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { apiGet } from "@/lib/api";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -58,6 +59,8 @@ export default function BookingPage() {
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [confirmed, setConfirmed] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [useCorporate, setUseCorporate] = useState(false);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 
   // Auto-fill name/phone from player profile when logged in
   useEffect(() => {
@@ -83,6 +86,22 @@ export default function BookingPage() {
 
   const dateStr = format(selectedDate, "yyyy-MM-dd");
   const dates = useMemo(() => generateDates(), []);
+
+  // Fetch corporate packages for logged-in user
+  const { data: corpData } = useQuery({
+    queryKey: ["my-corporate-booking", user?.id],
+    enabled: !!user,
+    staleTime: 30000,
+    queryFn: () => apiGet("api-corporate", "my"),
+  });
+
+  const activePackages = useMemo(() => {
+    if (!corpData?.packages?.length) return [];
+    return corpData.packages.filter((p: any) => p.status === 'active' && p.total_hours - p.used_hours > 0).map((p: any) => {
+      const membership = corpData.memberships?.find((m: any) => m.corporate_accounts?.id === p.corporate_account_id);
+      return { ...p, company_name: membership?.corporate_accounts?.company_name || 'Företag' };
+    });
+  }, [corpData]);
 
   // Fetch courts + availability
   const { data, isLoading } = useQuery({
@@ -180,6 +199,7 @@ export default function BookingPage() {
           endTime: addHour(selectedTime!),
           name: name.trim(),
           phone: phone.trim(),
+          corporatePackageId: useCorporate ? selectedPackageId : undefined,
         }),
       });
       if (!res.ok) {
@@ -495,6 +515,62 @@ export default function BookingPage() {
             </div>
           )}
 
+          {/* Corporate payment option */}
+          {selectedCourts.length > 0 && activePackages.length > 0 && (
+            <div>
+              <div className="h-px bg-neutral-100 mb-6" />
+              <h2
+                className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
+                style={{ fontFamily: FONT_MONO }}
+              >
+                betalning
+              </h2>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => { setUseCorporate(false); setSelectedPackageId(null); }}
+                  className={`w-full py-3 px-4 rounded-2xl text-left text-[13px] font-medium transition-all ${
+                    !useCorporate
+                      ? "bg-neutral-900 text-white"
+                      : "bg-neutral-50 text-neutral-600"
+                  }`}
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  betala i kassan · {totalPrice} kr
+                </button>
+                {activePackages.map((pkg: any) => {
+                  const remaining = pkg.total_hours - pkg.used_hours;
+                  const isSelected = useCorporate && selectedPackageId === pkg.id;
+                  return (
+                    <button
+                      key={pkg.id}
+                      type="button"
+                      onClick={() => { setUseCorporate(true); setSelectedPackageId(pkg.id); }}
+                      className={`w-full py-3 px-4 rounded-2xl text-left flex items-center gap-3 transition-all ${
+                        isSelected
+                          ? "bg-neutral-900 text-white"
+                          : "bg-neutral-50 text-neutral-600"
+                      }`}
+                    >
+                      <Building2 className={`w-4 h-4 flex-shrink-0 ${isSelected ? "text-orange-400" : "text-neutral-400"}`} />
+                      <div className="flex-1">
+                        <span className="text-[13px] font-medium" style={{ fontFamily: FONT_MONO }}>
+                          {pkg.company_name}
+                        </span>
+                        <span className={`text-[11px] ml-2 ${isSelected ? "text-white/60" : "text-neutral-400"}`} style={{ fontFamily: FONT_MONO }}>
+                          {remaining}h kvar
+                        </span>
+                      </div>
+                      <span className="text-[13px] font-bold" style={{ fontFamily: FONT_GROTESK }}>
+                        0 kr
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Summary + Book button */}
           {selectedCourts.length > 0 && name.trim() && phone.trim() && (
             <div>
@@ -531,7 +607,7 @@ export default function BookingPage() {
                     totalt
                   </span>
                   <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                    {totalPrice} kr
+                    {useCorporate ? "0 kr" : `${totalPrice} kr`}
                   </span>
                 </div>
               </div>
