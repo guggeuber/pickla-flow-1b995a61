@@ -17,6 +17,7 @@ import EventPage from "./pages/EventPage";
 import BookingPage from "./pages/BookingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
 import MembershipPage from "./pages/MembershipPage";
+import ClaimPassPage from "./pages/ClaimPassPage";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
