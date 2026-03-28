@@ -56,6 +56,7 @@ function getVenueStatus(occupancy: number) {
 const TodayScreen = () => {
   const now = useRealtimeClock();
   const [selectedCourt, setSelectedCourt] = useState<CourtDisplay | null>(null);
+  const [showScanner, setShowScanner] = useState(false);
 
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
   const venueId = staffVenue?.venue_id;
