@@ -163,9 +163,15 @@ export default function BookingPage() {
 
   const bookMutation = useMutation({
     mutationFn: async () => {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      // Pass auth token so the backend can link the booking to this user
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (currentSession?.access_token) {
+        headers["Authorization"] = `Bearer ${currentSession.access_token}`;
+      }
       const res = await fetch(`${BASE_URL}/api-bookings/public-book`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           slug,
           courtIds: selectedCourts,
