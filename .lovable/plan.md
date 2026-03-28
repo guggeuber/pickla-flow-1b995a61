@@ -1,39 +1,48 @@
 
 
-## Plan: Fix "Bli medlem" och bokningsvisning i admin
+## Plan: Medlemssida, inloggning & go-live-fix
 
-### Problem 1: "Bli medlem" visar inga erbjudanden
-- PlayPage:s "Bli medlem"-knapp navigerar till `/community` som visar **FeedTab** (inte membership)
-- `PlayNowTab` (community "play" tab) har **hårdkodade** planer istället för att hämta från databasens `membership_tiers`
-- Det finns inga faktiska membership tiers synliga för användaren
+### Översikt
 
-**Lösning:** Ändra "Bli medlem" på PlayPage att navigera till `/community?tab=play` och uppdatera `PlayNowTab` att hämta tiers + pricing från DB istället för hårdkodad data.
+Skapa en dedikerad `/membership`-sida i samma vita PlayPage-design där gäster kan se tiers, registrera sig (skapar konto), och ansöka om medlemskap. Betalning hanteras manuellt via desken (som idag) — sidan samlar in intresseanmälan, inte betalning. Dessutom säkerställa att inloggningsflödet fungerar och att `/my`-sidan visar bokningar korrekt.
 
-### Problem 2: Bokningar syns inte i admin
-- Bokningarna **finns i databasen** (senaste: 2026-03-25, för datum 2026-03-26)
-- `TodayScreen` filtrerar **bara dagens datum** — om du bokade för imorgon syns det inte
-- Admin-panelen (`/hub`) har **ingen bokningssektion** — bara TodayScreen (som visar banstatus) och BookScreen (för att skapa nya bokningar)
+### Vad som byggs
 
-**Lösning:** Lägg till en bokningsöversikt i admin/desk som visar bokningar per dag med datumväljare, inte bara "idag".
+#### 1. Ny `/membership`-sida
+- Samma vita, minimalistiska design som PlayPage (Space Grotesk + Space Mono, vita kort, rundade hörn)
+- Hämtar `membership_tiers` + `membership_tier_pricing` dynamiskt från DB
+- Visar tier-kort med namn, beskrivning, månadspris, dagspasspris
+- "Bli medlem"-knapp per tier som öppnar ett registreringsformulär
+- Formuläret samlar: namn, e-post, telefon, lösenord (för att skapa konto)
+- Vid submit: skapar konto via `signUp`, sparar telefon till `player_profiles`, och skickar en membership request (eller toast med "Vi kontaktar dig för att aktivera ditt medlemskap")
+- Om redan inloggad: visa "Kontakta oss för att aktivera medlemskap" + länk till WhatsApp/desk
 
-### Filer att ändra
+#### 2. Uppdatera PlayPage
+- "Bli medlem"-knappen navigerar till `/membership` istället för `/community?tab=play`
+
+#### 3. Fix inloggning & `/my`-sidan
+- Verifiera att Auth-flödet fungerar (det ser korrekt ut redan)
+- `/my` visar redan bokningar, dagspass och medlemskap — men lägga till en "Logga in"-länk i PlayPage-headern för icke-inloggade
+- Lägga till navigeringslänk till `/my` i PlayPage för inloggade användare
+
+#### 4. Betalning
+- Recurring-betalning byggs **inte** nu — medlemskap betalas och aktiveras manuellt via desken (befintligt flöde i CustomersScreen)
+- Membership-sidan kommunicerar tydligt att "betalning sker i desken" eller "vi kontaktar dig"
+- Stripe-integration för recurring kan läggas till senare
+
+### Filer att ändra/skapa
 
 | Fil | Ändring |
 |------|--------|
-| `src/pages/PlayPage.tsx` | Ändra "Bli medlem" → navigera `/community?tab=play` |
-| `src/components/community/PlayNowTab.tsx` | Hämta `membership_tiers` + `membership_tier_pricing` från DB istället för hårdkodad data |
-| `src/screens/TodayScreen.tsx` | Lägg till en "Bokningar"-sektion med datumväljare som visar alla bokningar, inte bara dagens banstatus |
+| `src/pages/MembershipPage.tsx` | **Ny** — tier-lista + registreringsformulär i PlayPage-design |
+| `src/App.tsx` | Lägg till route `/membership` |
+| `src/pages/PlayPage.tsx` | "Bli medlem" → `/membership`, lägg till inloggnings-/profil-ikon i header |
 
-### Detaljer
+### Designdetaljer
 
-**PlayNowTab** omskrivs till att:
-1. Hämta aktiva `membership_tiers` via supabase-klienten
-2. Hämta `membership_tier_pricing` med `product_type = 'day_pass'` för att visa dagspaspris per tier
-3. Rendera tiers dynamiskt med namn, pris, färg från DB
-
-**TodayScreen** bokningsvy:
-1. Lägg till expanderbar sektion "Bokningar" under befintliga stats
-2. Datumväljare (quickdates + kalender) — defaultar till idag
-3. Lista bokningar för valt datum med bana, tid, status, kundinfo (från notes)
-4. Möjlighet att avboka (PATCH status → cancelled)
+- Vit bakgrund, samma `FONT_HEADING` och `FONT_MONO` som PlayPage
+- Tier-kort i samma stil som event-korten (rundade 2xl, subtila borders)
+- Registreringsformulär: samma input-stil som Auth-sidan (rounded-2xl, bg-neutral-50)
+- Formuläret visas inline under vald tier (expand/collapse)
+- After signup: toast "Konto skapat! Kolla din e-post" + info om att medlemskap aktiveras via desken
 
