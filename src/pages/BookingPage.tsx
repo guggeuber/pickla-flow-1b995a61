@@ -199,6 +199,7 @@ export default function BookingPage() {
           endTime: addHour(selectedTime!),
           name: name.trim(),
           phone: phone.trim(),
+          corporatePackageId: useCorporate ? selectedPackageId : undefined,
         }),
       });
       if (!res.ok) {
