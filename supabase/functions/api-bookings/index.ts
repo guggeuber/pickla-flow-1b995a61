@@ -211,7 +211,21 @@ Deno.serve(async (req) => {
       }
     }
 
-    const publicUserId = await getOrCreatePublicBookingUserId(admin);
+    // Try to resolve authenticated user from Authorization header
+    let bookingUserId: string | null = null;
+    const authHeader = req.headers.get('Authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.slice(7);
+      const { data: { user: authUser } } = await admin.auth.getUser(token);
+      if (authUser?.id) {
+        bookingUserId = authUser.id;
+      }
+    }
+
+    // Fallback to guest user if not authenticated
+    if (!bookingUserId) {
+      bookingUserId = await getOrCreatePublicBookingUserId(admin);
+    }
 
     // Fetch pricing rules for this venue
     const { data: pricingRules } = await admin.from('pricing_rules')
@@ -244,8 +258,8 @@ Deno.serve(async (req) => {
       const { data: booking, error: bErr } = await admin.from('bookings').insert({
         venue_id: venue.id,
         venue_court_id: courtId,
-        user_id: publicUserId,
-        booked_by: null,
+        user_id: bookingUserId,
+        booked_by: bookingUserId,
         start_time: startISO,
         end_time: endISO,
         total_price: price,
