@@ -1,0 +1,1 @@
+ALTER TABLE public.day_passes DROP CONSTRAINT day_passes_user_id_fkey;
