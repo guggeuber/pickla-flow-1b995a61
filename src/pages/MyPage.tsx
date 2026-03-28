@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
