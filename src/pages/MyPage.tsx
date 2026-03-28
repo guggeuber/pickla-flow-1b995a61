@@ -366,8 +366,7 @@ function DayPassAllowanceSection() {
     </motion.div>
   );
 }
-
-
+const MyPage = () => {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
