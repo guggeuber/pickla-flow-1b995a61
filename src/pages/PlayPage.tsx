@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Loader2, Zap, Ticket, Check, Clock, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Zap, Ticket, Check, Clock, Users, UserCircle, LogIn } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -273,6 +273,25 @@ const PlayPage = () => {
           <ArrowLeft className="w-5 h-5" style={{ color: "#3E3D39" }} />
         </button>
         <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
+        <div className="flex-1" />
+        {user ? (
+          <button
+            onClick={() => navigate("/my")}
+            className="w-9 h-9 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+            style={{ background: "rgba(62,61,57,0.08)" }}
+          >
+            <UserCircle className="w-5 h-5" style={{ color: "#3E3D39" }} />
+          </button>
+        ) : (
+          <button
+            onClick={() => navigate("/auth?redirect=/play")}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full active:scale-95 transition-transform text-[11px] font-bold"
+            style={{ background: "rgba(62,61,57,0.08)", color: "#3E3D39", fontFamily: FONT_MONO }}
+          >
+            <LogIn className="w-3.5 h-3.5" />
+            Logga in
+          </button>
+        )}
       </div>
 
       <motion.div variants={container} initial="hidden" animate="show" className="px-5 pb-12 flex flex-col gap-6">
@@ -361,7 +380,7 @@ const PlayPage = () => {
         ) : (
           <motion.button
             variants={item}
-            onClick={() => navigate("/community?tab=play")}
+            onClick={() => navigate("/membership")}
             className="rounded-2xl p-4 flex items-center gap-3 text-left transition-all active:scale-[0.98]"
             style={{ background: "rgba(62,61,57,0.03)", border: "1.5px solid rgba(62,61,57,0.08)" }}
           >

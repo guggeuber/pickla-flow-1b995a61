@@ -16,6 +16,7 @@ import PlayPage from "./pages/PlayPage";
 import EventPage from "./pages/EventPage";
 import BookingPage from "./pages/BookingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
+import MembershipPage from "./pages/MembershipPage";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -54,6 +55,7 @@ const App = () => (
             <Route path="/event/:id" element={<EventPage />} />
             <Route path="/e/:slug" element={<EventPage />} />
             <Route path="/book" element={<BookingPage />} />
+            <Route path="/membership" element={<MembershipPage />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
