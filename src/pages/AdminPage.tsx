@@ -18,6 +18,7 @@ import AdminStories from "@/components/admin/AdminStories";
 import AdminEvents from "@/components/admin/AdminEvents";
 import AdminMemberships from "@/components/admin/AdminMemberships";
 import AdminTemplates from "@/components/admin/AdminTemplates";
+import AdminCorporate from "@/components/admin/AdminCorporate";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
