@@ -250,7 +250,7 @@ function DayPassAllowanceSection() {
 
   const handleRevoke = async (shareId: string) => {
     try {
-      await apiPost("api-day-passes", `revoke-share?id=${shareId}`, undefined, 'DELETE');
+      await apiDelete("api-day-passes", "revoke-share", { id: shareId });
       queryClient.invalidateQueries({ queryKey: ["day-pass-allowance"] });
       toast.success("Delning borttagen, passet återställt");
     } catch (err: any) {
