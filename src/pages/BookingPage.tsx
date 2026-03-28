@@ -59,6 +59,8 @@ export default function BookingPage() {
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [confirmed, setConfirmed] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [useCorporate, setUseCorporate] = useState(false);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 
   // Auto-fill name/phone from player profile when logged in
   useEffect(() => {
