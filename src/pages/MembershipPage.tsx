@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, ChevronDown } from "lucide-react";
+import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -11,8 +11,8 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
-const item = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 26 } } };
+const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.1 } } };
+const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 260, damping: 24 } } };
 
 function useMembershipTiers() {
   return useQuery({
@@ -28,7 +28,7 @@ function useMembershipTiers() {
       const { data: pricing } = await supabase
         .from("membership_tier_pricing")
         .select("tier_id, product_type, fixed_price, discount_percent, label")
-        .in("product_type", ["day_pass", "event_fee"]);
+        .in("product_type", ["day_pass", "event_fee", "court_hourly", "guest_pass"]);
 
       return (tiers || []).map((t: any) => ({
         ...t,
@@ -57,6 +57,38 @@ function useActiveMembership() {
   });
 }
 
+// Build benefit list from tier data
+function getTierBenefits(tier: any): string[] {
+  const benefits: string[] = [];
+  const dayPass = tier.pricing?.find((p: any) => p.product_type === "day_pass");
+  const eventFee = tier.pricing?.find((p: any) => p.product_type === "event_fee");
+  const courtHourly = tier.pricing?.find((p: any) => p.product_type === "court_hourly");
+
+  if (dayPass) {
+    if (dayPass.fixed_price === 0) benefits.push("Gratis dagspass – spela varje dag");
+    else if (dayPass.fixed_price != null) benefits.push(`Dagspass för bara ${Math.round(dayPass.fixed_price)} kr`);
+    else if (dayPass.discount_percent) benefits.push(`${dayPass.discount_percent}% rabatt på dagspass`);
+  }
+  if (eventFee) {
+    if (eventFee.fixed_price === 0) benefits.push("Gratis deltagande i alla events");
+    else if (eventFee.fixed_price != null) benefits.push(`Events från ${Math.round(eventFee.fixed_price)} kr`);
+    else if (eventFee.discount_percent) benefits.push(`${eventFee.discount_percent}% rabatt på events`);
+  }
+  if (courtHourly) {
+    if (courtHourly.discount_percent) benefits.push(`${courtHourly.discount_percent}% rabatt på banbokning`);
+    else if (courtHourly.fixed_price != null) benefits.push(`Boka bana för ${Math.round(courtHourly.fixed_price)} kr/h`);
+  }
+
+  // Always add some generic benefits
+  benefits.push("Förtur vid banbokning");
+  benefits.push("Tillgång till medlemsevent & tävlingar");
+  if (benefits.length < 5) benefits.push("Del av Pickla-communityn");
+
+  return benefits;
+}
+
+const TIER_ICONS = [Star, Zap, Crown];
+
 const MembershipPage = () => {
   const navigate = useNavigate();
   const { user, signUp } = useAuth();
@@ -75,7 +107,6 @@ const MembershipPage = () => {
     setSubmitting(true);
     try {
       if (user) {
-        // Already logged in — update phone if provided
         if (formData.phone) {
           await supabase
             .from("player_profiles")
@@ -85,7 +116,6 @@ const MembershipPage = () => {
         toast.success("Tack! Vi kontaktar dig för att aktivera ditt medlemskap.");
         setSelectedTierId(null);
       } else {
-        // Create account
         if (!formData.name.trim()) {
           toast.error("Ange ditt namn");
           setSubmitting(false);
@@ -97,9 +127,6 @@ const MembershipPage = () => {
           setSubmitting(false);
           return;
         }
-
-        // After signup the trigger creates player_profile, but we need to update phone
-        // This will happen on next login since we can't guarantee the profile exists yet
         toast.success("Konto skapat! Kolla din e-post för att verifiera. Vi kontaktar dig för att aktivera medlemskapet.");
         setSelectedTierId(null);
         setFormData({ name: "", email: "", phone: "", password: "" });
@@ -109,6 +136,8 @@ const MembershipPage = () => {
     }
     setSubmitting(false);
   };
+
+  const bestValueIndex = tiers && tiers.length > 1 ? tiers.length - 1 : -1;
 
   return (
     <div className="min-h-screen bg-white" style={{ color: "#3E3D39" }}>
@@ -124,14 +153,14 @@ const MembershipPage = () => {
         <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
       </div>
 
-      <motion.div variants={container} initial="hidden" animate="show" className="px-5 pb-12 flex flex-col gap-6">
-        {/* Hero */}
-        <motion.div variants={item} className="text-center pt-2">
-          <h1 className="text-2xl font-black tracking-tight uppercase" style={{ fontFamily: FONT_HEADING }}>
-            Medlemskap
+      <motion.div variants={container} initial="hidden" animate="show" className="px-5 pb-12 flex flex-col gap-5">
+        {/* Hero section */}
+        <motion.div variants={item} className="text-center pt-2 pb-1">
+          <h1 className="text-[26px] font-black tracking-tight" style={{ fontFamily: FONT_HEADING }}>
+            Spela mer. Betala mindre.
           </h1>
-          <p className="text-sm mt-2" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
-            Välj ditt medlemskap och börja spela
+          <p className="text-[13px] mt-2 leading-relaxed" style={{ color: "rgba(62,61,57,0.55)", fontFamily: FONT_MONO }}>
+            Bli medlem och få tillgång till förmåner,{"\n"}rabatter och exklusiva events.
           </p>
         </motion.div>
 
@@ -162,93 +191,100 @@ const MembershipPage = () => {
             <Loader2 className="w-5 h-5 animate-spin" style={{ color: "#3E3D39" }} />
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
-            {(tiers || []).map((tier: any) => {
+          <div className="flex flex-col gap-5">
+            {(tiers || []).map((tier: any, idx: number) => {
               const isSelected = selectedTierId === tier.id;
-              const dayPassPricing = tier.pricing?.find((p: any) => p.product_type === "day_pass");
-              const eventFeePricing = tier.pricing?.find((p: any) => p.product_type === "event_fee");
+              const benefits = getTierBenefits(tier);
+              const isBestValue = idx === bestValueIndex;
+              const TierIcon = TIER_ICONS[Math.min(idx, TIER_ICONS.length - 1)];
+              const tierColor = tier.color || "#E86C24";
 
               return (
-                <motion.div key={tier.id} variants={item}>
-                  <button
-                    onClick={() => !hasMembership && setSelectedTierId(isSelected ? null : tier.id)}
-                    className="w-full rounded-2xl p-5 text-left transition-all active:scale-[0.99]"
+                <motion.div key={tier.id} variants={item} className="relative">
+                  {/* Badge above card */}
+                  {isBestValue && (
+                    <div className="flex justify-center -mb-3 relative z-10">
+                      <span
+                        className="px-4 py-1 rounded-full text-[11px] font-black uppercase tracking-widest text-white"
+                        style={{ background: tierColor, fontFamily: FONT_MONO }}
+                      >
+                        Mest värde
+                      </span>
+                    </div>
+                  )}
+
+                  <div
+                    className="rounded-2xl overflow-hidden transition-all"
                     style={{
-                      background: isSelected ? `${tier.color || "#E86C24"}08` : "rgba(255,255,255,0.8)",
-                      border: `2px solid ${isSelected ? (tier.color || "#E86C24") + "40" : "rgba(62,61,57,0.08)"}`,
-                      boxShadow: isSelected ? `0 4px 20px ${tier.color || "#E86C24"}15` : "0 2px 12px rgba(0,0,0,0.04)",
+                      border: `2px solid ${isBestValue ? tierColor + "50" : "rgba(62,61,57,0.08)"}`,
+                      boxShadow: isBestValue
+                        ? `0 8px 32px ${tierColor}20, 0 2px 8px rgba(0,0,0,0.04)`
+                        : "0 2px 12px rgba(0,0,0,0.04)",
                     }}
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
+                    {/* Card header */}
+                    <div className="p-5 pb-4">
+                      <div className="flex items-center gap-3 mb-3">
                         <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm"
-                          style={{ background: tier.color || "#E86C24" }}
+                          className="w-11 h-11 rounded-xl flex items-center justify-center"
+                          style={{ background: `${tierColor}15` }}
                         >
-                          {tier.name?.[0]?.toUpperCase() || "M"}
+                          <TierIcon className="w-5 h-5" style={{ color: tierColor }} />
                         </div>
                         <div>
-                          <p className="text-[15px] font-bold tracking-tight" style={{ fontFamily: FONT_HEADING }}>
+                          <p className="text-[17px] font-black tracking-tight" style={{ fontFamily: FONT_HEADING }}>
                             {tier.name}
                           </p>
                           {tier.description && (
-                            <p className="text-[11px] mt-0.5" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
+                            <p className="text-[11px]" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
                               {tier.description}
                             </p>
                           )}
                         </div>
                       </div>
-                      {!hasMembership && (
-                        <ChevronDown
-                          className="w-4 h-4 flex-shrink-0 mt-1 transition-transform"
-                          style={{
-                            color: "rgba(62,61,57,0.3)",
-                            transform: isSelected ? "rotate(180deg)" : "rotate(0deg)",
-                          }}
-                        />
-                      )}
+
+                      {/* Benefits list */}
+                      <div className="space-y-2.5 mt-4">
+                        {benefits.map((benefit, i) => (
+                          <div key={i} className="flex items-start gap-2.5">
+                            <Check
+                              className="w-4 h-4 flex-shrink-0 mt-0.5"
+                              style={{ color: tierColor }}
+                              strokeWidth={3}
+                            />
+                            <p className="text-[13px] leading-snug" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
+                              {benefit}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
-                    {/* Pricing info */}
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      {tier.monthly_price != null && tier.monthly_price > 0 && (
-                        <span
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold"
+                    {/* CTA section */}
+                    {!hasMembership && (
+                      <div className="px-5 pb-5">
+                        <button
+                          onClick={() => setSelectedTierId(isSelected ? null : tier.id)}
+                          className="w-full py-4 rounded-2xl text-white text-[14px] font-black uppercase tracking-wider active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                           style={{
-                            background: `${tier.color || "#E86C24"}12`,
-                            color: tier.color || "#E86C24",
+                            background: tierColor,
                             fontFamily: FONT_MONO,
+                            boxShadow: `0 4px 16px ${tierColor}40`,
                           }}
                         >
-                          {Math.round(tier.monthly_price)} kr/mån
-                        </span>
-                      )}
-                      {dayPassPricing && (
-                        <span
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold"
-                          style={{
-                            background: "rgba(62,61,57,0.05)",
-                            color: "rgba(62,61,57,0.6)",
-                            fontFamily: FONT_MONO,
-                          }}
-                        >
-                          Dagspass: {dayPassPricing.fixed_price != null ? `${Math.round(dayPassPricing.fixed_price)} kr` : dayPassPricing.discount_percent ? `-${dayPassPricing.discount_percent}%` : "Gratis"}
-                        </span>
-                      )}
-                      {eventFeePricing && (
-                        <span
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold"
-                          style={{
-                            background: "rgba(62,61,57,0.05)",
-                            color: "rgba(62,61,57,0.6)",
-                            fontFamily: FONT_MONO,
-                          }}
-                        >
-                          Event: {eventFeePricing.fixed_price != null ? (eventFeePricing.fixed_price === 0 ? "Gratis" : `${Math.round(eventFeePricing.fixed_price)} kr`) : eventFeePricing.discount_percent ? `-${eventFeePricing.discount_percent}%` : "Gratis"}
-                        </span>
-                      )}
-                    </div>
-                  </button>
+                          {tier.monthly_price > 0
+                            ? `${Math.round(tier.monthly_price)} KR/MÅN – BLI MEDLEM`
+                            : "BLI MEDLEM – GRATIS"}
+                        </button>
+
+                        {tier.monthly_price > 0 && (
+                          <p className="text-[10px] text-center mt-2" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
+                            Ingen bindningstid. Betalning sker via desken.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
 
                   {/* Inline signup form */}
                   <AnimatePresence>
@@ -339,7 +375,7 @@ const MembershipPage = () => {
                             disabled={submitting}
                             className="w-full py-3.5 rounded-2xl text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-2"
                             style={{
-                              background: tier.color || "#E86C24",
+                              background: tierColor,
                               fontFamily: FONT_MONO,
                             }}
                           >
@@ -348,7 +384,7 @@ const MembershipPage = () => {
                             ) : user ? (
                               "ANSÖK OM MEDLEMSKAP"
                             ) : (
-                              "SKAPA KONTO & ANSÖK"
+                              "SKAPA KONTO & BLI MEDLEM"
                             )}
                           </button>
 
