@@ -361,13 +361,22 @@ function DayPassAllowanceSection() {
                   {s.status === "claimed" ? "Hämtad" : "Väntande"}
                 </span>
                 {s.status === "pending" && s.token && (
-                  <button
-                    onClick={() => copyLink(buildLink(s.token))}
-                    className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
-                    style={{ background: "rgba(255,255,255,0.06)" }}
-                  >
-                    <Copy className="w-3 h-3 text-white/40" />
-                  </button>
+                  <>
+                    <button
+                      onClick={() => copyLink(buildLink(s.token))}
+                      className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                      style={{ background: "rgba(255,255,255,0.06)" }}
+                    >
+                      <Copy className="w-3 h-3 text-white/40" />
+                    </button>
+                    <button
+                      onClick={() => handleRevoke(s.id)}
+                      className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                      style={{ background: "rgba(239,68,68,0.1)" }}
+                    >
+                      <Trash2 className="w-3 h-3 text-red-400/60" />
+                    </button>
+                  </>
                 )}
               </div>
             ))}
