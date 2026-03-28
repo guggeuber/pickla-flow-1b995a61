@@ -354,6 +354,9 @@ const MyPage = () => {
             )}
           </motion.div>
 
+          {/* Day pass allowance (for members) */}
+          <DayPassAllowanceSection />
+
           {/* Day passes */}
           <motion.div variants={item}>
             <div className="flex items-center gap-2 mb-2">
