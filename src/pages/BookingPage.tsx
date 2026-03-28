@@ -515,6 +515,62 @@ export default function BookingPage() {
             </div>
           )}
 
+          {/* Corporate payment option */}
+          {selectedCourts.length > 0 && activePackages.length > 0 && (
+            <div>
+              <div className="h-px bg-neutral-100 mb-6" />
+              <h2
+                className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
+                style={{ fontFamily: FONT_MONO }}
+              >
+                betalning
+              </h2>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => { setUseCorporate(false); setSelectedPackageId(null); }}
+                  className={`w-full py-3 px-4 rounded-2xl text-left text-[13px] font-medium transition-all ${
+                    !useCorporate
+                      ? "bg-neutral-900 text-white"
+                      : "bg-neutral-50 text-neutral-600"
+                  }`}
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  betala i kassan · {totalPrice} kr
+                </button>
+                {activePackages.map((pkg: any) => {
+                  const remaining = pkg.total_hours - pkg.used_hours;
+                  const isSelected = useCorporate && selectedPackageId === pkg.id;
+                  return (
+                    <button
+                      key={pkg.id}
+                      type="button"
+                      onClick={() => { setUseCorporate(true); setSelectedPackageId(pkg.id); }}
+                      className={`w-full py-3 px-4 rounded-2xl text-left flex items-center gap-3 transition-all ${
+                        isSelected
+                          ? "bg-neutral-900 text-white"
+                          : "bg-neutral-50 text-neutral-600"
+                      }`}
+                    >
+                      <Building2 className={`w-4 h-4 flex-shrink-0 ${isSelected ? "text-orange-400" : "text-neutral-400"}`} />
+                      <div className="flex-1">
+                        <span className="text-[13px] font-medium" style={{ fontFamily: FONT_MONO }}>
+                          {pkg.company_name}
+                        </span>
+                        <span className={`text-[11px] ml-2 ${isSelected ? "text-white/60" : "text-neutral-400"}`} style={{ fontFamily: FONT_MONO }}>
+                          {remaining}h kvar
+                        </span>
+                      </div>
+                      <span className="text-[13px] font-bold" style={{ fontFamily: FONT_GROTESK }}>
+                        0 kr
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Summary + Book button */}
           {selectedCourts.length > 0 && name.trim() && phone.trim() && (
             <div>
