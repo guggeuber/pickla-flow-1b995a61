@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { apiGet, apiPost } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
@@ -62,6 +63,16 @@ function useMyDayPasses() {
       if (error) throw error;
       return data;
     },
+  });
+}
+
+function useDayPassAllowance() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["day-pass-allowance", user?.id],
+    enabled: !!user,
+    staleTime: 15000,
+    queryFn: () => apiGet("api-day-passes", "my-allowance"),
   });
 }
 
