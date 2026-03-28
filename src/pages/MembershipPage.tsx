@@ -203,8 +203,7 @@ function DayPassPurchaseSection() {
     </motion.div>
   );
 }
-
-
+const MembershipPage = () => {
   const navigate = useNavigate();
   const { user, signUp } = useAuth();
   const { data: tiers, isLoading } = useMembershipTiers();
