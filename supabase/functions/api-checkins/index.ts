@@ -11,6 +11,109 @@ Deno.serve(async (req) => {
 
   try {
     // Public endpoint: validate-checkin (no auth required for desk search)
+    if (req.method === 'POST' && path === 'validate-by-uid') {
+      const { client, userId, error } = await getAuthenticatedClient(req);
+      if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+      const body = await req.json();
+      const { venue_id, user_id: targetUserId } = body;
+      if (!venue_id || !targetUserId) return errorResponse('Missing venue_id or user_id');
+
+      const serviceClient = getServiceClient();
+
+      // Get profile
+      const { data: profile } = await serviceClient
+        .from('player_profiles')
+        .select('id, auth_user_id, display_name, phone, avatar_url')
+        .eq('auth_user_id', targetUserId)
+        .maybeSingle();
+
+      if (!profile) return errorResponse('User not found', 404);
+
+      const today = new Date().toISOString().slice(0, 10);
+      const entitlements: any[] = [];
+
+      // Check membership
+      const { data: membership } = await serviceClient
+        .from('memberships')
+        .select('id, tier_id, status, membership_tiers(name, color)')
+        .eq('user_id', targetUserId)
+        .eq('venue_id', venue_id)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+
+      if (membership) {
+        entitlements.push({
+          type: 'membership',
+          id: membership.id,
+          label: (membership as any).membership_tiers?.name || 'Medlem',
+          color: (membership as any).membership_tiers?.color || '#4CAF50',
+        });
+      }
+
+      // Check day pass
+      const { data: dayPass } = await serviceClient
+        .from('day_passes')
+        .select('id, price, status')
+        .eq('user_id', targetUserId)
+        .eq('venue_id', venue_id)
+        .eq('valid_date', today)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+
+      if (dayPass) {
+        entitlements.push({
+          type: 'day_pass',
+          id: dayPass.id,
+          label: `Dagspass (${dayPass.price || 0} kr)`,
+        });
+      }
+
+      // Check booking
+      const nowIso = new Date().toISOString();
+      const { data: booking } = await serviceClient
+        .from('bookings')
+        .select('id, start_time, end_time, venue_courts(name)')
+        .eq('user_id', targetUserId)
+        .eq('venue_id', venue_id)
+        .eq('status', 'confirmed')
+        .lte('start_time', nowIso)
+        .gte('end_time', nowIso)
+        .limit(1)
+        .maybeSingle();
+
+      if (booking) {
+        entitlements.push({
+          type: 'booking',
+          id: booking.id,
+          label: `Bokning: ${(booking as any).venue_courts?.name || 'Bana'}`,
+        });
+      }
+
+      // Already checked in?
+      const { data: existingCheckin } = await serviceClient
+        .from('venue_checkins')
+        .select('id')
+        .eq('user_id', targetUserId)
+        .eq('venue_id', venue_id)
+        .eq('session_date', today)
+        .is('checked_out_at', null)
+        .limit(1)
+        .maybeSingle();
+
+      return jsonResponse({
+        profile_id: profile.id,
+        user_id: profile.auth_user_id,
+        display_name: profile.display_name,
+        phone: profile.phone,
+        avatar_url: profile.avatar_url,
+        entitlements,
+        already_checked_in: !!existingCheckin,
+      });
+    }
+
     if (req.method === 'POST' && path === 'validate-checkin') {
       const { client, userId, error } = await getAuthenticatedClient(req);
       if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
