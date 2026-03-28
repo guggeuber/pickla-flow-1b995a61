@@ -10,8 +10,6 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const pathParts = url.pathname.split('/').filter(Boolean);
   const path = pathParts.pop() || '';
-  // For claim/:token pattern
-  const parentPath = pathParts.length > 0 ? pathParts[pathParts.length - 1] : '';
 
   try {
     // ─── PUBLIC: POST /public-purchase ───
@@ -41,7 +39,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ id: data.id, ref, name, phone, price: price || 165 }, 201);
     }
 
-    // ─── PUBLIC: POST /claim (claim a shared pass by token) ───
+    // ─── PUBLIC: POST /claim ───
     if (req.method === 'POST' && path === 'claim') {
       const body = await req.json();
       const { token } = body;
@@ -49,7 +47,6 @@ Deno.serve(async (req) => {
 
       const adminClient = getServiceClient();
 
-      // Find the share
       const { data: share, error: shareErr } = await adminClient
         .from('day_pass_shares')
         .select('*, day_passes(*)')
@@ -59,7 +56,6 @@ Deno.serve(async (req) => {
 
       if (shareErr || !share) return errorResponse('Pass not found or already claimed', 404);
 
-      // Get authenticated user if available
       const authHeader = req.headers.get('Authorization');
       let claimUserId: string | null = null;
 
@@ -78,14 +74,12 @@ Deno.serve(async (req) => {
 
       if (!claimUserId) return errorResponse('Must be logged in to claim', 401);
 
-      // Update share status
       await adminClient.from('day_pass_shares')
         .update({ status: 'claimed', claimed_by: claimUserId, claimed_at: new Date().toISOString() })
         .eq('id', share.id);
 
-      // Update day_pass user_id to claimed user
       await adminClient.from('day_passes')
-        .update({ user_id: claimUserId })
+        .update({ user_id: claimUserId, status: 'active' })
         .eq('id', share.day_pass_id);
 
       return jsonResponse({ success: true, dayPassId: share.day_pass_id });
@@ -105,7 +99,6 @@ Deno.serve(async (req) => {
 
       if (!share) return errorResponse('Not found', 404);
 
-      // Get sharer name
       const { data: sharerProfile } = await adminClient
         .from('player_profiles')
         .select('display_name')
@@ -124,9 +117,123 @@ Deno.serve(async (req) => {
 
     const adminClient = getServiceClient();
 
-    // ─── GET /my-allowance ───
+    // ─── GET /my-passes ── unified: all passes + allowance info ───
+    if (req.method === 'GET' && path === 'my-passes') {
+      // Get all user's active day passes
+      const { data: passes } = await adminClient
+        .from('day_passes')
+        .select('id, valid_date, purchase_date, price, status, shared_from, venue_id, created_at')
+        .eq('user_id', userId)
+        .in('status', ['active', 'used'])
+        .order('created_at', { ascending: false });
+
+      // Get shares created by this user
+      const { data: shares } = await adminClient
+        .from('day_pass_shares')
+        .select('id, token, status, recipient_email, day_pass_id, claimed_by, created_at')
+        .eq('shared_by', userId)
+        .order('created_at', { ascending: false });
+
+      // Map shares to their day_pass_id for easy lookup
+      const sharesByPassId: Record<string, any> = {};
+      (shares || []).forEach((s: any) => { sharesByPassId[s.day_pass_id] = s; });
+
+      // Enrich passes with share info
+      const enrichedPasses = (passes || []).map((p: any) => ({
+        ...p,
+        share: sharesByPassId[p.id] || null,
+        is_free: (p.price === 0 || p.price === null),
+      }));
+
+      // Check membership grant info
+      let allowance = { has_membership: false, passes_allowed: 0, passes_remaining: 0 };
+
+      const { data: membership } = await adminClient
+        .from('memberships')
+        .select('id, tier_id, venue_id')
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .limit(1)
+        .single();
+
+      if (membership) {
+        const { data: tierPricing } = await adminClient
+          .from('membership_tier_pricing')
+          .select('fixed_price')
+          .eq('tier_id', membership.tier_id)
+          .eq('product_type', 'monthly_passes')
+          .single();
+
+        const passesAllowed = tierPricing?.fixed_price ? Math.round(tierPricing.fixed_price) : 0;
+
+        if (passesAllowed > 0) {
+          const now = new Date();
+          const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+
+          let { data: grant } = await adminClient
+            .from('day_pass_grants')
+            .select('*')
+            .eq('membership_id', membership.id)
+            .eq('month_year', monthYear)
+            .single();
+
+          if (!grant) {
+            // Create grant AND auto-create free passes
+            const { data: newGrant } = await adminClient.from('day_pass_grants').insert({
+              membership_id: membership.id,
+              venue_id: membership.venue_id,
+              month_year: monthYear,
+              passes_allowed: passesAllowed,
+              passes_used: 0,
+            }).select().single();
+            grant = newGrant;
+
+            // Auto-create day passes for this month
+            const today = now.toISOString().slice(0, 10);
+            const passInserts = [];
+            for (let i = 0; i < passesAllowed; i++) {
+              passInserts.push({
+                venue_id: membership.venue_id,
+                user_id: userId,
+                valid_date: today,
+                purchase_date: today,
+                price: 0,
+                status: 'active',
+              });
+            }
+            await adminClient.from('day_passes').insert(passInserts);
+          }
+
+          allowance = {
+            has_membership: true,
+            passes_allowed: passesAllowed,
+            passes_remaining: (grant?.passes_allowed || passesAllowed) - (grant?.passes_used || 0),
+          };
+        }
+      }
+
+      // Re-fetch passes after potential grant creation
+      const { data: finalPasses } = await adminClient
+        .from('day_passes')
+        .select('id, valid_date, purchase_date, price, status, shared_from, venue_id, created_at')
+        .eq('user_id', userId)
+        .in('status', ['active', 'used'])
+        .order('created_at', { ascending: false });
+
+      const finalShares: Record<string, any> = {};
+      (shares || []).forEach((s: any) => { finalShares[s.day_pass_id] = s; });
+
+      const finalEnriched = (finalPasses || []).map((p: any) => ({
+        ...p,
+        share: finalShares[p.id] || null,
+        is_free: (p.price === 0 || p.price === null),
+      }));
+
+      return jsonResponse({ passes: finalEnriched, allowance, shares: shares || [] });
+    }
+
+    // ─── GET /my-allowance (kept for backwards compat) ───
     if (req.method === 'GET' && path === 'my-allowance') {
-      // Find active membership
       const { data: membership } = await adminClient
         .from('memberships')
         .select('id, tier_id, venue_id')
@@ -137,7 +244,6 @@ Deno.serve(async (req) => {
 
       if (!membership) return jsonResponse({ has_membership: false, passes_allowed: 0, passes_used: 0, passes_remaining: 0 });
 
-      // Check tier pricing for monthly_passes
       const { data: tierPricing } = await adminClient
         .from('membership_tier_pricing')
         .select('fixed_price')
@@ -148,7 +254,6 @@ Deno.serve(async (req) => {
       const passesAllowed = tierPricing?.fixed_price ? Math.round(tierPricing.fixed_price) : 0;
       if (passesAllowed === 0) return jsonResponse({ has_membership: true, passes_allowed: 0, passes_used: 0, passes_remaining: 0 });
 
-      // Get or create grant for current month
       const now = new Date();
       const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 
@@ -170,7 +275,6 @@ Deno.serve(async (req) => {
         grant = newGrant;
       }
 
-      // Get shares for this month
       const { data: shares } = await adminClient
         .from('day_pass_shares')
         .select('id, token, status, recipient_email, recipient_phone, claimed_by, created_at')
@@ -188,75 +292,84 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ─── POST /share ───
-    if (req.method === 'POST' && path === 'share') {
-      const body = await req.json();
-      const { recipient_email, recipient_phone } = body;
-      if (!recipient_email && !recipient_phone) return errorResponse('Missing recipient info');
+    // ─── POST /buy ── self-purchase a day pass ───
+    if (req.method === 'POST' && path === 'buy') {
+      // Get venue
+      const { data: venue } = await adminClient.from('venues').select('id').limit(1).single();
+      if (!venue) return errorResponse('No venue found');
 
-      // Get membership
-      const { data: membership } = await adminClient
-        .from('memberships')
-        .select('id, tier_id, venue_id')
-        .eq('user_id', userId)
-        .eq('status', 'active')
+      // Get day pass price from pricing rules
+      const { data: pricing } = await adminClient
+        .from('pricing_rules')
+        .select('price')
+        .eq('venue_id', venue.id)
+        .eq('type', 'day_pass')
+        .eq('is_active', true)
         .limit(1)
         .single();
 
-      if (!membership) return errorResponse('No active membership');
+      const price = pricing?.price || 165;
+      const today = new Date().toISOString().slice(0, 10);
 
-      // Check allowance
-      const now = new Date();
-      const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-
-      const { data: grant } = await adminClient
-        .from('day_pass_grants')
-        .select('*')
-        .eq('membership_id', membership.id)
-        .eq('month_year', monthYear)
-        .single();
-
-      if (!grant) return errorResponse('No grant for this month');
-      if (grant.passes_used >= grant.passes_allowed) return errorResponse('No passes remaining this month');
-
-      const today = now.toISOString().slice(0, 10);
-      const token = Math.random().toString(36).substring(2, 10).toUpperCase();
-
-      // Create day_pass owned by sharer initially; reassigned on claim
-      const { data: dayPass, error: dpErr } = await adminClient.from('day_passes').insert({
-        venue_id: membership.venue_id,
+      const { data, error: insertErr } = await adminClient.from('day_passes').insert({
+        venue_id: venue.id,
         user_id: userId,
         valid_date: today,
         purchase_date: today,
-        price: 0,
+        price,
         status: 'active',
       }).select('id').single();
 
-      if (dpErr) return errorResponse(dpErr.message);
+      if (insertErr) return errorResponse(insertErr.message);
+      return jsonResponse({ id: data.id, price }, 201);
+    }
 
-      // Create share record
+    // ─── POST /share ── share an existing pass ───
+    if (req.method === 'POST' && path === 'share') {
+      const body = await req.json();
+      const { day_pass_id, recipient_email } = body;
+      if (!day_pass_id) return errorResponse('Missing day_pass_id');
+      if (!recipient_email) return errorResponse('Missing recipient_email');
+
+      // Verify the pass belongs to the user and is active
+      const { data: pass, error: passErr } = await adminClient
+        .from('day_passes')
+        .select('id, venue_id, status, user_id')
+        .eq('id', day_pass_id)
+        .single();
+
+      if (passErr || !pass) return errorResponse('Pass not found', 404);
+      if (pass.user_id !== userId) return errorResponse('Not your pass', 403);
+      if (pass.status !== 'active') return errorResponse('Pass is not active');
+
+      // Check if already shared
+      const { data: existingShare } = await adminClient
+        .from('day_pass_shares')
+        .select('id')
+        .eq('day_pass_id', day_pass_id)
+        .eq('status', 'pending')
+        .single();
+
+      if (existingShare) return errorResponse('Pass is already shared');
+
+      const token = Math.random().toString(36).substring(2, 10).toUpperCase();
+
       const { data: share, error: shareErr } = await adminClient.from('day_pass_shares').insert({
-        day_pass_id: dayPass.id,
+        day_pass_id,
         shared_by: userId,
-        recipient_email: recipient_email || null,
-        recipient_phone: recipient_phone || null,
+        recipient_email,
         token,
         status: 'pending',
       }).select().single();
 
       if (shareErr) return errorResponse(shareErr.message);
 
-      // Update shared_from on day_pass
+      // Mark pass with shared_from reference
       await adminClient.from('day_passes')
         .update({ shared_from: share.id })
-        .eq('id', dayPass.id);
+        .eq('id', day_pass_id);
 
-      // Increment passes_used
-      await adminClient.from('day_pass_grants')
-        .update({ passes_used: grant.passes_used + 1 })
-        .eq('id', grant.id);
-
-      return jsonResponse({ token, share_id: share.id, day_pass_id: dayPass.id }, 201);
+      return jsonResponse({ token, share_id: share.id, day_pass_id }, 201);
     }
 
     // ─── DELETE /revoke-share ───
@@ -264,7 +377,6 @@ Deno.serve(async (req) => {
       const shareId = url.searchParams.get('id');
       if (!shareId) return errorResponse('Missing share id');
 
-      // Verify ownership and status
       const { data: share, error: sErr } = await adminClient
         .from('day_pass_shares')
         .select('id, day_pass_id, shared_by, status')
@@ -275,35 +387,11 @@ Deno.serve(async (req) => {
       if (share.shared_by !== userId) return errorResponse('Not your share', 403);
       if (share.status === 'claimed') return errorResponse('Already claimed, cannot revoke');
 
-      // Delete share, delete the day_pass, decrement grant
+      // Delete share, restore the pass
       await adminClient.from('day_pass_shares').delete().eq('id', shareId);
-      await adminClient.from('day_passes').delete().eq('id', share.day_pass_id);
-
-      // Decrement passes_used on current month grant
-      const now = new Date();
-      const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-      const { data: membership } = await adminClient
-        .from('memberships')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .limit(1)
-        .single();
-
-      if (membership) {
-        const { data: grant } = await adminClient
-          .from('day_pass_grants')
-          .select('id, passes_used')
-          .eq('membership_id', membership.id)
-          .eq('month_year', monthYear)
-          .single();
-
-        if (grant && grant.passes_used > 0) {
-          await adminClient.from('day_pass_grants')
-            .update({ passes_used: grant.passes_used - 1 })
-            .eq('id', grant.id);
-        }
-      }
+      await adminClient.from('day_passes')
+        .update({ shared_from: null })
+        .eq('id', share.day_pass_id);
 
       return jsonResponse({ ok: true });
     }
