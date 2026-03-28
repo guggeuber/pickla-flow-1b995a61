@@ -69,7 +69,8 @@ const ClaimPassPage = () => {
     setClaiming(false);
   };
 
-  // Auto-claim when user becomes authenticated
+  // Auto-claim is handled by AuthProvider via localStorage token
+  // Just redirect if user is already logged in and share is being claimed
   useEffect(() => {
     if (user && shareInfo?.status === "pending" && !claiming) {
       handleClaim();
