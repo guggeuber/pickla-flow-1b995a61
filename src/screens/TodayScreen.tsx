@@ -296,6 +296,13 @@ const TodayScreen = () => {
         )}
       </div>
 
+      {/* QR Scanner */}
+      <AnimatePresence>
+        {showScanner && venueId && (
+          <QrScanner venueId={venueId} onClose={() => setShowScanner(false)} />
+        )}
+      </AnimatePresence>
+
       {/* Court Action Sheet */}
       <AnimatePresence>
         {selectedCourt && (

@@ -556,6 +556,9 @@ const MyPage = () => {
             )}
           </motion.div>
 
+          {/* QR Code for check-in */}
+          <QrCodeCard userId={user.id} displayName={displayName} />
+
           {/* Unified day pass section */}
           <DayPassSection />
         </motion.div>
