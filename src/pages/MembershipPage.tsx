@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown } from "lucide-react";
+import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown, Ticket } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
