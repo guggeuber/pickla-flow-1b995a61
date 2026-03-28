@@ -17,6 +17,7 @@ import EventPage from "./pages/EventPage";
 import BookingPage from "./pages/BookingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
 import MembershipPage from "./pages/MembershipPage";
+import ClaimPassPage from "./pages/ClaimPassPage";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -57,6 +58,7 @@ const App = () => (
             <Route path="/book" element={<BookingPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
+            <Route path="/pass/:token" element={<ClaimPassPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown } from "lucide-react";
+import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown, Ticket } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
@@ -88,7 +89,120 @@ function getTierBenefits(tier: any): string[] {
 }
 
 const TIER_ICONS = [Star, Zap, Crown];
+function DayPassPurchaseSection() {
+  const [buying, setBuying] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [purchaseRef, setPurchaseRef] = useState<string | null>(null);
 
+  const handleBuy = async () => {
+    if (!name.trim() || !phone.trim()) {
+      toast.error("Ange namn och telefon");
+      return;
+    }
+    setBuying(true);
+    try {
+      const result = await apiPost("api-day-passes", "public-purchase", {
+        name: name.trim(),
+        phone: phone.trim(),
+        price: 165,
+      });
+      setPurchaseRef(result.ref);
+      toast.success("Dagspass köpt!");
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte köpa dagspass");
+    }
+    setBuying(false);
+  };
+
+  return (
+    <motion.div variants={item}>
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{ border: "2px solid rgba(62,61,57,0.08)", boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}
+      >
+        <div className="p-5">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center" style={{ background: "rgba(232,108,36,0.1)" }}>
+              <Ticket className="w-5 h-5" style={{ color: "#E86C24" }} />
+            </div>
+            <div>
+              <p className="text-[17px] font-black tracking-tight" style={{ fontFamily: FONT_HEADING }}>Dagspass</p>
+              <p className="text-[11px]" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
+                Spela open play under en hel dag
+              </p>
+            </div>
+          </div>
+
+          {purchaseRef ? (
+            <div className="mt-3 rounded-xl p-4 text-center" style={{ background: "rgba(76,175,80,0.08)", border: "1px solid rgba(76,175,80,0.15)" }}>
+              <Check className="w-6 h-6 mx-auto mb-2" style={{ color: "#4CAF50" }} />
+              <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING }}>Dagspass köpt!</p>
+              <p className="text-lg font-black mt-1" style={{ fontFamily: FONT_MONO, color: "#E86C24" }}>{purchaseRef}</p>
+              <p className="text-[10px] mt-1" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
+                Visa denna kod i desken
+              </p>
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={() => setShowForm(!showForm)}
+                className="w-full mt-3 py-4 rounded-2xl text-white text-[14px] font-black uppercase tracking-wider active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                style={{ background: "#E86C24", fontFamily: FONT_MONO, boxShadow: "0 4px 16px rgba(232,108,36,0.3)" }}
+              >
+                165 KR – KÖP DAGSPASS
+              </button>
+
+              <AnimatePresence>
+                {showForm && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="pt-3 space-y-2">
+                      <input
+                        type="text"
+                        placeholder="Ditt namn"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-full px-4 py-3 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-sm placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400"
+                        style={{ fontFamily: FONT_MONO }}
+                        required
+                      />
+                      <input
+                        type="tel"
+                        placeholder="Telefonnummer"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="w-full px-4 py-3 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-sm placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400"
+                        style={{ fontFamily: FONT_MONO }}
+                        required
+                      />
+                      <button
+                        onClick={handleBuy}
+                        disabled={buying}
+                        className="w-full py-3 rounded-2xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-2"
+                        style={{ background: "#E86C24", fontFamily: FONT_MONO }}
+                      >
+                        {buying ? <Loader2 className="w-4 h-4 animate-spin" /> : "BEKRÄFTA KÖP"}
+                      </button>
+                      <p className="text-[10px] text-center" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
+                        Betalning sker i desken vid ankomst.
+                      </p>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 const MembershipPage = () => {
   const navigate = useNavigate();
   const { user, signUp } = useAuth();
@@ -400,6 +514,9 @@ const MembershipPage = () => {
             })}
           </div>
         )}
+
+        {/* Buy day pass */}
+        <DayPassPurchaseSection />
 
         {/* Already have account */}
         {!user && (
