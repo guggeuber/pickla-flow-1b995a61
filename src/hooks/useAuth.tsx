@@ -1,6 +1,8 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { User, Session } from "@supabase/supabase-js";
+import { apiPost } from "@/lib/api";
+import { toast } from "sonner";
 
 interface AuthContextType {
   user: User | null;
@@ -13,10 +15,30 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const claimAttempted = useRef(false);
+
+  // Auto-claim pending day pass when user becomes authenticated
+  useEffect(() => {
+    if (!user || claimAttempted.current) return;
+    const token = localStorage.getItem(PENDING_CLAIM_KEY);
+    if (!token) return;
+    claimAttempted.current = true;
+    apiPost("api-day-passes", "claim", { token })
+      .then(() => {
+        localStorage.removeItem(PENDING_CLAIM_KEY);
+        toast.success("Dagspass hämtat! Du hittar det under Mitt konto.");
+      })
+      .catch(() => {
+        // Token might already be claimed or invalid — clear it silently
+        localStorage.removeItem(PENDING_CLAIM_KEY);
+      });
+  }, [user]);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
