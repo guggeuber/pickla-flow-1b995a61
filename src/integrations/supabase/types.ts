@@ -476,6 +476,98 @@ export type Database = {
           },
         ]
       }
+      day_pass_grants: {
+        Row: {
+          created_at: string | null
+          id: string
+          membership_id: string
+          month_year: string
+          passes_allowed: number
+          passes_used: number
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          membership_id: string
+          month_year: string
+          passes_allowed?: number
+          passes_used?: number
+          venue_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          membership_id?: string
+          month_year?: string
+          passes_allowed?: number
+          passes_used?: number
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "day_pass_grants_membership_id_fkey"
+            columns: ["membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "day_pass_grants_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      day_pass_shares: {
+        Row: {
+          claimed_at: string | null
+          claimed_by: string | null
+          created_at: string | null
+          day_pass_id: string
+          id: string
+          recipient_email: string | null
+          recipient_phone: string | null
+          shared_by: string
+          status: string
+          token: string
+        }
+        Insert: {
+          claimed_at?: string | null
+          claimed_by?: string | null
+          created_at?: string | null
+          day_pass_id: string
+          id?: string
+          recipient_email?: string | null
+          recipient_phone?: string | null
+          shared_by: string
+          status?: string
+          token: string
+        }
+        Update: {
+          claimed_at?: string | null
+          claimed_by?: string | null
+          created_at?: string | null
+          day_pass_id?: string
+          id?: string
+          recipient_email?: string | null
+          recipient_phone?: string | null
+          shared_by?: string
+          status?: string
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "day_pass_shares_day_pass_id_fkey"
+            columns: ["day_pass_id"]
+            isOneToOne: false
+            referencedRelation: "day_passes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       day_passes: {
         Row: {
           created_at: string | null
@@ -483,6 +575,7 @@ export type Database = {
           id: string
           price: number | null
           purchase_date: string
+          shared_from: string | null
           sold_by: string | null
           status: Database["public"]["Enums"]["day_pass_status"] | null
           user_id: string
@@ -495,6 +588,7 @@ export type Database = {
           id?: string
           price?: number | null
           purchase_date?: string
+          shared_from?: string | null
           sold_by?: string | null
           status?: Database["public"]["Enums"]["day_pass_status"] | null
           user_id: string
@@ -507,6 +601,7 @@ export type Database = {
           id?: string
           price?: number | null
           purchase_date?: string
+          shared_from?: string | null
           sold_by?: string | null
           status?: Database["public"]["Enums"]["day_pass_status"] | null
           user_id?: string
@@ -514,6 +609,13 @@ export type Database = {
           venue_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "day_passes_shared_from_fkey"
+            columns: ["shared_from"]
+            isOneToOne: false
+            referencedRelation: "day_pass_shares"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "day_passes_venue_id_fkey"
             columns: ["venue_id"]
@@ -2212,7 +2314,7 @@ export type Database = {
         | "cancelled"
         | "completed"
         | "no_show"
-      day_pass_status: "active" | "expired" | "cancelled"
+      day_pass_status: "active" | "expired" | "cancelled" | "used"
       event_format:
         | "round_robin"
         | "knockout"
@@ -2363,7 +2465,7 @@ export const Constants = {
         "completed",
         "no_show",
       ],
-      day_pass_status: ["active", "expired", "cancelled"],
+      day_pass_status: ["active", "expired", "cancelled", "used"],
       event_format: [
         "round_robin",
         "knockout",
