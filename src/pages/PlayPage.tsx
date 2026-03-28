@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Loader2, Zap, Ticket, Check, Clock, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Zap, Ticket, Check, Clock, Users, UserCircle, LogIn } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
