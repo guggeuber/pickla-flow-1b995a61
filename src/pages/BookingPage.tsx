@@ -607,7 +607,7 @@ export default function BookingPage() {
                     totalt
                   </span>
                   <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                    {totalPrice} kr
+                    {useCorporate ? "0 kr" : `${totalPrice} kr`}
                   </span>
                 </div>
               </div>
