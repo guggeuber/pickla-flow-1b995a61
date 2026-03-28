@@ -87,6 +87,119 @@ function useActiveMembership() {
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
 const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } };
 
+function ProfileCard({ profile, user, displayName }: { profile: any; user: any; displayName: string }) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(displayName);
+  const [editPhone, setEditPhone] = useState(profile?.phone || "");
+  const [saving, setSaving] = useState(false);
+  const queryClient = useQueryClient();
+
+  const handleSave = async () => {
+    setSaving(true);
+    const { error } = await supabase
+      .from("player_profiles")
+      .update({ display_name: editName.trim(), phone: editPhone.trim() })
+      .eq("auth_user_id", user.id);
+    setSaving(false);
+    if (error) {
+      toast.error("Kunde inte spara");
+    } else {
+      toast.success("Uppgifter sparade");
+      queryClient.invalidateQueries({ queryKey: ["player-profile"] });
+      setEditing(false);
+    }
+  };
+
+  return (
+    <motion.div
+      variants={item}
+      className="rounded-2xl p-5"
+      style={{
+        background: "rgba(255,255,255,0.06)",
+        border: "1.5px solid rgba(255,255,255,0.08)",
+      }}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className="w-12 h-12 rounded-full flex items-center justify-center"
+          style={{ background: "rgba(255,255,255,0.1)" }}
+        >
+          <span className="text-lg font-bold text-white">
+            {displayName.charAt(0).toUpperCase()}
+          </span>
+        </div>
+        <div className="flex-1">
+          {editing ? (
+            <div className="flex flex-col gap-2">
+              <input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="bg-white/10 text-white text-sm rounded-lg px-3 py-1.5 outline-none border border-white/10 focus:border-white/30"
+                placeholder="Namn"
+                style={{ fontFamily: FONT_HEADING }}
+              />
+              <div className="flex items-center gap-2">
+                <Phone className="w-3.5 h-3.5 text-white/40 shrink-0" />
+                <input
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  className="bg-white/10 text-white text-sm rounded-lg px-3 py-1.5 outline-none border border-white/10 focus:border-white/30 flex-1"
+                  placeholder="Telefonnummer"
+                  style={{ fontFamily: FONT_MONO }}
+                />
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p className="font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>{displayName}</p>
+              <p className="text-xs text-white/40">{user.email}</p>
+              {profile?.phone && (
+                <p className="text-xs text-white/40 mt-0.5" style={{ fontFamily: FONT_MONO }}>{profile.phone}</p>
+              )}
+            </div>
+          )}
+        </div>
+        {editing ? (
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={handleSave}
+            disabled={saving}
+            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: "rgba(232,108,36,0.2)" }}
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin text-white/70" /> : <Save className="w-4 h-4" style={{ color: "#E86C24" }} />}
+          </motion.button>
+        ) : (
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => { setEditName(displayName); setEditPhone(profile?.phone || ""); setEditing(true); }}
+            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: "rgba(255,255,255,0.1)" }}
+          >
+            <Pencil className="w-4 h-4 text-white/50" />
+          </motion.button>
+        )}
+      </div>
+      {profile && !editing && (
+        <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="text-center flex-1">
+            <p className="text-lg font-bold text-white">{profile.total_matches || 0}</p>
+            <p className="text-[10px] uppercase tracking-wide text-white/40">Matcher</p>
+          </div>
+          <div className="text-center flex-1">
+            <p className="text-lg font-bold text-white">{profile.total_wins || 0}</p>
+            <p className="text-[10px] uppercase tracking-wide text-white/40">Vinster</p>
+          </div>
+          <div className="text-center flex-1">
+            <p className="text-lg font-bold" style={{ color: "#E86C24" }}>{profile.pickla_rating || 1000}</p>
+            <p className="text-[10px] uppercase tracking-wide text-white/40">Rating</p>
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 const MyPage = () => {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
