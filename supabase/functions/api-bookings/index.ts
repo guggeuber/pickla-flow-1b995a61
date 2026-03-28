@@ -174,7 +174,7 @@ Deno.serve(async (req) => {
 
   if (req.method === 'POST' && path === 'public-book') {
     const body = await req.json();
-    const { slug, courtIds, date, startTime, endTime, name, phone } = body;
+    const { slug, courtIds, date, startTime, endTime, name, phone, corporatePackageId } = body;
 
     const safeName = typeof name === 'string' ? name.trim() : '';
     const safePhone = typeof phone === 'string'
@@ -199,6 +199,7 @@ Deno.serve(async (req) => {
     // Build ISO timestamps
     const startISO = `${date}T${startTime}:00.000Z`;
     const endISO = `${date}T${endTime}:00.000Z`;
+    const durationHours = (new Date(endISO).getTime() - new Date(startISO).getTime()) / 3600000;
 
     // Check conflicts for all courts
     for (const courtId of courtIds) {
@@ -222,6 +223,34 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Validate corporate package if provided
+    let validCorporatePackageId: string | null = null;
+    if (corporatePackageId && bookingUserId) {
+      const { data: pkg } = await admin.from('corporate_packages')
+        .select('id, total_hours, used_hours, status, corporate_account_id')
+        .eq('id', corporatePackageId)
+        .eq('status', 'active')
+        .single();
+
+      if (pkg) {
+        // Verify user is a member of this corporate account
+        const { data: membership } = await admin.from('corporate_members')
+          .select('id')
+          .eq('corporate_account_id', pkg.corporate_account_id)
+          .eq('user_id', bookingUserId)
+          .maybeSingle();
+
+        if (membership) {
+          const totalBookingHours = durationHours * courtIds.length;
+          const remaining = pkg.total_hours - pkg.used_hours;
+          if (totalBookingHours > remaining) {
+            return errorResponse(`Inte tillräckligt med timmar kvar (${remaining}h tillgängligt)`, 400);
+          }
+          validCorporatePackageId = pkg.id;
+        }
+      }
+    }
+
     // Fallback to guest user if not authenticated
     if (!bookingUserId) {
       bookingUserId = await getOrCreatePublicBookingUserId(admin);
@@ -236,6 +265,7 @@ Deno.serve(async (req) => {
     const bookingDayOfWeek = new Date(date + 'T12:00:00Z').getUTCDay();
 
     const bookings = [];
+    let totalHoursBooked = 0;
     for (const courtId of courtIds) {
       const { data: court } = await admin.from('venue_courts')
         .select('hourly_rate').eq('id', courtId).single();
@@ -252,8 +282,7 @@ Deno.serve(async (req) => {
         if (matchingRule) hourlyRate = matchingRule.price;
       }
 
-      const durationHours = (new Date(endISO).getTime() - new Date(startISO).getTime()) / 3600000;
-      const price = Math.round(hourlyRate * durationHours);
+      const price = validCorporatePackageId ? 0 : Math.round(hourlyRate * durationHours);
 
       const { data: booking, error: bErr } = await admin.from('bookings').insert({
         venue_id: venue.id,
@@ -265,13 +294,26 @@ Deno.serve(async (req) => {
         total_price: price,
         status: 'confirmed',
         notes: `${safeName} | ${safePhone}`,
+        corporate_package_id: validCorporatePackageId,
       }).select().single();
 
       if (bErr) return errorResponse(bErr.message);
       bookings.push(booking);
+      totalHoursBooked += durationHours;
     }
 
-    return jsonResponse({ bookings, count: bookings.length }, 201);
+    // Deduct hours from corporate package
+    if (validCorporatePackageId && totalHoursBooked > 0) {
+      const { data: currentPkg } = await admin.from('corporate_packages')
+        .select('used_hours').eq('id', validCorporatePackageId).single();
+      if (currentPkg) {
+        await admin.from('corporate_packages')
+          .update({ used_hours: (currentPkg.used_hours || 0) + totalHoursBooked })
+          .eq('id', validCorporatePackageId);
+      }
+    }
+
+    return jsonResponse({ bookings, count: bookings.length, corporate: !!validCorporatePackageId }, 201);
   }
 
   try {
