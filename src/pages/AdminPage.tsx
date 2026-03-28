@@ -18,12 +18,13 @@ import AdminStories from "@/components/admin/AdminStories";
 import AdminEvents from "@/components/admin/AdminEvents";
 import AdminMemberships from "@/components/admin/AdminMemberships";
 import AdminTemplates from "@/components/admin/AdminTemplates";
+import AdminCorporate from "@/components/admin/AdminCorporate";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | "events" | "memberships" | "templates" | null;
+type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | "events" | "memberships" | "templates" | "corporate" | null;
 
 /* ── Sparkline SVG ── */
 function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
@@ -199,6 +200,7 @@ const AdminPage = () => {
       events: { label: "Events", icon: Trophy },
       memberships: { label: "Medlemskap", icon: Crown },
       templates: { label: "Event-mallar", icon: FileText },
+      corporate: { label: "Företag", icon: Building2 },
     };
     const s = sectionLabels[activeSection];
 
@@ -229,6 +231,7 @@ const AdminPage = () => {
           {activeSection === "events" && <AdminEvents venueId={venueId} />}
           {activeSection === "memberships" && <AdminMemberships venueId={venueId} />}
           {activeSection === "templates" && <AdminTemplates />}
+          {activeSection === "corporate" && <AdminCorporate venueId={venueId} />}
         </div>
       </div>
     );
@@ -245,6 +248,7 @@ const AdminPage = () => {
     { id: "events" as SectionId, icon: Trophy, label: "Events", stat: "Turneringar", color: "var(--sell)" },
     { id: "memberships" as SectionId, icon: Crown, label: "Medlemskap", stat: "Nivåer & rabatter", color: "var(--badge-vip)" },
     ...(adminData?.isSuperAdmin ? [{ id: "templates" as SectionId, icon: FileText, label: "Event-mallar", stat: "Franchise", color: "var(--primary)" }] : []),
+    { id: "corporate" as SectionId, icon: Building2, label: "Företag", stat: "Företagskonton", color: "var(--badge-vip)" },
   ];
 
   return (

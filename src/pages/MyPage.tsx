@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, Plus, ShoppingBag } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, Plus, ShoppingBag, Building2, ChevronRight } from "lucide-react";
 import QrCodeCard from "@/components/my/QrCodeCard";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -76,6 +76,66 @@ function useActiveMembership() {
       return data;
     },
   });
+}
+
+function useCorporateMemberships() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["my-corporate", user?.id],
+    enabled: !!user,
+    staleTime: 30000,
+    queryFn: () => apiGet("api-corporate", "my"),
+  });
+}
+
+function CorporateSection() {
+  const { data } = useCorporateMemberships();
+  const navigate = useNavigate();
+
+  if (!data?.memberships?.length) return null;
+
+  return (
+    <motion.div variants={item}>
+      <div className="flex items-center gap-2 mb-2">
+        <Building2 className="w-4 h-4" style={{ color: "#E86C24" }} />
+        <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Företag</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {data.memberships.map((m: any) => {
+          const account = m.corporate_accounts;
+          const pkg = data.packages?.find((p: any) => p.corporate_account_id === account?.id);
+          const remaining = pkg ? pkg.total_hours - pkg.used_hours : null;
+
+          return (
+            <button
+              key={m.id}
+              onClick={() => {
+                if (m.role === 'admin') {
+                  navigate(`/corp/dashboard?id=${account?.id}`);
+                }
+              }}
+              className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
+              style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "rgba(232,108,36,0.15)" }}>
+                  <Building2 className="w-4 h-4" style={{ color: "#E86C24" }} />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-white">{account?.company_name || "Företag"}</p>
+                  <p className="text-[11px] text-white/40" style={{ fontFamily: FONT_MONO }}>
+                    {m.role === 'admin' ? 'Admin' : 'Medlem'}
+                    {remaining !== null && ` · ${remaining}h kvar`}
+                  </p>
+                </div>
+              </div>
+              {m.role === 'admin' && <ChevronRight className="w-4 h-4 text-white/30" />}
+            </button>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
 }
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
@@ -555,6 +615,9 @@ const MyPage = () => {
               </div>
             )}
           </motion.div>
+
+          {/* Corporate memberships */}
+          <CorporateSection />
 
           {/* QR Code for check-in */}
           <QrCodeCard userId={user.id} displayName={displayName} />
