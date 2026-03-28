@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, ExternalLink, Trash2 } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, Plus, ShoppingBag } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -48,31 +48,13 @@ function useMyBookings() {
   });
 }
 
-function useMyDayPasses() {
+function useMyPasses() {
   const { user } = useAuth();
   return useQuery({
-    queryKey: ["my-day-passes", user?.id],
+    queryKey: ["my-passes", user?.id],
     enabled: !!user,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("day_passes")
-        .select("*")
-        .eq("user_id", user!.id)
-        .order("valid_date", { ascending: false })
-        .limit(10);
-      if (error) throw error;
-      return data;
-    },
-  });
-}
-
-function useDayPassAllowance() {
-  const { user } = useAuth();
-  return useQuery({
-    queryKey: ["day-pass-allowance", user?.id],
-    enabled: !!user,
-    staleTime: 15000,
-    queryFn: () => apiGet("api-day-passes", "my-allowance"),
+    staleTime: 10000,
+    queryFn: () => apiGet("api-day-passes", "my-passes"),
   });
 }
 
@@ -210,37 +192,65 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
     </motion.div>
   );
 }
-function DayPassAllowanceSection() {
-  const { data: allowance, isLoading } = useDayPassAllowance();
+
+function DayPassSection() {
+  const { data, isLoading } = useMyPasses();
   const queryClient = useQueryClient();
-  const [showShareForm, setShowShareForm] = useState(false);
+  const [buying, setBuying] = useState(false);
+  const [sharingPassId, setSharingPassId] = useState<string | null>(null);
   const [shareEmail, setShareEmail] = useState("");
   const [sharing, setSharing] = useState(false);
-  const [justCreatedLink, setJustCreatedLink] = useState<string | null>(null);
+  const [justCreatedToken, setJustCreatedToken] = useState<string | null>(null);
 
-  if (isLoading || !allowance?.has_membership || allowance.passes_allowed === 0) return null;
+  const passes = data?.passes || [];
+  const allowance = data?.allowance || { has_membership: false, passes_allowed: 0, passes_remaining: 0 };
+  const shares = data?.shares || [];
+
+  const activePasses = passes.filter((p: any) => p.status === 'active' && !p.share);
+  const sharedPasses = passes.filter((p: any) => p.share?.status === 'pending');
+  const usedPasses = passes.filter((p: any) => p.status === 'used' || p.share?.status === 'claimed');
 
   const buildLink = (token: string) => `${window.location.origin}/pass/${token}`;
 
-  const handleShare = async () => {
-    if (!shareEmail.trim()) {
-      toast.error("Ange e-postadress");
-      return;
+  const handleBuy = async () => {
+    setBuying(true);
+    try {
+      const result = await apiPost("api-day-passes", "buy", {});
+      queryClient.invalidateQueries({ queryKey: ["my-passes"] });
+      toast.success(`Dagspass köpt (${result.price} SEK) – betalas i disk`);
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte köpa dagspass");
     }
+    setBuying(false);
+  };
+
+  const handleShare = async (dayPassId: string) => {
+    if (!shareEmail.trim()) { toast.error("Ange e-postadress"); return; }
     setSharing(true);
     try {
       const result = await apiPost("api-day-passes", "share", {
+        day_pass_id: dayPassId,
         recipient_email: shareEmail.trim(),
       });
-      const link = buildLink(result.token);
-      setJustCreatedLink(link);
+      setJustCreatedToken(result.token);
       setShareEmail("");
-      queryClient.invalidateQueries({ queryKey: ["day-pass-allowance"] });
-      toast.success("Dagspass skapat! Dela länken med din vän.");
+      setSharingPassId(null);
+      queryClient.invalidateQueries({ queryKey: ["my-passes"] });
+      toast.success("Pass delat! Kopiera länken och skicka till din vän.");
     } catch (err: any) {
       toast.error(err.message || "Kunde inte dela pass");
     }
     setSharing(false);
+  };
+
+  const handleRevoke = async (shareId: string) => {
+    try {
+      await apiDelete("api-day-passes", "revoke-share", { id: shareId });
+      queryClient.invalidateQueries({ queryKey: ["my-passes"] });
+      toast.success("Delning borttagen");
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte ta bort delningen");
+    }
   };
 
   const copyLink = (link: string) => {
@@ -248,144 +258,166 @@ function DayPassAllowanceSection() {
     toast.success("Länk kopierad!");
   };
 
-  const handleRevoke = async (shareId: string) => {
-    try {
-      await apiDelete("api-day-passes", "revoke-share", { id: shareId });
-      queryClient.invalidateQueries({ queryKey: ["day-pass-allowance"] });
-      toast.success("Delning borttagen, passet återställt");
-    } catch (err: any) {
-      toast.error(err.message || "Kunde inte ta bort delningen");
-    }
-  };
+  if (isLoading) {
+    return (
+      <motion.div variants={item} className="flex justify-center py-4">
+        <Loader2 className="w-5 h-5 animate-spin text-white/30" />
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div variants={item}>
-      <div className="flex items-center gap-2 mb-2">
-        <Gift className="w-4 h-4" style={{ color: "#E86C24" }} />
-        <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Dagspass att dela</span>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Ticket className="w-4 h-4" style={{ color: "#E86C24" }} />
+          <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Mina dagspass</span>
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>
+            {activePasses.length}
+          </span>
+        </div>
       </div>
 
-      <div className="rounded-2xl p-4" style={{ background: "rgba(232,108,36,0.08)", border: "1.5px solid rgba(232,108,36,0.15)" }}>
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm text-white" style={{ fontFamily: FONT_HEADING }}>
-            <span className="text-xl font-black" style={{ color: "#E86C24" }}>{allowance.passes_remaining}</span>
-            <span className="text-white/50 text-xs ml-1">av {allowance.passes_allowed} kvar denna månad</span>
+      {/* Member allowance info */}
+      {allowance.has_membership && allowance.passes_allowed > 0 && (
+        <div className="rounded-xl px-3 py-2 mb-3 flex items-center gap-2" style={{ background: "rgba(76,175,80,0.08)", border: "1px solid rgba(76,175,80,0.15)" }}>
+          <Gift className="w-3.5 h-3.5 shrink-0" style={{ color: "#4CAF50" }} />
+          <p className="text-[11px] text-white/50" style={{ fontFamily: FONT_MONO }}>
+            <span className="font-bold text-white">{allowance.passes_remaining}</span> av {allowance.passes_allowed} gratispass kvar denna månad
           </p>
         </div>
+      )}
 
-        {/* Progress bar */}
-        <div className="h-1.5 rounded-full mb-4" style={{ background: "rgba(255,255,255,0.08)" }}>
-          <div
-            className="h-full rounded-full transition-all"
-            style={{
-              width: `${((allowance.passes_allowed - allowance.passes_remaining) / allowance.passes_allowed) * 100}%`,
-              background: "#E86C24",
-            }}
-          />
-        </div>
+      {/* Buy button */}
+      <button
+        onClick={handleBuy}
+        disabled={buying}
+        className="w-full py-3 rounded-xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2 mb-3 disabled:opacity-40"
+        style={{ background: "#E86C24", fontFamily: FONT_MONO }}
+      >
+        {buying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><ShoppingBag className="w-3.5 h-3.5" /> Köp dagspass</>}
+      </button>
 
-        {allowance.passes_remaining > 0 && (
-          <>
-            <button
-              onClick={() => { setShowShareForm(!showShareForm); setJustCreatedLink(null); }}
-              className="w-full py-3 rounded-xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
-              style={{ background: "#E86C24", fontFamily: FONT_MONO }}
-            >
-              <Send className="w-3.5 h-3.5" />
-              Ge till en vän
+      {/* Just created share link */}
+      <AnimatePresence>
+        {justCreatedToken && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            className="rounded-xl p-3 flex items-center gap-2 mb-3"
+            style={{ background: "rgba(76,175,80,0.1)", border: "1px solid rgba(76,175,80,0.2)" }}
+          >
+            <Check className="w-3.5 h-3.5 shrink-0" style={{ color: "#4CAF50" }} />
+            <p className="text-xs text-white/60 flex-1 truncate" style={{ fontFamily: FONT_MONO }}>{buildLink(justCreatedToken)}</p>
+            <button onClick={() => copyLink(buildLink(justCreatedToken))} className="shrink-0">
+              <Copy className="w-4 h-4" style={{ color: "#4CAF50" }} />
             </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            <AnimatePresence>
-              {showShareForm && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden"
-                >
-                  <div className="pt-3 space-y-2">
-                    <input
-                      type="email"
-                      placeholder="Vännens e-postadress"
-                      value={shareEmail}
-                      onChange={(e) => setShareEmail(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm placeholder:text-white/25 focus:outline-none focus:border-white/30"
-                      style={{ fontFamily: FONT_MONO }}
-                    />
-                    <button
-                      onClick={handleShare}
-                      disabled={sharing}
-                      className="w-full py-2.5 rounded-xl text-white text-xs font-bold active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-2"
-                      style={{ background: "rgba(232,108,36,0.3)", fontFamily: FONT_MONO }}
-                    >
-                      {sharing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Skicka dagspass"}
-                    </button>
-
-                    {justCreatedLink && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="rounded-xl p-3 flex items-center gap-2"
-                        style={{ background: "rgba(76,175,80,0.1)", border: "1px solid rgba(76,175,80,0.2)" }}
-                      >
-                        <Check className="w-3.5 h-3.5 shrink-0" style={{ color: "#4CAF50" }} />
-                        <p className="text-xs text-white/60 flex-1 truncate" style={{ fontFamily: FONT_MONO }}>{justCreatedLink}</p>
-                        <button onClick={() => copyLink(justCreatedLink)} className="shrink-0">
-                          <Copy className="w-4 h-4" style={{ color: "#4CAF50" }} />
-                        </button>
-                      </motion.div>
+      {/* Active passes */}
+      {activePasses.length === 0 && sharedPasses.length === 0 ? (
+        <div className="rounded-2xl p-4 text-center" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+          <p className="text-xs text-white/30">Inga aktiva dagspass</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {activePasses.map((p: any) => (
+            <div key={p.id}>
+              <div className="rounded-xl p-3 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-white">Dagspass</p>
+                    {p.is_free && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "rgba(76,175,80,0.15)", color: "#4CAF50" }}>GRATIS</span>
                     )}
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </>
-        )}
-
-        {/* Shared passes list — always visible, with copy link */}
-        {allowance.shares?.length > 0 && (
-          <div className="mt-3 pt-3 space-y-2" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-            <p className="text-[10px] uppercase tracking-wider text-white/30" style={{ fontFamily: FONT_MONO }}>Delade pass</p>
-            {allowance.shares.map((s: any) => (
-              <div key={s.id} className="flex items-center gap-2 text-xs">
-                <span className="text-white/50 truncate flex-1" style={{ fontFamily: FONT_MONO }}>
-                  {s.recipient_email || s.recipient_phone}
-                </span>
-                <span
-                  className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0"
-                  style={{
-                    background: s.status === "claimed" ? "rgba(76,175,80,0.15)" : "rgba(232,108,36,0.15)",
-                    color: s.status === "claimed" ? "#4CAF50" : "#E86C24",
-                  }}
+                  <p className="text-xs text-white/40">
+                    {new Date(p.valid_date).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
+                  </p>
+                </div>
+                {!p.is_free && <span className="text-xs font-bold text-white/50 mr-2">{p.price} SEK</span>}
+                <button
+                  onClick={() => { setSharingPassId(sharingPassId === p.id ? null : p.id); setShareEmail(""); setJustCreatedToken(null); }}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ background: sharingPassId === p.id ? "rgba(232,108,36,0.2)" : "rgba(255,255,255,0.06)" }}
                 >
-                  {s.status === "claimed" ? "Hämtad" : "Väntande"}
-                </span>
-                {s.status === "pending" && s.token && (
-                  <>
+                  <Send className="w-3.5 h-3.5" style={{ color: sharingPassId === p.id ? "#E86C24" : "rgba(255,255,255,0.4)" }} />
+                </button>
+              </div>
+
+              {/* Share form inline */}
+              <AnimatePresence>
+                {sharingPassId === p.id && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="pt-2 flex gap-2">
+                      <input
+                        type="email"
+                        placeholder="Vännens e-post"
+                        value={shareEmail}
+                        onChange={(e) => setShareEmail(e.target.value)}
+                        className="flex-1 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-xs placeholder:text-white/25 focus:outline-none focus:border-white/30"
+                        style={{ fontFamily: FONT_MONO }}
+                      />
+                      <button
+                        onClick={() => handleShare(p.id)}
+                        disabled={sharing}
+                        className="px-4 py-2.5 rounded-xl text-white text-xs font-bold active:scale-[0.98] transition-transform disabled:opacity-40"
+                        style={{ background: "rgba(232,108,36,0.3)", fontFamily: FONT_MONO }}
+                      >
+                        {sharing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Dela"}
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ))}
+
+          {/* Shared (pending) passes */}
+          {sharedPasses.length > 0 && (
+            <div className="pt-1">
+              <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5" style={{ fontFamily: FONT_MONO }}>Delade pass</p>
+              {sharedPasses.map((p: any) => (
+                <div key={p.id} className="rounded-xl p-3 flex items-center gap-2 mb-1.5" style={{ background: "rgba(232,108,36,0.05)", border: "1px solid rgba(232,108,36,0.12)" }}>
+                  <Send className="w-3 h-3 shrink-0" style={{ color: "#E86C24" }} />
+                  <span className="text-xs text-white/50 truncate flex-1" style={{ fontFamily: FONT_MONO }}>
+                    {p.share?.recipient_email || "Delat pass"}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold shrink-0" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>
+                    Väntande
+                  </span>
+                  {p.share?.token && (
                     <button
-                      onClick={() => copyLink(buildLink(s.token))}
-                      className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                      onClick={() => copyLink(buildLink(p.share.token))}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
                       style={{ background: "rgba(255,255,255,0.06)" }}
                     >
                       <Copy className="w-3 h-3 text-white/40" />
                     </button>
+                  )}
+                  {p.share && (
                     <button
-                      onClick={() => handleRevoke(s.id)}
-                      className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                      onClick={() => handleRevoke(p.share.id)}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
                       style={{ background: "rgba(239,68,68,0.1)" }}
                     >
                       <Trash2 className="w-3 h-3 text-red-400/60" />
                     </button>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }
+
 const MyPage = () => {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
@@ -394,7 +426,6 @@ const MyPage = () => {
 
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
-  const { data: dayPasses } = useMyDayPasses();
   const { data: activeMembership } = useActiveMembership();
 
   if (loading) {
@@ -409,7 +440,6 @@ const MyPage = () => {
 
   const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
   const activeBookings = bookings?.filter((b) => b.status === "confirmed" || b.status === "pending") || [];
-  const activePasses = dayPasses?.filter((p) => p.status === "active") || [];
   const membershipTier = (activeMembership as any)?.membership_tiers;
 
   return (
@@ -446,11 +476,7 @@ const MyPage = () => {
       <main className="pt-28 px-5 pb-28">
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
           {/* Profile card with edit */}
-          <ProfileCard
-            profile={profile}
-            user={user}
-            displayName={displayName}
-          />
+          <ProfileCard profile={profile} user={user} displayName={displayName} />
 
           {/* Membership */}
           {activeMembership ? (
@@ -529,40 +555,12 @@ const MyPage = () => {
             )}
           </motion.div>
 
-          {/* Day pass allowance (for members) */}
-          <DayPassAllowanceSection />
-
-          {/* Day passes */}
-          <motion.div variants={item}>
-            <div className="flex items-center gap-2 mb-2">
-              <Ticket className="w-4 h-4" style={{ color: "#E86C24" }} />
-              <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Mina dagspass</span>
-              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>{activePasses.length}</span>
-            </div>
-            {activePasses.length === 0 ? (
-              <div className="rounded-2xl p-4 text-center" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
-                <p className="text-xs text-white/30">Inga aktiva dagspass</p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {activePasses.map((p) => (
-                  <div key={p.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
-                    <div>
-                      <p className="text-sm font-medium text-white">Dagspass</p>
-                      <p className="text-xs text-white/40">
-                        {new Date(p.valid_date).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
-                      </p>
-                    </div>
-                    <span className="text-sm font-bold text-white">{p.price || 0} SEK</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </motion.div>
+          {/* Unified day pass section */}
+          <DayPassSection />
         </motion.div>
       </main>
 
-      {/* ═══ FIXED BOTTOM NAV — same as LinkHub ═══ */}
+      {/* ═══ FIXED BOTTOM NAV ═══ */}
       <nav
         className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-8 pt-12"
         style={{
