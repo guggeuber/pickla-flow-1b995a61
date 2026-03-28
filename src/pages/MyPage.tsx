@@ -215,27 +215,26 @@ function DayPassAllowanceSection() {
   const queryClient = useQueryClient();
   const [showShareForm, setShowShareForm] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
-  const [sharePhone, setSharePhone] = useState("");
   const [sharing, setSharing] = useState(false);
-  const [shareLink, setShareLink] = useState<string | null>(null);
+  const [justCreatedLink, setJustCreatedLink] = useState<string | null>(null);
 
   if (isLoading || !allowance?.has_membership || allowance.passes_allowed === 0) return null;
 
+  const buildLink = (token: string) => `${window.location.origin}/pass/${token}`;
+
   const handleShare = async () => {
-    if (!shareEmail.trim() && !sharePhone.trim()) {
-      toast.error("Ange e-post eller telefon");
+    if (!shareEmail.trim()) {
+      toast.error("Ange e-postadress");
       return;
     }
     setSharing(true);
     try {
       const result = await apiPost("api-day-passes", "share", {
-        recipient_email: shareEmail.trim() || undefined,
-        recipient_phone: sharePhone.trim() || undefined,
+        recipient_email: shareEmail.trim(),
       });
-      const link = `${window.location.origin}/pass/${result.token}`;
-      setShareLink(link);
+      const link = buildLink(result.token);
+      setJustCreatedLink(link);
       setShareEmail("");
-      setSharePhone("");
       queryClient.invalidateQueries({ queryKey: ["day-pass-allowance"] });
       toast.success("Dagspass skapat! Dela länken med din vän.");
     } catch (err: any) {
@@ -278,7 +277,7 @@ function DayPassAllowanceSection() {
         {allowance.passes_remaining > 0 && (
           <>
             <button
-              onClick={() => { setShowShareForm(!showShareForm); setShareLink(null); }}
+              onClick={() => { setShowShareForm(!showShareForm); setJustCreatedLink(null); }}
               className="w-full py-3 rounded-xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
               style={{ background: "#E86C24", fontFamily: FONT_MONO }}
             >
@@ -297,17 +296,9 @@ function DayPassAllowanceSection() {
                   <div className="pt-3 space-y-2">
                     <input
                       type="email"
-                      placeholder="Vännens e-post"
+                      placeholder="Vännens e-postadress"
                       value={shareEmail}
                       onChange={(e) => setShareEmail(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm placeholder:text-white/25 focus:outline-none focus:border-white/30"
-                      style={{ fontFamily: FONT_MONO }}
-                    />
-                    <input
-                      type="tel"
-                      placeholder="Eller telefonnummer"
-                      value={sharePhone}
-                      onChange={(e) => setSharePhone(e.target.value)}
                       className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm placeholder:text-white/25 focus:outline-none focus:border-white/30"
                       style={{ fontFamily: FONT_MONO }}
                     />
@@ -317,18 +308,19 @@ function DayPassAllowanceSection() {
                       className="w-full py-2.5 rounded-xl text-white text-xs font-bold active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-2"
                       style={{ background: "rgba(232,108,36,0.3)", fontFamily: FONT_MONO }}
                     >
-                      {sharing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Skapa delningslänk"}
+                      {sharing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Skicka dagspass"}
                     </button>
 
-                    {shareLink && (
+                    {justCreatedLink && (
                       <motion.div
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="rounded-xl p-3 flex items-center gap-2"
                         style={{ background: "rgba(76,175,80,0.1)", border: "1px solid rgba(76,175,80,0.2)" }}
                       >
-                        <p className="text-xs text-white/60 flex-1 truncate" style={{ fontFamily: FONT_MONO }}>{shareLink}</p>
-                        <button onClick={() => copyLink(shareLink)} className="shrink-0">
+                        <Check className="w-3.5 h-3.5 shrink-0" style={{ color: "#4CAF50" }} />
+                        <p className="text-xs text-white/60 flex-1 truncate" style={{ fontFamily: FONT_MONO }}>{justCreatedLink}</p>
+                        <button onClick={() => copyLink(justCreatedLink)} className="shrink-0">
                           <Copy className="w-4 h-4" style={{ color: "#4CAF50" }} />
                         </button>
                       </motion.div>
@@ -340,17 +332,17 @@ function DayPassAllowanceSection() {
           </>
         )}
 
-        {/* Shared passes list */}
+        {/* Shared passes list — always visible, with copy link */}
         {allowance.shares?.length > 0 && (
           <div className="mt-3 pt-3 space-y-2" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
             <p className="text-[10px] uppercase tracking-wider text-white/30" style={{ fontFamily: FONT_MONO }}>Delade pass</p>
             {allowance.shares.map((s: any) => (
-              <div key={s.id} className="flex items-center justify-between text-xs">
-                <span className="text-white/50 truncate max-w-[60%]" style={{ fontFamily: FONT_MONO }}>
+              <div key={s.id} className="flex items-center gap-2 text-xs">
+                <span className="text-white/50 truncate flex-1" style={{ fontFamily: FONT_MONO }}>
                   {s.recipient_email || s.recipient_phone}
                 </span>
                 <span
-                  className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0"
                   style={{
                     background: s.status === "claimed" ? "rgba(76,175,80,0.15)" : "rgba(232,108,36,0.15)",
                     color: s.status === "claimed" ? "#4CAF50" : "#E86C24",
@@ -358,6 +350,15 @@ function DayPassAllowanceSection() {
                 >
                   {s.status === "claimed" ? "Hämtad" : "Väntande"}
                 </span>
+                {s.status === "pending" && s.token && (
+                  <button
+                    onClick={() => copyLink(buildLink(s.token))}
+                    className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                    style={{ background: "rgba(255,255,255,0.06)" }}
+                  >
+                    <Copy className="w-3 h-3 text-white/40" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
