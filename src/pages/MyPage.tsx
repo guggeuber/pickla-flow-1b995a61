@@ -248,6 +248,16 @@ function DayPassAllowanceSection() {
     toast.success("Länk kopierad!");
   };
 
+  const handleRevoke = async (shareId: string) => {
+    try {
+      await apiPost("api-day-passes", `revoke-share?id=${shareId}`, undefined, 'DELETE');
+      queryClient.invalidateQueries({ queryKey: ["day-pass-allowance"] });
+      toast.success("Delning borttagen, passet återställt");
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte ta bort delningen");
+    }
+  };
+
   return (
     <motion.div variants={item}>
       <div className="flex items-center gap-2 mb-2">
