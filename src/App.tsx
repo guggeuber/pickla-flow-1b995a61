@@ -58,6 +58,7 @@ const App = () => (
             <Route path="/book" element={<BookingPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
+            <Route path="/pass/:token" element={<ClaimPassPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
