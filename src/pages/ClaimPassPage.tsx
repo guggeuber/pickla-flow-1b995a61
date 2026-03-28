@@ -11,6 +11,11 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
+const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
+
+export const getPendingClaimToken = () => localStorage.getItem(PENDING_CLAIM_KEY);
+export const clearPendingClaimToken = () => localStorage.removeItem(PENDING_CLAIM_KEY);
+
 const ClaimPassPage = () => {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
@@ -18,6 +23,11 @@ const ClaimPassPage = () => {
   const [claiming, setClaiming] = useState(false);
   const [mode, setMode] = useState<"register" | "login">("register");
   const [formData, setFormData] = useState({ name: "", email: "", password: "" });
+
+  // Persist token so claim survives navigation away
+  useEffect(() => {
+    if (token) localStorage.setItem(PENDING_CLAIM_KEY, token);
+  }, [token]);
 
   const { data: shareInfo, isLoading } = useQuery({
     queryKey: ["share-info", token],
