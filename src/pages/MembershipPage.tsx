@@ -402,6 +402,9 @@ const MembershipPage = () => {
           </div>
         )}
 
+        {/* Buy day pass */}
+        <DayPassPurchaseSection />
+
         {/* Already have account */}
         {!user && (
           <motion.div variants={item} className="text-center">
