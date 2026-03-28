@@ -55,6 +55,7 @@ const App = () => (
             <Route path="/event/:id" element={<EventPage />} />
             <Route path="/e/:slug" element={<EventPage />} />
             <Route path="/book" element={<BookingPage />} />
+            <Route path="/membership" element={<MembershipPage />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
