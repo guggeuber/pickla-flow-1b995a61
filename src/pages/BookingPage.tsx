@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin } from "lucide-react";
@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -47,6 +49,7 @@ export default function BookingPage() {
   const [searchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
@@ -54,6 +57,29 @@ export default function BookingPage() {
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [confirmed, setConfirmed] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+
+  // Auto-fill name/phone from player profile when logged in
+  useEffect(() => {
+    if (!user || profileLoaded) return;
+    const prefillFromProfile = async () => {
+      const { data } = await supabase
+        .from("player_profiles")
+        .select("display_name, phone")
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
+      if (data) {
+        if (data.display_name && !name) setName(data.display_name);
+        if (data.phone && !phone) setPhone(data.phone);
+      } else {
+        // Fallback to user metadata
+        const meta = user.user_metadata;
+        if (meta?.display_name && !name) setName(meta.display_name);
+      }
+      setProfileLoaded(true);
+    };
+    prefillFromProfile();
+  }, [user, profileLoaded]);
 
   const dateStr = format(selectedDate, "yyyy-MM-dd");
   const dates = useMemo(() => generateDates(), []);
