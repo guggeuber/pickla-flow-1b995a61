@@ -259,6 +259,55 @@ Deno.serve(async (req) => {
       return jsonResponse({ token, share_id: share.id, day_pass_id: dayPass.id }, 201);
     }
 
+    // ─── DELETE /revoke-share ───
+    if (req.method === 'DELETE' && path === 'revoke-share') {
+      const shareId = url.searchParams.get('id');
+      if (!shareId) return errorResponse('Missing share id');
+
+      // Verify ownership and status
+      const { data: share, error: sErr } = await adminClient
+        .from('day_pass_shares')
+        .select('id, day_pass_id, shared_by, status')
+        .eq('id', shareId)
+        .single();
+
+      if (sErr || !share) return errorResponse('Share not found', 404);
+      if (share.shared_by !== userId) return errorResponse('Not your share', 403);
+      if (share.status === 'claimed') return errorResponse('Already claimed, cannot revoke');
+
+      // Delete share, delete the day_pass, decrement grant
+      await adminClient.from('day_pass_shares').delete().eq('id', shareId);
+      await adminClient.from('day_passes').delete().eq('id', share.day_pass_id);
+
+      // Decrement passes_used on current month grant
+      const now = new Date();
+      const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      const { data: membership } = await adminClient
+        .from('memberships')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .limit(1)
+        .single();
+
+      if (membership) {
+        const { data: grant } = await adminClient
+          .from('day_pass_grants')
+          .select('id, passes_used')
+          .eq('membership_id', membership.id)
+          .eq('month_year', monthYear)
+          .single();
+
+        if (grant && grant.passes_used > 0) {
+          await adminClient.from('day_pass_grants')
+            .update({ passes_used: grant.passes_used - 1 })
+            .eq('id', grant.id);
+        }
+      }
+
+      return jsonResponse({ ok: true });
+    }
+
     // ─── GET /venue?venueId=X&date=YYYY-MM-DD ───
     if (req.method === 'GET' && path === 'venue') {
       const venueId = url.searchParams.get('venueId');

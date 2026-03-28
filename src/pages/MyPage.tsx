@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, ExternalLink } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, ExternalLink, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
@@ -248,6 +248,16 @@ function DayPassAllowanceSection() {
     toast.success("Länk kopierad!");
   };
 
+  const handleRevoke = async (shareId: string) => {
+    try {
+      await apiDelete("api-day-passes", "revoke-share", { id: shareId });
+      queryClient.invalidateQueries({ queryKey: ["day-pass-allowance"] });
+      toast.success("Delning borttagen, passet återställt");
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte ta bort delningen");
+    }
+  };
+
   return (
     <motion.div variants={item}>
       <div className="flex items-center gap-2 mb-2">
@@ -351,13 +361,22 @@ function DayPassAllowanceSection() {
                   {s.status === "claimed" ? "Hämtad" : "Väntande"}
                 </span>
                 {s.status === "pending" && s.token && (
-                  <button
-                    onClick={() => copyLink(buildLink(s.token))}
-                    className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
-                    style={{ background: "rgba(255,255,255,0.06)" }}
-                  >
-                    <Copy className="w-3 h-3 text-white/40" />
-                  </button>
+                  <>
+                    <button
+                      onClick={() => copyLink(buildLink(s.token))}
+                      className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                      style={{ background: "rgba(255,255,255,0.06)" }}
+                    >
+                      <Copy className="w-3 h-3 text-white/40" />
+                    </button>
+                    <button
+                      onClick={() => handleRevoke(s.id)}
+                      className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                      style={{ background: "rgba(239,68,68,0.1)" }}
+                    >
+                      <Trash2 className="w-3 h-3 text-red-400/60" />
+                    </button>
+                  </>
                 )}
               </div>
             ))}
