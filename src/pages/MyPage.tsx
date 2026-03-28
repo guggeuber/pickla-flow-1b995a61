@@ -556,6 +556,9 @@ const MyPage = () => {
             )}
           </motion.div>
 
+          {/* Corporate memberships */}
+          <CorporateSection />
+
           {/* QR Code for check-in */}
           <QrCodeCard userId={user.id} displayName={displayName} />
 
