@@ -40,6 +40,7 @@ const ClaimPassPage = () => {
     setClaiming(true);
     try {
       await apiPost("api-day-passes", "claim", { token });
+      clearPendingClaimToken();
       toast.success("Dagspass hämtat! Du hittar det under Mitt konto.");
       navigate("/my");
     } catch (err: any) {
