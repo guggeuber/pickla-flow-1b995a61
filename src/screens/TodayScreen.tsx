@@ -160,6 +160,18 @@ const TodayScreen = () => {
         </div>
       </div>
 
+      {/* Scan QR Button */}
+      {venueId && (
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={() => setShowScanner(true)}
+          className="w-full bg-court-free text-white rounded-2xl py-4 font-bold text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-court-free/25"
+        >
+          <ScanLine className="w-5 h-5" />
+          Skanna incheckning
+        </motion.button>
+      )}
+
       {/* Revenue Strip */}
       <div className="revenue-hero rounded-2xl p-4">
         <div className="flex items-center justify-between">
