@@ -222,11 +222,10 @@ Deno.serve(async (req) => {
       const today = now.toISOString().slice(0, 10);
       const token = Math.random().toString(36).substring(2, 10).toUpperCase();
 
-      // Create day_pass for recipient (placeholder user)
-      const ANON_USER_ID = '00000000-0000-0000-0000-000000000000';
+      // Create day_pass owned by sharer initially; reassigned on claim
       const { data: dayPass, error: dpErr } = await adminClient.from('day_passes').insert({
         venue_id: membership.venue_id,
-        user_id: ANON_USER_ID,
+        user_id: userId,
         valid_date: today,
         purchase_date: today,
         price: 0,
