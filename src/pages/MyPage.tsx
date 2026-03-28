@@ -146,46 +146,12 @@ const MyPage = () => {
       {/* ═══ MAIN CONTENT ═══ */}
       <main className="pt-28 px-5 pb-28">
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
-          {/* Profile card */}
-          <motion.div
-            variants={item}
-            className="rounded-2xl p-5"
-            style={{
-              background: "rgba(255,255,255,0.06)",
-              border: "1.5px solid rgba(255,255,255,0.08)",
-            }}
-          >
-            <div className="flex items-center gap-3">
-              <div
-                className="w-12 h-12 rounded-full flex items-center justify-center"
-                style={{ background: "rgba(255,255,255,0.1)" }}
-              >
-                <span className="text-lg font-bold text-white">
-                  {displayName.charAt(0).toUpperCase()}
-                </span>
-              </div>
-              <div>
-                <p className="font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>{displayName}</p>
-                <p className="text-xs text-white/40">{user.email}</p>
-              </div>
-            </div>
-            {profile && (
-              <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                <div className="text-center flex-1">
-                  <p className="text-lg font-bold text-white">{profile.total_matches || 0}</p>
-                  <p className="text-[10px] uppercase tracking-wide text-white/40">Matcher</p>
-                </div>
-                <div className="text-center flex-1">
-                  <p className="text-lg font-bold text-white">{profile.total_wins || 0}</p>
-                  <p className="text-[10px] uppercase tracking-wide text-white/40">Vinster</p>
-                </div>
-                <div className="text-center flex-1">
-                  <p className="text-lg font-bold" style={{ color: "#E86C24" }}>{profile.pickla_rating || 1000}</p>
-                  <p className="text-[10px] uppercase tracking-wide text-white/40">Rating</p>
-                </div>
-              </div>
-            )}
-          </motion.div>
+          {/* Profile card with edit */}
+          <ProfileCard
+            profile={profile}
+            user={user}
+            displayName={displayName}
+          />
 
           {/* Membership */}
           {activeMembership ? (
