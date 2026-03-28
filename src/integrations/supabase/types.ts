@@ -18,6 +18,7 @@ export type Database = {
         Row: {
           booked_by: string | null
           booking_ref: string | null
+          corporate_package_id: string | null
           created_at: string | null
           currency: string | null
           end_time: string
@@ -34,6 +35,7 @@ export type Database = {
         Insert: {
           booked_by?: string | null
           booking_ref?: string | null
+          corporate_package_id?: string | null
           created_at?: string | null
           currency?: string | null
           end_time: string
@@ -50,6 +52,7 @@ export type Database = {
         Update: {
           booked_by?: string | null
           booking_ref?: string | null
+          corporate_package_id?: string | null
           created_at?: string | null
           currency?: string | null
           end_time?: string
@@ -64,6 +67,13 @@ export type Database = {
           venue_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "bookings_corporate_package_id_fkey"
+            columns: ["corporate_package_id"]
+            isOneToOne: false
+            referencedRelation: "corporate_packages"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "bookings_venue_court_id_fkey"
             columns: ["venue_court_id"]
@@ -166,6 +176,151 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "community_stories_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      corporate_accounts: {
+        Row: {
+          company_name: string
+          contact_email: string | null
+          contact_name: string | null
+          contact_phone: string | null
+          created_at: string
+          id: string
+          invite_token: string
+          is_active: boolean
+          updated_at: string
+          venue_id: string
+        }
+        Insert: {
+          company_name: string
+          contact_email?: string | null
+          contact_name?: string | null
+          contact_phone?: string | null
+          created_at?: string
+          id?: string
+          invite_token?: string
+          is_active?: boolean
+          updated_at?: string
+          venue_id: string
+        }
+        Update: {
+          company_name?: string
+          contact_email?: string | null
+          contact_name?: string | null
+          contact_phone?: string | null
+          created_at?: string
+          id?: string
+          invite_token?: string
+          is_active?: boolean
+          updated_at?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "corporate_accounts_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      corporate_members: {
+        Row: {
+          corporate_account_id: string
+          id: string
+          joined_at: string
+          role: string
+          user_id: string
+        }
+        Insert: {
+          corporate_account_id: string
+          id?: string
+          joined_at?: string
+          role?: string
+          user_id: string
+        }
+        Update: {
+          corporate_account_id?: string
+          id?: string
+          joined_at?: string
+          role?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "corporate_members_corporate_account_id_fkey"
+            columns: ["corporate_account_id"]
+            isOneToOne: false
+            referencedRelation: "corporate_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      corporate_packages: {
+        Row: {
+          corporate_account_id: string
+          created_at: string
+          currency: string | null
+          id: string
+          notes: string | null
+          package_type: string
+          price_total: number | null
+          status: string
+          total_hours: number
+          updated_at: string
+          used_hours: number
+          valid_from: string
+          valid_to: string | null
+          venue_id: string
+        }
+        Insert: {
+          corporate_account_id: string
+          created_at?: string
+          currency?: string | null
+          id?: string
+          notes?: string | null
+          package_type?: string
+          price_total?: number | null
+          status?: string
+          total_hours?: number
+          updated_at?: string
+          used_hours?: number
+          valid_from?: string
+          valid_to?: string | null
+          venue_id: string
+        }
+        Update: {
+          corporate_account_id?: string
+          created_at?: string
+          currency?: string | null
+          id?: string
+          notes?: string | null
+          package_type?: string
+          price_total?: number | null
+          status?: string
+          total_hours?: number
+          updated_at?: string
+          used_hours?: number
+          valid_from?: string
+          valid_to?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "corporate_packages_corporate_account_id_fkey"
+            columns: ["corporate_account_id"]
+            isOneToOne: false
+            referencedRelation: "corporate_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "corporate_packages_venue_id_fkey"
             columns: ["venue_id"]
             isOneToOne: false
             referencedRelation: "venues"
