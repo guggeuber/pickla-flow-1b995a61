@@ -137,6 +137,7 @@ export default function AdminCorporate({ venueId }: Props) {
                 <Input placeholder="E-post" type="email" value={form.contact_email} onChange={(e) => setForm({ ...form, contact_email: e.target.value })} />
                 <Input placeholder="Telefon" value={form.contact_phone} onChange={(e) => setForm({ ...form, contact_phone: e.target.value })} />
                 <Input placeholder="Antal timmar" type="number" value={form.total_hours} onChange={(e) => setForm({ ...form, total_hours: e.target.value })} />
+                <Input placeholder="Rabatt % (0 = ingen)" type="number" value={form.discount_percent} onChange={(e) => setForm({ ...form, discount_percent: e.target.value })} />
                 <Button onClick={handleCreate} disabled={creating} className="w-full">
                   {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : "Skapa"}
                 </Button>
