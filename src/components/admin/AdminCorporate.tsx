@@ -27,7 +27,7 @@ const DAYS = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 export default function AdminCorporate({ venueId }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40" });
+  const [form, setForm] = useState({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40", discount_percent: "0" });
 
   const { data: accounts, refetch } = useQuery({
     queryKey: ["admin-corporate", venueId],
@@ -73,6 +73,12 @@ export default function AdminCorporate({ venueId }: Props) {
 
       if (error) throw error;
 
+      // Set discount if provided
+      const discountPct = parseFloat(form.discount_percent) || 0;
+      if (discountPct > 0) {
+        await supabase.from("corporate_accounts").update({ discount_percent: discountPct }).eq("id", account.id);
+      }
+
       const totalHours = parseFloat(form.total_hours) || 40;
       await supabase.from("corporate_packages").insert({
         corporate_account_id: account.id,
@@ -83,7 +89,7 @@ export default function AdminCorporate({ venueId }: Props) {
 
       toast.success(`${form.company_name} skapat!`);
       setShowCreate(false);
-      setForm({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40" });
+      setForm({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40", discount_percent: "0" });
       refetch();
     } catch (e: any) {
       toast.error(e.message);
@@ -131,6 +137,7 @@ export default function AdminCorporate({ venueId }: Props) {
                 <Input placeholder="E-post" type="email" value={form.contact_email} onChange={(e) => setForm({ ...form, contact_email: e.target.value })} />
                 <Input placeholder="Telefon" value={form.contact_phone} onChange={(e) => setForm({ ...form, contact_phone: e.target.value })} />
                 <Input placeholder="Antal timmar" type="number" value={form.total_hours} onChange={(e) => setForm({ ...form, total_hours: e.target.value })} />
+                <Input placeholder="Rabatt % (0 = ingen)" type="number" value={form.discount_percent} onChange={(e) => setForm({ ...form, discount_percent: e.target.value })} />
                 <Button onClick={handleCreate} disabled={creating} className="w-full">
                   {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : "Skapa"}
                 </Button>
@@ -166,6 +173,11 @@ export default function AdminCorporate({ venueId }: Props) {
                     </div>
                   )}
                 </div>
+                {acc.discount_percent > 0 && (
+                  <Badge variant="outline" className="text-xs">
+                    {acc.discount_percent}% rabatt
+                  </Badge>
+                )}
                 {acc.contact_email && (
                   <p className="text-xs text-muted-foreground">{acc.contact_name} · {acc.contact_email}</p>
                 )}

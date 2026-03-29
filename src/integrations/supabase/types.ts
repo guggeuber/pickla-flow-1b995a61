@@ -190,6 +190,7 @@ export type Database = {
           contact_name: string | null
           contact_phone: string | null
           created_at: string
+          discount_percent: number | null
           id: string
           invite_token: string
           is_active: boolean
@@ -202,6 +203,7 @@ export type Database = {
           contact_name?: string | null
           contact_phone?: string | null
           created_at?: string
+          discount_percent?: number | null
           id?: string
           invite_token?: string
           is_active?: boolean
@@ -214,6 +216,7 @@ export type Database = {
           contact_name?: string | null
           contact_phone?: string | null
           created_at?: string
+          discount_percent?: number | null
           id?: string
           invite_token?: string
           is_active?: boolean
