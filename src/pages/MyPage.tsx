@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, Plus, ShoppingBag, Building2, ChevronRight } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight } from "lucide-react";
 import QrCodeCard from "@/components/my/QrCodeCard";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -13,6 +13,20 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
+
+// Brand colors for player-facing light theme
+const BLUE = "#0066FF";
+const BLUE_LIGHT = "rgba(0,102,255,0.08)";
+const BLUE_BORDER = "rgba(0,102,255,0.15)";
+const GREEN = "#22C55E";
+const GREEN_LIGHT = "rgba(34,197,94,0.08)";
+const GREEN_BORDER = "rgba(34,197,94,0.15)";
+const TEXT_PRIMARY = "#111827";
+const TEXT_SECONDARY = "#6B7280";
+const TEXT_MUTED = "#9CA3AF";
+const CARD_BG = "#FFFFFF";
+const CARD_BORDER = "#E5E7EB";
+const PAGE_BG = "#F8FAFC";
 
 function usePlayerProfile() {
   const { user } = useAuth();
@@ -97,8 +111,8 @@ function CorporateSection() {
   return (
     <motion.div variants={item}>
       <div className="flex items-center gap-2 mb-2">
-        <Building2 className="w-4 h-4" style={{ color: "#E86C24" }} />
-        <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Företag</span>
+        <Building2 className="w-4 h-4" style={{ color: BLUE }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Företag</span>
       </div>
       <div className="flex flex-col gap-2">
         {data.memberships.map((m: any) => {
@@ -115,21 +129,21 @@ function CorporateSection() {
                 }
               }}
               className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
-              style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}
+              style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
             >
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "rgba(232,108,36,0.15)" }}>
-                  <Building2 className="w-4 h-4" style={{ color: "#E86C24" }} />
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: BLUE_LIGHT }}>
+                  <Building2 className="w-4 h-4" style={{ color: BLUE }} />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-white">{account?.company_name || "Företag"}</p>
-                  <p className="text-[11px] text-white/40" style={{ fontFamily: FONT_MONO }}>
+                  <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{account?.company_name || "Företag"}</p>
+                  <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
                     {m.role === 'admin' ? 'Admin' : 'Medlem'}
                     {remaining !== null && ` · ${remaining}h kvar`}
                   </p>
                 </div>
               </div>
-              {m.role === 'admin' && <ChevronRight className="w-4 h-4 text-white/30" />}
+              {m.role === 'admin' && <ChevronRight className="w-4 h-4" style={{ color: TEXT_MUTED }} />}
             </button>
           );
         })}
@@ -168,17 +182,14 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
     <motion.div
       variants={item}
       className="rounded-2xl p-5"
-      style={{
-        background: "rgba(255,255,255,0.06)",
-        border: "1.5px solid rgba(255,255,255,0.08)",
-      }}
+      style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}`, boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
     >
       <div className="flex items-center gap-3">
         <div
           className="w-12 h-12 rounded-full flex items-center justify-center"
-          style={{ background: "rgba(255,255,255,0.1)" }}
+          style={{ background: BLUE_LIGHT }}
         >
-          <span className="text-lg font-bold text-white">
+          <span className="text-lg font-bold" style={{ color: BLUE }}>
             {displayName.charAt(0).toUpperCase()}
           </span>
         </div>
@@ -188,27 +199,27 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
               <input
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
-                className="bg-white/10 text-white text-sm rounded-lg px-3 py-1.5 outline-none border border-white/10 focus:border-white/30"
+                className="text-sm rounded-lg px-3 py-1.5 outline-none"
                 placeholder="Namn"
-                style={{ fontFamily: FONT_HEADING }}
+                style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
               />
               <div className="flex items-center gap-2">
-                <Phone className="w-3.5 h-3.5 text-white/40 shrink-0" />
+                <Phone className="w-3.5 h-3.5 shrink-0" style={{ color: TEXT_MUTED }} />
                 <input
                   value={editPhone}
                   onChange={(e) => setEditPhone(e.target.value)}
-                  className="bg-white/10 text-white text-sm rounded-lg px-3 py-1.5 outline-none border border-white/10 focus:border-white/30 flex-1"
+                  className="text-sm rounded-lg px-3 py-1.5 outline-none flex-1"
                   placeholder="Telefonnummer"
-                  style={{ fontFamily: FONT_MONO }}
+                  style={{ fontFamily: FONT_MONO, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
                 />
               </div>
             </div>
           ) : (
             <div>
-              <p className="font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>{displayName}</p>
-              <p className="text-xs text-white/40">{user.email}</p>
+              <p className="font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
+              <p className="text-xs" style={{ color: TEXT_MUTED }}>{user.email}</p>
               {profile?.phone && (
-                <p className="text-xs text-white/40 mt-0.5" style={{ fontFamily: FONT_MONO }}>{profile.phone}</p>
+                <p className="text-xs mt-0.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{profile.phone}</p>
               )}
             </div>
           )}
@@ -219,34 +230,34 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
             onClick={handleSave}
             disabled={saving}
             className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: "rgba(232,108,36,0.2)" }}
+            style={{ background: BLUE_LIGHT }}
           >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin text-white/70" /> : <Save className="w-4 h-4" style={{ color: "#E86C24" }} />}
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} /> : <Save className="w-4 h-4" style={{ color: BLUE }} />}
           </motion.button>
         ) : (
           <motion.button
             whileTap={{ scale: 0.9 }}
             onClick={() => { setEditName(displayName); setEditPhone(profile?.phone || ""); setEditing(true); }}
             className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: "rgba(255,255,255,0.1)" }}
+            style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}
           >
-            <Pencil className="w-4 h-4 text-white/50" />
+            <Pencil className="w-4 h-4" style={{ color: TEXT_MUTED }} />
           </motion.button>
         )}
       </div>
       {profile && !editing && (
-        <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+        <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: `1px solid ${CARD_BORDER}` }}>
           <div className="text-center flex-1">
-            <p className="text-lg font-bold text-white">{profile.total_matches || 0}</p>
-            <p className="text-[10px] uppercase tracking-wide text-white/40">Matcher</p>
+            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_matches || 0}</p>
+            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Matcher</p>
           </div>
           <div className="text-center flex-1">
-            <p className="text-lg font-bold text-white">{profile.total_wins || 0}</p>
-            <p className="text-[10px] uppercase tracking-wide text-white/40">Vinster</p>
+            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_wins || 0}</p>
+            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Vinster</p>
           </div>
           <div className="text-center flex-1">
-            <p className="text-lg font-bold" style={{ color: "#E86C24" }}>{profile.pickla_rating || 1000}</p>
-            <p className="text-[10px] uppercase tracking-wide text-white/40">Rating</p>
+            <p className="text-lg font-bold" style={{ color: BLUE }}>{profile.pickla_rating || 1000}</p>
+            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Rating</p>
           </div>
         </div>
       )}
@@ -265,11 +276,9 @@ function DayPassSection() {
 
   const passes = data?.passes || [];
   const allowance = data?.allowance || { has_membership: false, passes_allowed: 0, passes_remaining: 0 };
-  const shares = data?.shares || [];
 
   const activePasses = passes.filter((p: any) => p.status === 'active' && !p.share);
   const sharedPasses = passes.filter((p: any) => p.share?.status === 'pending');
-  const usedPasses = passes.filter((p: any) => p.status === 'used' || p.share?.status === 'claimed');
 
   const buildLink = (token: string) => `${window.location.origin}/pass/${token}`;
 
@@ -322,7 +331,7 @@ function DayPassSection() {
   if (isLoading) {
     return (
       <motion.div variants={item} className="flex justify-center py-4">
-        <Loader2 className="w-5 h-5 animate-spin text-white/30" />
+        <Loader2 className="w-5 h-5 animate-spin" style={{ color: TEXT_MUTED }} />
       </motion.div>
     );
   }
@@ -331,9 +340,9 @@ function DayPassSection() {
     <motion.div variants={item}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Ticket className="w-4 h-4" style={{ color: "#E86C24" }} />
-          <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Mina dagspass</span>
-          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>
+          <Ticket className="w-4 h-4" style={{ color: BLUE }} />
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina dagspass</span>
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>
             {activePasses.length}
           </span>
         </div>
@@ -341,10 +350,10 @@ function DayPassSection() {
 
       {/* Member allowance info */}
       {allowance.has_membership && allowance.passes_allowed > 0 && (
-        <div className="rounded-xl px-3 py-2 mb-3 flex items-center gap-2" style={{ background: "rgba(76,175,80,0.08)", border: "1px solid rgba(76,175,80,0.15)" }}>
-          <Gift className="w-3.5 h-3.5 shrink-0" style={{ color: "#4CAF50" }} />
-          <p className="text-[11px] text-white/50" style={{ fontFamily: FONT_MONO }}>
-            <span className="font-bold text-white">{allowance.passes_remaining}</span> av {allowance.passes_allowed} gratispass kvar denna månad
+        <div className="rounded-xl px-3 py-2 mb-3 flex items-center gap-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
+          <Gift className="w-3.5 h-3.5 shrink-0" style={{ color: GREEN }} />
+          <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
+            <span className="font-bold" style={{ color: TEXT_PRIMARY }}>{allowance.passes_remaining}</span> av {allowance.passes_allowed} gratispass kvar denna månad
           </p>
         </div>
       )}
@@ -354,7 +363,7 @@ function DayPassSection() {
         onClick={handleBuy}
         disabled={buying}
         className="w-full py-3 rounded-xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2 mb-3 disabled:opacity-40"
-        style={{ background: "#E86C24", fontFamily: FONT_MONO }}
+        style={{ background: BLUE, fontFamily: FONT_MONO }}
       >
         {buying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><ShoppingBag className="w-3.5 h-3.5" /> Köp dagspass</>}
       </button>
@@ -365,12 +374,12 @@ function DayPassSection() {
           <motion.div
             initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
             className="rounded-xl p-3 flex items-center gap-2 mb-3"
-            style={{ background: "rgba(76,175,80,0.1)", border: "1px solid rgba(76,175,80,0.2)" }}
+            style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}
           >
-            <Check className="w-3.5 h-3.5 shrink-0" style={{ color: "#4CAF50" }} />
-            <p className="text-xs text-white/60 flex-1 truncate" style={{ fontFamily: FONT_MONO }}>{buildLink(justCreatedToken)}</p>
+            <Check className="w-3.5 h-3.5 shrink-0" style={{ color: GREEN }} />
+            <p className="text-xs flex-1 truncate" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{buildLink(justCreatedToken)}</p>
             <button onClick={() => copyLink(buildLink(justCreatedToken))} className="shrink-0">
-              <Copy className="w-4 h-4" style={{ color: "#4CAF50" }} />
+              <Copy className="w-4 h-4" style={{ color: GREEN }} />
             </button>
           </motion.div>
         )}
@@ -378,32 +387,32 @@ function DayPassSection() {
 
       {/* Active passes */}
       {activePasses.length === 0 && sharedPasses.length === 0 ? (
-        <div className="rounded-2xl p-4 text-center" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
-          <p className="text-xs text-white/30">Inga aktiva dagspass</p>
+        <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+          <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga aktiva dagspass</p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
           {activePasses.map((p: any) => (
             <div key={p.id}>
-              <div className="rounded-xl p-3 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+              <div className="rounded-xl p-3 flex items-center justify-between" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium text-white">Dagspass</p>
+                    <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>Dagspass</p>
                     {p.is_free && (
-                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "rgba(76,175,80,0.15)", color: "#4CAF50" }}>GRATIS</span>
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: GREEN_LIGHT, color: GREEN }}>GRATIS</span>
                     )}
                   </div>
-                  <p className="text-xs text-white/40">
+                  <p className="text-xs" style={{ color: TEXT_MUTED }}>
                     {new Date(p.valid_date).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
                   </p>
                 </div>
-                {!p.is_free && <span className="text-xs font-bold text-white/50 mr-2">{p.price} SEK</span>}
+                {!p.is_free && <span className="text-xs font-bold mr-2" style={{ color: TEXT_SECONDARY }}>{p.price} SEK</span>}
                 <button
                   onClick={() => { setSharingPassId(sharingPassId === p.id ? null : p.id); setShareEmail(""); setJustCreatedToken(null); }}
                   className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                  style={{ background: sharingPassId === p.id ? "rgba(232,108,36,0.2)" : "rgba(255,255,255,0.06)" }}
+                  style={{ background: sharingPassId === p.id ? BLUE_LIGHT : PAGE_BG, border: `1px solid ${sharingPassId === p.id ? BLUE_BORDER : CARD_BORDER}` }}
                 >
-                  <Send className="w-3.5 h-3.5" style={{ color: sharingPassId === p.id ? "#E86C24" : "rgba(255,255,255,0.4)" }} />
+                  <Send className="w-3.5 h-3.5" style={{ color: sharingPassId === p.id ? BLUE : TEXT_MUTED }} />
                 </button>
               </div>
 
@@ -420,14 +429,14 @@ function DayPassSection() {
                         placeholder="Vännens e-post"
                         value={shareEmail}
                         onChange={(e) => setShareEmail(e.target.value)}
-                        className="flex-1 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-xs placeholder:text-white/25 focus:outline-none focus:border-white/30"
-                        style={{ fontFamily: FONT_MONO }}
+                        className="flex-1 px-3 py-2.5 rounded-xl text-xs outline-none"
+                        style={{ fontFamily: FONT_MONO, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
                       />
                       <button
                         onClick={() => handleShare(p.id)}
                         disabled={sharing}
                         className="px-4 py-2.5 rounded-xl text-white text-xs font-bold active:scale-[0.98] transition-transform disabled:opacity-40"
-                        style={{ background: "rgba(232,108,36,0.3)", fontFamily: FONT_MONO }}
+                        style={{ background: BLUE, fontFamily: FONT_MONO }}
                       >
                         {sharing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Dela"}
                       </button>
@@ -441,32 +450,32 @@ function DayPassSection() {
           {/* Shared (pending) passes */}
           {sharedPasses.length > 0 && (
             <div className="pt-1">
-              <p className="text-[10px] uppercase tracking-wider text-white/30 mb-1.5" style={{ fontFamily: FONT_MONO }}>Delade pass</p>
+              <p className="text-[10px] uppercase tracking-wider mb-1.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Delade pass</p>
               {sharedPasses.map((p: any) => (
-                <div key={p.id} className="rounded-xl p-3 flex items-center gap-2 mb-1.5" style={{ background: "rgba(232,108,36,0.05)", border: "1px solid rgba(232,108,36,0.12)" }}>
-                  <Send className="w-3 h-3 shrink-0" style={{ color: "#E86C24" }} />
-                  <span className="text-xs text-white/50 truncate flex-1" style={{ fontFamily: FONT_MONO }}>
+                <div key={p.id} className="rounded-xl p-3 flex items-center gap-2 mb-1.5" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
+                  <Send className="w-3 h-3 shrink-0" style={{ color: BLUE }} />
+                  <span className="text-xs truncate flex-1" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
                     {p.share?.recipient_email || "Delat pass"}
                   </span>
-                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold shrink-0" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold shrink-0" style={{ background: BLUE_LIGHT, color: BLUE }}>
                     Väntande
                   </span>
                   {p.share?.token && (
                     <button
                       onClick={() => copyLink(buildLink(p.share.token))}
                       className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                      style={{ background: "rgba(255,255,255,0.06)" }}
+                      style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}
                     >
-                      <Copy className="w-3 h-3 text-white/40" />
+                      <Copy className="w-3 h-3" style={{ color: TEXT_MUTED }} />
                     </button>
                   )}
                   {p.share && (
                     <button
                       onClick={() => handleRevoke(p.share.id)}
                       className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                      style={{ background: "rgba(239,68,68,0.1)" }}
+                      style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)" }}
                     >
-                      <Trash2 className="w-3 h-3 text-red-400/60" />
+                      <Trash2 className="w-3 h-3 text-red-400" />
                     </button>
                   )}
                 </div>
@@ -491,8 +500,8 @@ const MyPage = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#1a1e2e" }}>
-        <Loader2 className="w-6 h-6 animate-spin text-white" />
+      <div className="min-h-screen flex items-center justify-center" style={{ background: PAGE_BG }}>
+        <Loader2 className="w-6 h-6 animate-spin" style={{ color: BLUE }} />
       </div>
     );
   }
@@ -504,20 +513,19 @@ const MyPage = () => {
   const membershipTier = (activeMembership as any)?.membership_tiers;
 
   return (
-    <div className="min-h-screen" style={{ background: "#1a1e2e" }}>
+    <div className="min-h-screen" style={{ background: PAGE_BG }}>
       {/* ═══ STICKY TOP: Logo ═══ */}
       <header
         className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
         style={{
-          background: "linear-gradient(to bottom, rgba(26,30,46,0.8) 0%, rgba(26,30,46,0.4) 50%, transparent 100%)",
+          background: "linear-gradient(to bottom, rgba(248,250,252,0.95) 0%, rgba(248,250,252,0.7) 50%, transparent 100%)",
         }}
       >
         <div className="pt-2">
           <img
             src={picklaLogo}
             alt="Pickla"
-            className="h-14 w-auto"
-            style={{ filter: "brightness(0) invert(1)" }}
+            className="h-7 w-auto"
           />
         </div>
         <motion.button
@@ -527,14 +535,14 @@ const MyPage = () => {
             navigate(`/?v=${venueSlug}`);
           }}
           className="w-9 h-9 rounded-xl flex items-center justify-center mb-1"
-          style={{ background: "rgba(255,255,255,0.1)" }}
+          style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}
         >
-          <LogOut className="w-4 h-4 text-white/70" />
+          <LogOut className="w-4 h-4" style={{ color: TEXT_MUTED }} />
         </motion.button>
       </header>
 
       {/* ═══ MAIN CONTENT ═══ */}
-      <main className="pt-28 px-5 pb-28">
+      <main className="pt-24 px-5 pb-28">
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
           {/* Profile card with edit */}
           <ProfileCard profile={profile} user={user} displayName={displayName} />
@@ -546,20 +554,20 @@ const MyPage = () => {
               className="rounded-2xl p-5"
               style={{
                 background: membershipTier?.color
-                  ? `${membershipTier.color}22`
-                  : "rgba(76,175,80,0.08)",
-                border: `1.5px solid ${membershipTier?.color || "rgba(76,175,80,0.2)"}44`,
+                  ? `${membershipTier.color}10`
+                  : GREEN_LIGHT,
+                border: `1.5px solid ${membershipTier?.color ? membershipTier.color + "30" : GREEN_BORDER}`,
               }}
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: `${membershipTier?.color || "#4CAF50"}33` }}>
-                  <Check className="w-5 h-5" style={{ color: membershipTier?.color || "#4CAF50" }} />
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: `${membershipTier?.color || GREEN}20` }}>
+                  <Check className="w-5 h-5" style={{ color: membershipTier?.color || GREEN }} />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-white" style={{ fontFamily: FONT_HEADING }}>
+                  <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
                     {membershipTier?.name || "Medlem"}
                   </p>
-                  <p className="text-[11px] text-white/40" style={{ fontFamily: FONT_MONO }}>
+                  <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
                     {membershipTier?.description || "Aktivt medlemskap"}
                   </p>
                 </div>
@@ -571,14 +579,14 @@ const MyPage = () => {
               onClick={() => navigate("/play")}
               className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
               style={{
-                background: "rgba(232,108,36,0.1)",
-                border: "1.5px solid rgba(232,108,36,0.2)",
+                background: BLUE_LIGHT,
+                border: `1.5px solid ${BLUE_BORDER}`,
               }}
             >
-              <p className="text-sm font-bold text-white" style={{ fontFamily: FONT_HEADING }}>
+              <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
                 Bli medlem
               </p>
-              <p className="text-[11px] text-white/40" style={{ fontFamily: FONT_MONO }}>
+              <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
                 Se medlemskap och priser →
               </p>
             </motion.button>
@@ -587,27 +595,27 @@ const MyPage = () => {
           {/* Active bookings */}
           <motion.div variants={item}>
             <div className="flex items-center gap-2 mb-2">
-              <Calendar className="w-4 h-4" style={{ color: "#E86C24" }} />
-              <span className="text-sm font-semibold text-white" style={{ fontFamily: FONT_HEADING }}>Mina bokningar</span>
-              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "rgba(232,108,36,0.15)", color: "#E86C24" }}>{activeBookings.length}</span>
+              <Calendar className="w-4 h-4" style={{ color: BLUE }} />
+              <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookings.length}</span>
             </div>
             {activeBookings.length === 0 ? (
-              <div className="rounded-2xl p-4 text-center" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
-                <p className="text-xs text-white/30">Inga aktiva bokningar</p>
+              <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga aktiva bokningar</p>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
                 {activeBookings.slice(0, 5).map((b) => (
-                  <div key={b.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,255,255,0.06)" }}>
+                  <div key={b.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
                     <div>
-                      <p className="text-sm font-medium text-white">{(b as any).venue_courts?.name || "Bana"}</p>
-                      <p className="text-xs text-white/40">
+                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{(b as any).venue_courts?.name || "Bana"}</p>
+                      <p className="text-xs" style={{ color: TEXT_MUTED }}>
                         {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
                         {" "}
                         {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
                       </p>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? "rgba(76,175,80,0.15)" : "rgba(232,108,36,0.15)", color: b.status === "confirmed" ? "#4CAF50" : "#E86C24" }}>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? GREEN_LIGHT : BLUE_LIGHT, color: b.status === "confirmed" ? GREEN : BLUE }}>
                       {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
                     </span>
                   </div>
@@ -631,28 +639,28 @@ const MyPage = () => {
       <nav
         className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-8 pt-12"
         style={{
-          background: "linear-gradient(to top, rgba(26,30,46,0.95) 0%, rgba(26,30,46,0.7) 40%, rgba(26,30,46,0.3) 70%, transparent 100%)",
+          background: "linear-gradient(to top, rgba(248,250,252,0.97) 0%, rgba(248,250,252,0.8) 40%, rgba(248,250,252,0.3) 70%, transparent 100%)",
         }}
       >
         <a
           href="https://chat.whatsapp.com/HL1XcYaNFSuE56q7MqCpdw"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO }}
+          className="text-[13px] font-bold underline underline-offset-4 active:opacity-60 transition-opacity"
+          style={{ fontFamily: FONT_MONO, color: TEXT_PRIMARY, textDecorationColor: CARD_BORDER }}
         >
           chat
         </a>
         <button
           onClick={() => navigate("/play")}
-          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO }}
+          className="text-[13px] font-bold underline underline-offset-4 active:opacity-60 transition-opacity"
+          style={{ fontFamily: FONT_MONO, color: TEXT_PRIMARY, textDecorationColor: CARD_BORDER }}
         >
           play
         </button>
         <span
-          className="text-white text-[13px] font-bold underline underline-offset-4 decoration-white/60"
-          style={{ fontFamily: FONT_MONO }}
+          className="text-[13px] font-bold underline underline-offset-4"
+          style={{ fontFamily: FONT_MONO, color: BLUE, textDecorationColor: BLUE }}
         >
           me
         </span>
