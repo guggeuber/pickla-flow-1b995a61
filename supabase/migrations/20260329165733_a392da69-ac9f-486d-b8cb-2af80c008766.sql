@@ -1,0 +1,1 @@
+ALTER TABLE public.corporate_accounts ADD COLUMN IF NOT EXISTS discount_percent numeric DEFAULT 0;
