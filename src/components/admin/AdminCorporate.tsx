@@ -27,7 +27,7 @@ const DAYS = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 export default function AdminCorporate({ venueId }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40" });
+  const [form, setForm] = useState({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40", discount_percent: "0" });
 
   const { data: accounts, refetch } = useQuery({
     queryKey: ["admin-corporate", venueId],
