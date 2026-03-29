@@ -20,6 +20,7 @@ import MembershipPage from "./pages/MembershipPage";
 import ClaimPassPage from "./pages/ClaimPassPage";
 import CorporateJoinPage from "./pages/CorporateJoinPage";
 import CorporateDashboard from "./pages/CorporateDashboard";
+import CorporateRegisterPage from "./pages/CorporateRegisterPage";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
