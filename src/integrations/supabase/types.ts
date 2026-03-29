@@ -235,6 +235,8 @@ export type Database = {
           corporate_account_id: string
           id: string
           joined_at: string
+          monthly_cost_limit: number | null
+          monthly_hour_limit: number | null
           role: string
           user_id: string
         }
@@ -242,6 +244,8 @@ export type Database = {
           corporate_account_id: string
           id?: string
           joined_at?: string
+          monthly_cost_limit?: number | null
+          monthly_hour_limit?: number | null
           role?: string
           user_id: string
         }
@@ -249,6 +253,8 @@ export type Database = {
           corporate_account_id?: string
           id?: string
           joined_at?: string
+          monthly_cost_limit?: number | null
+          monthly_hour_limit?: number | null
           role?: string
           user_id?: string
         }
@@ -258,6 +264,135 @@ export type Database = {
             columns: ["corporate_account_id"]
             isOneToOne: false
             referencedRelation: "corporate_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      corporate_order_items: {
+        Row: {
+          booking_id: string | null
+          created_at: string
+          day_of_week: number | null
+          end_time: string | null
+          id: string
+          order_id: string
+          scheduled_date: string | null
+          start_time: string | null
+          status: string
+          week_number: number | null
+        }
+        Insert: {
+          booking_id?: string | null
+          created_at?: string
+          day_of_week?: number | null
+          end_time?: string | null
+          id?: string
+          order_id: string
+          scheduled_date?: string | null
+          start_time?: string | null
+          status?: string
+          week_number?: number | null
+        }
+        Update: {
+          booking_id?: string | null
+          created_at?: string
+          day_of_week?: number | null
+          end_time?: string | null
+          id?: string
+          order_id?: string
+          scheduled_date?: string | null
+          start_time?: string | null
+          status?: string
+          week_number?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "corporate_order_items_booking_id_fkey"
+            columns: ["booking_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "corporate_order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "corporate_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      corporate_orders: {
+        Row: {
+          corporate_account_id: string
+          created_at: string
+          created_by: string
+          currency: string | null
+          fulfilled_at: string | null
+          id: string
+          invoiced_at: string | null
+          notes: string | null
+          order_number: string
+          order_type: string
+          paid_at: string | null
+          recurring_config: Json | null
+          status: string
+          total_hours: number
+          total_price: number
+          updated_at: string
+          venue_id: string
+        }
+        Insert: {
+          corporate_account_id: string
+          created_at?: string
+          created_by: string
+          currency?: string | null
+          fulfilled_at?: string | null
+          id?: string
+          invoiced_at?: string | null
+          notes?: string | null
+          order_number: string
+          order_type?: string
+          paid_at?: string | null
+          recurring_config?: Json | null
+          status?: string
+          total_hours?: number
+          total_price?: number
+          updated_at?: string
+          venue_id: string
+        }
+        Update: {
+          corporate_account_id?: string
+          created_at?: string
+          created_by?: string
+          currency?: string | null
+          fulfilled_at?: string | null
+          id?: string
+          invoiced_at?: string | null
+          notes?: string | null
+          order_number?: string
+          order_type?: string
+          paid_at?: string | null
+          recurring_config?: Json | null
+          status?: string
+          total_hours?: number
+          total_price?: number
+          updated_at?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "corporate_orders_corporate_account_id_fkey"
+            columns: ["corporate_account_id"]
+            isOneToOne: false
+            referencedRelation: "corporate_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "corporate_orders_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
             referencedColumns: ["id"]
           },
         ]
