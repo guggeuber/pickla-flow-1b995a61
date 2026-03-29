@@ -173,6 +173,11 @@ export default function AdminCorporate({ venueId }: Props) {
                     </div>
                   )}
                 </div>
+                {acc.discount_percent > 0 && (
+                  <Badge variant="outline" className="text-xs">
+                    {acc.discount_percent}% rabatt
+                  </Badge>
+                )}
                 {acc.contact_email && (
                   <p className="text-xs text-muted-foreground">{acc.contact_name} · {acc.contact_email}</p>
                 )}
