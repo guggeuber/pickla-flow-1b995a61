@@ -73,6 +73,12 @@ export default function AdminCorporate({ venueId }: Props) {
 
       if (error) throw error;
 
+      // Set discount if provided
+      const discountPct = parseFloat(form.discount_percent) || 0;
+      if (discountPct > 0) {
+        await supabase.from("corporate_accounts").update({ discount_percent: discountPct }).eq("id", account.id);
+      }
+
       const totalHours = parseFloat(form.total_hours) || 40;
       await supabase.from("corporate_packages").insert({
         corporate_account_id: account.id,
@@ -83,7 +89,7 @@ export default function AdminCorporate({ venueId }: Props) {
 
       toast.success(`${form.company_name} skapat!`);
       setShowCreate(false);
-      setForm({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40" });
+      setForm({ company_name: "", contact_name: "", contact_email: "", contact_phone: "", total_hours: "40", discount_percent: "0" });
       refetch();
     } catch (e: any) {
       toast.error(e.message);
