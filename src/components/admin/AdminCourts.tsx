@@ -3,12 +3,15 @@ import { useAdminCourts, useAdminMutation } from "@/hooks/useAdmin";
 import { Loader2, Plus, LayoutGrid, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
+const SPORT_TYPES = ["pickleball", "darts", "padel"] as const;
+
 const AdminCourts = ({ venueId }: { venueId: string }) => {
   const { data: courts, isLoading } = useAdminCourts(venueId);
   const { addCourt, updateCourt } = useAdminMutation(venueId);
   const [name, setName] = useState("");
   const [courtNumber, setCourtNumber] = useState("");
   const [courtType, setCourtType] = useState("indoor");
+  const [sportType, setSportType] = useState("pickleball");
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
