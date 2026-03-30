@@ -103,7 +103,7 @@ export function useAdminMutation(venueId: string | undefined) {
   });
 
   const addCourt = useMutation({
-    mutationFn: (body: { name: string; court_number: number; court_type?: string; hourly_rate?: number }) =>
+    mutationFn: (body: { name: string; court_number: number; court_type?: string; sport_type?: string; hourly_rate?: number }) =>
       apiPost("api-admin", "courts", { ...body, venueId }),
     onSuccess: invalidate("courts"),
   });
