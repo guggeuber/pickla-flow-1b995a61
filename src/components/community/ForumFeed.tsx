@@ -1033,6 +1033,12 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
   const [showGifPicker, setShowGifPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Edit state
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(post.title);
+  const [editBody, setEditBody] = useState(post.body || "");
+  const [saving, setSaving] = useState(false);
+
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
     enabled: !!user,
