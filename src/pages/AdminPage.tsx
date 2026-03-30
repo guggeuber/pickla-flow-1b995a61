@@ -253,6 +253,7 @@ const AdminPage = () => {
     { id: "memberships" as SectionId, icon: Crown, label: "Medlemskap", stat: "Nivåer & rabatter", color: "var(--badge-vip)" },
     ...(adminData?.isSuperAdmin ? [{ id: "templates" as SectionId, icon: FileText, label: "Event-mallar", stat: "Franchise", color: "var(--primary)" }] : []),
     { id: "corporate" as SectionId, icon: Building2, label: "Företag", stat: "Företagskonton", color: "var(--badge-vip)" },
+    { id: "channels" as SectionId, icon: MessageSquare, label: "Chat", stat: "Channels", color: "var(--primary)" },
   ];
 
   return (
