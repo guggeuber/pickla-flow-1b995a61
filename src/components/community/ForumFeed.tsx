@@ -1401,6 +1401,24 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
           </button>
         </div>
 
+        {/* Sport selector */}
+        <div className="flex gap-1.5 mb-3">
+          {SPORT_FILTERS.filter(s => s.key !== "all").map(s => (
+            <button
+              key={s.key}
+              onClick={() => setSportType(s.key)}
+              className="px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all"
+              style={{
+                background: sportType === s.key ? "#11111110" : "#f5f5f5",
+                color: sportType === s.key ? "#111" : "#9CA3AF",
+                border: sportType === s.key ? "1.5px solid #11111130" : "1.5px solid transparent",
+              }}
+            >
+              {s.emoji} {s.label}
+            </button>
+          ))}
+        </div>
+
         {/* Tag selector */}
         <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
           {TAGS.filter(t => t.key !== "all").map(t => (
