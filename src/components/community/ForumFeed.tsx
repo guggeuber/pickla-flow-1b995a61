@@ -1048,7 +1048,27 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
     },
   });
 
-  const { data: comments, isLoading: commentsLoading } = useQuery({
+  const isAuthor = profile && post.author_profile_id === profile.id;
+
+  const handleSaveEdit = async () => {
+    if (!editTitle.trim() || saving) return;
+    setSaving(true);
+    try {
+      await (supabase as any).from("forum_posts").update({
+        title: editTitle.trim(),
+        body: editBody.trim(),
+      }).eq("id", post.id);
+      post.title = editTitle.trim();
+      post.body = editBody.trim();
+      qc.invalidateQueries({ queryKey: ["forum-posts"] });
+      toast.success("Post updated!");
+      setEditing(false);
+    } catch {
+      toast.error("Could not save changes");
+    }
+    setSaving(false);
+  };
+
     queryKey: ["post-comments", post.id],
     queryFn: async () => {
       const { data, error } = await (supabase as any)
