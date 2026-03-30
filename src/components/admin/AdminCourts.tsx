@@ -190,7 +190,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
         ))}
       </div>
       {(!courts || courts.length === 0) && (
-        <p className="text-sm text-muted-foreground text-center py-6">Inga banor konfigurerade</p>
+        <p className="text-sm text-muted-foreground text-center py-6">No courts configured</p>
       )}
     </div>
   );
