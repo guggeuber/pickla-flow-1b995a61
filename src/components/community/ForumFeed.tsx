@@ -158,26 +158,29 @@ function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
           {filteredTextParts}
         </p>
       )}
-      {/* Media thumbnails — show in both card and detail */}
+      {/* Media — full-width like Reddit */}
       {mediaUrls.length > 0 && (
-        <div className={`mt-2 ${clamp ? "flex gap-1.5 overflow-hidden" : "space-y-2"}`}>
-          {(clamp ? mediaUrls.slice(0, 2) : mediaUrls).map((src, i) => (
-            <img
-              key={`media-${i}`}
-              src={src}
-              alt={gifExtension.test(src) ? "GIF" : "Shared image"}
-              className={clamp
-                ? "rounded-lg object-cover border border-neutral-100 w-20 h-20"
-                : "rounded-xl max-w-full max-h-64 object-cover border border-neutral-100"
-              }
-              loading="lazy"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
-          ))}
-          {clamp && mediaUrls.length > 2 && (
-            <div className="w-20 h-20 rounded-lg bg-neutral-100 flex items-center justify-center text-[11px] font-bold text-neutral-400">
-              +{mediaUrls.length - 2}
+        <div className="mt-2 space-y-2">
+          {(clamp ? mediaUrls.slice(0, 1) : mediaUrls).map((src, i) => (
+            <div key={`media-${i}`} className="relative rounded-2xl overflow-hidden border border-neutral-100 bg-neutral-50">
+              <img
+                src={src}
+                alt={gifExtension.test(src) ? "GIF" : "Shared image"}
+                className="w-full max-h-80 object-cover"
+                loading="lazy"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+              {gifExtension.test(src) && (
+                <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[9px] font-black tracking-wide bg-black/60 text-white">
+                  GIF
+                </span>
+              )}
             </div>
+          ))}
+          {clamp && mediaUrls.length > 1 && (
+            <p className="text-[11px] text-neutral-400 font-semibold" style={{ fontFamily: FONT_MONO }}>
+              +{mediaUrls.length - 1} more image{mediaUrls.length > 2 ? "s" : ""}
+            </p>
           )}
         </div>
       )}
