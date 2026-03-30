@@ -141,6 +141,13 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
                   <option value="indoor">Indoor</option>
                   <option value="outdoor">Outdoor</option>
                 </select>
+                <select
+                  value={editSportType}
+                  onChange={(e) => setEditSportType(e.target.value)}
+                  className="w-full text-center rounded-lg px-2 py-1 text-[11px] outline-none bg-white/80 text-neutral-900 capitalize"
+                >
+                  {SPORT_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
                 <div className="flex gap-1.5">
                   <button
                     onClick={() => saveEdit(court.id)}
