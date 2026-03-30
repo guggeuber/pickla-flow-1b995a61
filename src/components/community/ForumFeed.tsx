@@ -897,9 +897,38 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
 
 /* ── Post Card ── */
 function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
   const isLfg = post.tag === "lfg";
   const isPoll = post.tag === "poll";
+  const [showMenu, setShowMenu] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const { data: profile } = useQuery({
+    queryKey: ["my-profile-id"],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data } = await supabase.from("player_profiles").select("id").eq("auth_user_id", user!.id).single();
+      return data;
+    },
+  });
+
+  const isAuthor = profile && post.author_profile_id === profile.id;
+
+  const handleDelete = async () => {
+    if (!confirm("Delete this post?")) return;
+    setDeleting(true);
+    try {
+      await (supabase as any).from("forum_posts").delete().eq("id", post.id);
+      qc.invalidateQueries({ queryKey: ["forum-posts"] });
+      toast.success("Post deleted");
+    } catch {
+      toast.error("Could not delete post");
+    }
+    setDeleting(false);
+    setShowMenu(false);
+  };
 
   return (
     <motion.div
@@ -921,7 +950,39 @@ function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
         <span className="text-[10px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
           {timeAgo(post.created_at)}
         </span>
+        {post.sport_type && post.sport_type !== "pickleball" && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-neutral-100 text-neutral-500 font-semibold">
+            {SPORT_FILTERS.find(s => s.key === post.sport_type)?.emoji || "🏟️"} {post.sport_type}
+          </span>
+        )}
         {post.is_pinned && <Pin className="w-3 h-3 text-amber-500 ml-auto" />}
+        {isAuthor && !post.is_pinned && (
+          <div className="ml-auto relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
+              className="w-7 h-7 rounded-lg flex items-center justify-center bg-neutral-50 active:scale-90 transition-transform"
+            >
+              <MoreHorizontal className="w-4 h-4 text-neutral-400" />
+            </button>
+            {showMenu && (
+              <div className="absolute right-0 top-8 z-20 bg-white rounded-xl border border-neutral-100 shadow-lg py-1 min-w-[120px]">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onOpen(); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-neutral-700 hover:bg-neutral-50"
+                >
+                  <Pencil className="w-3.5 h-3.5" /> Edit
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDelete(); }}
+                  disabled={deleting}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-red-500 hover:bg-red-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Tag */}
