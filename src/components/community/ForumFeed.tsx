@@ -5,7 +5,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2, ArrowBigUp, ArrowBigDown, MessageCircle, Plus, Pin, Send, X,
-  ChevronLeft, Users, CalendarDays, MapPin, Clock, Image as ImageIcon, BarChart3, ExternalLink, Paperclip, Search, Smile
+  ChevronLeft, Users, CalendarDays, MapPin, Clock, Image as ImageIcon, BarChart3, ExternalLink, Paperclip, Search, Smile,
+  Pencil, MoreHorizontal, Check, Trash2
 } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -23,6 +24,12 @@ const TAGS = [
   { key: "events", label: "Events" },
   { key: "tips", label: "Tips" },
   { key: "poll", label: "Poll" },
+];
+
+const SPORT_FILTERS = [
+  { key: "all", label: "All Sports", emoji: "🏟️" },
+  { key: "pickleball", label: "Pickleball", emoji: "🏓" },
+  { key: "dart", label: "Dart", emoji: "🎯" },
 ];
 
 const TAG_COLORS: Record<string, string> = {
@@ -890,9 +897,38 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
 
 /* ── Post Card ── */
 function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
   const isLfg = post.tag === "lfg";
   const isPoll = post.tag === "poll";
+  const [showMenu, setShowMenu] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const { data: profile } = useQuery({
+    queryKey: ["my-profile-id"],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data } = await supabase.from("player_profiles").select("id").eq("auth_user_id", user!.id).single();
+      return data;
+    },
+  });
+
+  const isAuthor = profile && post.author_profile_id === profile.id;
+
+  const handleDelete = async () => {
+    if (!confirm("Delete this post?")) return;
+    setDeleting(true);
+    try {
+      await (supabase as any).from("forum_posts").delete().eq("id", post.id);
+      qc.invalidateQueries({ queryKey: ["forum-posts"] });
+      toast.success("Post deleted");
+    } catch {
+      toast.error("Could not delete post");
+    }
+    setDeleting(false);
+    setShowMenu(false);
+  };
 
   return (
     <motion.div
@@ -914,7 +950,39 @@ function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
         <span className="text-[10px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
           {timeAgo(post.created_at)}
         </span>
+        {post.sport_type && post.sport_type !== "pickleball" && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-neutral-100 text-neutral-500 font-semibold">
+            {SPORT_FILTERS.find(s => s.key === post.sport_type)?.emoji || "🏟️"} {post.sport_type}
+          </span>
+        )}
         {post.is_pinned && <Pin className="w-3 h-3 text-amber-500 ml-auto" />}
+        {isAuthor && !post.is_pinned && (
+          <div className="ml-auto relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
+              className="w-7 h-7 rounded-lg flex items-center justify-center bg-neutral-50 active:scale-90 transition-transform"
+            >
+              <MoreHorizontal className="w-4 h-4 text-neutral-400" />
+            </button>
+            {showMenu && (
+              <div className="absolute right-0 top-8 z-20 bg-white rounded-xl border border-neutral-100 shadow-lg py-1 min-w-[120px]">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onOpen(); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-neutral-700 hover:bg-neutral-50"
+                >
+                  <Pencil className="w-3.5 h-3.5" /> Edit
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDelete(); }}
+                  disabled={deleting}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-red-500 hover:bg-red-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Tag */}
@@ -965,6 +1033,12 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
   const [showGifPicker, setShowGifPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Edit state
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(post.title);
+  const [editBody, setEditBody] = useState(post.body || "");
+  const [saving, setSaving] = useState(false);
+
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
     enabled: !!user,
@@ -973,6 +1047,27 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
       return data;
     },
   });
+
+  const isAuthor = profile && post.author_profile_id === profile.id;
+
+  const handleSaveEdit = async () => {
+    if (!editTitle.trim() || saving) return;
+    setSaving(true);
+    try {
+      await (supabase as any).from("forum_posts").update({
+        title: editTitle.trim(),
+        body: editBody.trim(),
+      }).eq("id", post.id);
+      post.title = editTitle.trim();
+      post.body = editBody.trim();
+      qc.invalidateQueries({ queryKey: ["forum-posts"] });
+      toast.success("Post updated!");
+      setEditing(false);
+    } catch {
+      toast.error("Could not save changes");
+    }
+    setSaving(false);
+  };
 
   const { data: comments, isLoading: commentsLoading } = useQuery({
     queryKey: ["post-comments", post.id],
@@ -1027,7 +1122,15 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
         <button onClick={onBack} className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 bg-neutral-50">
           <ChevronLeft className="w-4 h-4 text-neutral-600" />
         </button>
-        <span className="text-sm font-semibold text-neutral-500" style={{ fontFamily: FONT_GROTESK }}>Thread</span>
+        <span className="text-sm font-semibold text-neutral-500 flex-1" style={{ fontFamily: FONT_GROTESK }}>Thread</span>
+        {isAuthor && !editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-neutral-50 text-neutral-500 active:scale-95 transition-all"
+          >
+            <Pencil className="w-3.5 h-3.5" /> Edit
+          </button>
+        )}
       </div>
 
       {/* Post */}
@@ -1051,8 +1154,46 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
           style={{ background: `${tagColor}15`, color: tagColor }}>
           {post.tag}
         </span>
-        <h2 className="text-lg font-bold text-neutral-900 mb-2" style={{ fontFamily: FONT_GROTESK }}>{post.title}</h2>
-        {post.body && <RichBody text={post.body} />}
+
+        {editing ? (
+          <div className="space-y-3">
+            <input
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              className="w-full text-base font-bold rounded-xl px-4 py-3 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 focus:border-neutral-300"
+              style={{ fontFamily: FONT_GROTESK, fontSize: "16px" }}
+            />
+            <textarea
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+              rows={4}
+              className="w-full text-sm rounded-xl px-4 py-3 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 focus:border-neutral-300 resize-none"
+              style={{ fontSize: "16px" }}
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveEdit}
+                disabled={!editTitle.trim() || saving}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-bold text-white transition-all active:scale-95 disabled:opacity-40"
+                style={{ background: BLUE }}
+              >
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Save
+              </button>
+              <button
+                onClick={() => { setEditing(false); setEditTitle(post.title); setEditBody(post.body || ""); }}
+                className="px-4 py-2 rounded-xl text-[12px] font-bold text-neutral-500 bg-neutral-100 active:scale-95 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <h2 className="text-lg font-bold text-neutral-900 mb-2" style={{ fontFamily: FONT_GROTESK }}>{post.title}</h2>
+            {post.body && <RichBody text={post.body} />}
+          </>
+        )}
 
         {isLfg && <LfgSignupButton postId={post.id} />}
         {isPoll && <PollView postId={post.id} />}
@@ -1164,6 +1305,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tag, setTag] = useState("general");
+  const [sportType, setSportType] = useState("pickleball");
   const [posting, setPosting] = useState(false);
   const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
   const { upload, uploading } = useImageUpload();
@@ -1207,6 +1349,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
         title: title.trim(),
         body: body.trim(),
         tag,
+        sport_type: sportType,
       }).select().single();
 
       if (tag === "poll" && newPost) {
@@ -1256,6 +1399,24 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
           <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center bg-neutral-100 active:scale-90">
             <X className="w-4 h-4 text-neutral-500" />
           </button>
+        </div>
+
+        {/* Sport selector */}
+        <div className="flex gap-1.5 mb-3">
+          {SPORT_FILTERS.filter(s => s.key !== "all").map(s => (
+            <button
+              key={s.key}
+              onClick={() => setSportType(s.key)}
+              className="px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all"
+              style={{
+                background: sportType === s.key ? "#11111110" : "#f5f5f5",
+                color: sportType === s.key ? "#111" : "#9CA3AF",
+                border: sportType === s.key ? "1.5px solid #11111130" : "1.5px solid transparent",
+              }}
+            >
+              {s.emoji} {s.label}
+            </button>
+          ))}
         </div>
 
         {/* Tag selector */}
@@ -1390,6 +1551,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
 export function ForumFeed() {
   const { user } = useAuth();
   const [activeTag, setActiveTag] = useState("all");
+  const [activeSport, setActiveSport] = useState("all");
   const [sort, setSort] = useState<"hot" | "new">("hot");
   const [selectedPost, setSelectedPost] = useState<any>(null);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
@@ -1413,7 +1575,7 @@ export function ForumFeed() {
   });
 
   const { data: posts, isLoading } = useQuery({
-    queryKey: ["forum-posts", activeTag, sort],
+    queryKey: ["forum-posts", activeTag, activeSport, sort],
     staleTime: 15000,
     queryFn: async () => {
       let query = (supabase as any)
@@ -1422,6 +1584,9 @@ export function ForumFeed() {
 
       if (activeTag !== "all") {
         query = query.eq("tag", activeTag);
+      }
+      if (activeSport !== "all") {
+        query = query.eq("sport_type", activeSport);
       }
 
       if (sort === "hot") {
@@ -1480,8 +1645,22 @@ export function ForumFeed() {
 
   return (
     <div>
-      {/* Sort tabs */}
-      <div className="flex items-center gap-1 mb-3">
+      {/* Sport filter */}
+      <div className="flex items-center gap-1.5 mb-3 overflow-x-auto pb-1">
+        {SPORT_FILTERS.map(s => (
+          <button
+            key={s.key}
+            onClick={() => setActiveSport(s.key)}
+            className="px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all"
+            style={{
+              background: activeSport === s.key ? "#111" : "#f5f5f5",
+              color: activeSport === s.key ? "#fff" : "#9CA3AF",
+            }}
+          >
+            {s.emoji} {s.label}
+          </button>
+        ))}
+        <div className="w-px h-5 bg-neutral-200 mx-1" />
         {(["hot", "new"] as const).map(s => (
           <button
             key={s}
