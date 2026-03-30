@@ -4,6 +4,7 @@ import {
   ArrowLeft, Building2, Users, LayoutGrid, Clock, Tag, Link2,
   Loader2, ShieldAlert, ChevronDown, TrendingUp, TrendingDown, Minus,
   Ticket, CalendarCheck, ChevronRight, Plus, Camera, Trophy, Crown, FileText,
+  MessageSquare,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAdminCheck, useAdminVenues, useAdminStats, useAdminHistory } from "@/hooks/useAdmin";
