@@ -1645,8 +1645,22 @@ export function ForumFeed() {
 
   return (
     <div>
-      {/* Sort tabs */}
-      <div className="flex items-center gap-1 mb-3">
+      {/* Sport filter */}
+      <div className="flex items-center gap-1.5 mb-3 overflow-x-auto pb-1">
+        {SPORT_FILTERS.map(s => (
+          <button
+            key={s.key}
+            onClick={() => setActiveSport(s.key)}
+            className="px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all"
+            style={{
+              background: activeSport === s.key ? "#111" : "#f5f5f5",
+              color: activeSport === s.key ? "#fff" : "#9CA3AF",
+            }}
+          >
+            {s.emoji} {s.label}
+          </button>
+        ))}
+        <div className="w-px h-5 bg-neutral-200 mx-1" />
         {(["hot", "new"] as const).map(s => (
           <button
             key={s}
