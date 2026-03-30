@@ -1349,6 +1349,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
         title: title.trim(),
         body: body.trim(),
         tag,
+        sport_type: sportType,
       }).select().single();
 
       if (tag === "poll" && newPost) {
