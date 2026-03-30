@@ -167,7 +167,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
               <>
                 <LayoutGrid className="w-5 h-5" />
                 <span className="text-sm font-bold">{court.name}</span>
-                <span className="text-[10px] opacity-70">{court.court_type}</span>
+                <span className="text-[10px] opacity-70 capitalize">{court.sport_type || "pickleball"} · {court.court_type}</span>
                 <div className="flex gap-1.5 mt-1">
                   <button
                     onClick={() => toggleAvailability(court)}
@@ -175,7 +175,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
                       court.is_available ? "bg-court-free/20" : "bg-court-active/20"
                     }`}
                   >
-                    {court.is_available ? "Tillgänglig" : "Avstängd"}
+                    {court.is_available ? "Available" : "Disabled"}
                   </button>
                   <button
                     onClick={() => startEdit(court)}
