@@ -5,7 +5,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2, ArrowBigUp, ArrowBigDown, MessageCircle, Plus, Pin, Send, X,
-  ChevronLeft, Users, CalendarDays, MapPin, Clock, Image as ImageIcon, BarChart3, ExternalLink, Paperclip, Search, Smile
+  ChevronLeft, Users, CalendarDays, MapPin, Clock, Image as ImageIcon, BarChart3, ExternalLink, Paperclip, Search, Smile,
+  Pencil, MoreHorizontal, Check, Trash2
 } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
