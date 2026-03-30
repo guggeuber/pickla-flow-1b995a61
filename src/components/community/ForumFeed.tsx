@@ -118,30 +118,18 @@ function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
 
   const parts = text.split(urlRegex);
   const urls: string[] = [];
+  const mediaUrls: string[] = [];
 
-  const content = parts.map((part, i) => {
+  const textParts = parts.map((part, i) => {
     if (urlRegex.test(part)) {
       urlRegex.lastIndex = 0;
       if (imageExtensions.test(part)) {
-        if (clamp) {
-          return (
-            <span key={i} className="inline-flex items-center gap-1 text-blue-500">
-              <ImageIcon className="w-3 h-3" /> {gifExtension.test(part) ? "GIF" : "image"}
-            </span>
-          );
-        }
-        return (
-          <img
-            key={i}
-            src={part}
-            alt="Shared image"
-            className="rounded-xl mt-2 mb-1 max-w-full max-h-64 object-cover border border-neutral-100"
-            loading="lazy"
-          />
-        );
+        mediaUrls.push(part);
+        // Don't render inline in text — we'll show as media block below
+        return null;
       }
       // Non-image URL — collect for preview
-      if (!clamp) urls.push(part);
+      urls.push(part);
       return (
         <a
           key={i}
@@ -152,20 +140,49 @@ function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
           onClick={(e) => e.stopPropagation()}
         >
           <ExternalLink className="w-3 h-3 shrink-0" />
-          {clamp ? (() => { try { return new URL(part).hostname; } catch { return part; } })() : part}
+          {(() => { try { return new URL(part).hostname; } catch { return part; } })()}
         </a>
       );
     }
     return <span key={i}>{part}</span>;
   });
 
+  // Filter out null entries (media URLs removed from text flow)
+  const filteredTextParts = textParts.filter(Boolean);
+
   return (
     <div>
-      <p className={`text-[13px] text-neutral-500 leading-relaxed whitespace-pre-wrap ${clamp ? "line-clamp-2" : ""}`}>
-        {content}
-      </p>
-      {/* Show link previews for non-image URLs (max 2) */}
-      {!clamp && urls.slice(0, 2).map((u, i) => <LinkPreview key={`lp-${i}`} url={u} />)}
+      {/* Text content */}
+      {filteredTextParts.length > 0 && (
+        <p className={`text-[13px] text-neutral-500 leading-relaxed whitespace-pre-wrap ${clamp ? "line-clamp-2" : ""}`}>
+          {filteredTextParts}
+        </p>
+      )}
+      {/* Media thumbnails — show in both card and detail */}
+      {mediaUrls.length > 0 && (
+        <div className={`mt-2 ${clamp ? "flex gap-1.5 overflow-hidden" : "space-y-2"}`}>
+          {(clamp ? mediaUrls.slice(0, 2) : mediaUrls).map((src, i) => (
+            <img
+              key={`media-${i}`}
+              src={src}
+              alt={gifExtension.test(src) ? "GIF" : "Shared image"}
+              className={clamp
+                ? "rounded-lg object-cover border border-neutral-100 w-20 h-20"
+                : "rounded-xl max-w-full max-h-64 object-cover border border-neutral-100"
+              }
+              loading="lazy"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ))}
+          {clamp && mediaUrls.length > 2 && (
+            <div className="w-20 h-20 rounded-lg bg-neutral-100 flex items-center justify-center text-[11px] font-bold text-neutral-400">
+              +{mediaUrls.length - 2}
+            </div>
+          )}
+        </div>
+      )}
+      {/* Link previews — show max 1 in card, max 2 in detail */}
+      {urls.slice(0, clamp ? 1 : 2).map((u, i) => <LinkPreview key={`lp-${i}`} url={u} />)}
     </div>
   );
 }
