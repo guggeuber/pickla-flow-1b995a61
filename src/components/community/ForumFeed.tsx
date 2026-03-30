@@ -1305,6 +1305,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tag, setTag] = useState("general");
+  const [sportType, setSportType] = useState("pickleball");
   const [posting, setPosting] = useState(false);
   const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
   const { upload, uploading } = useImageUpload();
