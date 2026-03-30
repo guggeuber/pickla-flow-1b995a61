@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Loader2, Hash, Users, ChevronLeft, Zap } from "lucide-react";
+import { Send, Loader2, Hash, Users, ChevronLeft, Zap, MessageCircle } from "lucide-react";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
