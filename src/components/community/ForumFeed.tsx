@@ -1122,7 +1122,15 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
         <button onClick={onBack} className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 bg-neutral-50">
           <ChevronLeft className="w-4 h-4 text-neutral-600" />
         </button>
-        <span className="text-sm font-semibold text-neutral-500" style={{ fontFamily: FONT_GROTESK }}>Thread</span>
+        <span className="text-sm font-semibold text-neutral-500 flex-1" style={{ fontFamily: FONT_GROTESK }}>Thread</span>
+        {isAuthor && !editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-neutral-50 text-neutral-500 active:scale-95 transition-all"
+          >
+            <Pencil className="w-3.5 h-3.5" /> Edit
+          </button>
+        )}
       </div>
 
       {/* Post */}
@@ -1146,8 +1154,46 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
           style={{ background: `${tagColor}15`, color: tagColor }}>
           {post.tag}
         </span>
-        <h2 className="text-lg font-bold text-neutral-900 mb-2" style={{ fontFamily: FONT_GROTESK }}>{post.title}</h2>
-        {post.body && <RichBody text={post.body} />}
+
+        {editing ? (
+          <div className="space-y-3">
+            <input
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              className="w-full text-base font-bold rounded-xl px-4 py-3 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 focus:border-neutral-300"
+              style={{ fontFamily: FONT_GROTESK, fontSize: "16px" }}
+            />
+            <textarea
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+              rows={4}
+              className="w-full text-sm rounded-xl px-4 py-3 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 focus:border-neutral-300 resize-none"
+              style={{ fontSize: "16px" }}
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveEdit}
+                disabled={!editTitle.trim() || saving}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[12px] font-bold text-white transition-all active:scale-95 disabled:opacity-40"
+                style={{ background: BLUE }}
+              >
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Save
+              </button>
+              <button
+                onClick={() => { setEditing(false); setEditTitle(post.title); setEditBody(post.body || ""); }}
+                className="px-4 py-2 rounded-xl text-[12px] font-bold text-neutral-500 bg-neutral-100 active:scale-95 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <h2 className="text-lg font-bold text-neutral-900 mb-2" style={{ fontFamily: FONT_GROTESK }}>{post.title}</h2>
+            {post.body && <RichBody text={post.body} />}
+          </>
+        )}
 
         {isLfg && <LfgSignupButton postId={post.id} />}
         {isPoll && <PollView postId={post.id} />}
