@@ -203,6 +203,7 @@ const AdminPage = () => {
       memberships: { label: "Medlemskap", icon: Crown },
       templates: { label: "Event-mallar", icon: FileText },
       corporate: { label: "Företag", icon: Building2 },
+      channels: { label: "Chat Channels", icon: MessageSquare },
     };
     const s = sectionLabels[activeSection];
 
