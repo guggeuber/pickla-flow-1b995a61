@@ -1575,7 +1575,7 @@ export function ForumFeed() {
   });
 
   const { data: posts, isLoading } = useQuery({
-    queryKey: ["forum-posts", activeTag, sort],
+    queryKey: ["forum-posts", activeTag, activeSport, sort],
     staleTime: 15000,
     queryFn: async () => {
       let query = (supabase as any)
@@ -1584,6 +1584,9 @@ export function ForumFeed() {
 
       if (activeTag !== "all") {
         query = query.eq("tag", activeTag);
+      }
+      if (activeSport !== "all") {
+        query = query.eq("sport_type", activeSport);
       }
 
       if (sort === "hot") {
