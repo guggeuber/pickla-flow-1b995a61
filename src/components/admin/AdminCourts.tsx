@@ -17,6 +17,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editType, setEditType] = useState("");
+  const [editSportType, setEditSportType] = useState("pickleball");
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
