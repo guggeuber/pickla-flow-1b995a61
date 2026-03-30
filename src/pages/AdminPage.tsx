@@ -224,6 +224,12 @@ const AdminPage = () => {
           </div>
         </div>
         <div className="px-4 pb-8 pt-1">
+          {!venueId ? (
+            <div className="flex items-center justify-center py-12">
+              <p className="text-sm text-muted-foreground">Välj en venue först</p>
+            </div>
+          ) : (
+          <>
           {activeSection === "venue" && <AdminVenue venueId={venueId} />}
           {activeSection === "staff" && <AdminStaff venueId={venueId} />}
           {activeSection === "courts" && <AdminCourts venueId={venueId} />}
