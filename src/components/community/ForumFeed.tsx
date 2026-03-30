@@ -26,6 +26,12 @@ const TAGS = [
   { key: "poll", label: "Poll" },
 ];
 
+const SPORT_FILTERS = [
+  { key: "all", label: "All Sports", emoji: "🏟️" },
+  { key: "pickleball", label: "Pickleball", emoji: "🏓" },
+  { key: "dart", label: "Dart", emoji: "🎯" },
+];
+
 const TAG_COLORS: Record<string, string> = {
   question: "#3B82F6",
   equipment: "#F59E0B",
