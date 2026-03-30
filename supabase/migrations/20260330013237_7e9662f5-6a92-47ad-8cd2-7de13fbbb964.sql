@@ -1,0 +1,2 @@
+ALTER TABLE public.venue_courts DROP CONSTRAINT IF EXISTS venue_courts_venue_id_court_number_key;
+ALTER TABLE public.venue_courts ADD CONSTRAINT venue_courts_venue_id_sport_court_number_key UNIQUE (venue_id, sport_type, court_number);
