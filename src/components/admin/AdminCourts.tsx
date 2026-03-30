@@ -39,7 +39,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
   const toggleAvailability = (court: any) => {
     updateCourt.mutate(
       { courtId: court.id, is_available: !court.is_available },
-      { onSuccess: () => toast.success(court.is_available ? "Avstängd" : "Aktiverad") }
+      { onSuccess: () => toast.success(court.is_available ? "Disabled" : "Enabled") }
     );
   };
 
@@ -47,6 +47,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
     setEditingId(court.id);
     setEditName(court.name);
     setEditType(court.court_type || "indoor");
+    setEditSportType(court.sport_type || "pickleball");
   };
 
   const saveEdit = (courtId: string) => {
