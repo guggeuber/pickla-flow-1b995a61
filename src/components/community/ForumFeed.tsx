@@ -1069,6 +1069,7 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
     setSaving(false);
   };
 
+  const { data: comments, isLoading: commentsLoading } = useQuery({
     queryKey: ["post-comments", post.id],
     queryFn: async () => {
       const { data, error } = await (supabase as any)
