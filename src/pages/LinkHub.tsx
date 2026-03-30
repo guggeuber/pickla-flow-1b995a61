@@ -307,15 +307,13 @@ const LinkHub = () => {
           background: "linear-gradient(to top, rgba(26,30,46,0.95) 0%, rgba(26,30,46,0.7) 40%, rgba(26,30,46,0.3) 70%, transparent 100%)",
         }}
       >
-        <a
-          href="https://chat.whatsapp.com/HL1XcYaNFSuE56q7MqCpdw"
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={() => navigate("/community?tab=chat")}
           className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Mono', monospace" }}
         >
           chat
-        </a>
+        </button>
 
         <button
           onClick={() => navigate("/play")}

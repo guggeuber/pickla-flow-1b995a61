@@ -3,27 +3,31 @@ import { useAdminCourts, useAdminMutation } from "@/hooks/useAdmin";
 import { Loader2, Plus, LayoutGrid, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
+const SPORT_TYPES = ["pickleball", "darts", "padel"] as const;
+
 const AdminCourts = ({ venueId }: { venueId: string }) => {
   const { data: courts, isLoading } = useAdminCourts(venueId);
   const { addCourt, updateCourt } = useAdminMutation(venueId);
   const [name, setName] = useState("");
   const [courtNumber, setCourtNumber] = useState("");
   const [courtType, setCourtType] = useState("indoor");
+  const [sportType, setSportType] = useState("pickleball");
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editType, setEditType] = useState("");
+  const [editSportType, setEditSportType] = useState("pickleball");
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
   const handleAdd = () => {
     if (!name || !courtNumber) return;
     addCourt.mutate(
-      { name, court_number: parseInt(courtNumber), court_type: courtType },
+      { name, court_number: parseInt(courtNumber), court_type: courtType, sport_type: sportType },
       {
         onSuccess: () => {
-          toast.success("Bana tillagd!");
+          toast.success("Court added!");
           setName("");
           setCourtNumber("");
         },
@@ -35,7 +39,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
   const toggleAvailability = (court: any) => {
     updateCourt.mutate(
       { courtId: court.id, is_available: !court.is_available },
-      { onSuccess: () => toast.success(court.is_available ? "Avstängd" : "Aktiverad") }
+      { onSuccess: () => toast.success(court.is_available ? "Disabled" : "Enabled") }
     );
   };
 
@@ -43,14 +47,15 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
     setEditingId(court.id);
     setEditName(court.name);
     setEditType(court.court_type || "indoor");
+    setEditSportType(court.sport_type || "pickleball");
   };
 
   const saveEdit = (courtId: string) => {
     updateCourt.mutate(
-      { courtId, name: editName, court_type: editType },
+      { courtId, name: editName, court_type: editType, sport_type: editSportType },
       {
         onSuccess: () => {
-          toast.success("Uppdaterad");
+          toast.success("Updated");
           setEditingId(null);
         },
         onError: (e) => toast.error(e.message),
@@ -62,10 +67,10 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
     <div className="space-y-4">
       {/* Add form */}
       <div className="glass-card rounded-2xl p-4 space-y-3">
-        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Ny bana</p>
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">New Court</p>
         <div className="grid grid-cols-3 gap-2">
           <input
-            placeholder="Namn (t.ex. Bana 1)"
+            placeholder="Name (e.g. Court 1)"
             className="col-span-2 rounded-xl px-3 py-2.5 text-sm outline-none"
             style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
             value={name}
@@ -80,17 +85,27 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
             onChange={(e) => setCourtNumber(e.target.value)}
           />
         </div>
-        <select
-          value={courtType}
-          onChange={(e) => setCourtType(e.target.value)}
-          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
-          style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
-        >
-          <option value="indoor">Indoor</option>
-          <option value="outdoor">Outdoor</option>
-        </select>
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            value={sportType}
+            onChange={(e) => setSportType(e.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none capitalize"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
+          >
+            {SPORT_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select
+            value={courtType}
+            onChange={(e) => setCourtType(e.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
+          >
+            <option value="indoor">Indoor</option>
+            <option value="outdoor">Outdoor</option>
+          </select>
+        </div>
         <p className="text-[10px] text-muted-foreground">
-          Pris styrs av prisregler under Prissättning
+          Pricing is controlled via Pricing Rules
         </p>
         <button
           onClick={handleAdd}
@@ -98,7 +113,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
           className="w-full flex items-center justify-center gap-2 rounded-xl py-2.5 bg-primary text-primary-foreground font-semibold text-sm disabled:opacity-50"
         >
           {addCourt.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-          Lägg till bana
+          Add Court
         </button>
       </div>
 
@@ -126,6 +141,13 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
                   <option value="indoor">Indoor</option>
                   <option value="outdoor">Outdoor</option>
                 </select>
+                <select
+                  value={editSportType}
+                  onChange={(e) => setEditSportType(e.target.value)}
+                  className="w-full text-center rounded-lg px-2 py-1 text-[11px] outline-none bg-white/80 text-neutral-900 capitalize"
+                >
+                  {SPORT_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
                 <div className="flex gap-1.5">
                   <button
                     onClick={() => saveEdit(court.id)}
@@ -145,7 +167,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
               <>
                 <LayoutGrid className="w-5 h-5" />
                 <span className="text-sm font-bold">{court.name}</span>
-                <span className="text-[10px] opacity-70">{court.court_type}</span>
+                <span className="text-[10px] opacity-70 capitalize">{court.sport_type || "pickleball"} · {court.court_type}</span>
                 <div className="flex gap-1.5 mt-1">
                   <button
                     onClick={() => toggleAvailability(court)}
@@ -153,7 +175,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
                       court.is_available ? "bg-court-free/20" : "bg-court-active/20"
                     }`}
                   >
-                    {court.is_available ? "Tillgänglig" : "Avstängd"}
+                    {court.is_available ? "Available" : "Disabled"}
                   </button>
                   <button
                     onClick={() => startEdit(court)}
@@ -168,7 +190,7 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
         ))}
       </div>
       {(!courts || courts.length === 0) && (
-        <p className="text-sm text-muted-foreground text-center py-6">Inga banor konfigurerade</p>
+        <p className="text-sm text-muted-foreground text-center py-6">No courts configured</p>
       )}
     </div>
   );

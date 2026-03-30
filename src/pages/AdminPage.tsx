@@ -4,6 +4,7 @@ import {
   ArrowLeft, Building2, Users, LayoutGrid, Clock, Tag, Link2,
   Loader2, ShieldAlert, ChevronDown, TrendingUp, TrendingDown, Minus,
   Ticket, CalendarCheck, ChevronRight, Plus, Camera, Trophy, Crown, FileText,
+  MessageSquare,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAdminCheck, useAdminVenues, useAdminStats, useAdminHistory } from "@/hooks/useAdmin";
@@ -19,12 +20,13 @@ import AdminEvents from "@/components/admin/AdminEvents";
 import AdminMemberships from "@/components/admin/AdminMemberships";
 import AdminTemplates from "@/components/admin/AdminTemplates";
 import AdminCorporate from "@/components/admin/AdminCorporate";
+import AdminChannels from "@/components/admin/AdminChannels";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | "events" | "memberships" | "templates" | "corporate" | null;
+type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "links" | "stories" | "events" | "memberships" | "templates" | "corporate" | "channels" | null;
 
 /* ── Sparkline SVG ── */
 function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
@@ -201,6 +203,7 @@ const AdminPage = () => {
       memberships: { label: "Medlemskap", icon: Crown },
       templates: { label: "Event-mallar", icon: FileText },
       corporate: { label: "Företag", icon: Building2 },
+      channels: { label: "Chat Channels", icon: MessageSquare },
     };
     const s = sectionLabels[activeSection];
 
@@ -232,6 +235,7 @@ const AdminPage = () => {
           {activeSection === "memberships" && <AdminMemberships venueId={venueId} />}
           {activeSection === "templates" && <AdminTemplates />}
           {activeSection === "corporate" && <AdminCorporate venueId={venueId} />}
+          {activeSection === "channels" && <AdminChannels venueId={venueId} />}
         </div>
       </div>
     );
@@ -249,6 +253,7 @@ const AdminPage = () => {
     { id: "memberships" as SectionId, icon: Crown, label: "Medlemskap", stat: "Nivåer & rabatter", color: "var(--badge-vip)" },
     ...(adminData?.isSuperAdmin ? [{ id: "templates" as SectionId, icon: FileText, label: "Event-mallar", stat: "Franchise", color: "var(--primary)" }] : []),
     { id: "corporate" as SectionId, icon: Building2, label: "Företag", stat: "Företagskonton", color: "var(--badge-vip)" },
+    { id: "channels" as SectionId, icon: MessageSquare, label: "Chat", stat: "Channels", color: "var(--primary)" },
   ];
 
   return (
