@@ -1,0 +1,1 @@
+ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS sport_type text NOT NULL DEFAULT 'pickleball';

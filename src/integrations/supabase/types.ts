@@ -1635,6 +1635,7 @@ export type Database = {
           created_at: string
           id: string
           is_pinned: boolean
+          sport_type: string
           tag: string
           title: string
           updated_at: string
@@ -1648,6 +1649,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_pinned?: boolean
+          sport_type?: string
           tag?: string
           title: string
           updated_at?: string
@@ -1661,6 +1663,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_pinned?: boolean
+          sport_type?: string
           tag?: string
           title?: string
           updated_at?: string
