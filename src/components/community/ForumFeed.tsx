@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2, ArrowBigUp, ArrowBigDown, MessageCircle, Plus, Pin, Send, X,
-  ChevronLeft, Users, CalendarDays, MapPin, Clock, Link2, Image, BarChart3, ExternalLink
+  ChevronLeft, Users, CalendarDays, MapPin, Clock, Image as ImageIcon, BarChart3, ExternalLink, Paperclip, Search, Smile
 } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -47,23 +47,86 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(days / 7)}w`;
 }
 
-/* ── Rich Body Renderer (links + images) ── */
+/* ── Link Preview Component ── */
+function LinkPreview({ url }: { url: string }) {
+  const { data: preview, isLoading } = useQuery({
+    queryKey: ["link-preview", url],
+    staleTime: 300000, // 5 min cache
+    queryFn: async () => {
+      try {
+        const res = await supabase.functions.invoke("api-link-preview", {
+          body: { url },
+        });
+        if (res.error) return null;
+        return res.data as { title?: string; description?: string; image?: string; site_name?: string } | null;
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="mt-2 rounded-xl border border-neutral-100 p-3 animate-pulse bg-neutral-50">
+        <div className="h-3 w-2/3 bg-neutral-200 rounded mb-2" />
+        <div className="h-2 w-full bg-neutral-100 rounded" />
+      </div>
+    );
+  }
+
+  if (!preview || (!preview.title && !preview.description && !preview.image)) {
+    return null;
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-2 block rounded-xl border border-neutral-100 overflow-hidden hover:border-neutral-200 transition-colors"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {preview.image && (
+        <img
+          src={preview.image}
+          alt={preview.title || ""}
+          className="w-full h-32 object-cover"
+          loading="lazy"
+          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+        />
+      )}
+      <div className="p-3">
+        {preview.site_name && (
+          <span className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wide">{preview.site_name}</span>
+        )}
+        {preview.title && (
+          <p className="text-[13px] font-semibold text-neutral-800 leading-snug line-clamp-2">{preview.title}</p>
+        )}
+        {preview.description && (
+          <p className="text-[11px] text-neutral-500 line-clamp-2 mt-0.5">{preview.description}</p>
+        )}
+      </div>
+    </a>
+  );
+}
+
+/* ── Rich Body Renderer (links + images + link previews) ── */
 function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
-  // URL regex
   const urlRegex = /(https?:\/\/[^\s<]+)/g;
   const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg)(\?[^\s]*)?$/i;
+  const gifExtension = /\.gif(\?[^\s]*)?$/i;
 
   const parts = text.split(urlRegex);
+  const urls: string[] = [];
 
   const content = parts.map((part, i) => {
     if (urlRegex.test(part)) {
-      // Reset lastIndex
       urlRegex.lastIndex = 0;
       if (imageExtensions.test(part)) {
         if (clamp) {
           return (
             <span key={i} className="inline-flex items-center gap-1 text-blue-500">
-              <Image className="w-3 h-3" /> image
+              <ImageIcon className="w-3 h-3" /> {gifExtension.test(part) ? "GIF" : "image"}
             </span>
           );
         }
@@ -77,6 +140,8 @@ function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
           />
         );
       }
+      // Non-image URL — collect for preview
+      if (!clamp) urls.push(part);
       return (
         <a
           key={i}
@@ -87,7 +152,7 @@ function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
           onClick={(e) => e.stopPropagation()}
         >
           <ExternalLink className="w-3 h-3 shrink-0" />
-          {clamp ? new URL(part).hostname : part}
+          {clamp ? (() => { try { return new URL(part).hostname; } catch { return part; } })() : part}
         </a>
       );
     }
@@ -95,11 +160,13 @@ function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
   });
 
   return (
-    <p
-      className={`text-[13px] text-neutral-500 leading-relaxed whitespace-pre-wrap ${clamp ? "line-clamp-2" : ""}`}
-    >
-      {content}
-    </p>
+    <div>
+      <p className={`text-[13px] text-neutral-500 leading-relaxed whitespace-pre-wrap ${clamp ? "line-clamp-2" : ""}`}>
+        {content}
+      </p>
+      {/* Show link previews for non-image URLs (max 2) */}
+      {!clamp && urls.slice(0, 2).map((u, i) => <LinkPreview key={`lp-${i}`} url={u} />)}
+    </div>
   );
 }
 
@@ -324,14 +391,10 @@ function PollView({ postId, compact = false }: { postId: string; compact?: boole
               padding: "10px 14px",
             }}
           >
-            {/* Progress bar bg */}
             {hasVoted && (
               <div
                 className="absolute inset-y-0 left-0 rounded-xl transition-all"
-                style={{
-                  width: `${pct}%`,
-                  background: isSelected ? "#F9731618" : "#f5f5f5",
-                }}
+                style={{ width: `${pct}%`, background: isSelected ? "#F9731618" : "#f5f5f5" }}
               />
             )}
             <div className="relative flex items-center justify-between">
@@ -354,10 +417,134 @@ function PollView({ postId, compact = false }: { postId: string; compact?: boole
   );
 }
 
+/* ── Image Upload Helper ── */
+function useImageUpload() {
+  const { user } = useAuth();
+  const [uploading, setUploading] = useState(false);
+
+  const upload = useCallback(async (file: File): Promise<string | null> => {
+    if (!user) return null;
+    setUploading(true);
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `${user.id}/${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("forum-images").upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+      if (error) throw error;
+      const { data: urlData } = supabase.storage.from("forum-images").getPublicUrl(path);
+      return urlData.publicUrl;
+    } catch (err: any) {
+      toast.error("Upload failed: " + (err.message || "Unknown error"));
+      return null;
+    } finally {
+      setUploading(false);
+    }
+  }, [user]);
+
+  return { upload, uploading };
+}
+
+/* ── GIF Search (Tenor via public proxy) ── */
+function GifPicker({ onSelect, onClose }: { onSelect: (url: string) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const searchGifs = async (q: string) => {
+    if (!q.trim()) { setResults([]); return; }
+    setLoading(true);
+    try {
+      // Use Tenor's public v2 API with the public test key
+      const res = await fetch(
+        `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCYQ&client_key=pickla_community&limit=12&media_filter=gif`
+      );
+      const data = await res.json();
+      const urls = (data.results || []).map((r: any) => {
+        // Get the smallest GIF format
+        const media = r.media_formats;
+        return media?.tinygif?.url || media?.gif?.url || media?.mediumgif?.url || "";
+      }).filter(Boolean);
+      setResults(urls);
+    } catch {
+      setResults([]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    const t = setTimeout(() => searchGifs(query), 400);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-white p-3 shadow-lg">
+      <div className="flex items-center gap-2 mb-2">
+        <Search className="w-4 h-4 text-neutral-400" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search GIFs..."
+          className="flex-1 text-sm outline-none bg-transparent text-neutral-900 placeholder:text-neutral-400"
+          style={{ fontSize: "16px" }}
+        />
+        <button onClick={onClose} className="p-1 rounded-lg bg-neutral-100 active:scale-90">
+          <X className="w-3.5 h-3.5 text-neutral-500" />
+        </button>
+      </div>
+      {loading && <div className="flex justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-neutral-300" /></div>}
+      {!loading && results.length > 0 && (
+        <div className="grid grid-cols-3 gap-1.5 max-h-48 overflow-y-auto">
+          {results.map((url, i) => (
+            <button
+              key={i}
+              onClick={() => onSelect(url)}
+              className="rounded-lg overflow-hidden active:scale-95 transition-transform"
+            >
+              <img src={url} alt="GIF" className="w-full h-20 object-cover" loading="lazy" />
+            </button>
+          ))}
+        </div>
+      )}
+      {!loading && query && results.length === 0 && (
+        <p className="text-[11px] text-neutral-400 text-center py-3" style={{ fontFamily: FONT_MONO }}>No GIFs found</p>
+      )}
+      {!query && (
+        <p className="text-[11px] text-neutral-400 text-center py-3" style={{ fontFamily: FONT_MONO }}>
+          Type to search for GIFs ✨
+        </p>
+      )}
+    </div>
+  );
+}
+
 /* ── Inline Event Card ── */
 function EventCard({ event, onOpen }: { event: any; onOpen: () => void }) {
   const navigate = useNavigate();
+
+  // Fetch comment count for linked event post
+  const { data: eventCommentCount } = useQuery({
+    queryKey: ["event-comment-count", event.id],
+    staleTime: 30000,
+    queryFn: async () => {
+      const eventName = event.display_name || event.name;
+      const { data } = await (supabase as any)
+        .from("forum_posts")
+        .select("comment_count")
+        .eq("tag", "events")
+        .ilike("title", `%${eventName.substring(0, 30)}%`)
+        .limit(1);
+      return data?.[0]?.comment_count || 0;
+    },
+  });
+
   const startDate = event.start_date ? new Date(event.start_date) : null;
+  const eventUrl = event.slug ? `/e/${event.slug}` : `/e/${event.id}`;
 
   return (
     <motion.div
@@ -400,22 +587,20 @@ function EventCard({ event, onOpen }: { event: any; onOpen: () => void }) {
         )}
       </div>
       <div className="flex gap-2 mt-3">
-        {event.slug && (
-          <button
-            onClick={(e) => { e.stopPropagation(); navigate(`/e/${event.slug}`); }}
-            className="flex-1 text-center py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95"
-            style={{ background: `${BLUE}10`, color: BLUE, fontFamily: FONT_MONO }}
-          >
-            View & Sign up →
-          </button>
-        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); navigate(eventUrl); }}
+          className="flex-1 text-center py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+          style={{ background: `${BLUE}10`, color: BLUE, fontFamily: FONT_MONO }}
+        >
+          View & Sign up →
+        </button>
         <button
           onClick={(e) => { e.stopPropagation(); onOpen(); }}
           className="px-3 py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95 flex items-center gap-1"
           style={{ background: "#f5f5f5", color: "#9CA3AF" }}
         >
           <MessageCircle className="w-3.5 h-3.5" />
-          Discuss
+          {(eventCommentCount || 0) > 0 ? eventCommentCount : "Discuss"}
         </button>
       </div>
     </motion.div>
@@ -431,9 +616,10 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const startDate = event.start_date ? new Date(event.start_date) : null;
-
-  // Use a synthetic "event discussion" post keyed by event id
-  const discussionKey = `event-discussion-${event.id}`;
+  const eventUrl = event.slug ? `/e/${event.slug}` : `/e/${event.id}`;
+  const { upload, uploading } = useImageUpload();
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -444,11 +630,10 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
     },
   });
 
-  // Find or create a forum post linked to this event (tag = events, title = event name)
+  // Find or create a forum post linked to this event
   const { data: eventPost } = useQuery({
     queryKey: ["event-post", event.id],
     queryFn: async () => {
-      // Look for existing event-linked post by checking title match + events tag
       const { data: existing } = await (supabase as any)
         .from("forum_posts")
         .select("*")
@@ -491,11 +676,11 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
     }
   };
 
-  const handleSendComment = async () => {
-    const text = comment.trim();
-    if (!text || !user || !profile || sending) return;
+  const handleSendComment = async (text?: string) => {
+    const commentText = (text || comment).trim();
+    if (!commentText || !user || !profile || sending) return;
     setSending(true);
-    setComment("");
+    if (!text) setComment("");
 
     let postId = eventPost?.id;
     if (!postId) {
@@ -512,15 +697,31 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
       await (supabase as any).from("post_comments").insert({
         post_id: postId,
         author_profile_id: profile.id,
-        body: text,
+        body: commentText,
       });
       qc.invalidateQueries({ queryKey: ["post-comments", postId] });
       qc.invalidateQueries({ queryKey: ["forum-posts"] });
+      qc.invalidateQueries({ queryKey: ["event-comment-count", event.id] });
     } catch {
-      setComment(text);
+      if (!text) setComment(commentText);
       toast.error("Could not post comment");
     }
     setSending(false);
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = await upload(file);
+    if (url) {
+      await handleSendComment(url);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleGifSelect = async (gifUrl: string) => {
+    setShowGifPicker(false);
+    await handleSendComment(gifUrl);
   };
 
   return (
@@ -556,15 +757,13 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
             <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {String(event.start_time).substring(0, 5)}</span>
           )}
         </div>
-        {event.slug && (
-          <button
-            onClick={() => navigate(`/e/${event.slug}`)}
-            className="mt-3 w-full text-center py-2.5 rounded-xl text-[11px] font-bold transition-all active:scale-95"
-            style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
-          >
-            View Event & Sign Up →
-          </button>
-        )}
+        <button
+          onClick={() => navigate(eventUrl)}
+          className="mt-3 w-full text-center py-2.5 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+          style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
+        >
+          View Event & Sign Up →
+        </button>
       </div>
 
       {/* Vote on event post */}
@@ -614,10 +813,31 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
         )}
       </div>
 
+      {/* GIF Picker */}
+      {showGifPicker && (
+        <div className="mb-2">
+          <GifPicker onSelect={handleGifSelect} onClose={() => setShowGifPicker(false)} />
+        </div>
+      )}
+
       {/* Comment input */}
       {user ? (
         <div className="pt-3 mt-3 border-t border-neutral-100">
+          <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleImageUpload} />
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform"
+            >
+              {uploading ? <Loader2 className="w-4 h-4 animate-spin text-neutral-400" /> : <Paperclip className="w-4 h-4 text-neutral-400" />}
+            </button>
+            <button
+              onClick={() => setShowGifPicker(!showGifPicker)}
+              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform"
+            >
+              <span className="text-sm">GIF</span>
+            </button>
             <input
               ref={inputRef}
               value={comment}
@@ -628,7 +848,7 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
               style={{ fontSize: "16px" }}
             />
             <button
-              onClick={handleSendComment}
+              onClick={() => handleSendComment()}
               disabled={!comment.trim() || sending}
               className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all active:scale-90 disabled:opacity-30"
               style={{ background: BLUE }}
@@ -721,6 +941,9 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
   const isLfg = post.tag === "lfg";
   const isPoll = post.tag === "poll";
+  const { upload, uploading } = useImageUpload();
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -744,24 +967,37 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
     },
   });
 
-  const handleSendComment = async () => {
-    const text = comment.trim();
-    if (!text || !user || !profile || sending) return;
+  const handleSendComment = async (text?: string) => {
+    const commentText = (text || comment).trim();
+    if (!commentText || !user || !profile || sending) return;
     setSending(true);
-    setComment("");
+    if (!text) setComment("");
     try {
       await (supabase as any).from("post_comments").insert({
         post_id: post.id,
         author_profile_id: profile.id,
-        body: text,
+        body: commentText,
       });
       qc.invalidateQueries({ queryKey: ["post-comments", post.id] });
       qc.invalidateQueries({ queryKey: ["forum-posts"] });
     } catch {
-      setComment(text);
+      if (!text) setComment(commentText);
       toast.error("Could not post comment");
     }
     setSending(false);
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = await upload(file);
+    if (url) await handleSendComment(url);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleGifSelect = async (gifUrl: string) => {
+    setShowGifPicker(false);
+    await handleSendComment(gifUrl);
   };
 
   return (
@@ -846,10 +1082,31 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
         )}
       </div>
 
+      {/* GIF Picker */}
+      {showGifPicker && (
+        <div className="mb-2">
+          <GifPicker onSelect={handleGifSelect} onClose={() => setShowGifPicker(false)} />
+        </div>
+      )}
+
       {/* Comment input */}
       {user ? (
         <div className="pt-3 mt-3 border-t border-neutral-100">
+          <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleImageUpload} />
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform"
+            >
+              {uploading ? <Loader2 className="w-4 h-4 animate-spin text-neutral-400" /> : <Paperclip className="w-4 h-4 text-neutral-400" />}
+            </button>
+            <button
+              onClick={() => setShowGifPicker(!showGifPicker)}
+              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform text-[11px] font-bold text-neutral-400"
+            >
+              GIF
+            </button>
             <input
               ref={inputRef}
               value={comment}
@@ -860,7 +1117,7 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
               style={{ fontSize: "16px" }}
             />
             <button
-              onClick={handleSendComment}
+              onClick={() => handleSendComment()}
               disabled={!comment.trim() || sending}
               className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all active:scale-90 disabled:opacity-30"
               style={{ background: BLUE }}
@@ -889,6 +1146,9 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
   const [tag, setTag] = useState("general");
   const [posting, setPosting] = useState(false);
   const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const { upload, uploading } = useImageUpload();
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -898,6 +1158,21 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
       return data;
     },
   });
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = await upload(file);
+    if (url) {
+      setBody(prev => prev ? prev + "\n" + url : url);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleGifSelect = (gifUrl: string) => {
+    setShowGifPicker(false);
+    setBody(prev => prev ? prev + "\n" + gifUrl : gifUrl);
+  };
 
   const handleSubmit = async () => {
     if (!title.trim() || !user || !profile || posting) return;
@@ -914,7 +1189,6 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
         tag,
       }).select().single();
 
-      // Create poll options if poll tag
       if (tag === "poll" && newPost) {
         const validOptions = pollOptions.filter(o => o.trim());
         for (let i = 0; i < validOptions.length; i++) {
@@ -1008,11 +1282,38 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder={tag === "lfg" ? "Describe level, venue, time etc..." : "What's on your mind? (optional) — paste links/image URLs too!"}
+          placeholder={tag === "lfg" ? "Describe level, venue, time etc..." : "What's on your mind? (optional)"}
           rows={3}
-          className="w-full text-sm rounded-xl px-4 py-3 mb-4 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300 resize-none"
+          className="w-full text-sm rounded-xl px-4 py-3 mb-2 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300 resize-none"
           style={{ fontSize: "16px" }}
         />
+
+        {/* Media buttons */}
+        <div className="flex gap-2 mb-4">
+          <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleImageUpload} />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-neutral-50 border border-neutral-200 text-neutral-500 active:scale-95 transition-all"
+          >
+            {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+            Photo
+          </button>
+          <button
+            onClick={() => setShowGifPicker(!showGifPicker)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-neutral-50 border border-neutral-200 text-neutral-500 active:scale-95 transition-all"
+          >
+            <Smile className="w-3.5 h-3.5" />
+            GIF
+          </button>
+        </div>
+
+        {/* GIF Picker */}
+        {showGifPicker && (
+          <div className="mb-4">
+            <GifPicker onSelect={handleGifSelect} onClose={() => setShowGifPicker(false)} />
+          </div>
+        )}
 
         {/* Poll options */}
         {tag === "poll" && (
