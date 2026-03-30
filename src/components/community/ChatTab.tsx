@@ -5,10 +5,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Loader2, Hash, Users, ChevronLeft, Zap } from "lucide-react";
 
+const FONT_GROTESK = "'Space Grotesk', sans-serif";
+const FONT_MONO = "'Space Mono', monospace";
 const BLUE = "#0066FF";
-const GREEN = "#22C55E";
-const TEXT_PRIMARY = "#111827";
-const TEXT_MUTED = "#9CA3AF";
 
 interface ChatChannel {
   id: string;
@@ -39,40 +38,42 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/* ── Channel List ── */
 function ChannelList({ channels, onSelect }: { channels: ChatChannel[]; onSelect: (c: ChatChannel) => void }) {
   const venueChannels = channels.filter(c => c.channel_type === "venue");
   const crewChannels = channels.filter(c => c.channel_type === "crew");
   const sportChannels = channels.filter(c => c.channel_type === "sport");
 
-  const renderGroup = (title: string, items: ChatChannel[], icon: typeof Hash) => {
+  const ICONS: Record<string, typeof Hash> = { venue: Hash, sport: Zap, crew: Users };
+
+  const renderGroup = (title: string, items: ChatChannel[], type: string) => {
     if (items.length === 0) return null;
-    const Icon = icon;
+    const Icon = ICONS[type] || Hash;
     return (
-      <div className="mb-4">
-        <p className="text-[10px] font-bold uppercase tracking-widest mb-2 px-1" style={{ color: TEXT_MUTED }}>{title}</p>
-        <div className="flex flex-col gap-1.5">
+      <div className="mb-5">
+        <p className="text-[10px] font-bold uppercase tracking-widest mb-2 text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+          {title}
+        </p>
+        <div className="flex flex-col gap-1">
           {items.map(ch => (
             <button
               key={ch.id}
               onClick={() => onSelect(ch)}
-              className="flex items-center gap-3 rounded-xl px-3 py-3 text-left transition-all active:scale-[0.98]"
-              style={{ background: "rgba(255,255,255,0.6)", border: "1.5px solid rgba(0,0,0,0.06)" }}
+              className="flex items-center gap-3 rounded-xl px-3 py-3 text-left transition-all active:scale-[0.98] bg-neutral-50 border border-neutral-100 hover:border-neutral-200"
             >
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                style={{ background: `${BLUE}10` }}>
-                <Icon className="w-4 h-4" style={{ color: BLUE }} />
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-neutral-100">
+                <Icon className="w-3.5 h-3.5 text-neutral-500" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate" style={{ fontFamily: "'Space Grotesk', sans-serif", color: TEXT_PRIMARY }}>
-                  {ch.name}
+                <p className="text-sm font-semibold text-neutral-900 truncate" style={{ fontFamily: FONT_GROTESK }}>
+                  #{ch.name}
                 </p>
                 {ch.description && (
-                  <p className="text-[11px] truncate" style={{ color: TEXT_MUTED }}>{ch.description}</p>
+                  <p className="text-[11px] text-neutral-400 truncate">{ch.description}</p>
                 )}
               </div>
               {ch.sport_type && (
-                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase shrink-0"
-                  style={{ background: `${GREEN}15`, color: GREEN }}>
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase shrink-0 bg-neutral-100 text-neutral-500">
                   {ch.sport_type}
                 </span>
               )}
@@ -85,17 +86,17 @@ function ChannelList({ channels, onSelect }: { channels: ChatChannel[]; onSelect
 
   return (
     <div>
-      {renderGroup("Channels", venueChannels, Hash)}
-      {renderGroup("Sport", sportChannels, Zap)}
-      {renderGroup("Crews", crewChannels, Users)}
+      {renderGroup("Channels", venueChannels, "venue")}
+      {renderGroup("Sport", sportChannels, "sport")}
+      {renderGroup("Crews", crewChannels, "crew")}
       {channels.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: `${BLUE}10` }}>
-            <Hash className="w-7 h-7" style={{ color: BLUE }} />
+          <div className="w-12 h-12 rounded-full flex items-center justify-center bg-neutral-100">
+            <Hash className="w-6 h-6 text-neutral-400" />
           </div>
-          <p className="text-sm font-semibold" style={{ color: TEXT_PRIMARY }}>No channels yet</p>
-          <p className="text-xs text-center max-w-[200px]" style={{ color: TEXT_MUTED }}>
-            Channels will appear here when created by venue admins.
+          <p className="text-sm font-semibold text-neutral-900">No channels yet</p>
+          <p className="text-xs text-center max-w-[200px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+            Channels will appear here when created.
           </p>
         </div>
       )}
@@ -103,6 +104,7 @@ function ChannelList({ channels, onSelect }: { channels: ChatChannel[]; onSelect
   );
 }
 
+/* ── Message Bubble ── */
 function MessageBubble({ msg, isOwn }: { msg: ChatMessage; isOwn: boolean }) {
   const name = msg.player_profiles?.display_name || "Player";
   const avatar = msg.player_profiles?.avatar_url;
@@ -113,9 +115,8 @@ function MessageBubble({ msg, isOwn }: { msg: ChatMessage; isOwn: boolean }) {
         avatar ? (
           <img src={avatar} alt={name} className="w-7 h-7 rounded-full object-cover shrink-0 mt-1" />
         ) : (
-          <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-1"
-            style={{ background: `${BLUE}15` }}>
-            <span className="text-[10px] font-bold" style={{ color: BLUE }}>
+          <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-1 bg-neutral-100">
+            <span className="text-[10px] font-bold text-neutral-500">
               {name.charAt(0).toUpperCase()}
             </span>
           </div>
@@ -123,27 +124,29 @@ function MessageBubble({ msg, isOwn }: { msg: ChatMessage; isOwn: boolean }) {
       )}
       <div className={`max-w-[75%] ${isOwn ? "items-end" : "items-start"} flex flex-col`}>
         {!isOwn && (
-          <span className="text-[10px] font-semibold mb-0.5 px-1" style={{ color: TEXT_MUTED }}>{name}</span>
+          <span className="text-[10px] font-semibold mb-0.5 px-1 text-neutral-400">{name}</span>
         )}
         <div
           className="rounded-2xl px-3.5 py-2"
           style={{
-            background: isOwn ? BLUE : "rgba(255,255,255,0.8)",
-            border: isOwn ? "none" : "1px solid rgba(0,0,0,0.06)",
+            background: isOwn ? BLUE : "#f5f5f5",
             borderTopRightRadius: isOwn ? 6 : 16,
             borderTopLeftRadius: isOwn ? 16 : 6,
           }}
         >
-          <p className="text-[13px] leading-relaxed" style={{ color: isOwn ? "#fff" : TEXT_PRIMARY }}>
+          <p className={`text-[13px] leading-relaxed ${isOwn ? "text-white" : "text-neutral-900"}`}>
             {msg.content}
           </p>
         </div>
-        <span className="text-[9px] mt-0.5 px-1" style={{ color: TEXT_MUTED }}>{timeAgo(msg.created_at)}</span>
+        <span className="text-[9px] mt-0.5 px-1 text-neutral-300" style={{ fontFamily: FONT_MONO }}>
+          {timeAgo(msg.created_at)}
+        </span>
       </div>
     </div>
   );
 }
 
+/* ── Chat Room ── */
 function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack: () => void; profileId: string }) {
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
@@ -164,7 +167,6 @@ function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack
     },
   });
 
-  // Realtime subscription
   useEffect(() => {
     const sub = supabase
       .channel(`chat-${channel.id}`)
@@ -177,11 +179,9 @@ function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack
         queryClient.invalidateQueries({ queryKey: ["chat-messages", channel.id] });
       })
       .subscribe();
-
     return () => { supabase.removeChannel(sub); };
   }, [channel.id, queryClient]);
 
-  // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -198,26 +198,28 @@ function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack
         content: text,
         message_type: "text",
       });
-    } catch (err) {
+    } catch {
       setMessage(text);
     }
     setSending(false);
   }, [message, sending, channel.id, profileId]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-160px)]">
+    <div className="flex flex-col" style={{ height: "calc(100vh - 140px)" }}>
       {/* Channel header */}
-      <div className="flex items-center gap-3 pb-3 mb-3" style={{ borderBottom: "1px solid rgba(0,0,0,0.06)" }}>
-        <button onClick={onBack} className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90"
-          style={{ background: "rgba(0,0,0,0.04)" }}>
-          <ChevronLeft className="w-4 h-4" style={{ color: TEXT_PRIMARY }} />
+      <div className="flex items-center gap-3 pb-3 mb-3 border-b border-neutral-100">
+        <button
+          onClick={onBack}
+          className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 bg-neutral-50"
+        >
+          <ChevronLeft className="w-4 h-4 text-neutral-600" />
         </button>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold truncate" style={{ fontFamily: "'Space Grotesk', sans-serif", color: TEXT_PRIMARY }}>
-            # {channel.name}
+          <p className="text-sm font-bold text-neutral-900 truncate" style={{ fontFamily: FONT_GROTESK }}>
+            #{channel.name}
           </p>
           {channel.description && (
-            <p className="text-[10px] truncate" style={{ color: TEXT_MUTED }}>{channel.description}</p>
+            <p className="text-[10px] text-neutral-400 truncate">{channel.description}</p>
           )}
         </div>
       </div>
@@ -226,7 +228,7 @@ function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack
       <div className="flex-1 overflow-y-auto pr-1 space-y-3">
         {isLoading ? (
           <div className="flex justify-center py-8">
-            <Loader2 className="w-5 h-5 animate-spin" style={{ color: TEXT_MUTED }} />
+            <Loader2 className="w-5 h-5 animate-spin text-neutral-300" />
           </div>
         ) : messages && messages.length > 0 ? (
           messages.map(msg => (
@@ -234,22 +236,23 @@ function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack
           ))
         ) : (
           <div className="flex flex-col items-center justify-center py-12 gap-2">
-            <p className="text-xs" style={{ color: TEXT_MUTED }}>No messages yet — be the first! 🎉</p>
+            <p className="text-xs text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+              No messages yet — be the first! 🎉
+            </p>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}
-      <div className="pt-3 mt-2" style={{ borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+      <div className="pt-3 mt-2 border-t border-neutral-100">
         <div className="flex items-center gap-2">
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
             placeholder="Type a message..."
-            className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none"
-            style={{ background: "rgba(255,255,255,0.8)", border: "1.5px solid rgba(0,0,0,0.08)", color: TEXT_PRIMARY }}
+            className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300"
           />
           <button
             onClick={handleSend}
@@ -269,6 +272,7 @@ function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack
   );
 }
 
+/* ── Main Tab ── */
 export function ChatTab() {
   const { user } = useAuth();
   const [selectedChannel, setSelectedChannel] = useState<ChatChannel | null>(null);
@@ -302,11 +306,15 @@ export function ChatTab() {
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center py-16 gap-3">
-        <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: `${BLUE}10` }}>
-          <Hash className="w-7 h-7" style={{ color: BLUE }} />
+        <div className="w-12 h-12 rounded-full flex items-center justify-center bg-neutral-100">
+          <MessageCircle className="w-6 h-6 text-neutral-400" />
         </div>
-        <p className="text-sm font-semibold" style={{ color: TEXT_PRIMARY }}>Sign in to chat</p>
-        <a href="/auth?redirect=/community" className="px-6 py-2.5 rounded-xl text-sm font-bold text-white" style={{ background: BLUE }}>
+        <p className="text-sm font-semibold text-neutral-900">Sign in to chat</p>
+        <a
+          href="/auth?redirect=/community"
+          className="px-6 py-2.5 rounded-xl text-sm font-bold text-white"
+          style={{ background: BLUE }}
+        >
           Sign in
         </a>
       </div>
@@ -316,7 +324,7 @@ export function ChatTab() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <Loader2 className="w-5 h-5 animate-spin" style={{ color: TEXT_MUTED }} />
+        <Loader2 className="w-5 h-5 animate-spin text-neutral-300" />
       </div>
     );
   }
