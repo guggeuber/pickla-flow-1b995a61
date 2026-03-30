@@ -24,10 +24,10 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
   const handleAdd = () => {
     if (!name || !courtNumber) return;
     addCourt.mutate(
-      { name, court_number: parseInt(courtNumber), court_type: courtType },
+      { name, court_number: parseInt(courtNumber), court_type: courtType, sport_type: sportType },
       {
         onSuccess: () => {
-          toast.success("Bana tillagd!");
+          toast.success("Court added!");
           setName("");
           setCourtNumber("");
         },
