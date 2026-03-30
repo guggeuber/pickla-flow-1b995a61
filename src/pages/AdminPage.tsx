@@ -242,6 +242,8 @@ const AdminPage = () => {
           {activeSection === "templates" && <AdminTemplates />}
           {activeSection === "corporate" && <AdminCorporate venueId={venueId} />}
           {activeSection === "channels" && <AdminChannels venueId={venueId} />}
+          </>
+          )}
         </div>
       </div>
     );
