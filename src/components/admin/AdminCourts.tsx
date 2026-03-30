@@ -52,10 +52,10 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
 
   const saveEdit = (courtId: string) => {
     updateCourt.mutate(
-      { courtId, name: editName, court_type: editType },
+      { courtId, name: editName, court_type: editType, sport_type: editSportType },
       {
         onSuccess: () => {
-          toast.success("Uppdaterad");
+          toast.success("Updated");
           setEditingId(null);
         },
         onError: (e) => toast.error(e.message),
