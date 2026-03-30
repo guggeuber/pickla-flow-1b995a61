@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { CommunityNav } from "@/components/community/CommunityNav";
-import { FeedTab } from "@/components/community/FeedTab";
+import { ChatTab } from "@/components/community/ChatTab";
 import { PlayNowTab } from "@/components/community/PlayNowTab";
 import { ProfileTab } from "@/components/community/ProfileTab";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -27,7 +27,7 @@ const CommunityPage = () => {
       {/* Header */}
       <div className="px-5 pt-6 pb-3 flex items-center justify-between">
         <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}>
-          <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
+          <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
         </motion.div>
         <motion.h1
           initial={{ opacity: 0 }}
@@ -37,7 +37,7 @@ const CommunityPage = () => {
         >
           Community
         </motion.h1>
-        <div className="w-8" /> {/* spacer */}
+        <div className="w-7" />
       </div>
 
       {/* Content */}
@@ -50,7 +50,7 @@ const CommunityPage = () => {
             exit={{ opacity: 0, x: -20 }}
             transition={{ duration: 0.2 }}
           >
-            {activeTab === "chat" && <FeedTab />}
+            {activeTab === "chat" && <ChatTab />}
             {activeTab === "play" && <PlayNowTab />}
             {activeTab === "profile" && <ProfileTab />}
           </motion.div>

@@ -3,8 +3,10 @@ import { MessageCircle, Play, User } from "lucide-react";
 
 type Tab = "chat" | "play" | "profile";
 
-const tabs: { key: Tab; label: string; icon: typeof MessageCircle; href?: string }[] = [
-  { key: "chat", label: "Chat", icon: MessageCircle, href: "https://chat.whatsapp.com/HL1XcYaNFSuE56q7MqCpdw" },
+const BLUE = "#0066FF";
+
+const tabs: { key: Tab; label: string; icon: typeof MessageCircle }[] = [
+  { key: "chat", label: "Chat", icon: MessageCircle },
   { key: "play", label: "Play", icon: Play },
   { key: "profile", label: "Me", icon: User },
 ];
@@ -25,30 +27,24 @@ export function CommunityNav({ active, onChange }: { active: Tab; onChange: (t: 
         return (
           <button
             key={tab.key}
-            onClick={() => {
-              if (tab.href) {
-                window.open(tab.href, "_blank", "noopener,noreferrer");
-              } else {
-                onChange(tab.key);
-              }
-            }}
+            onClick={() => onChange(tab.key)}
             className="flex flex-col items-center gap-0.5 py-2 px-4 rounded-xl transition-all relative min-w-[64px]"
           >
             {isActive && (
               <motion.div
                 layoutId="community-tab-bg"
                 className="absolute inset-0 rounded-xl"
-                style={{ background: "rgba(232,108,36,0.1)" }}
+                style={{ background: `${BLUE}15` }}
                 transition={{ type: "spring", stiffness: 400, damping: 30 }}
               />
             )}
             <Icon
               className="w-5 h-5 relative z-10"
-              style={{ color: isActive ? "#E86C24" : "rgba(62,61,57,0.4)" }}
+              style={{ color: isActive ? BLUE : "rgba(62,61,57,0.4)" }}
             />
             <span
               className="text-[10px] font-semibold relative z-10 tracking-wide"
-              style={{ color: isActive ? "#E86C24" : "rgba(62,61,57,0.4)" }}
+              style={{ color: isActive ? BLUE : "rgba(62,61,57,0.4)" }}
             >
               {tab.label}
             </span>
