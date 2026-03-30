@@ -1,42 +1,43 @@
 import { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChatTab } from "@/components/community/ChatTab";
-import { PlayNowTab } from "@/components/community/PlayNowTab";
+import { ForumFeed } from "@/components/community/ForumFeed";
+import { ActivityFeed } from "@/components/community/ActivityFeed";
 import { ProfileTab } from "@/components/community/ProfileTab";
-import { ArrowLeft, MessageCircle, Play, User } from "lucide-react";
+import { ArrowLeft, MessageSquareText, Activity, User } from "lucide-react";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-type Tab = "chat" | "play" | "profile";
+type Tab = "forum" | "activity" | "profile";
 
-const tabs: { key: Tab; label: string; icon: typeof MessageCircle }[] = [
-  { key: "chat", label: "Chat", icon: MessageCircle },
-  { key: "play", label: "Play", icon: Play },
+const tabs: { key: Tab; label: string; icon: typeof MessageSquareText }[] = [
+  { key: "forum", label: "Forum", icon: MessageSquareText },
+  { key: "activity", label: "Activity", icon: Activity },
   { key: "profile", label: "Me", icon: User },
 ];
 
 const CommunityPage = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const initialTab = (searchParams.get("tab") as Tab) || "chat";
-  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  const initialTab = (searchParams.get("tab") as Tab) || "forum";
+  const [activeTab, setActiveTab] = useState<Tab>(
+    ["forum", "activity", "profile"].includes(initialTab) ? initialTab : "forum"
+  );
 
   useEffect(() => {
     const t = searchParams.get("tab") as Tab;
-    if (t && ["chat", "play", "profile"].includes(t)) setActiveTab(t);
+    if (t && ["forum", "activity", "profile"].includes(t)) setActiveTab(t);
   }, [searchParams]);
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-white border-b border-neutral-100">
-        <div className="px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-center gap-3">
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-neutral-100">
+        <div className="px-5 pt-[env(safe-area-inset-top,12px)] pb-2 flex items-center gap-3">
           <button
             onClick={() => navigate("/")}
-            className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-transform"
-            style={{ background: "#f5f5f5" }}
+            className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-transform bg-neutral-50"
           >
             <ArrowLeft className="w-4 h-4 text-neutral-600" />
           </button>
@@ -60,7 +61,7 @@ const CommunityPage = () => {
                 className="flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-xs font-semibold transition-all relative"
                 style={{
                   fontFamily: FONT_MONO,
-                  color: isActive ? "#0066FF" : "#9CA3AF",
+                  color: isActive ? "#111" : "#9CA3AF",
                 }}
               >
                 <Icon className="w-3.5 h-3.5" />
@@ -68,8 +69,7 @@ const CommunityPage = () => {
                 {isActive && (
                   <motion.div
                     layoutId="community-tab-indicator"
-                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
-                    style={{ background: "#0066FF" }}
+                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full bg-neutral-900"
                     transition={{ type: "spring", stiffness: 400, damping: 30 }}
                   />
                 )}
@@ -89,8 +89,8 @@ const CommunityPage = () => {
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.15 }}
           >
-            {activeTab === "chat" && <ChatTab />}
-            {activeTab === "play" && <PlayNowTab />}
+            {activeTab === "forum" && <ForumFeed />}
+            {activeTab === "activity" && <ActivityFeed />}
             {activeTab === "profile" && <ProfileTab />}
           </motion.div>
         </AnimatePresence>

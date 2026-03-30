@@ -192,6 +192,38 @@ export type Database = {
           },
         ]
       }
+      comment_votes: {
+        Row: {
+          auth_user_id: string
+          comment_id: string
+          created_at: string
+          id: string
+          vote_value: number
+        }
+        Insert: {
+          auth_user_id: string
+          comment_id: string
+          created_at?: string
+          id?: string
+          vote_value?: number
+        }
+        Update: {
+          auth_user_id?: string
+          comment_id?: string
+          created_at?: string
+          id?: string
+          vote_value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comment_votes_comment_id_fkey"
+            columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "post_comments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       community_feed: {
         Row: {
           content: Json | null
@@ -1495,6 +1527,63 @@ export type Database = {
           },
         ]
       }
+      forum_posts: {
+        Row: {
+          author_profile_id: string
+          body: string
+          comment_count: number
+          created_at: string
+          id: string
+          is_pinned: boolean
+          tag: string
+          title: string
+          updated_at: string
+          upvote_count: number
+          venue_id: string | null
+        }
+        Insert: {
+          author_profile_id: string
+          body?: string
+          comment_count?: number
+          created_at?: string
+          id?: string
+          is_pinned?: boolean
+          tag?: string
+          title: string
+          updated_at?: string
+          upvote_count?: number
+          venue_id?: string | null
+        }
+        Update: {
+          author_profile_id?: string
+          body?: string
+          comment_count?: number
+          created_at?: string
+          id?: string
+          is_pinned?: boolean
+          tag?: string
+          title?: string
+          updated_at?: string
+          upvote_count?: number
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forum_posts_author_profile_id_fkey"
+            columns: ["author_profile_id"]
+            isOneToOne: false
+            referencedRelation: "player_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forum_posts_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ladder_challenges: {
         Row: {
           challenged_entry_id: string
@@ -2098,6 +2187,93 @@ export type Database = {
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      post_comments: {
+        Row: {
+          author_profile_id: string
+          body: string
+          created_at: string
+          id: string
+          parent_comment_id: string | null
+          post_id: string
+          updated_at: string
+          upvote_count: number
+        }
+        Insert: {
+          author_profile_id: string
+          body: string
+          created_at?: string
+          id?: string
+          parent_comment_id?: string | null
+          post_id: string
+          updated_at?: string
+          upvote_count?: number
+        }
+        Update: {
+          author_profile_id?: string
+          body?: string
+          created_at?: string
+          id?: string
+          parent_comment_id?: string | null
+          post_id?: string
+          updated_at?: string
+          upvote_count?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "post_comments_author_profile_id_fkey"
+            columns: ["author_profile_id"]
+            isOneToOne: false
+            referencedRelation: "player_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "post_comments_parent_comment_id_fkey"
+            columns: ["parent_comment_id"]
+            isOneToOne: false
+            referencedRelation: "post_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "post_comments_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "forum_posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      post_votes: {
+        Row: {
+          auth_user_id: string
+          created_at: string
+          id: string
+          post_id: string
+          vote_value: number
+        }
+        Insert: {
+          auth_user_id: string
+          created_at?: string
+          id?: string
+          post_id: string
+          vote_value?: number
+        }
+        Update: {
+          auth_user_id?: string
+          created_at?: string
+          id?: string
+          post_id?: string
+          vote_value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "post_votes_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "forum_posts"
             referencedColumns: ["id"]
           },
         ]
