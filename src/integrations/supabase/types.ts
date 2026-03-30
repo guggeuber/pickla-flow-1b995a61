@@ -1527,6 +1527,45 @@ export type Database = {
           },
         ]
       }
+      forum_post_signups: {
+        Row: {
+          id: string
+          player_profile_id: string
+          post_id: string
+          signed_up_at: string
+          status: string
+        }
+        Insert: {
+          id?: string
+          player_profile_id: string
+          post_id: string
+          signed_up_at?: string
+          status?: string
+        }
+        Update: {
+          id?: string
+          player_profile_id?: string
+          post_id?: string
+          signed_up_at?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forum_post_signups_player_profile_id_fkey"
+            columns: ["player_profile_id"]
+            isOneToOne: false
+            referencedRelation: "player_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "forum_post_signups_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "forum_posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       forum_posts: {
         Row: {
           author_profile_id: string
