@@ -1527,6 +1527,67 @@ export type Database = {
           },
         ]
       }
+      forum_poll_options: {
+        Row: {
+          created_at: string
+          id: string
+          label: string
+          post_id: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          label: string
+          post_id: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          label?: string
+          post_id?: string
+          sort_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forum_poll_options_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "forum_posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      forum_poll_votes: {
+        Row: {
+          auth_user_id: string
+          created_at: string
+          id: string
+          option_id: string
+        }
+        Insert: {
+          auth_user_id: string
+          created_at?: string
+          id?: string
+          option_id: string
+        }
+        Update: {
+          auth_user_id?: string
+          created_at?: string
+          id?: string
+          option_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "forum_poll_votes_option_id_fkey"
+            columns: ["option_id"]
+            isOneToOne: false
+            referencedRelation: "forum_poll_options"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       forum_post_signups: {
         Row: {
           id: string

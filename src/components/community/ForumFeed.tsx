@@ -1,13 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2, ArrowBigUp, ArrowBigDown, MessageCircle, Plus, Pin, Send, X,
-  ChevronLeft, Users, CalendarDays, MapPin, Clock
+  ChevronLeft, Users, CalendarDays, MapPin, Clock, Link2, Image, BarChart3, ExternalLink
 } from "lucide-react";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -21,6 +22,7 @@ const TAGS = [
   { key: "lfg", label: "LFG" },
   { key: "events", label: "Events" },
   { key: "tips", label: "Tips" },
+  { key: "poll", label: "Poll" },
 ];
 
 const TAG_COLORS: Record<string, string> = {
@@ -30,6 +32,7 @@ const TAG_COLORS: Record<string, string> = {
   events: "#8B5CF6",
   tips: "#EC4899",
   general: "#6B7280",
+  poll: "#F97316",
 };
 
 function timeAgo(dateStr: string): string {
@@ -42,6 +45,62 @@ function timeAgo(dateStr: string): string {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d`;
   return `${Math.floor(days / 7)}w`;
+}
+
+/* ── Rich Body Renderer (links + images) ── */
+function RichBody({ text, clamp = false }: { text: string; clamp?: boolean }) {
+  // URL regex
+  const urlRegex = /(https?:\/\/[^\s<]+)/g;
+  const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg)(\?[^\s]*)?$/i;
+
+  const parts = text.split(urlRegex);
+
+  const content = parts.map((part, i) => {
+    if (urlRegex.test(part)) {
+      // Reset lastIndex
+      urlRegex.lastIndex = 0;
+      if (imageExtensions.test(part)) {
+        if (clamp) {
+          return (
+            <span key={i} className="inline-flex items-center gap-1 text-blue-500">
+              <Image className="w-3 h-3" /> image
+            </span>
+          );
+        }
+        return (
+          <img
+            key={i}
+            src={part}
+            alt="Shared image"
+            className="rounded-xl mt-2 mb-1 max-w-full max-h-64 object-cover border border-neutral-100"
+            loading="lazy"
+          />
+        );
+      }
+      return (
+        <a
+          key={i}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-blue-500 hover:underline break-all"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="w-3 h-3 shrink-0" />
+          {clamp ? new URL(part).hostname : part}
+        </a>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+
+  return (
+    <p
+      className={`text-[13px] text-neutral-500 leading-relaxed whitespace-pre-wrap ${clamp ? "line-clamp-2" : ""}`}
+    >
+      {content}
+    </p>
+  );
 }
 
 /* ── Vote Button ── */
@@ -177,16 +236,136 @@ function LfgSignupButton({ postId }: { postId: string }) {
   );
 }
 
+/* ── Poll Component ── */
+function PollView({ postId, compact = false }: { postId: string; compact?: boolean }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const [voting, setVoting] = useState(false);
+
+  const { data: options } = useQuery({
+    queryKey: ["poll-options", postId],
+    queryFn: async () => {
+      const { data } = await (supabase as any)
+        .from("forum_poll_options")
+        .select("*")
+        .eq("post_id", postId)
+        .order("sort_order", { ascending: true });
+      return data || [];
+    },
+  });
+
+  const { data: votes } = useQuery({
+    queryKey: ["poll-votes", postId],
+    queryFn: async () => {
+      if (!options?.length) return [];
+      const optionIds = options.map((o: any) => o.id);
+      const { data } = await (supabase as any)
+        .from("forum_poll_votes")
+        .select("*")
+        .in("option_id", optionIds);
+      return data || [];
+    },
+    enabled: !!options?.length,
+  });
+
+  if (!options?.length) return null;
+
+  const totalVotes = votes?.length || 0;
+  const voteCounts: Record<string, number> = {};
+  (votes || []).forEach((v: any) => {
+    voteCounts[v.option_id] = (voteCounts[v.option_id] || 0) + 1;
+  });
+  const userVote = votes?.find((v: any) => v.auth_user_id === user?.id);
+  const hasVoted = !!userVote;
+
+  const handleVote = async (optionId: string) => {
+    if (!user || voting) return;
+    setVoting(true);
+    try {
+      if (userVote) {
+        await (supabase as any).from("forum_poll_votes").delete().eq("id", userVote.id);
+      }
+      if (!userVote || userVote.option_id !== optionId) {
+        await (supabase as any).from("forum_poll_votes").insert({ option_id: optionId, auth_user_id: user.id });
+      }
+      qc.invalidateQueries({ queryKey: ["poll-votes", postId] });
+    } catch {
+      toast.error("Could not vote");
+    }
+    setVoting(false);
+  };
+
+  if (compact) {
+    return (
+      <div className="mt-2 flex items-center gap-2">
+        <BarChart3 className="w-3.5 h-3.5" style={{ color: "#F97316" }} />
+        <span className="text-[11px] font-semibold" style={{ color: "#F97316", fontFamily: FONT_MONO }}>
+          {options.length} options · {totalVotes} votes
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 space-y-2">
+      {options.map((opt: any) => {
+        const count = voteCounts[opt.id] || 0;
+        const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+        const isSelected = userVote?.option_id === opt.id;
+
+        return (
+          <button
+            key={opt.id}
+            onClick={() => handleVote(opt.id)}
+            disabled={!user || voting}
+            className="w-full relative rounded-xl overflow-hidden text-left transition-all active:scale-[0.98]"
+            style={{
+              border: isSelected ? "1.5px solid #F9731660" : "1.5px solid #e5e5e5",
+              padding: "10px 14px",
+            }}
+          >
+            {/* Progress bar bg */}
+            {hasVoted && (
+              <div
+                className="absolute inset-y-0 left-0 rounded-xl transition-all"
+                style={{
+                  width: `${pct}%`,
+                  background: isSelected ? "#F9731618" : "#f5f5f5",
+                }}
+              />
+            )}
+            <div className="relative flex items-center justify-between">
+              <span className="text-[13px] font-semibold" style={{ color: isSelected ? "#F97316" : "#374151" }}>
+                {opt.label}
+              </span>
+              {hasVoted && (
+                <span className="text-[11px] font-bold" style={{ color: "#9CA3AF", fontFamily: FONT_MONO }}>
+                  {pct}%
+                </span>
+              )}
+            </div>
+          </button>
+        );
+      })}
+      <p className="text-[10px] text-neutral-400 text-center" style={{ fontFamily: FONT_MONO }}>
+        {totalVotes} vote{totalVotes !== 1 ? "s" : ""} · {hasVoted ? "tap to change" : "tap to vote"}
+      </p>
+    </div>
+  );
+}
+
 /* ── Inline Event Card ── */
-function EventCard({ event }: { event: any }) {
+function EventCard({ event, onOpen }: { event: any; onOpen: () => void }) {
+  const navigate = useNavigate();
   const startDate = event.start_date ? new Date(event.start_date) : null;
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-2xl border border-neutral-100 p-4"
+      className="bg-white rounded-2xl border border-neutral-100 p-4 cursor-pointer active:bg-neutral-50 transition-colors"
       style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
+      onClick={onOpen}
     >
       <div className="flex items-center gap-2 mb-2">
         <CalendarDays className="w-4 h-4" style={{ color: "#8B5CF6" }} />
@@ -220,16 +399,252 @@ function EventCard({ event }: { event: any }) {
           </span>
         )}
       </div>
-      {event.slug && (
-        <a
-          href={`/e/${event.slug}`}
-          className="mt-3 block w-full text-center py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95"
-          style={{ background: `${BLUE}10`, color: BLUE, fontFamily: FONT_MONO }}
+      <div className="flex gap-2 mt-3">
+        {event.slug && (
+          <button
+            onClick={(e) => { e.stopPropagation(); navigate(`/e/${event.slug}`); }}
+            className="flex-1 text-center py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+            style={{ background: `${BLUE}10`, color: BLUE, fontFamily: FONT_MONO }}
+          >
+            View & Sign up →
+          </button>
+        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); onOpen(); }}
+          className="px-3 py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95 flex items-center gap-1"
+          style={{ background: "#f5f5f5", color: "#9CA3AF" }}
         >
-          View & Sign up →
-        </a>
-      )}
+          <MessageCircle className="w-3.5 h-3.5" />
+          Discuss
+        </button>
+      </div>
     </motion.div>
+  );
+}
+
+/* ── Event Detail / Discussion View ── */
+function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [comment, setComment] = useState("");
+  const [sending, setSending] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const startDate = event.start_date ? new Date(event.start_date) : null;
+
+  // Use a synthetic "event discussion" post keyed by event id
+  const discussionKey = `event-discussion-${event.id}`;
+
+  const { data: profile } = useQuery({
+    queryKey: ["my-profile-id"],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data } = await supabase.from("player_profiles").select("id").eq("auth_user_id", user!.id).single();
+      return data;
+    },
+  });
+
+  // Find or create a forum post linked to this event (tag = events, title = event name)
+  const { data: eventPost } = useQuery({
+    queryKey: ["event-post", event.id],
+    queryFn: async () => {
+      // Look for existing event-linked post by checking title match + events tag
+      const { data: existing } = await (supabase as any)
+        .from("forum_posts")
+        .select("*")
+        .eq("tag", "events")
+        .ilike("title", `%${(event.display_name || event.name).substring(0, 30)}%`)
+        .limit(1);
+      if (existing && existing.length > 0) return existing[0];
+      return null;
+    },
+  });
+
+  const { data: comments, isLoading: commentsLoading } = useQuery({
+    queryKey: ["post-comments", eventPost?.id],
+    enabled: !!eventPost,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("post_comments")
+        .select("*, player_profiles(display_name, avatar_url)")
+        .eq("post_id", eventPost.id)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const handleCreateEventPost = async () => {
+    if (!user || !profile) return null;
+    try {
+      const { data: newPost } = await (supabase as any).from("forum_posts").insert({
+        author_profile_id: profile.id,
+        title: `📅 ${event.display_name || event.name}`,
+        body: event.description || "Event discussion thread",
+        tag: "events",
+      }).select().single();
+      qc.invalidateQueries({ queryKey: ["event-post", event.id] });
+      qc.invalidateQueries({ queryKey: ["forum-posts"] });
+      return newPost;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleSendComment = async () => {
+    const text = comment.trim();
+    if (!text || !user || !profile || sending) return;
+    setSending(true);
+    setComment("");
+
+    let postId = eventPost?.id;
+    if (!postId) {
+      const created = await handleCreateEventPost();
+      postId = created?.id;
+    }
+    if (!postId) {
+      toast.error("Could not create discussion");
+      setSending(false);
+      return;
+    }
+
+    try {
+      await (supabase as any).from("post_comments").insert({
+        post_id: postId,
+        author_profile_id: profile.id,
+        body: text,
+      });
+      qc.invalidateQueries({ queryKey: ["post-comments", postId] });
+      qc.invalidateQueries({ queryKey: ["forum-posts"] });
+    } catch {
+      setComment(text);
+      toast.error("Could not post comment");
+    }
+    setSending(false);
+  };
+
+  return (
+    <div className="flex flex-col" style={{ minHeight: "calc(100vh - 200px)" }}>
+      {/* Header */}
+      <div className="flex items-center gap-3 pb-3 mb-3 border-b border-neutral-100">
+        <button onClick={onBack} className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 bg-neutral-50">
+          <ChevronLeft className="w-4 h-4 text-neutral-600" />
+        </button>
+        <span className="text-sm font-semibold text-neutral-500" style={{ fontFamily: FONT_GROTESK }}>Event Discussion</span>
+      </div>
+
+      {/* Event info */}
+      <div className="mb-4 rounded-2xl p-4" style={{ background: "#8B5CF608", border: "1.5px solid #8B5CF620" }}>
+        <div className="flex items-center gap-2 mb-2">
+          <CalendarDays className="w-4 h-4" style={{ color: "#8B5CF6" }} />
+          <span className="text-[9px] font-bold uppercase tracking-wide" style={{ color: "#8B5CF6" }}>Event</span>
+        </div>
+        <h2 className="text-lg font-bold text-neutral-900 mb-1" style={{ fontFamily: FONT_GROTESK }}>
+          {event.display_name || event.name}
+        </h2>
+        {event.description && (
+          <p className="text-[13px] text-neutral-500 leading-relaxed mb-2">{event.description}</p>
+        )}
+        <div className="flex items-center gap-3 text-[11px] text-neutral-400">
+          {event.venues?.name && (
+            <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {event.venues.name}</span>
+          )}
+          {startDate && (
+            <span>{startDate.toLocaleDateString("sv-SE", { day: "numeric", month: "short" })}</span>
+          )}
+          {event.start_time && (
+            <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {String(event.start_time).substring(0, 5)}</span>
+          )}
+        </div>
+        {event.slug && (
+          <button
+            onClick={() => navigate(`/e/${event.slug}`)}
+            className="mt-3 w-full text-center py-2.5 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+            style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
+          >
+            View Event & Sign Up →
+          </button>
+        )}
+      </div>
+
+      {/* Vote on event post */}
+      {eventPost && (
+        <div className="flex items-center gap-3 mb-4">
+          <VoteButton postId={eventPost.id} currentCount={eventPost.upvote_count || 0} userVote={0} />
+          <span className="text-xs text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+            {comments?.length || 0} comments
+          </span>
+        </div>
+      )}
+
+      {/* Comments */}
+      <div className="flex-1">
+        <p className="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-3" style={{ fontFamily: FONT_MONO }}>
+          Discussion
+        </p>
+        {eventPost && commentsLoading ? (
+          <div className="flex justify-center py-6"><Loader2 className="w-4 h-4 animate-spin text-neutral-300" /></div>
+        ) : comments && comments.length > 0 ? (
+          <div className="space-y-3">
+            {comments.map((c: any) => (
+              <div key={c.id} className="flex gap-2">
+                <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 bg-neutral-100 mt-0.5">
+                  <span className="text-[9px] font-bold text-neutral-500">
+                    {(c.player_profiles?.display_name || "?").charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-neutral-700">
+                      {c.player_profiles?.display_name || "Anonymous"}
+                    </span>
+                    <span className="text-[10px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                      {timeAgo(c.created_at)}
+                    </span>
+                  </div>
+                  <RichBody text={c.body} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400 text-center py-6" style={{ fontFamily: FONT_MONO }}>
+            No comments yet — start the discussion!
+          </p>
+        )}
+      </div>
+
+      {/* Comment input */}
+      {user ? (
+        <div className="pt-3 mt-3 border-t border-neutral-100">
+          <div className="flex items-center gap-2">
+            <input
+              ref={inputRef}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendComment(); } }}
+              placeholder="Add a comment..."
+              className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300"
+              style={{ fontSize: "16px" }}
+            />
+            <button
+              onClick={handleSendComment}
+              disabled={!comment.trim() || sending}
+              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all active:scale-90 disabled:opacity-30"
+              style={{ background: BLUE }}
+            >
+              {sending ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Send className="w-4 h-4 text-white" />}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="pt-3 mt-3 border-t border-neutral-100 text-center">
+          <a href="/auth?redirect=/community" className="text-xs font-semibold" style={{ color: BLUE }}>
+            Sign in to comment
+          </a>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -237,6 +652,7 @@ function EventCard({ event }: { event: any }) {
 function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
   const isLfg = post.tag === "lfg";
+  const isPoll = post.tag === "poll";
 
   return (
     <motion.div
@@ -274,15 +690,14 @@ function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
         <h3 className="text-[15px] font-bold text-neutral-900 leading-snug mb-1" style={{ fontFamily: FONT_GROTESK }}>
           {post.title}
         </h3>
-        {post.body && (
-          <p className="text-[13px] text-neutral-500 line-clamp-2 leading-relaxed">
-            {post.body}
-          </p>
-        )}
+        {post.body && <RichBody text={post.body} clamp />}
       </button>
 
       {/* LFG signup inline */}
       {isLfg && <LfgSignupButton postId={post.id} />}
+
+      {/* Poll compact preview */}
+      {isPoll && <PollView postId={post.id} compact />}
 
       {/* Actions */}
       <div className="flex items-center gap-3 mt-3">
@@ -302,8 +717,10 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
   const qc = useQueryClient();
   const [comment, setComment] = useState("");
   const [sending, setSending] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
   const isLfg = post.tag === "lfg";
+  const isPoll = post.tag === "poll";
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -379,10 +796,11 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
           {post.tag}
         </span>
         <h2 className="text-lg font-bold text-neutral-900 mb-2" style={{ fontFamily: FONT_GROTESK }}>{post.title}</h2>
-        {post.body && <p className="text-[14px] text-neutral-600 leading-relaxed whitespace-pre-wrap">{post.body}</p>}
-        
+        {post.body && <RichBody text={post.body} />}
+
         {isLfg && <LfgSignupButton postId={post.id} />}
-        
+        {isPoll && <PollView postId={post.id} />}
+
         <div className="flex items-center gap-3 mt-3">
           <VoteButton postId={post.id} currentCount={post.upvote_count} userVote={post.user_vote || 0} />
           <span className="text-xs text-neutral-400" style={{ fontFamily: FONT_MONO }}>
@@ -416,7 +834,7 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
                       {timeAgo(c.created_at)}
                     </span>
                   </div>
-                  <p className="text-[13px] text-neutral-600 mt-0.5 leading-relaxed">{c.body}</p>
+                  <RichBody text={c.body} />
                 </div>
               </div>
             ))}
@@ -433,11 +851,13 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
         <div className="pt-3 mt-3 border-t border-neutral-100">
           <div className="flex items-center gap-2">
             <input
+              ref={inputRef}
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendComment(); } }}
               placeholder="Add a comment..."
               className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300"
+              style={{ fontSize: "16px" }}
             />
             <button
               onClick={handleSendComment}
@@ -468,6 +888,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
   const [body, setBody] = useState("");
   const [tag, setTag] = useState("general");
   const [posting, setPosting] = useState(false);
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -480,19 +901,37 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
 
   const handleSubmit = async () => {
     if (!title.trim() || !user || !profile || posting) return;
+    if (tag === "poll" && pollOptions.filter(o => o.trim()).length < 2) {
+      toast.error("Add at least 2 poll options");
+      return;
+    }
     setPosting(true);
     try {
-      await (supabase as any).from("forum_posts").insert({
+      const { data: newPost } = await (supabase as any).from("forum_posts").insert({
         author_profile_id: profile.id,
         title: title.trim(),
         body: body.trim(),
         tag,
-      });
+      }).select().single();
+
+      // Create poll options if poll tag
+      if (tag === "poll" && newPost) {
+        const validOptions = pollOptions.filter(o => o.trim());
+        for (let i = 0; i < validOptions.length; i++) {
+          await (supabase as any).from("forum_poll_options").insert({
+            post_id: newPost.id,
+            label: validOptions[i].trim(),
+            sort_order: i,
+          });
+        }
+      }
+
       qc.invalidateQueries({ queryKey: ["forum-posts"] });
       toast.success("Post created! 🎉");
       setTitle("");
       setBody("");
       setTag("general");
+      setPollOptions(["", ""]);
       onClose();
     } catch (e: any) {
       toast.error(e.message || "Could not create post");
@@ -515,7 +954,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
         animate={{ y: 0 }}
         exit={{ y: "100%" }}
         transition={{ type: "spring", damping: 30, stiffness: 400 }}
-        className="bg-white w-full max-w-lg rounded-t-3xl p-5 pb-8"
+        className="bg-white w-full max-w-lg rounded-t-3xl p-5 pb-8 overflow-y-auto"
         style={{ maxHeight: "85vh" }}
       >
         <div className="flex items-center justify-between mb-4">
@@ -551,20 +990,67 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
           </div>
         )}
 
+        {tag === "poll" && (
+          <div className="rounded-xl p-3 mb-3" style={{ background: "#F9731608", border: "1px solid #F9731620" }}>
+            <p className="text-[11px] text-neutral-500 mb-2" style={{ fontFamily: FONT_MONO }}>
+              📊 Add options for your poll below
+            </p>
+          </div>
+        )}
+
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder={tag === "lfg" ? "e.g. Söker motståndare imorgon kl 10" : "Title"}
+          placeholder={tag === "lfg" ? "e.g. Söker motståndare imorgon kl 10" : tag === "poll" ? "Your poll question" : "Title"}
           className="w-full text-base font-bold rounded-xl px-4 py-3 mb-3 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300"
-          style={{ fontFamily: FONT_GROTESK }}
+          style={{ fontFamily: FONT_GROTESK, fontSize: "16px" }}
         />
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder={tag === "lfg" ? "Describe level, venue, time etc..." : "What's on your mind? (optional)"}
-          rows={4}
+          placeholder={tag === "lfg" ? "Describe level, venue, time etc..." : "What's on your mind? (optional) — paste links/image URLs too!"}
+          rows={3}
           className="w-full text-sm rounded-xl px-4 py-3 mb-4 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300 resize-none"
+          style={{ fontSize: "16px" }}
         />
+
+        {/* Poll options */}
+        {tag === "poll" && (
+          <div className="mb-4 space-y-2">
+            {pollOptions.map((opt, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  value={opt}
+                  onChange={(e) => {
+                    const newOpts = [...pollOptions];
+                    newOpts[i] = e.target.value;
+                    setPollOptions(newOpts);
+                  }}
+                  placeholder={`Option ${i + 1}`}
+                  className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300"
+                  style={{ fontSize: "16px" }}
+                />
+                {pollOptions.length > 2 && (
+                  <button
+                    onClick={() => setPollOptions(pollOptions.filter((_, j) => j !== i))}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center bg-neutral-100 text-neutral-400 active:scale-90"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+            {pollOptions.length < 6 && (
+              <button
+                onClick={() => setPollOptions([...pollOptions, ""])}
+                className="text-[11px] font-bold px-3 py-1.5 rounded-lg transition-all active:scale-95"
+                style={{ color: "#F97316", background: "#F9731610" }}
+              >
+                + Add option
+              </button>
+            )}
+          </div>
+        )}
 
         <button
           onClick={handleSubmit}
@@ -585,6 +1071,7 @@ export function ForumFeed() {
   const [activeTag, setActiveTag] = useState("all");
   const [sort, setSort] = useState<"hot" | "new">("hot");
   const [selectedPost, setSelectedPost] = useState<any>(null);
+  const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [showCreate, setShowCreate] = useState(false);
 
   // Fetch upcoming events inline
@@ -649,6 +1136,17 @@ export function ForumFeed() {
   // Merge events inline into posts when showing "all" or "events" tag
   const showEvents = (activeTag === "all" || activeTag === "events") && upcomingEvents && upcomingEvents.length > 0;
 
+  // Event detail view
+  if (selectedEvent) {
+    return (
+      <AnimatePresence mode="wait">
+        <motion.div key="event-detail" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
+          <EventDetail event={selectedEvent} onBack={() => setSelectedEvent(null)} />
+        </motion.div>
+      </AnimatePresence>
+    );
+  }
+
   if (selectedPost) {
     return (
       <AnimatePresence mode="wait">
@@ -703,7 +1201,7 @@ export function ForumFeed() {
         <div className="flex flex-col gap-3">
           {/* Show events at top */}
           {showEvents && upcomingEvents.map((ev: any) => (
-            <EventCard key={`event-${ev.id}`} event={ev} />
+            <EventCard key={`event-${ev.id}`} event={ev} onOpen={() => setSelectedEvent(ev)} />
           ))}
 
           {posts && posts.length > 0 ? (
