@@ -90,6 +90,108 @@ export type Database = {
           },
         ]
       }
+      chat_channels: {
+        Row: {
+          channel_type: string
+          created_at: string
+          crew_id: string | null
+          description: string | null
+          id: string
+          is_active: boolean
+          name: string
+          sport_type: string | null
+          updated_at: string
+          venue_id: string | null
+        }
+        Insert: {
+          channel_type?: string
+          created_at?: string
+          crew_id?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          sport_type?: string | null
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Update: {
+          channel_type?: string
+          created_at?: string
+          crew_id?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          sport_type?: string | null
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_channels_crew_id_fkey"
+            columns: ["crew_id"]
+            isOneToOne: false
+            referencedRelation: "crews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "chat_channels_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      chat_messages: {
+        Row: {
+          channel_id: string
+          content: string
+          created_at: string
+          id: string
+          message_type: string
+          metadata: Json | null
+          sender_profile_id: string
+          updated_at: string
+        }
+        Insert: {
+          channel_id: string
+          content: string
+          created_at?: string
+          id?: string
+          message_type?: string
+          metadata?: Json | null
+          sender_profile_id: string
+          updated_at?: string
+        }
+        Update: {
+          channel_id?: string
+          content?: string
+          created_at?: string
+          id?: string
+          message_type?: string
+          metadata?: Json | null
+          sender_profile_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_messages_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "chat_channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "chat_messages_sender_profile_id_fkey"
+            columns: ["sender_profile_id"]
+            isOneToOne: false
+            referencedRelation: "player_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       community_feed: {
         Row: {
           content: Json | null
@@ -1110,6 +1212,7 @@ export type Database = {
           scoring_format: string | null
           scoring_type: string | null
           secondary_color: string | null
+          sport_type: string
           updated_at: string | null
           vat_rate: number | null
           whatsapp_url: string | null
@@ -1140,6 +1243,7 @@ export type Database = {
           scoring_format?: string | null
           scoring_type?: string | null
           secondary_color?: string | null
+          sport_type?: string
           updated_at?: string | null
           vat_rate?: number | null
           whatsapp_url?: string | null
@@ -1170,6 +1274,7 @@ export type Database = {
           scoring_format?: string | null
           scoring_type?: string | null
           secondary_color?: string | null
+          sport_type?: string
           updated_at?: string | null
           vat_rate?: number | null
           whatsapp_url?: string | null
@@ -1218,6 +1323,7 @@ export type Database = {
           semifinals_generated: boolean | null
           show_on_sticker: boolean
           slug: string | null
+          sport_type: string
           start_date: string | null
           start_time: string | null
           status: string | null
@@ -1270,6 +1376,7 @@ export type Database = {
           semifinals_generated?: boolean | null
           show_on_sticker?: boolean
           slug?: string | null
+          sport_type?: string
           start_date?: string | null
           start_time?: string | null
           status?: string | null
@@ -1322,6 +1429,7 @@ export type Database = {
           semifinals_generated?: boolean | null
           show_on_sticker?: boolean
           slug?: string | null
+          sport_type?: string
           start_date?: string | null
           start_time?: string | null
           status?: string | null
@@ -2329,6 +2437,7 @@ export type Database = {
           id: string
           is_available: boolean | null
           name: string
+          sport_type: string
           updated_at: string | null
           venue_id: string
         }
@@ -2340,6 +2449,7 @@ export type Database = {
           id?: string
           is_available?: boolean | null
           name: string
+          sport_type?: string
           updated_at?: string | null
           venue_id: string
         }
@@ -2351,6 +2461,7 @@ export type Database = {
           id?: string
           is_available?: boolean | null
           name?: string
+          sport_type?: string
           updated_at?: string | null
           venue_id?: string
         }
