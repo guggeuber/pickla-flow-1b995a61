@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 import { motion, AnimatePresence } from "framer-motion";
 import { ForumFeed } from "@/components/community/ForumFeed";
 import { ActivityFeed } from "@/components/community/ActivityFeed";
@@ -17,6 +19,42 @@ const tabs: { key: Tab; label: string; icon: typeof MessageSquareText }[] = [
   { key: "profile", label: "Me", icon: User },
 ];
 
+function useNewContentBadges() {
+  // Check for new forum posts since last visit
+  const { data: forumBadge } = useQuery({
+    queryKey: ["forum-badge"],
+    staleTime: 30000,
+    queryFn: async () => {
+      const lastSeen = localStorage.getItem("community_forum_last_seen");
+      if (!lastSeen) return true; // never visited = show badge
+      const { count, error } = await (supabase as any)
+        .from("forum_posts")
+        .select("id", { count: "exact", head: true })
+        .gt("created_at", lastSeen);
+      if (error) return false;
+      return (count || 0) > 0;
+    },
+  });
+
+  // Check for new activity since last visit
+  const { data: activityBadge } = useQuery({
+    queryKey: ["activity-badge"],
+    staleTime: 30000,
+    queryFn: async () => {
+      const lastSeen = localStorage.getItem("community_activity_last_seen");
+      if (!lastSeen) return true;
+      const { count, error } = await (supabase as any)
+        .from("community_feed")
+        .select("id", { count: "exact", head: true })
+        .gt("created_at", lastSeen);
+      if (error) return false;
+      return (count || 0) > 0;
+    },
+  });
+
+  return { forumBadge: !!forumBadge, activityBadge: !!activityBadge };
+}
+
 const CommunityPage = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -24,11 +62,18 @@ const CommunityPage = () => {
   const [activeTab, setActiveTab] = useState<Tab>(
     ["forum", "activity", "profile"].includes(initialTab) ? initialTab : "forum"
   );
+  const { forumBadge, activityBadge } = useNewContentBadges();
 
   useEffect(() => {
     const t = searchParams.get("tab") as Tab;
     if (t && ["forum", "activity", "profile"].includes(t)) setActiveTab(t);
   }, [searchParams]);
+
+  const getBadge = (key: Tab) => {
+    if (key === "forum" && forumBadge && activeTab !== "forum") return true;
+    if (key === "activity" && activityBadge && activeTab !== "activity") return true;
+    return false;
+  };
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -54,6 +99,7 @@ const CommunityPage = () => {
           {tabs.map((tab) => {
             const isActive = activeTab === tab.key;
             const Icon = tab.icon;
+            const hasBadge = getBadge(tab.key);
             return (
               <button
                 key={tab.key}
@@ -64,7 +110,12 @@ const CommunityPage = () => {
                   color: isActive ? "#111" : "#9CA3AF",
                 }}
               >
-                <Icon className="w-3.5 h-3.5" />
+                <div className="relative">
+                  <Icon className="w-3.5 h-3.5" />
+                  {hasBadge && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 border border-white" />
+                  )}
+                </div>
                 {tab.label}
                 {isActive && (
                   <motion.div
