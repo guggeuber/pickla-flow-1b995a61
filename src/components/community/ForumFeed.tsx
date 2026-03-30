@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2, ArrowBigUp, ArrowBigDown, MessageCircle, Plus, Pin, Send, X,
-  ChevronLeft, MoreHorizontal, Trash2
+  ChevronLeft, Users, CalendarDays, MapPin, Clock
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -94,9 +94,149 @@ function VoteButton({ postId, currentCount, userVote }: { postId: string; curren
   );
 }
 
+/* ── LFG Signup Button ── */
+function LfgSignupButton({ postId }: { postId: string }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+
+  const { data: signups } = useQuery({
+    queryKey: ["post-signups", postId],
+    queryFn: async () => {
+      const { data } = await (supabase as any)
+        .from("forum_post_signups")
+        .select("*, player_profiles(display_name)")
+        .eq("post_id", postId);
+      return data || [];
+    },
+  });
+
+  const { data: profile } = useQuery({
+    queryKey: ["my-profile-id"],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data } = await supabase.from("player_profiles").select("id").eq("auth_user_id", user!.id).single();
+      return data;
+    },
+  });
+
+  const isSignedUp = profile && signups?.some((s: any) => s.player_profile_id === profile.id);
+  const count = signups?.length || 0;
+
+  const toggle = async () => {
+    if (!user || !profile || busy) return;
+    setBusy(true);
+    try {
+      if (isSignedUp) {
+        await (supabase as any).from("forum_post_signups").delete().eq("post_id", postId).eq("player_profile_id", profile.id);
+      } else {
+        await (supabase as any).from("forum_post_signups").insert({ post_id: postId, player_profile_id: profile.id });
+        toast.success("You're in! 🎾");
+      }
+      qc.invalidateQueries({ queryKey: ["post-signups", postId] });
+    } catch {
+      toast.error("Could not update signup");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="mt-3 rounded-xl p-3" style={{ background: "#22C55E10", border: "1.5px solid #22C55E30" }}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Users className="w-4 h-4" style={{ color: "#22C55E" }} />
+          <span className="text-xs font-bold" style={{ color: "#22C55E", fontFamily: FONT_MONO }}>
+            {count} joined
+          </span>
+          {signups && signups.length > 0 && (
+            <span className="text-[10px] text-neutral-400 truncate max-w-[140px]">
+              {signups.map((s: any) => s.player_profiles?.display_name || "?").join(", ")}
+            </span>
+          )}
+        </div>
+        {user ? (
+          <button
+            onClick={toggle}
+            disabled={busy}
+            className="px-4 py-1.5 rounded-lg text-[11px] font-bold transition-all active:scale-95"
+            style={{
+              background: isSignedUp ? "#EF444415" : "#22C55E",
+              color: isSignedUp ? "#EF4444" : "#fff",
+              fontFamily: FONT_MONO,
+            }}
+          >
+            {busy ? "..." : isSignedUp ? "Leave" : "Join"}
+          </button>
+        ) : (
+          <a href="/auth?redirect=/community" className="text-[11px] font-bold" style={{ color: BLUE }}>
+            Sign in
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Inline Event Card ── */
+function EventCard({ event }: { event: any }) {
+  const startDate = event.start_date ? new Date(event.start_date) : null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-white rounded-2xl border border-neutral-100 p-4"
+      style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <CalendarDays className="w-4 h-4" style={{ color: "#8B5CF6" }} />
+        <span
+          className="inline-block px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide"
+          style={{ background: "#8B5CF615", color: "#8B5CF6" }}
+        >
+          Event
+        </span>
+        {startDate && (
+          <span className="text-[10px] text-neutral-400 ml-auto" style={{ fontFamily: FONT_MONO }}>
+            {startDate.toLocaleDateString("sv-SE", { day: "numeric", month: "short" })}
+          </span>
+        )}
+      </div>
+      <h3 className="text-[15px] font-bold text-neutral-900 leading-snug mb-1" style={{ fontFamily: FONT_GROTESK }}>
+        {event.display_name || event.name}
+      </h3>
+      {event.description && (
+        <p className="text-[13px] text-neutral-500 line-clamp-2 leading-relaxed mb-2">{event.description}</p>
+      )}
+      <div className="flex items-center gap-3 text-[11px] text-neutral-400">
+        {event.venues?.name && (
+          <span className="flex items-center gap-1">
+            <MapPin className="w-3 h-3" /> {event.venues.name}
+          </span>
+        )}
+        {event.start_time && (
+          <span className="flex items-center gap-1">
+            <Clock className="w-3 h-3" /> {String(event.start_time).substring(0, 5)}
+          </span>
+        )}
+      </div>
+      {event.slug && (
+        <a
+          href={`/e/${event.slug}`}
+          className="mt-3 block w-full text-center py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+          style={{ background: `${BLUE}10`, color: BLUE, fontFamily: FONT_MONO }}
+        >
+          View & Sign up →
+        </a>
+      )}
+    </motion.div>
+  );
+}
+
 /* ── Post Card ── */
 function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
+  const isLfg = post.tag === "lfg";
 
   return (
     <motion.div
@@ -141,6 +281,9 @@ function PostCard({ post, onOpen }: { post: any; onOpen: () => void }) {
         )}
       </button>
 
+      {/* LFG signup inline */}
+      {isLfg && <LfgSignupButton postId={post.id} />}
+
       {/* Actions */}
       <div className="flex items-center gap-3 mt-3">
         <VoteButton postId={post.id} currentCount={post.upvote_count} userVote={post.user_vote || 0} />
@@ -160,6 +303,7 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
   const [comment, setComment] = useState("");
   const [sending, setSending] = useState(false);
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
+  const isLfg = post.tag === "lfg";
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -236,6 +380,9 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
         </span>
         <h2 className="text-lg font-bold text-neutral-900 mb-2" style={{ fontFamily: FONT_GROTESK }}>{post.title}</h2>
         {post.body && <p className="text-[14px] text-neutral-600 leading-relaxed whitespace-pre-wrap">{post.body}</p>}
+        
+        {isLfg && <LfgSignupButton postId={post.id} />}
+        
         <div className="flex items-center gap-3 mt-3">
           <VoteButton postId={post.id} currentCount={post.upvote_count} userVote={post.user_vote || 0} />
           <span className="text-xs text-neutral-400" style={{ fontFamily: FONT_MONO }}>
@@ -396,17 +543,25 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
           ))}
         </div>
 
+        {tag === "lfg" && (
+          <div className="rounded-xl p-3 mb-3" style={{ background: "#22C55E08", border: "1px solid #22C55E20" }}>
+            <p className="text-[11px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+              💡 LFG posts let others join directly — perfect for "looking for game" requests!
+            </p>
+          </div>
+        )}
+
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title"
+          placeholder={tag === "lfg" ? "e.g. Söker motståndare imorgon kl 10" : "Title"}
           className="w-full text-base font-bold rounded-xl px-4 py-3 mb-3 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300"
           style={{ fontFamily: FONT_GROTESK }}
         />
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="What's on your mind? (optional)"
+          placeholder={tag === "lfg" ? "Describe level, venue, time etc..." : "What's on your mind? (optional)"}
           rows={4}
           className="w-full text-sm rounded-xl px-4 py-3 mb-4 outline-none bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-300 resize-none"
         />
@@ -431,6 +586,23 @@ export function ForumFeed() {
   const [sort, setSort] = useState<"hot" | "new">("hot");
   const [selectedPost, setSelectedPost] = useState<any>(null);
   const [showCreate, setShowCreate] = useState(false);
+
+  // Fetch upcoming events inline
+  const { data: upcomingEvents } = useQuery({
+    queryKey: ["upcoming-events-inline"],
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("events")
+        .select("id, name, display_name, description, slug, start_date, start_time, sport_type, venues(name)")
+        .eq("is_public", true)
+        .gte("start_date", new Date().toISOString())
+        .order("start_date", { ascending: true })
+        .limit(3);
+      if (error) throw error;
+      return data || [];
+    },
+  });
 
   const { data: posts, isLoading } = useQuery({
     queryKey: ["forum-posts", activeTag, sort],
@@ -465,9 +637,17 @@ export function ForumFeed() {
         (votes || []).forEach((v: any) => { userVotes[v.post_id] = v.vote_value; });
       }
 
+      // Save latest timestamp for badge
+      if (data?.length) {
+        localStorage.setItem("community_forum_last_seen", new Date().toISOString());
+      }
+
       return (data || []).map((p: any) => ({ ...p, user_vote: userVotes[p.id] || 0 }));
     },
   });
+
+  // Merge events inline into posts when showing "all" or "events" tag
+  const showEvents = (activeTag === "all" || activeTag === "events") && upcomingEvents && upcomingEvents.length > 0;
 
   if (selectedPost) {
     return (
@@ -516,24 +696,31 @@ export function ForumFeed() {
         ))}
       </div>
 
-      {/* Posts */}
+      {/* Posts + inline events */}
       {isLoading ? (
         <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-neutral-300" /></div>
-      ) : posts && posts.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          {posts.map((post: any) => (
-            <PostCard key={post.id} post={post} onOpen={() => setSelectedPost(post)} />
-          ))}
-        </div>
       ) : (
-        <div className="flex flex-col items-center justify-center py-12 gap-2">
-          <MessageCircle className="w-6 h-6 text-neutral-300" />
-          <p className="text-sm font-semibold text-neutral-500" style={{ fontFamily: FONT_GROTESK }}>
-            No posts yet
-          </p>
-          <p className="text-[11px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-            Be the first to start a discussion!
-          </p>
+        <div className="flex flex-col gap-3">
+          {/* Show events at top */}
+          {showEvents && upcomingEvents.map((ev: any) => (
+            <EventCard key={`event-${ev.id}`} event={ev} />
+          ))}
+
+          {posts && posts.length > 0 ? (
+            posts.map((post: any) => (
+              <PostCard key={post.id} post={post} onOpen={() => setSelectedPost(post)} />
+            ))
+          ) : !showEvents ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2">
+              <MessageCircle className="w-6 h-6 text-neutral-300" />
+              <p className="text-sm font-semibold text-neutral-500" style={{ fontFamily: FONT_GROTESK }}>
+                No posts yet
+              </p>
+              <p className="text-[11px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                Be the first to start a discussion!
+              </p>
+            </div>
+          ) : null}
         </div>
       )}
 

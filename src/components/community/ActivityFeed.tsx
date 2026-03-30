@@ -1,20 +1,21 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion } from "framer-motion";
-import { Loader2, Zap, Trophy, UserCheck, CalendarPlus, Swords, Dumbbell, Heart, MessageCircle } from "lucide-react";
+import { Loader2, Zap, Trophy, UserCheck, CalendarPlus, Swords, Dumbbell, Heart } from "lucide-react";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-const feedTypeConfig: Record<string, { icon: typeof Trophy; emoji: string; color: string }> = {
-  match_result: { icon: Trophy, emoji: "🏆", color: "#F59E0B" },
-  checkin: { icon: UserCheck, emoji: "🏓", color: "#22C55E" },
-  event_created: { icon: CalendarPlus, emoji: "📅", color: "#3B82F6" },
-  crew_challenge_created: { icon: Swords, emoji: "⚔️", color: "#8B5CF6" },
-  crew_challenge_accepted: { icon: Swords, emoji: "🤝", color: "#22C55E" },
-  crew_challenge_completed: { icon: Swords, emoji: "🏅", color: "#F59E0B" },
-  crew_session: { icon: Dumbbell, emoji: "💪", color: "#3B82F6" },
+const feedTypeConfig: Record<string, { emoji: string; color: string }> = {
+  match_result: { emoji: "🏆", color: "#F59E0B" },
+  checkin: { emoji: "🏓", color: "#22C55E" },
+  event_created: { emoji: "📅", color: "#3B82F6" },
+  crew_challenge_created: { emoji: "⚔️", color: "#8B5CF6" },
+  crew_challenge_accepted: { emoji: "🤝", color: "#22C55E" },
+  crew_challenge_completed: { emoji: "🏅", color: "#F59E0B" },
+  crew_session: { emoji: "💪", color: "#3B82F6" },
 };
 
 function timeAgo(dateStr: string): string {
@@ -27,6 +28,48 @@ function timeAgo(dateStr: string): string {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d`;
   return `${Math.floor(days / 7)}w`;
+}
+
+function LikeButton({ feedItemId, likeCount, userLiked }: { feedItemId: string; likeCount: number; userLiked: boolean }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const [optimisticLiked, setOptimisticLiked] = useState(userLiked);
+  const [optimisticCount, setOptimisticCount] = useState(likeCount);
+  const [busy, setBusy] = useState(false);
+
+  const toggle = async () => {
+    if (!user || busy) return;
+    setBusy(true);
+    const wasLiked = optimisticLiked;
+    setOptimisticLiked(!wasLiked);
+    setOptimisticCount(c => wasLiked ? c - 1 : c + 1);
+
+    try {
+      if (wasLiked) {
+        await (supabase as any).from("feed_likes").delete().eq("feed_item_id", feedItemId).eq("auth_user_id", user.id);
+      } else {
+        await (supabase as any).from("feed_likes").insert({ feed_item_id: feedItemId, auth_user_id: user.id });
+      }
+      qc.invalidateQueries({ queryKey: ["community-feed"] });
+    } catch {
+      setOptimisticLiked(wasLiked);
+      setOptimisticCount(likeCount);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <button onClick={toggle} disabled={!user} className="flex items-center gap-1 text-[11px] transition-all active:scale-90">
+      <Heart
+        className="w-3.5 h-3.5 transition-colors"
+        fill={optimisticLiked ? "#EF4444" : "none"}
+        stroke={optimisticLiked ? "#EF4444" : "#9CA3AF"}
+      />
+      <span style={{ color: optimisticLiked ? "#EF4444" : "#9CA3AF", fontFamily: FONT_MONO }}>
+        {optimisticCount}
+      </span>
+    </button>
+  );
 }
 
 function ActivityCard({ item: fi }: { item: any }) {
@@ -69,9 +112,7 @@ function ActivityCard({ item: fi }: { item: any }) {
         )}
         {renderMatchScore()}
         <div className="flex items-center gap-4 mt-2">
-          <span className="flex items-center gap-1 text-[11px] text-neutral-400">
-            <Heart className="w-3 h-3" /> {fi.like_count || 0}
-          </span>
+          <LikeButton feedItemId={fi.id} likeCount={fi.like_count || 0} userLiked={fi.user_liked || false} />
         </div>
       </div>
     </div>
@@ -93,16 +134,26 @@ export function ActivityFeed() {
       if (error) throw error;
       const feedIds = (feed || []).map((f: any) => f.id);
       let likeCounts: Record<string, number> = {};
+      let userLikes: Record<string, boolean> = {};
       if (feedIds.length > 0) {
         const { data: likes } = await (supabase as any)
           .from("feed_likes")
-          .select("feed_item_id")
+          .select("feed_item_id, auth_user_id")
           .in("feed_item_id", feedIds);
         (likes || []).forEach((l: any) => {
           likeCounts[l.feed_item_id] = (likeCounts[l.feed_item_id] || 0) + 1;
+          if (user && l.auth_user_id === user.id) userLikes[l.feed_item_id] = true;
         });
       }
-      return (feed || []).map((f: any) => ({ ...f, like_count: likeCounts[f.id] || 0 }));
+      // Save latest timestamp for badge
+      if (feed?.length) {
+        localStorage.setItem("community_activity_last_seen", new Date().toISOString());
+      }
+      return (feed || []).map((f: any) => ({
+        ...f,
+        like_count: likeCounts[f.id] || 0,
+        user_liked: userLikes[f.id] || false,
+      }));
     },
   });
 
