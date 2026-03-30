@@ -1551,6 +1551,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
 export function ForumFeed() {
   const { user } = useAuth();
   const [activeTag, setActiveTag] = useState("all");
+  const [activeSport, setActiveSport] = useState("all");
   const [sort, setSort] = useState<"hot" | "new">("hot");
   const [selectedPost, setSelectedPost] = useState<any>(null);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
