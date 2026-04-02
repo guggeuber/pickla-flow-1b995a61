@@ -1557,16 +1557,20 @@ export function ForumFeed() {
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [showCreate, setShowCreate] = useState(false);
 
-  // Fetch upcoming events inline
+  // Fetch upcoming events inline (filtered by sport)
   const { data: upcomingEvents } = useQuery({
-    queryKey: ["upcoming-events-inline"],
+    queryKey: ["upcoming-events-inline", activeSport],
     staleTime: 60000,
     queryFn: async () => {
-      const { data, error } = await (supabase as any)
+      let query = (supabase as any)
         .from("events")
         .select("id, name, display_name, description, slug, start_date, start_time, sport_type, venues(name)")
         .eq("is_public", true)
-        .gte("start_date", new Date().toISOString())
+        .gte("start_date", new Date().toISOString());
+      if (activeSport !== "all") {
+        query = query.eq("sport_type", activeSport);
+      }
+      const { data, error } = await query
         .order("start_date", { ascending: true })
         .limit(3);
       if (error) throw error;
