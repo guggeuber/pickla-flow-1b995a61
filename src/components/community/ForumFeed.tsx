@@ -1649,8 +1649,8 @@ export function ForumFeed() {
 
   return (
     <div>
-      {/* Sport filter */}
-      <div className="flex items-center gap-1.5 mb-3 overflow-x-auto pb-1">
+      {/* Sport + Sort bar */}
+      <div className="flex items-center gap-1.5 mb-2 overflow-x-auto pb-1">
         {SPORT_FILTERS.map(s => (
           <button
             key={s.key}
@@ -1664,33 +1664,34 @@ export function ForumFeed() {
             {s.emoji} {s.label}
           </button>
         ))}
-        <div className="w-px h-5 bg-neutral-200 mx-1" />
-        {(["hot", "new"] as const).map(s => (
-          <button
-            key={s}
-            onClick={() => setSort(s)}
-            className="px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wide transition-all"
-            style={{
-              fontFamily: FONT_MONO,
-              background: sort === s ? "#111" : "transparent",
-              color: sort === s ? "#fff" : "#9CA3AF",
-            }}
-          >
-            {s === "hot" ? "🔥 Hot" : "🕐 New"}
-          </button>
-        ))}
+        <div className="ml-auto flex gap-1">
+          {(["hot", "new"] as const).map(s => (
+            <button
+              key={s}
+              onClick={() => setSort(s)}
+              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wide transition-all"
+              style={{
+                fontFamily: FONT_MONO,
+                color: sort === s ? "#111" : "#D1D5DB",
+              }}
+            >
+              {s === "hot" ? "🔥" : "🕐"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Tag filter */}
-      <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1 -mx-1 px-1">
+      <div className="flex gap-1 mb-3 overflow-x-auto pb-1">
         {TAGS.map(t => (
           <button
             key={t.key}
             onClick={() => setActiveTag(t.key)}
-            className="px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all"
+            className="px-2.5 py-1 rounded-full text-[10px] font-semibold whitespace-nowrap transition-all"
             style={{
-              background: activeTag === t.key ? "#111" : "#f5f5f5",
-              color: activeTag === t.key ? "#fff" : "#9CA3AF",
+              background: activeTag === t.key ? `${TAG_COLORS[t.key] || "#111"}15` : "transparent",
+              color: activeTag === t.key ? TAG_COLORS[t.key] || "#111" : "#D1D5DB",
+              borderBottom: activeTag === t.key ? `2px solid ${TAG_COLORS[t.key] || "#111"}` : "2px solid transparent",
             }}
           >
             {t.label}
