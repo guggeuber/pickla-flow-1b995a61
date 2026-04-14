@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Wifi, WifiOff, Users } from "lucide-react";
+import { DateTime } from "luxon";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet } from "@/lib/api";
 
@@ -102,10 +103,7 @@ function getCourtStatus(
   if (upcoming.length > 0) {
     const next = upcoming[0];
     const nextMs = new Date(next.start).getTime();
-    const timeLabel = new Date(next.start).toLocaleTimeString("sv-SE", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const timeLabel = DateTime.fromISO(next.start, { zone: "Europe/Stockholm" }).toFormat("HH:mm");
     if (nextMs <= soonMs) {
       return { status: "soon", startsAt: timeLabel };
     }
@@ -268,7 +266,7 @@ export default function VenueDisplay() {
   const [isConnected, setIsConnected] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState(new Date());
 
-  const today = now.toISOString().split("T")[0];
+  const today = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
   const nowMs = now.getTime();
 
   // ── Venue info (name, logo) ────────────────────────────────────────────────
@@ -445,17 +443,16 @@ export default function VenueDisplay() {
             className="font-display font-black tabular-nums text-foreground leading-none"
             style={{ fontSize: "clamp(3rem, 5vw, 4.5rem)" }}
           >
-            {now.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+            {DateTime.fromJSDate(now).setZone("Europe/Stockholm").toFormat("HH:mm")}
           </p>
           <p
             className="text-muted-foreground mt-1 capitalize"
             style={{ fontSize: "clamp(0.8rem, 1.2vw, 1rem)" }}
           >
-            {now.toLocaleDateString("sv-SE", {
-              weekday: "long",
-              day: "numeric",
-              month: "long",
-            })}
+            {DateTime.fromJSDate(now).setZone("Europe/Stockholm").toLocaleString(
+              { weekday: "long", day: "numeric", month: "long" },
+              { locale: "sv-SE" },
+            )}
           </p>
         </div>
       </div>
@@ -531,10 +528,7 @@ export default function VenueDisplay() {
                     className="text-muted-foreground"
                     style={{ fontSize: "clamp(0.85rem, 1.2vw, 1rem)" }}
                   >
-                    {new Date(player.checked_in_at).toLocaleTimeString("sv-SE", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+                    {DateTime.fromISO(player.checked_in_at, { zone: "Europe/Stockholm" }).toFormat("HH:mm")}
                   </span>
                 </motion.div>
               ))}
@@ -547,11 +541,7 @@ export default function VenueDisplay() {
       <div className="flex-shrink-0 flex items-center justify-end px-10 py-2 border-t border-border/40">
         <p className="font-mono text-muted-foreground/40" style={{ fontSize: "0.7rem" }}>
           Uppdaterades{" "}
-          {lastRefreshed.toLocaleTimeString("sv-SE", {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          })}
+          {DateTime.fromJSDate(lastRefreshed).setZone("Europe/Stockholm").toFormat("HH:mm:ss")}
         </p>
       </div>
     </div>
