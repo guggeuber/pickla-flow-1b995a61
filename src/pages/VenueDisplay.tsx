@@ -115,103 +115,143 @@ function getCourtStatus(
   return { status: "free" };
 }
 
-// ─── Court Card ──────────────────────────────────────────────────────────────
+// Max courts per sub-column before adding another sub-column.
+// At 1080p this gives cards ~85px each (plenty readable from 3m).
+const MAX_PER_SUBCOL = 10;
 
-function CourtCard({
-  court,
-  nowMs,
-  index,
-}: {
-  court: CourtDisplay;
-  nowMs: number;
-  index: number;
-}) {
+// Split an array into N chunks as evenly as possible.
+function splitIntoChunks<T>(arr: T[], numCols: number): T[][] {
+  const perCol = Math.ceil(arr.length / numCols);
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i += perCol) {
+    result.push(arr.slice(i, i + perCol));
+  }
+  return result;
+}
+
+// How many sub-columns a sport needs.
+function subColCount(courts: CourtDisplay[], sport: string): number {
+  const fromCount = Math.ceil(courts.length / MAX_PER_SUBCOL);
+  // Pickleball always uses at least 2 sub-columns so the screen is never empty.
+  return Math.max(sport === "pickleball" ? 2 : 1, fromCount);
+}
+
+// ─── Court Card ───────────────────────────────────────────────────────────────
+// Fills its grid cell completely — font/padding adapt via clamp so they look
+// good whether the card is 80px tall (10 courts) or 200px tall (4 courts).
+
+function CourtCard({ court, nowMs }: { court: CourtDisplay; nowMs: number }) {
   const cfg = STATUS_CFG[court.status];
 
   return (
-    <motion.div
-      layout
-      key={court.id}
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.04, duration: 0.25 }}
-      className={`flex items-center justify-between rounded-xl border-2 px-5 py-3 ${cfg.bg} ${cfg.border}`}
+    <div
+      className={`flex items-center justify-between rounded-xl border-2 px-4 overflow-hidden
+        ${cfg.bg} ${cfg.border}`}
+      style={{ minHeight: 0 }}
     >
-      {/* Left block */}
-      <div className="flex items-center gap-4 min-w-0">
+      {/* Left: dot + name + status */}
+      <div className="flex items-center gap-3 min-w-0 py-2">
         <span
-          className={`w-3 h-3 rounded-full flex-shrink-0 ${cfg.dot} ${
-            court.status === "active" ? "animate-pulse" : ""
-          }`}
+          className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg.dot}
+            ${court.status === "active" ? "animate-pulse" : ""}`}
         />
         <div className="min-w-0">
-          <p className="font-display font-black text-foreground text-xl leading-tight truncate">
+          <p
+            className="font-display font-black text-foreground leading-tight truncate"
+            style={{ fontSize: "clamp(0.9rem, 1.4vw, 1.25rem)" }}
+          >
             {court.name}
           </p>
-          <p className={`font-bold tracking-widest text-sm ${cfg.text}`}>
+          <p
+            className={`font-bold tracking-wider leading-tight ${cfg.text}`}
+            style={{ fontSize: "clamp(0.7rem, 1vw, 0.9rem)" }}
+          >
             {cfg.label}
             {court.startsAt && court.status !== "active" && (
-              <span className="text-muted-foreground font-normal ml-2">
-                {court.status === "soon" ? `· startar ${court.startsAt}` : `· nästa ${court.startsAt}`}
+              <span className="text-muted-foreground font-normal ml-1.5">
+                {court.status === "soon"
+                  ? `· startar ${court.startsAt}`
+                  : `· nästa ${court.startsAt}`}
               </span>
             )}
           </p>
         </div>
       </div>
 
-      {/* Right block: countdown */}
+      {/* Right: countdown (only for active) */}
       {court.endsAt && (
-        <div className="text-right pl-4 flex-shrink-0">
-          <p className={`font-display font-black tabular-nums leading-none ${cfg.text}`}
-            style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)" }}>
-            {formatCountdown(court.endsAt, nowMs)}
-          </p>
-          <p className="text-muted-foreground text-xs mt-0.5">kvar</p>
-        </div>
+        <p
+          className={`font-display font-black tabular-nums leading-none flex-shrink-0 pl-3 ${cfg.text}`}
+          style={{ fontSize: "clamp(1.4rem, 2.2vw, 2rem)" }}
+        >
+          {formatCountdown(court.endsAt, nowMs)}
+        </p>
       )}
-    </motion.div>
+    </div>
   );
 }
 
-// ─── Sport Column ─────────────────────────────────────────────────────────────
+// ─── Sport Section ────────────────────────────────────────────────────────────
+// One section per sport type. Contains a header row and N sub-columns of courts.
+// Height is fully constrained — no scroll, cards fill the available space via 1fr.
 
-function SportColumn({
+function SportSection({
   sport,
   courts,
   nowMs,
-  colIndex,
-  totalCols,
+  isLast,
 }: {
   sport: string;
   courts: CourtDisplay[];
   nowMs: number;
-  colIndex: number;
-  totalCols: number;
+  isLast: boolean;
 }) {
   const active = courts.filter((c) => c.status === "active").length;
   const accent = SPORT_ACCENT[sport] ?? "bg-primary";
+  const numSubs = subColCount(courts, sport);
+  const chunks = splitIntoChunks(courts, numSubs);
 
   return (
     <div
-      className={`flex flex-col overflow-hidden px-6 py-5 ${
-        colIndex < totalCols - 1 ? "border-r border-border" : ""
-      }`}
+      className={`flex-1 flex flex-col overflow-hidden ${!isLast ? "border-r border-border" : ""}`}
     >
-      {/* Sticky column header */}
-      <div className="flex-shrink-0 flex items-center gap-3 mb-4 pb-4 border-b border-border">
+      {/* Section header — shared across all sub-columns of this sport */}
+      <div className="flex-shrink-0 flex items-center gap-3 px-5 py-3 border-b border-border">
         <span className={`w-3 h-3 rounded-full flex-shrink-0 ${accent}`} />
-        <h2 className="font-display font-black text-foreground uppercase tracking-widest text-xl">
+        <h2
+          className="font-display font-black text-foreground uppercase tracking-widest"
+          style={{ fontSize: "clamp(1rem, 1.6vw, 1.4rem)" }}
+        >
           {SPORT_LABELS[sport] ?? sport}
+          <span className="text-muted-foreground font-normal ml-2">
+            ({courts.length})
+          </span>
         </h2>
-        <span className="ml-auto font-mono text-muted-foreground text-base">
-          {active}/{courts.length} aktiva
+        <span
+          className="ml-auto font-mono text-muted-foreground"
+          style={{ fontSize: "clamp(0.8rem, 1.1vw, 1rem)" }}
+        >
+          {active} aktiva
         </span>
       </div>
 
-      {/* Scrollable court cards */}
-      <div className="flex-1 overflow-y-auto min-h-0 space-y-2.5 pr-1">
-        {courts.map((court, i) => (
-          <CourtCard key={court.id} court={court} nowMs={nowMs} index={i} />
+      {/* Sub-columns */}
+      <div className="flex-1 min-h-0 flex">
+        {chunks.map((chunk, ci) => (
+          <div
+            key={ci}
+            className={`flex-1 overflow-hidden px-3 py-2 ${ci < chunks.length - 1 ? "border-r border-border/40" : ""}`}
+          >
+            {/* Grid fills full column height; each card gets 1fr */}
+            <div
+              className="h-full grid gap-1.5"
+              style={{ gridTemplateRows: `repeat(${chunk.length}, 1fr)` }}
+            >
+              {chunk.map((court) => (
+                <CourtCard key={court.id} court={court} nowMs={nowMs} />
+              ))}
+            </div>
+          </div>
         ))}
       </div>
     </div>
@@ -420,24 +460,20 @@ export default function VenueDisplay() {
         </div>
       </div>
 
-      {/* ── Court columns ───────────────────────────────────────────────────── */}
-      <div
-        className="flex-1 min-h-0 grid"
-        style={{ gridTemplateColumns: `repeat(${Math.max(sportTypes.length, 1)}, 1fr)` }}
-      >
+      {/* ── Sport sections ──────────────────────────────────────────────────── */}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         {sportTypes.length === 0 ? (
-          <div className="flex items-center justify-center col-span-full">
+          <div className="flex-1 flex items-center justify-center">
             <p className="text-2xl font-display text-muted-foreground">Laddar banor…</p>
           </div>
         ) : (
           sportTypes.map((sport, i) => (
-            <SportColumn
+            <SportSection
               key={sport}
               sport={sport}
               courts={courtsBySport[sport]}
               nowMs={nowMs}
-              colIndex={i}
-              totalCols={sportTypes.length}
+              isLast={i === sportTypes.length - 1}
             />
           ))
         )}
