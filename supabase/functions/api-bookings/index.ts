@@ -1,6 +1,24 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
-import { getAuthenticatedClient } from '../_shared/auth.ts';
+import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+async function generateAccessCode(supabase: any, venueId: string, bookingDate: string): Promise<string> {
+  const excluded = new Set(['0000','1111','2222','3333','4444','5555','6666','7777','8888','9999']);
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const code = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+    if (excluded.has(code)) continue;
+    const { data } = await supabase
+      .from('bookings')
+      .select('id')
+      .eq('venue_id', venueId)
+      .eq('access_code', code)
+      .gte('start_time', `${bookingDate}T00:00:00.000Z`)
+      .lte('start_time', `${bookingDate}T23:59:59.999Z`)
+      .maybeSingle();
+    if (!data) return code;
+  }
+  throw new Error('Kunde inte generera unik åtkomstkod');
+}
 
 async function getOrCreatePublicBookingUserId(admin: any): Promise<string> {
   const publicEmail = 'guest-booking@pickla.local';
@@ -283,6 +301,7 @@ Deno.serve(async (req) => {
       }
 
       const price = validCorporatePackageId ? 0 : Math.round(hourlyRate * durationHours);
+      const accessCode = await generateAccessCode(admin, venue.id, date);
 
       const { data: booking, error: bErr } = await admin.from('bookings').insert({
         venue_id: venue.id,
@@ -295,6 +314,8 @@ Deno.serve(async (req) => {
         status: 'confirmed',
         notes: `${safeName} | ${safePhone}`,
         corporate_package_id: validCorporatePackageId,
+        access_code: accessCode,
+        access_code_expires_at: endISO,
       }).select().single();
 
       if (bErr) return errorResponse(bErr.message);
@@ -426,6 +447,9 @@ Deno.serve(async (req) => {
         return errorResponse('Court is already booked for this time slot', 409);
       }
 
+      const bookingDate = startTime.slice(0, 10);
+      const accessCode = await generateAccessCode(getServiceClient(), venueId, bookingDate);
+
       const { data, error: insertErr } = await client.from('bookings').insert({
         venue_id: venueId,
         venue_court_id: venueCourtId,
@@ -436,6 +460,8 @@ Deno.serve(async (req) => {
         total_price: totalPrice,
         status: 'confirmed',
         notes,
+        access_code: accessCode,
+        access_code_expires_at: endTime,
       }).select().single();
 
       if (insertErr) return errorResponse(insertErr.message);

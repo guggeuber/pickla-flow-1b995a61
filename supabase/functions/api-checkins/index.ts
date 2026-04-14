@@ -10,6 +10,55 @@ Deno.serve(async (req) => {
   const path = url.pathname.split('/').pop() || '';
 
   try {
+    // POST /api-checkins/code — self-service check-in via booking access code (no auth required)
+    if (req.method === 'POST' && path === 'code') {
+      const body = await req.json();
+      const { venue_id, access_code } = body;
+      if (!venue_id || !access_code) return errorResponse('Missing venue_id or access_code');
+
+      const safeCode = String(access_code).trim();
+      if (!/^\d{4}$/.test(safeCode)) return errorResponse('Ogiltig kod', 400);
+
+      const serviceClient = getServiceClient();
+      const now = new Date().toISOString();
+
+      const { data: booking, error: bErr } = await serviceClient
+        .from('bookings')
+        .select('id, user_id, venue_id, start_time, end_time, status, booking_ref, venue_courts(name, court_number)')
+        .eq('venue_id', venue_id)
+        .eq('access_code', safeCode)
+        .eq('status', 'confirmed')
+        .gte('access_code_expires_at', now)
+        .maybeSingle();
+
+      if (bErr || !booking) return errorResponse('Ogiltig eller utgången kod', 404);
+
+      const { data: checkin, error: cErr } = await serviceClient
+        .from('venue_checkins')
+        .insert({
+          venue_id,
+          user_id: booking.user_id || null,
+          entry_type: 'booking_code',
+          entitlement_id: booking.id,
+          session_date: now.slice(0, 10),
+        })
+        .select()
+        .single();
+
+      if (cErr) return errorResponse(cErr.message);
+
+      return jsonResponse({
+        checkin,
+        booking: {
+          id: booking.id,
+          booking_ref: (booking as any).booking_ref,
+          start_time: booking.start_time,
+          end_time: booking.end_time,
+          court: (booking as any).venue_courts,
+        },
+      }, 201);
+    }
+
     // Public endpoint: validate-checkin (no auth required for desk search)
     if (req.method === 'POST' && path === 'validate-by-uid') {
       const { client, userId, error } = await getAuthenticatedClient(req);
