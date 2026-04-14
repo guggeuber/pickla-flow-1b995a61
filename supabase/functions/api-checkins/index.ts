@@ -24,7 +24,7 @@ Deno.serve(async (req) => {
 
       const { data: booking, error: bErr } = await serviceClient
         .from('bookings')
-        .select('id, user_id, venue_id, start_time, end_time, status, booking_ref, venue_courts(name, court_number)')
+        .select('id, user_id, venue_id, start_time, end_time, status, booking_ref, notes, venue_courts(name, court_number)')
         .eq('venue_id', venue_id)
         .eq('access_code', safeCode)
         .eq('status', 'confirmed')
@@ -47,6 +47,9 @@ Deno.serve(async (req) => {
 
       if (cErr) return errorResponse(cErr.message);
 
+      // Extract customer name from "Name | Phone" notes format
+      const customerName = ((booking as any).notes || '').split(' | ')[0].trim();
+
       return jsonResponse({
         checkin,
         booking: {
@@ -55,6 +58,7 @@ Deno.serve(async (req) => {
           start_time: booking.start_time,
           end_time: booking.end_time,
           court: (booking as any).venue_courts,
+          customer_name: customerName || null,
         },
       }, 201);
     }
