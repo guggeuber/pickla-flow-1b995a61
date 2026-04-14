@@ -199,6 +199,24 @@ export default function BookingConfirmation() {
         </div>
       </div>
 
+      {/* Access code */}
+      {!isCancelled && booking.access_code && (
+        <div className="mx-5 mt-4 mb-2 px-5 py-5 rounded-2xl bg-amber-50 border-2 border-amber-300/60 flex flex-col items-center gap-2 text-center">
+          <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest" style={{ fontFamily: FONT_MONO }}>
+            Din incheckningskod
+          </p>
+          <p
+            className="font-bold text-amber-900 tracking-[0.25em] leading-none"
+            style={{ fontFamily: FONT_MONO, fontSize: "clamp(2.5rem, 12vw, 4rem)" }}
+          >
+            {booking.access_code}
+          </p>
+          <p className="text-[11px] text-amber-700" style={{ fontFamily: FONT_MONO }}>
+            Slå in koden på surfplattan vid banorna
+          </p>
+        </div>
+      )}
+
       {/* Check-in notice */}
       {!isCancelled && (
         <div className="mx-5 mt-1 mb-2 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200/60">

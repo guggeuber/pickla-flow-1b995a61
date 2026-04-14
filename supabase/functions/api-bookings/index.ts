@@ -108,7 +108,7 @@ Deno.serve(async (req) => {
 
     // Get all bookings with same notes (grouped booking) or single
     const { data: booking } = await admin.from('bookings')
-      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, venue_courts(name, court_number)')
+      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, access_code, venue_courts(name, court_number)')
       .eq('booking_ref', ref).single();
 
     if (!booking) return errorResponse('Booking not found', 404);
