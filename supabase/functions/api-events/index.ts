@@ -138,6 +138,7 @@ Deno.serve(async (req) => {
       }
 
       const { data, error: insertErr } = await client.from('events').insert({
+        ...templateFields,
         name,
         event_type: eventType,
         format,
@@ -154,16 +155,6 @@ Deno.serve(async (req) => {
         scoring_format: scoringFormat || null,
         competition_type: competitionType || null,
         status: 'upcoming',
-        ...templateFields,
-        // Always use the user-provided name and core fields
-        name,
-        event_type: eventType,
-        format,
-        venue_id: venueId || null,
-        start_date: startDate || null,
-        end_date: endDate || null,
-        number_of_courts: numberOfCourts || 1,
-        // New fields
         start_time: startTime || null,
         end_time: endTime || null,
         entry_fee: entryFee != null ? Number(entryFee) : null,

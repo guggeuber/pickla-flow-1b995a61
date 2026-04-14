@@ -98,8 +98,11 @@ export default function BookingConfirmation() {
     );
   }
 
+  // Times are stored as UTC but represent local venue time — use UTC methods to avoid timezone shift
   const startDate = new Date(booking.start_time);
   const endDate = new Date(booking.end_time);
+  const startDateLocal = new Date(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate(), startDate.getUTCHours(), startDate.getUTCMinutes());
+  const endDateLocal = new Date(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate(), endDate.getUTCHours(), endDate.getUTCMinutes());
   const customerName = booking.notes?.split(" | ")[0] || "";
   const customerPhone = booking.notes?.split(" | ")[1] || "";
   const isCancelled = booking.status === "cancelled";
