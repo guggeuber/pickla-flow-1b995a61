@@ -1,6 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, CheckCircle2, MapPin, Calendar, Clock, Share2, CalendarPlus, Copy } from "lucide-react";
+import { Loader2, CheckCircle2, MapPin, Clock, Share2, CalendarPlus, Copy } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -11,7 +11,6 @@ const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
 function generateICS(title: string, start: string, end: string, location: string, description: string) {
-  // Times are stored as UTC but represent local venue time — keep as-is for ICS
   const fmt = (d: string) => new Date(d).toISOString().replace(/[-:]/g, "").split(".")[0];
   return `BEGIN:VCALENDAR
 VERSION:2.0
@@ -87,7 +86,7 @@ export default function BookingConfirmation() {
 
   if (error || !booking) {
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-3 px-5">
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-3 px-4">
         <p className="text-neutral-400 text-[13px]" style={{ fontFamily: FONT_MONO }}>
           bokningen hittades inte
         </p>
@@ -103,97 +102,67 @@ export default function BookingConfirmation() {
   const customerName = booking.notes?.split(" | ")[0] || "";
   const customerPhone = booking.notes?.split(" | ")[1] || "";
   const isCancelled = booking.status === "cancelled";
+  const courtNames = courts.map((c: any) => c.court_name).join(", ");
 
   return (
-    <div className="min-h-screen bg-white pb-20">
+    <div className="min-h-[100dvh] bg-white flex flex-col">
       {/* Top bar */}
-      <div className="px-5 pt-12 pb-3 flex items-center justify-between">
-        <span className="text-[11px] text-neutral-300" style={{ fontFamily: FONT_MONO }}>bokning</span>
+      <div className="px-4 pt-[env(safe-area-inset-top,10px)] pb-1 flex items-center justify-between">
+        <span className="text-[10px] text-neutral-300" style={{ fontFamily: FONT_MONO }}>bokning</span>
         <Link to={venue?.slug ? `/?v=${venue.slug}` : "/"}>
-          <img src={picklaLogo} alt="Pickla" className="h-6 w-auto opacity-20 hover:opacity-40 transition-opacity" />
+          <img src={picklaLogo} alt="Pickla" className="h-5 w-auto opacity-20 hover:opacity-40 transition-opacity" />
         </Link>
       </div>
 
-      {/* Status */}
-      <div className="flex flex-col items-center gap-3 py-8 px-5">
-        <CheckCircle2 className={`w-14 h-14 ${isCancelled ? "text-neutral-300" : "text-emerald-500"}`} />
+      {/* Status + ref */}
+      <div className="flex flex-col items-center gap-1.5 py-4 px-4">
+        <CheckCircle2 className={`w-10 h-10 ${isCancelled ? "text-neutral-300" : "text-emerald-500"}`} />
         <h1
-          className="text-[28px] font-bold text-neutral-900 tracking-tight"
+          className="text-[22px] font-bold text-neutral-900 tracking-tight"
           style={{ fontFamily: FONT_GROTESK }}
         >
           {isCancelled ? "avbokad" : "bokad!"}
         </h1>
         <button
           onClick={handleCopyRef}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-100 active:bg-neutral-200 transition-colors"
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-neutral-100 active:bg-neutral-200 transition-colors"
         >
-          <span className="text-[13px] font-bold text-neutral-600 tracking-wider" style={{ fontFamily: FONT_MONO }}>
+          <span className="text-[12px] font-bold text-neutral-600 tracking-wider" style={{ fontFamily: FONT_MONO }}>
             {ref}
           </span>
-          <Copy className="w-3 h-3 text-neutral-400" />
+          <Copy className="w-2.5 h-2.5 text-neutral-400" />
         </button>
       </div>
 
-      <div className="h-px bg-neutral-100 mx-5" />
+      <div className="h-px bg-neutral-100 mx-4" />
 
-      {/* Details */}
-      <div className="px-5 py-6 space-y-3">
+      {/* Compact details row */}
+      <div className="px-4 py-3 space-y-1.5">
         {venue && (
-          <div className="flex items-start gap-3">
-            <MapPin className="w-4 h-4 text-neutral-300 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-[14px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                {venue.name}
-              </p>
-              {(venue.address || venue.city) && (
-                <p className="text-[11px] text-neutral-400 mt-0.5" style={{ fontFamily: FONT_MONO }}>
-                  {[venue.address, venue.city].filter(Boolean).join(", ")}
-                </p>
-              )}
-            </div>
+          <div className="flex items-center gap-2">
+            <MapPin className="w-3.5 h-3.5 text-neutral-300 flex-shrink-0" />
+            <p className="text-[13px] font-bold text-neutral-900 truncate" style={{ fontFamily: FONT_GROTESK }}>
+              {venue.name}
+            </p>
           </div>
         )}
-
-        <div className="flex items-center gap-3">
-          <Calendar className="w-4 h-4 text-neutral-300 flex-shrink-0" />
-          <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {startDT.setLocale("sv").toFormat("EEEE d MMMM yyyy")}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Clock className="w-4 h-4 text-neutral-300 flex-shrink-0" />
-          <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {startDT.toFormat("HH:mm")} – {endDT.toFormat("HH:mm")}
+        <div className="flex items-center gap-2">
+          <Clock className="w-3.5 h-3.5 text-neutral-300 flex-shrink-0" />
+          <p className="text-[13px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
+            {startDT.setLocale("sv").toFormat("EEE d MMM")} · {startDT.toFormat("HH:mm")}–{endDT.toFormat("HH:mm")}
           </p>
         </div>
       </div>
 
-      <div className="h-px bg-neutral-100 mx-5" />
+      <div className="h-px bg-neutral-100 mx-4" />
 
-      {/* Courts */}
-      <div className="px-5 py-6">
-        <h2 className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3" style={{ fontFamily: FONT_MONO }}>
-          {courts.length === 1 ? "bana" : "banor"}
-        </h2>
-        <div className="space-y-2">
-          {courts.map((c: any, i: number) => (
-            <div key={i} className="flex justify-between items-center py-2">
-              <span className="text-[14px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                {c.court_name}
-              </span>
-              <span className="text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                {c.price} kr
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="h-px bg-neutral-100 mt-3 mb-3" />
-        <div className="flex justify-between">
-          <span className="text-[15px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            totalt
+      {/* Courts + total — compact inline */}
+      <div className="px-4 py-3">
+        <div className="flex justify-between items-center">
+          <span className="text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            {courtNames}
           </span>
-          <span className="text-[15px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
+          <span className="text-[14px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
             {totalPrice} kr
           </span>
         </div>
@@ -201,84 +170,73 @@ export default function BookingConfirmation() {
 
       {/* Access code */}
       {!isCancelled && booking.access_code && (
-        <div className="mx-5 mt-4 mb-2 px-5 py-5 rounded-2xl bg-amber-50 border-2 border-amber-300/60 flex flex-col items-center gap-2 text-center">
-          <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest" style={{ fontFamily: FONT_MONO }}>
-            Din incheckningskod
+        <div className="mx-4 mb-2 px-4 py-3 rounded-xl bg-amber-50 border-2 border-amber-300/60 flex flex-col items-center gap-1 text-center">
+          <p className="text-[9px] font-bold text-amber-700 uppercase tracking-widest" style={{ fontFamily: FONT_MONO }}>
+            incheckningskod
           </p>
           <p
             className="font-bold text-amber-900 tracking-[0.25em] leading-none"
-            style={{ fontFamily: FONT_MONO, fontSize: "clamp(2.5rem, 12vw, 4rem)" }}
+            style={{ fontFamily: FONT_MONO, fontSize: "clamp(2rem, 10vw, 3rem)" }}
           >
             {booking.access_code}
           </p>
-          <p className="text-[11px] text-amber-700" style={{ fontFamily: FONT_MONO }}>
-            Slå in koden på surfplattan vid banorna
+          <p className="text-[10px] text-amber-700" style={{ fontFamily: FONT_MONO }}>
+            Slå in koden vid banorna
           </p>
         </div>
       )}
 
       {/* Check-in notice */}
       {!isCancelled && (
-        <div className="mx-5 mt-1 mb-2 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200/60">
-          <p className="text-[12px] text-amber-800 leading-relaxed" style={{ fontFamily: FONT_MONO }}>
-            betalning &amp; incheckning sker i desken – kom minst 15 min innan din tid
+        <div className="mx-4 mb-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200/60">
+          <p className="text-[11px] text-amber-800 leading-snug" style={{ fontFamily: FONT_MONO }}>
+            betalning &amp; incheckning i desken – kom 15 min innan
           </p>
         </div>
       )}
 
-      <div className="h-px bg-neutral-100 mx-5" />
-
-      {/* Customer info */}
-      {customerName && (
-        <div className="px-5 py-6">
-          <h2 className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3" style={{ fontFamily: FONT_MONO }}>
-            bokad av
-          </h2>
-          <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {customerName}
-          </p>
-          {customerPhone && (
-            <p className="text-[12px] text-neutral-400 mt-1" style={{ fontFamily: FONT_MONO }}>
-              {customerPhone}
-            </p>
-          )}
-        </div>
-      )}
+      {/* Spacer to push buttons to bottom */}
+      <div className="flex-1 min-h-3" />
 
       {/* Action buttons */}
       {!isCancelled && (
-        <div className="px-5 space-y-3">
+        <div className="px-4 pb-2 flex gap-2">
           <button
             onClick={handleAddToCalendar}
-            className="w-full py-3.5 rounded-2xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+            className="flex-1 py-3 rounded-xl bg-neutral-900 text-white text-[11px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-1.5"
             style={{ fontFamily: FONT_MONO }}
           >
-            <CalendarPlus className="w-4 h-4" />
-            lägg till i kalender
+            <CalendarPlus className="w-3.5 h-3.5" />
+            kalender
           </button>
           <button
             onClick={handleShare}
-            className="w-full py-3.5 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-700 text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+            className="flex-1 py-3 rounded-xl bg-neutral-50 border border-neutral-200 text-neutral-700 text-[11px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-1.5"
             style={{ fontFamily: FONT_MONO }}
           >
-            <Share2 className="w-4 h-4" />
-            dela bokning
+            <Share2 className="w-3.5 h-3.5" />
+            dela
           </button>
         </div>
       )}
 
-      {/* Book again */}
-      {venue?.slug && (
-        <div className="px-5 mt-8 text-center">
+      {/* Book again + customer */}
+      <div className="px-4 pb-[env(safe-area-inset-bottom,12px)] pt-1 flex items-center justify-between">
+        {customerName && (
+          <span className="text-[10px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+            {customerName}{customerPhone ? ` · ${customerPhone}` : ""}
+          </span>
+        )}
+        {venue?.slug && (
           <Link
             to={`/book?v=${venue.slug}${customerName ? `&name=${encodeURIComponent(customerName)}` : ""}${customerPhone ? `&phone=${encodeURIComponent(customerPhone)}` : ""}`}
-            className="text-[12px] text-neutral-400 underline underline-offset-4"
+            className="text-[11px] text-neutral-400 underline underline-offset-4 ml-auto"
             style={{ fontFamily: FONT_MONO }}
           >
             boka igen
           </Link>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
