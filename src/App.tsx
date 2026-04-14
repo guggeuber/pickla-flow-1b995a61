@@ -21,6 +21,7 @@ import ClaimPassPage from "./pages/ClaimPassPage";
 import CorporateJoinPage from "./pages/CorporateJoinPage";
 import CorporateDashboard from "./pages/CorporateDashboard";
 import CorporateRegisterPage from "./pages/CorporateRegisterPage";
+import VenueDisplay from "./pages/VenueDisplay";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -65,6 +66,7 @@ const App = () => (
             <Route path="/corp/join" element={<CorporateJoinPage />} />
             <Route path="/corp/register" element={<CorporateRegisterPage />} />
             <Route path="/corp/dashboard" element={<ProtectedRoute><CorporateDashboard /></ProtectedRoute>} />
+            <Route path="/display/venue" element={<VenueDisplay />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

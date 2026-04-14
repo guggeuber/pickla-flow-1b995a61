@@ -153,7 +153,7 @@ Deno.serve(async (req) => {
 
     // Get courts
     const { data: courts } = await admin.from('venue_courts')
-      .select('id, name, court_number, court_type, hourly_rate, is_available')
+      .select('id, name, court_number, court_type, sport_type, hourly_rate, is_available')
       .eq('venue_id', venue.id).eq('is_available', true).order('court_number');
 
     // Get opening hours for requested day
