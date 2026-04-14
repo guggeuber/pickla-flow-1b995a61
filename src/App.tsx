@@ -16,6 +16,7 @@ import PlayPage from "./pages/PlayPage";
 import EventPage from "./pages/EventPage";
 import BookingPage from "./pages/BookingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
+import BookingConfirmed from "./pages/BookingConfirmed";
 import MembershipPage from "./pages/MembershipPage";
 import ClaimPassPage from "./pages/ClaimPassPage";
 import CorporateJoinPage from "./pages/CorporateJoinPage";
@@ -62,6 +63,7 @@ const App = () => (
             <Route path="/book" element={<BookingPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
+            <Route path="/booking/confirmed" element={<BookingConfirmed />} />
             <Route path="/pass/:token" element={<ClaimPassPage />} />
             <Route path="/corp/join" element={<CorporateJoinPage />} />
             <Route path="/corp/register" element={<CorporateRegisterPage />} />

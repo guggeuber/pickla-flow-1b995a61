@@ -1,51 +1,9 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
-
-async function generateAccessCode(supabase: any, venueId: string, bookingDate: string): Promise<string> {
-  const excluded = new Set(['0000','1111','2222','3333','4444','5555','6666','7777','8888','9999']);
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const code = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
-    if (excluded.has(code)) continue;
-    const { data } = await supabase
-      .from('bookings')
-      .select('id')
-      .eq('venue_id', venueId)
-      .eq('access_code', code)
-      .gte('start_time', `${bookingDate}T00:00:00.000Z`)
-      .lte('start_time', `${bookingDate}T23:59:59.999Z`)
-      .maybeSingle();
-    if (!data) return code;
-  }
-  throw new Error('Kunde inte generera unik åtkomstkod');
-}
-
-async function getOrCreatePublicBookingUserId(admin: any): Promise<string> {
-  const publicEmail = 'guest-booking@pickla.local';
-
-  for (let page = 1; page <= 10; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
-    if (error) break;
-
-    const found = data?.users?.find((u: any) => u.email?.toLowerCase() === publicEmail);
-    if (found?.id) return found.id;
-
-    if (!data?.users || data.users.length < 200) break;
-  }
-
-  const { data, error } = await admin.auth.admin.createUser({
-    email: publicEmail,
-    email_confirm: true,
-    user_metadata: { display_name: 'Public Booking Guest' },
-  });
-
-  if (error || !data?.user?.id) {
-    throw new Error('Kunde inte skapa gästanvändare för bokning');
-  }
-
-  return data.user.id;
-}
+import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -54,6 +12,77 @@ Deno.serve(async (req) => {
 
   const url = new URL(req.url);
   const path = url.pathname.split('/').pop() || '';
+
+  // ── POST /create-checkout — create a Stripe Checkout Session (no auth required) ──
+  if (req.method === 'POST' && path === 'create-checkout') {
+    const body = await req.json();
+    const { product_type, amount_sek, venue_id, metadata } = body;
+
+    if (!product_type || !amount_sek || !venue_id) return errorResponse('Missing required fields');
+    if (!['court_booking', 'day_pass'].includes(product_type)) return errorResponse('Invalid product_type');
+    if (typeof amount_sek !== 'number' || amount_sek <= 0) return errorResponse('amount_sek must be positive');
+
+    const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+    if (!stripeKey) return errorResponse('Stripe not configured', 500);
+
+    const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
+
+    // Derive base URL from request Origin to support multiple environments
+    const origin = req.headers.get('origin') || 'http://localhost:8080';
+
+    const meta = metadata || {};
+    const productName = product_type === 'court_booking'
+      ? `Banbokning${meta.date ? ` · ${meta.date}` : ''}${meta.start_time ? ` ${meta.start_time}–${meta.end_time || ''}` : ''}`
+      : 'Dagspass';
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'payment',
+      line_items: [{
+        price_data: {
+          currency: 'sek',
+          product_data: { name: productName },
+          unit_amount: Math.round(amount_sek) * 100,
+        },
+        quantity: 1,
+      }],
+      // All metadata values must be strings (Stripe limit: 500 chars each)
+      metadata: {
+        product_type,
+        venue_id,
+        slug:      String(meta.slug      || ''),
+        court_ids: String(meta.court_ids || '[]'),
+        date:      String(meta.date      || ''),
+        start_time:String(meta.start_time|| ''),
+        end_time:  String(meta.end_time  || ''),
+        name:      String(meta.name      || '').slice(0, 200),
+        phone:     String(meta.phone     || '').slice(0, 50),
+        user_id:   String(meta.user_id   || ''),
+      },
+      success_url: `${origin}/booking/confirmed?session={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${origin}/book${meta.slug ? `?v=${meta.slug}` : ''}`,
+    });
+
+    return jsonResponse({ url: session.url });
+  }
+
+  // ── GET /by-session?session=xxx — look up a booking by Stripe session ID ──
+  if (req.method === 'GET' && path === 'by-session') {
+    const sessionId = url.searchParams.get('session');
+    if (!sessionId) return errorResponse('Missing session');
+
+    const serviceClient = getServiceClient();
+    const { data: booking } = await serviceClient
+      .from('bookings')
+      .select('booking_ref')
+      .eq('stripe_session_id', sessionId)
+      .neq('status', 'cancelled')
+      .limit(1)
+      .maybeSingle();
+
+    if (!booking) return jsonResponse({ pending: true }, 200, 0);
+    return jsonResponse({ pending: false, booking_ref: booking.booking_ref }, 200, 0);
+  }
 
   // ── Public endpoint: venue by slug (no auth required) ──
   if (req.method === 'GET' && path === 'public-venue') {

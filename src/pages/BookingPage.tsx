@@ -9,7 +9,7 @@ import { DateTime } from "luxon";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -183,39 +183,69 @@ export default function BookingPage() {
 
   const bookMutation = useMutation({
     mutationFn: async () => {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      // Pass auth token so the backend can link the booking to this user
-      const { data: { session: currentSession } } = await supabase.auth.getSession();
-      if (currentSession?.access_token) {
-        headers["Authorization"] = `Bearer ${currentSession.access_token}`;
+      const isFree = useCorporate || totalPrice === 0;
+
+      if (isFree) {
+        // Corporate / free booking — create immediately without Stripe
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        if (currentSession?.access_token) {
+          headers["Authorization"] = `Bearer ${currentSession.access_token}`;
+        }
+        const res = await fetch(`${BASE_URL}/api-bookings/public-book`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            slug,
+            courtIds: selectedCourts,
+            date: dateStr,
+            startTime: selectedTime,
+            endTime: addHour(selectedTime!),
+            name: name.trim(),
+            phone: phone.trim(),
+            corporatePackageId: useCorporate ? selectedPackageId : undefined,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Bokningen misslyckades");
+        }
+        const result = await res.json();
+        return { type: "direct" as const, bookings: result.bookings };
       }
-      const res = await fetch(`${BASE_URL}/api-bookings/public-book`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+
+      // Paid booking — redirect to Stripe Checkout
+      const venueId = data?.venue?.id;
+      if (!venueId) throw new Error("Venue saknas");
+
+      const result = await apiPost("api-bookings", "create-checkout", {
+        product_type: "court_booking",
+        amount_sek:   totalPrice,
+        venue_id:     venueId,
+        metadata: {
           slug,
-          courtIds: selectedCourts,
-          date: dateStr,
-          startTime: selectedTime,
-          endTime: addHour(selectedTime!),
-          name: name.trim(),
-          phone: phone.trim(),
-          corporatePackageId: useCorporate ? selectedPackageId : undefined,
-        }),
+          court_ids:  JSON.stringify(selectedCourts),
+          date:       dateStr,
+          start_time: selectedTime!,
+          end_time:   addHour(selectedTime!),
+          name:       name.trim(),
+          phone:      phone.trim(),
+          user_id:    user?.id || "",
+        },
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Bokningen misslyckades");
-      }
-      return res.json();
+      return { type: "stripe" as const, url: result.url };
     },
-    onSuccess: (data) => {
-      const firstRef = data?.bookings?.[0]?.booking_ref;
+    onSuccess: (result) => {
+      if (result.type === "stripe") {
+        window.location.href = result.url;
+        return;
+      }
+      const firstRef = result.bookings?.[0]?.booking_ref;
       if (firstRef) {
         navigate(`/b/${firstRef}`);
       } else {
         setConfirmed(true);
-        toast.success("Bokad! 🎾");
+        toast.success("Bokad!");
       }
     },
     onError: (err: Error) => {
