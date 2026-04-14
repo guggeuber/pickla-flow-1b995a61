@@ -16,6 +16,8 @@ export type Database = {
     Tables: {
       bookings: {
         Row: {
+          access_code: string | null
+          access_code_expires_at: string | null
           booked_by: string | null
           booking_ref: string | null
           corporate_package_id: string | null
@@ -33,6 +35,8 @@ export type Database = {
           venue_id: string
         }
         Insert: {
+          access_code?: string | null
+          access_code_expires_at?: string | null
           booked_by?: string | null
           booking_ref?: string | null
           corporate_package_id?: string | null
@@ -50,6 +54,8 @@ export type Database = {
           venue_id: string
         }
         Update: {
+          access_code?: string | null
+          access_code_expires_at?: string | null
           booked_by?: string | null
           booking_ref?: string | null
           corporate_package_id?: string | null

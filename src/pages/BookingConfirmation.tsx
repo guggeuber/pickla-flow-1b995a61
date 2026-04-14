@@ -12,7 +12,8 @@ const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
 function generateICS(title: string, start: string, end: string, location: string, description: string) {
-  const fmt = (d: string) => new Date(d).toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+  // Times are stored as UTC but represent local venue time — keep as-is for ICS
+  const fmt = (d: string) => new Date(d).toISOString().replace(/[-:]/g, "").split(".")[0];
   return `BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Pickla//Booking//EN
@@ -98,8 +99,11 @@ export default function BookingConfirmation() {
     );
   }
 
+  // Times are stored as UTC but represent local venue time — use UTC methods to avoid timezone shift
   const startDate = new Date(booking.start_time);
   const endDate = new Date(booking.end_time);
+  const startDateLocal = new Date(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate(), startDate.getUTCHours(), startDate.getUTCMinutes());
+  const endDateLocal = new Date(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate(), endDate.getUTCHours(), endDate.getUTCMinutes());
   const customerName = booking.notes?.split(" | ")[0] || "";
   const customerPhone = booking.notes?.split(" | ")[1] || "";
   const isCancelled = booking.status === "cancelled";
@@ -157,14 +161,14 @@ export default function BookingConfirmation() {
         <div className="flex items-center gap-3">
           <Calendar className="w-4 h-4 text-neutral-300 flex-shrink-0" />
           <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {format(startDate, "EEEE d MMMM yyyy", { locale: sv })}
+            {format(startDateLocal, "EEEE d MMMM yyyy", { locale: sv })}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <Clock className="w-4 h-4 text-neutral-300 flex-shrink-0" />
           <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {format(startDate, "HH:mm")} – {format(endDate, "HH:mm")}
+            {format(startDateLocal, "HH:mm")} – {format(endDateLocal, "HH:mm")}
           </p>
         </div>
       </div>
