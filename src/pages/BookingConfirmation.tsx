@@ -12,7 +12,8 @@ const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
 function generateICS(title: string, start: string, end: string, location: string, description: string) {
-  const fmt = (d: string) => new Date(d).toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+  // Times are stored as UTC but represent local venue time — keep as-is for ICS
+  const fmt = (d: string) => new Date(d).toISOString().replace(/[-:]/g, "").split(".")[0];
   return `BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Pickla//Booking//EN
