@@ -272,7 +272,7 @@ export default function VenueDisplay() {
   const { data: courtsData } = useQuery({
     queryKey: ["display-courts", slug, today],
     enabled: !!slug,
-    queryFn: () => apiGet("api-bookings", "public-courts", { slug, date: today }),
+    queryFn: () => apiGet("api-bookings", "public-courts", { slug, date: today, showAll: "true" }),
     refetchInterval: 30_000,
     staleTime: 10_000,
   });

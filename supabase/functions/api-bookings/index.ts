@@ -143,6 +143,9 @@ Deno.serve(async (req) => {
     const date = url.searchParams.get('date'); // YYYY-MM-DD
     if (!venueSlug || !date) return errorResponse('Missing slug or date');
 
+    // showAll=true skips the is_available filter — used by the ops display screen
+    const showAll = url.searchParams.get('showAll') === 'true';
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(supabaseUrl, serviceKey);
@@ -151,10 +154,13 @@ Deno.serve(async (req) => {
       .select('id, name').eq('slug', venueSlug).eq('is_public', true).single();
     if (!venue) return errorResponse('Venue not found', 404);
 
-    // Get courts
-    const { data: courts } = await admin.from('venue_courts')
+    // Get courts — display screen passes showAll=true to include unavailable courts
+    let courtQuery = admin.from('venue_courts')
       .select('id, name, court_number, court_type, sport_type, hourly_rate, is_available')
-      .eq('venue_id', venue.id).eq('is_available', true).order('court_number');
+      .eq('venue_id', venue.id)
+      .order('court_number');
+    if (!showAll) courtQuery = courtQuery.eq('is_available', true);
+    const { data: courts } = await courtQuery;
 
     // Get opening hours for requested day
     const dayOfWeek = new Date(date + 'T12:00:00Z').getUTCDay();
