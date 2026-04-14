@@ -241,31 +241,31 @@ export default function BookingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white pb-20">
+    <div className="min-h-screen bg-white pb-16">
       {/* Top bar */}
-      <div className="px-5 pt-12 pb-3 flex items-center justify-between">
+      <div className="px-4 pt-[env(safe-area-inset-top,12px)] pb-2 flex items-center justify-between">
         <Link
           to={`/?v=${slug}`}
-          className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
+          className="inline-flex items-center gap-1 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
           style={{ fontFamily: FONT_MONO }}
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           tillbaka
         </Link>
-        <img src={picklaLogo} alt="Pickla" className="h-6 w-auto opacity-20" />
+        <img src={picklaLogo} alt="Pickla" className="h-5 w-auto opacity-20" />
       </div>
 
       {/* Header */}
-      <div className="px-5 pb-5">
+      <div className="px-4 pb-3">
         <h1
-          className="text-[28px] font-bold text-neutral-900 tracking-tight leading-tight"
+          className="text-[22px] font-bold text-neutral-900 tracking-tight leading-tight"
           style={{ fontFamily: FONT_GROTESK }}
         >
           boka bana
         </h1>
         {venueName && (
           <span
-            className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 mt-2"
+            className="inline-flex items-center gap-1 text-[10px] text-neutral-400 mt-1"
             style={{ fontFamily: FONT_MONO }}
           >
             <MapPin className="w-3 h-3" />
@@ -274,7 +274,7 @@ export default function BookingPage() {
         )}
       </div>
 
-      <div className="h-px bg-neutral-100 mx-5" />
+      <div className="h-px bg-neutral-100 mx-4" />
 
       {confirmed ? (
         <div className="flex flex-col items-center gap-4 py-16 px-5">
@@ -307,17 +307,17 @@ export default function BookingPage() {
           </button>
         </div>
       ) : (
-        <form onSubmit={handleBook} className="px-5 py-6 space-y-6">
+        <form onSubmit={handleBook} className="px-4 py-4 space-y-4">
           {/* Date picker */}
           <div>
             <h2
-              className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
+              className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
               style={{ fontFamily: FONT_MONO }}
             >
               datum
             </h2>
             <div
-              className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1"
+              className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1"
               style={{ scrollbarWidth: "none" }}
             >
               {dates.map((date, i) => {
@@ -333,14 +333,14 @@ export default function BookingPage() {
                       setSelectedDate(date);
                       setSelectedCourts([]);
                     }}
-                    className={`flex-shrink-0 w-[52px] py-2.5 rounded-2xl flex flex-col items-center gap-0.5 transition-all ${
+                    className={`flex-shrink-0 w-[44px] py-1.5 rounded-xl flex flex-col items-center gap-0 transition-all ${
                       isSelected
                         ? "bg-neutral-900 text-white"
                         : "bg-neutral-50 text-neutral-600"
                     }`}
                   >
                     <span
-                      className={`text-[9px] font-bold uppercase ${
+                      className={`text-[8px] font-bold uppercase leading-tight ${
                         isSelected ? "text-white/60" : "text-neutral-400"
                       }`}
                       style={{ fontFamily: FONT_MONO }}
@@ -350,13 +350,13 @@ export default function BookingPage() {
                         : format(date, "EEE", { locale: sv }).slice(0, 3)}
                     </span>
                     <span
-                      className="text-xl font-bold"
+                      className="text-[16px] font-bold leading-tight"
                       style={{ fontFamily: FONT_GROTESK }}
                     >
                       {date.getDate()}
                     </span>
                     <span
-                      className={`text-[8px] font-medium ${
+                      className={`text-[7px] font-medium leading-tight ${
                         isSelected ? "text-white/50" : "text-neutral-300"
                       }`}
                       style={{ fontFamily: FONT_MONO }}
@@ -385,14 +385,13 @@ export default function BookingPage() {
           {!isClosed && (
             <div>
               <h2
-                className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
+                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
                 style={{ fontFamily: FONT_MONO }}
               >
                 tid
               </h2>
               <div
-                className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1"
-                style={{ scrollbarWidth: "none" }}
+                className="grid grid-cols-5 gap-1.5"
               >
                 {timeSlots.map((time) => (
                   <button
@@ -402,7 +401,7 @@ export default function BookingPage() {
                       setSelectedTime(time);
                       setSelectedCourts([]);
                     }}
-                    className={`flex-shrink-0 px-3.5 py-2.5 rounded-xl text-[13px] font-bold transition-colors ${
+                    className={`py-2 rounded-xl text-[12px] font-bold transition-colors ${
                       selectedTime === time
                         ? "bg-neutral-900 text-white"
                         : "bg-neutral-50 text-neutral-500"
@@ -420,12 +419,12 @@ export default function BookingPage() {
           {selectedTime && !isClosed && (
             <div>
               <h2
-                className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
+                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
                 style={{ fontFamily: FONT_MONO }}
               >
                 välj bana{courts.length > 1 ? "or" : ""}
               </h2>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-1.5">
                 {courts.map((court) => {
                   const available = courtAvailability[court.id] !== false;
                   const selected = selectedCourts.includes(court.id);
@@ -435,7 +434,7 @@ export default function BookingPage() {
                       type="button"
                       disabled={!available}
                       onClick={() => available && toggleCourt(court.id)}
-                      className={`relative py-4 px-3 rounded-2xl text-left transition-all ${
+                      className={`relative py-3 px-3 rounded-xl text-left transition-all ${
                         !available
                           ? "opacity-30 bg-neutral-50 cursor-not-allowed"
                           : selected
@@ -444,13 +443,13 @@ export default function BookingPage() {
                       }`}
                     >
                       <p
-                        className="text-[13px] font-bold"
+                        className="text-[12px] font-bold"
                         style={{ fontFamily: FONT_GROTESK }}
                       >
                         {court.name}
                       </p>
                       <p
-                        className={`text-[11px] mt-0.5 ${
+                        className={`text-[10px] mt-0.5 ${
                           selected ? "text-white/60" : "text-neutral-400"
                         }`}
                         style={{ fontFamily: FONT_MONO }}
@@ -459,7 +458,7 @@ export default function BookingPage() {
                       </p>
                       {!available && (
                         <span
-                          className="text-[9px] text-neutral-400 mt-1 block"
+                          className="text-[8px] text-neutral-400 mt-0.5 block"
                           style={{ fontFamily: FONT_MONO }}
                         >
                           bokad
@@ -485,21 +484,21 @@ export default function BookingPage() {
           {/* Contact info */}
           {selectedCourts.length > 0 && (
             <div>
-              <div className="h-px bg-neutral-100 mb-6" />
+              <div className="h-px bg-neutral-100 mb-4" />
               <h2
-                className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
+                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
                 style={{ fontFamily: FONT_MONO }}
               >
                 dina uppgifter
               </h2>
-              <div className="space-y-3">
+              <div className="flex gap-2">
                 <input
                   placeholder="ditt namn"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
                   maxLength={100}
-                  className="w-full px-4 py-3.5 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[16px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
                   style={{ fontFamily: FONT_MONO }}
                 />
                 <input
@@ -509,7 +508,7 @@ export default function BookingPage() {
                   onChange={(e) => setPhone(e.target.value)}
                   required
                   maxLength={20}
-                  className="w-full px-4 py-3.5 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[16px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
                   style={{ fontFamily: FONT_MONO }}
                 />
               </div>
@@ -575,48 +574,20 @@ export default function BookingPage() {
           {/* Summary + Book button */}
           {selectedCourts.length > 0 && name.trim() && phone.trim() && (
             <div>
-              <div className="h-px bg-neutral-100 mb-4" />
-              <div className="space-y-2 mb-4">
-                <div className="flex justify-between text-[13px]">
-                  <span className="text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    datum
-                  </span>
-                  <span className="font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                    {format(selectedDate, "d MMM yyyy", { locale: sv })}
-                  </span>
-                </div>
-                <div className="flex justify-between text-[13px]">
-                  <span className="text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    tid
-                  </span>
-                  <span className="font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                    {selectedTime} – {addHour(selectedTime!)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-[13px]">
-                  <span className="text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    {selectedCourts.length === 1 ? "bana" : "banor"}
-                  </span>
-                  <span className="font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                    {selectedCourts
-                      .map((id) => courts.find((c) => c.id === id)?.name)
-                      .join(", ")}
-                  </span>
-                </div>
-                <div className="flex justify-between text-[15px] pt-2 border-t border-neutral-100">
-                  <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                    totalt
-                  </span>
-                  <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                    {useCorporate ? "0 kr" : `${totalPrice} kr`}
-                  </span>
-                </div>
+              <div className="h-px bg-neutral-100 mb-3" />
+              <div className="flex items-center justify-between text-[12px] mb-3" style={{ fontFamily: FONT_MONO }}>
+                <span className="text-neutral-400">
+                  {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{addHour(selectedTime!)} · {selectedCourts.map((id) => courts.find((c) => c.id === id)?.name).join(", ")}
+                </span>
+                <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
+                  {useCorporate ? "0 kr" : `${totalPrice} kr`}
+                </span>
               </div>
 
               <button
                 type="submit"
                 disabled={bookMutation.isPending}
-                className="w-full py-3.5 rounded-2xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40"
+                className="w-full py-3 rounded-xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40"
                 style={{ fontFamily: FONT_MONO }}
               >
                 {bookMutation.isPending ? (
