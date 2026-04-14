@@ -160,14 +160,14 @@ export default function BookingConfirmation() {
         <div className="flex items-center gap-3">
           <Calendar className="w-4 h-4 text-neutral-300 flex-shrink-0" />
           <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {format(startDate, "EEEE d MMMM yyyy", { locale: sv })}
+            {format(startDateLocal, "EEEE d MMMM yyyy", { locale: sv })}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <Clock className="w-4 h-4 text-neutral-300 flex-shrink-0" />
           <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {format(startDate, "HH:mm")} – {format(endDate, "HH:mm")}
+            {format(startDateLocal, "HH:mm")} – {format(endDateLocal, "HH:mm")}
           </p>
         </div>
       </div>
