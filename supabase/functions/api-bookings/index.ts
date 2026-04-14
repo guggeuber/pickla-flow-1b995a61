@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 async function generateAccessCode(supabase: any, venueId: string, bookingDate: string): Promise<string> {
   const excluded = new Set(['0000','1111','2222','3333','4444','5555','6666','7777','8888','9999']);
@@ -220,9 +221,9 @@ Deno.serve(async (req) => {
       .select('id').eq('slug', slug).eq('is_public', true).single();
     if (!venue) return errorResponse('Venue not found', 404);
 
-    // Build ISO timestamps
-    const startISO = `${date}T${startTime}:00.000Z`;
-    const endISO = `${date}T${endTime}:00.000Z`;
+    // Build UTC ISO timestamps from Stockholm local time
+    const startISO = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+    const endISO = DateTime.fromISO(`${date}T${endTime}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
     const durationHours = (new Date(endISO).getTime() - new Date(startISO).getTime()) / 3600000;
 
     // Check conflicts for all courts

@@ -5,6 +5,7 @@ import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin, Building2 } from "luci
 import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
+import { DateTime } from "luxon";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -147,8 +148,8 @@ export default function BookingPage() {
   // Check which courts are available for the selected time
   const courtAvailability = useMemo(() => {
     if (!selectedTime) return {};
-    const startISO = `${dateStr}T${selectedTime}:00.000Z`;
-    const endISO = `${dateStr}T${addHour(selectedTime)}:00.000Z`;
+    const startISO = DateTime.fromISO(`${dateStr}T${selectedTime}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
+    const endISO = DateTime.fromISO(`${dateStr}T${addHour(selectedTime)}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
     const startMs = new Date(startISO).getTime();
     const endMs = new Date(endISO).getTime();
 
