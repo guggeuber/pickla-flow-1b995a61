@@ -1,8 +1,7 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, CheckCircle2, MapPin, Calendar, Clock, Share2, CalendarPlus, Copy } from "lucide-react";
-import { format } from "date-fns";
-import { sv } from "date-fns/locale";
+import { DateTime } from "luxon";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
@@ -99,11 +98,8 @@ export default function BookingConfirmation() {
     );
   }
 
-  // Times are stored as UTC but represent local venue time — use UTC methods to avoid timezone shift
-  const startDate = new Date(booking.start_time);
-  const endDate = new Date(booking.end_time);
-  const startDateLocal = new Date(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate(), startDate.getUTCHours(), startDate.getUTCMinutes());
-  const endDateLocal = new Date(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate(), endDate.getUTCHours(), endDate.getUTCMinutes());
+  const startDT = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+  const endDT = DateTime.fromISO(booking.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
   const customerName = booking.notes?.split(" | ")[0] || "";
   const customerPhone = booking.notes?.split(" | ")[1] || "";
   const isCancelled = booking.status === "cancelled";
@@ -161,14 +157,14 @@ export default function BookingConfirmation() {
         <div className="flex items-center gap-3">
           <Calendar className="w-4 h-4 text-neutral-300 flex-shrink-0" />
           <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {format(startDateLocal, "EEEE d MMMM yyyy", { locale: sv })}
+            {startDT.setLocale("sv").toFormat("EEEE d MMMM yyyy")}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <Clock className="w-4 h-4 text-neutral-300 flex-shrink-0" />
           <p className="text-[14px] font-medium text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            {format(startDateLocal, "HH:mm")} – {format(endDateLocal, "HH:mm")}
+            {startDT.toFormat("HH:mm")} – {endDT.toFormat("HH:mm")}
           </p>
         </div>
       </div>
