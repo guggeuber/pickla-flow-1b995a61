@@ -10,23 +10,25 @@ Deno.serve(async (req) => {
   const path = url.pathname.split('/').pop() || '';
 
   try {
+    // ── PUBLIC: GET /tiers — membership plans are visible to everyone ──
+    if (req.method === 'GET' && path === 'tiers') {
+      const venueId = url.searchParams.get('venueId');
+      if (!venueId) return errorResponse('Missing venueId');
+
+      const serviceClient = getServiceClient();
+      const { data, error: qErr } = await serviceClient.from('membership_tiers')
+        .select('*').eq('venue_id', venueId).order('sort_order');
+      if (qErr) return errorResponse(qErr.message);
+      return jsonResponse(data, 200, 15);
+    }
+
+    // ── AUTHENTICATED: all mutating and sensitive endpoints ──
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
     const admin = getServiceClient();
 
     // ── TIERS ──
-
-    // GET /api-memberships/tiers?venueId=X
-    if (req.method === 'GET' && path === 'tiers') {
-      const venueId = url.searchParams.get('venueId');
-      if (!venueId) return errorResponse('Missing venueId');
-
-      const { data, error: qErr } = await client.from('membership_tiers')
-        .select('*').eq('venue_id', venueId).order('sort_order');
-      if (qErr) return errorResponse(qErr.message);
-      return jsonResponse(data, 200, 15);
-    }
 
     // POST /api-memberships/tiers
     if (req.method === 'POST' && path === 'tiers') {
