@@ -100,10 +100,28 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 
 ### Self-service Check-in
 - `POST api-checkins/code` — kiosk endpoint, no auth, validates `access_code` against active bookings.
+- Time-window validation (Luxon, Stockholm tz): same day, ≤30 min before start, not after end.
+- `session_date` stored as Stockholm date, not UTC.
 
 ### Open Play
-- `open_play_sessions` table: recurring schedule slots with `day_of_week[]`, `court_ids[]`, `price_sek`.
-- Seed data: "Open Play" (mon–thu + sat–sun, 165 kr) and "Fredagsklubben" (fri, 99 kr) for Pickla Arena Stockholm.
+- `open_play_sessions` table: recurring slots with `day_of_week[]`, `court_ids[]`, `price_sek`.
+- Seed: "Open Play" (mon–thu + sat–sun, 165 kr), "Fredagsklubben" (fri, 99 kr).
+- `/openplay` (`OpenPlayPage.tsx`): upcoming 7-day slots, Stripe checkout per slot.
+- `/display/openplay?v=slug` (`OpenPlayDisplay.tsx`): kiosk tablet, 4-digit touch input, `POST api-checkins/code`, B5–B8 status strip, 60s idle reset.
+
+### Stripe Payment Flow
+- `POST api-bookings/create-checkout` handles `court_booking`, `day_pass`, `membership`.
+  - `day_pass`/`court_booking`: `mode:'payment'`; success → `/booking/confirmed?type=day_pass&session=...`
+  - `membership`: `mode:'subscription'`, `recurring:{interval:'month'}`; success → `/membership/confirmed?session=...`
+  - Success URL uses `&session=` when path already contains `?` (avoids double-`?` bug).
+- `api-stripe-webhook` `resolveUserId(session, metaUserId, serviceClient)`: (1) metadata `user_id`, (2) `auth.admin.getUserByEmail(email)`, (3) `auth.admin.createUser({email, email_confirm:true})`, (4) guest fallback.
+- `BookingConfirmed.tsx`: `?type=day_pass` shows success immediately, redirects `/my` after 3s (no polling).
+- `MembershipConfirmed.tsx` at `/membership/confirmed`: success page → `/my`.
+- Membership idempotency: `memberships.notes = 'stripe_session:<id>'`.
+- After `signUp()`, call `supabase.auth.getUser()` directly — `useAuth` React state lags behind.
+
+### Venue Courts
+- 19 dart tables seeded in `venue_courts` with `sport_type = 'dart'`.
 
 ## Workflow
 
@@ -131,7 +149,7 @@ VITE_SUPABASE_PROJECT_ID=...
 Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 
 ## Next Up
-- PlayPage.tsx redesign with four cards and correct brand colors
-- `/display/openplay` tablet for pickleball self-service check-in
-- Day pass purchase flow with Stripe
-- `access_code` on `day_passes`
+- `access_code` on `day_passes` (shown to customer after purchase)
+- SMS to customer on day pass purchase
+- `/display/dart/:court_id` — dart kiosk webapp
+- Group purchase — multiple codes in one checkout
