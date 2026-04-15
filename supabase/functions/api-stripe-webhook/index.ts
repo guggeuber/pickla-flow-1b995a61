@@ -142,6 +142,42 @@ async function handleCourtBooking(
   }
 }
 
+// ── Shared: resolve a real user from metadata + Stripe customer_details ──────
+//
+// Priority:
+//   1. user_id from metadata (set when buyer was already logged in)
+//   2. Look up auth.users by customer_details.email (Stripe-verified)
+//   3. Create a new confirmed user with that email
+//   4. Fall back to the shared guest user (no email available)
+
+async function resolveUserId(
+  session: Stripe.Checkout.Session,
+  metaUserId: string,
+  serviceClient: any,
+): Promise<string> {
+  // 1. Explicit user_id from metadata — most reliable path
+  if (metaUserId) return metaUserId;
+
+  // 2 & 3. Use Stripe's verified customer email
+  const email = session.customer_details?.email;
+  if (email) {
+    // Try to find existing user
+    const { data: existing } = await serviceClient.auth.admin.getUserByEmail(email);
+    if (existing?.user?.id) return existing.user.id;
+
+    // Create a new confirmed user — they can set a password later via magic link
+    const { data: created, error: createErr } = await serviceClient.auth.admin.createUser({
+      email,
+      email_confirm: true,
+    });
+    if (created?.user?.id) return created.user.id;
+    console.error('Failed to create user for email', email, createErr?.message);
+  }
+
+  // 4. No email — fall back to shared guest user
+  return getOrCreatePublicBookingUserId(serviceClient);
+}
+
 // ── Day pass ─────────────────────────────────────────────────────────────────
 
 async function handleDayPass(
@@ -161,7 +197,7 @@ async function handleDayPass(
     .maybeSingle();
   if (existing) return;
 
-  const resolvedUserId = user_id || await getOrCreatePublicBookingUserId(serviceClient);
+  const resolvedUserId = await resolveUserId(session, user_id, serviceClient);
   const priceSek = Math.round((session.amount_total || 0) / 100);
 
   const { error } = await serviceClient.from('day_passes').insert({
@@ -183,7 +219,7 @@ async function handleMembership(
   meta: Record<string, string>,
   serviceClient: any,
 ): Promise<void> {
-  const { tier_id, user_id, customer_name, customer_email, customer_phone } = meta;
+  const { tier_id, user_id } = meta;
 
   if (!tier_id) throw new Error('Missing tier_id in membership metadata');
 
@@ -203,10 +239,7 @@ async function handleMembership(
     .maybeSingle();
   if (tierErr || !tier) throw new Error(`Membership tier not found: ${tier_id}`);
 
-  // Resolve user: use provided user_id or fall back to shared guest user
-  const resolvedUserId = user_id || await getOrCreatePublicBookingUserId(serviceClient);
-
-  const priceSek = Math.round((session.amount_total || 0) / 100);
+  const resolvedUserId = await resolveUserId(session, user_id, serviceClient);
   const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
 
   const { error } = await serviceClient.from('memberships').insert({
