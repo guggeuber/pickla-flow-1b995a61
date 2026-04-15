@@ -7,7 +7,7 @@ CREATE TABLE public.corporate_accounts (
   contact_name TEXT,
   contact_email TEXT,
   contact_phone TEXT,
-  invite_token TEXT NOT NULL DEFAULT encode(gen_random_bytes(16), 'hex'),
+  invite_token TEXT NOT NULL DEFAULT replace(gen_random_uuid()::text, '-', ''),
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
