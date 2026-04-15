@@ -544,6 +544,29 @@ const MyPage = () => {
       {/* ═══ MAIN CONTENT ═══ */}
       <main className="pt-24 px-5 pb-28">
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
+          {/* Greeting */}
+          <motion.p variants={item} className="text-lg font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+            Hej {displayName} 👋
+          </motion.p>
+
+          {/* Quick action pills */}
+          <motion.div variants={item} className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
+            {[
+              { label: "+ Boka bana", to: "/book" },
+              { label: "Köp dagspass", to: "/membership" },
+              { label: "Aktiviteter", to: "/community" },
+            ].map((a) => (
+              <button
+                key={a.label}
+                onClick={() => navigate(a.to)}
+                className="shrink-0 px-4 py-2 rounded-full text-[12px] font-bold whitespace-nowrap active:scale-95 transition-transform"
+                style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_MONO }}
+              >
+                {a.label}
+              </button>
+            ))}
+          </motion.div>
+
           {/* Profile card with edit */}
           <ProfileCard profile={profile} user={user} displayName={displayName} />
 
