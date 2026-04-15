@@ -9,10 +9,12 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
+const REDIRECT_KEY = "pickla_auth_redirect";
+
 const Auth = () => {
   const { user, loading, signIn, signUp } = useAuth();
   const [searchParams] = useSearchParams();
-  const redirectTo = searchParams.get("redirect") || "/play";
+  const redirectTo = searchParams.get("redirect") || "/my";
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,7 +31,13 @@ const Auth = () => {
 
   const venueParam = searchParams.get("v");
   const fullRedirect = venueParam && !redirectTo.includes("v=") ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}v=${venueParam}` : redirectTo;
-  if (user) return <Navigate to={fullRedirect} replace />;
+
+  if (user) {
+    // sessionStorage takes priority (set by ProtectedRoute), then ?redirect param, then /my
+    const intended = sessionStorage.getItem(REDIRECT_KEY);
+    if (intended) sessionStorage.removeItem(REDIRECT_KEY);
+    return <Navigate to={intended || fullRedirect} replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
