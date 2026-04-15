@@ -60,6 +60,8 @@ const App = () => (
             <Route path="/my" element={<MyPage />} />
             <Route path="/community" element={<CommunityPage />} />
             <Route path="/play" element={<PlayPage />} />
+            <Route path="/events" element={<EventsListPage />} />
+            <Route path="/openplay" element={<OpenPlayPage />} />
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="/event/:id" element={<EventPage />} />
             <Route path="/e/:slug" element={<EventPage />} />
