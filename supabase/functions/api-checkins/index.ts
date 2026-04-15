@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -20,7 +21,10 @@ Deno.serve(async (req) => {
       if (!/^\d{4}$/.test(safeCode)) return errorResponse('Ogiltig kod', 400);
 
       const serviceClient = getServiceClient();
-      const now = new Date().toISOString();
+
+      // Current time in Europe/Stockholm — used for all time comparisons
+      const nowSthlm = DateTime.now().setZone('Europe/Stockholm');
+      const todaySthlm = nowSthlm.toISODate(); // YYYY-MM-DD in Stockholm
 
       const { data: booking, error: bErr } = await serviceClient
         .from('bookings')
@@ -28,10 +32,31 @@ Deno.serve(async (req) => {
         .eq('venue_id', venue_id)
         .eq('access_code', safeCode)
         .eq('status', 'confirmed')
-        .gte('access_code_expires_at', now)
         .maybeSingle();
 
       if (bErr || !booking) return errorResponse('Ogiltig eller utgången kod', 404);
+
+      // ── Time-window validation ──────────────────────────────────────────────
+      const startSthlm = DateTime.fromISO(booking.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+      const endSthlm   = DateTime.fromISO(booking.end_time,   { zone: 'utc' }).setZone('Europe/Stockholm');
+
+      // Must be today in Stockholm
+      if (startSthlm.toISODate() !== todaySthlm) {
+        return errorResponse('Koden gäller inte idag', 400);
+      }
+
+      // Not more than 30 min before start
+      const openMs = startSthlm.minus({ minutes: 30 }).toMillis();
+      if (nowSthlm.toMillis() < openMs) {
+        const opensAt = startSthlm.minus({ minutes: 30 }).toFormat('HH:mm');
+        return errorResponse(`För tidigt — incheckning öppnar ${opensAt}`, 400);
+      }
+
+      // Not after end_time
+      if (nowSthlm.toMillis() > endSthlm.toMillis()) {
+        return errorResponse('Bokningstiden har passerat', 400);
+      }
+      // ──────────────────────────────────────────────────────────────────────
 
       const { data: checkin, error: cErr } = await serviceClient
         .from('venue_checkins')
@@ -40,7 +65,7 @@ Deno.serve(async (req) => {
           user_id: booking.user_id || null,
           entry_type: 'booking_code',
           entitlement_id: booking.id,
-          session_date: now.slice(0, 10),
+          session_date: todaySthlm,
         })
         .select()
         .single();
