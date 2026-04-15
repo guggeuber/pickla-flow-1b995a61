@@ -28,6 +28,7 @@ export type Database = {
           notes: string | null
           start_time: string
           status: Database["public"]["Enums"]["booking_status"] | null
+          stripe_session_id: string | null
           total_price: number | null
           updated_at: string | null
           user_id: string
@@ -47,6 +48,7 @@ export type Database = {
           notes?: string | null
           start_time: string
           status?: Database["public"]["Enums"]["booking_status"] | null
+          stripe_session_id?: string | null
           total_price?: number | null
           updated_at?: string | null
           user_id: string
@@ -66,6 +68,7 @@ export type Database = {
           notes?: string | null
           start_time?: string
           status?: Database["public"]["Enums"]["booking_status"] | null
+          stripe_session_id?: string | null
           total_price?: number | null
           updated_at?: string | null
           user_id?: string
@@ -1011,6 +1014,7 @@ export type Database = {
           shared_from: string | null
           sold_by: string | null
           status: Database["public"]["Enums"]["day_pass_status"] | null
+          stripe_session_id: string | null
           user_id: string
           valid_date: string
           venue_id: string
@@ -1024,6 +1028,7 @@ export type Database = {
           shared_from?: string | null
           sold_by?: string | null
           status?: Database["public"]["Enums"]["day_pass_status"] | null
+          stripe_session_id?: string | null
           user_id: string
           valid_date: string
           venue_id: string
@@ -1037,6 +1042,7 @@ export type Database = {
           shared_from?: string | null
           sold_by?: string | null
           status?: Database["public"]["Enums"]["day_pass_status"] | null
+          stripe_session_id?: string | null
           user_id?: string
           valid_date?: string
           venue_id?: string
@@ -2151,6 +2157,56 @@ export type Database = {
           },
           {
             foreignKeyName: "memberships_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      open_play_sessions: {
+        Row: {
+          court_ids: string[]
+          created_at: string
+          day_of_week: number[]
+          end_time: string
+          id: string
+          is_active: boolean
+          max_players: number
+          name: string
+          price_sek: number
+          start_time: string
+          venue_id: string
+        }
+        Insert: {
+          court_ids?: string[]
+          created_at?: string
+          day_of_week: number[]
+          end_time: string
+          id?: string
+          is_active?: boolean
+          max_players?: number
+          name: string
+          price_sek?: number
+          start_time: string
+          venue_id: string
+        }
+        Update: {
+          court_ids?: string[]
+          created_at?: string
+          day_of_week?: number[]
+          end_time?: string
+          id?: string
+          is_active?: boolean
+          max_players?: number
+          name?: string
+          price_sek?: number
+          start_time?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "open_play_sessions_venue_id_fkey"
             columns: ["venue_id"]
             isOneToOne: false
             referencedRelation: "venues"
