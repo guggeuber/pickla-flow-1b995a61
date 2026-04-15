@@ -232,6 +232,7 @@ const MembershipPage = () => {
       }
 
       // For paid tiers: create account if needed, then redirect to Stripe
+      let userId = user?.id || "";
       if (!user) {
         if (!formData.name.trim() || !formData.email.trim()) {
           toast.error("Ange namn och e-post");
@@ -244,6 +245,9 @@ const MembershipPage = () => {
           setSubmitting(false);
           return;
         }
+        // useAuth state hasn't updated yet after signUp — fetch user directly
+        const { data: { user: freshUser } } = await supabase.auth.getUser();
+        userId = freshUser?.id || "";
       }
 
       const result = await apiPost("api-bookings", "create-checkout", {
@@ -252,7 +256,7 @@ const MembershipPage = () => {
         metadata: {
           tier_id:        tier.id,
           tier_name:      tier.name,
-          user_id:        user?.id || "",
+          user_id:        userId,
           customer_name:  user ? "" : formData.name.trim(),
           customer_email: user ? (user.email || "") : formData.email.trim(),
           customer_phone: formData.phone.trim(),

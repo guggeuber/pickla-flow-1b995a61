@@ -18,8 +18,14 @@ export default function BookingConfirmed() {
 
   const isDayPass = type === "day_pass";
 
+  // Day pass: show success immediately, redirect to /my after 3 s
+  useEffect(() => {
+    if (!isDayPass) return;
+    const id = setTimeout(() => navigate("/my", { replace: true }), 3000);
+    return () => clearTimeout(id);
+  }, [isDayPass, navigate]);
+
   // Poll until the webhook has created the booking (typically < 2 s)
-  // Not needed for day_pass — just show success
   const { data } = useQuery({
     queryKey:       ["booking-by-session", session],
     enabled:        !!session && !timedOut && !isDayPass,
@@ -44,6 +50,27 @@ export default function BookingConfirmed() {
     const id = setTimeout(() => setTimedOut(true), TIMEOUT_MS);
     return () => clearTimeout(id);
   }, [session, isDayPass]);
+
+  // Day pass success screen — no session required
+  if (isDayPass) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-6 px-5 text-center">
+        <img src={picklaLogo} alt="Pickla" className="h-8 w-auto opacity-20 mb-2" />
+        <CheckCircle2 className="w-16 h-16 text-emerald-500" />
+        <div>
+          <h1
+            className="text-[26px] font-bold text-neutral-900 tracking-tight"
+            style={{ fontFamily: FONT_GROTESK }}
+          >
+            betalning genomförd!
+          </h1>
+          <p className="text-neutral-400 text-[12px] mt-2" style={{ fontFamily: FONT_MONO }}>
+            ditt dagspass är aktivt — välkommen in!
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (!session) {
     return (
@@ -72,15 +99,13 @@ export default function BookingConfirmed() {
           className="text-neutral-400 text-[12px] mt-2"
           style={{ fontFamily: FONT_MONO }}
         >
-          {isDayPass
-            ? "ditt dagspass är aktivt — välkommen in!"
-            : timedOut
+          {timedOut
             ? "din bokning bekräftas inom kort — kolla din e-post"
             : "bekräftar bokning…"}
         </p>
       </div>
 
-      {!timedOut && !isDayPass && (
+      {!timedOut && (
         <Loader2 className="w-5 h-5 animate-spin text-neutral-300" />
       )}
     </div>

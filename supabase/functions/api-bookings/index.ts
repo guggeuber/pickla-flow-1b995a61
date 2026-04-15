@@ -88,7 +88,7 @@ Deno.serve(async (req) => {
         }],
         metadata: stripeMetadata,
         subscription_data: { metadata: stripeMetadata },
-        success_url: `${origin}${successPath}?session={CHECKOUT_SESSION_ID}`,
+        success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
         cancel_url:  `${origin}${cancelPath}`,
       });
     } else {
@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
           quantity: 1,
         }],
         metadata: stripeMetadata,
-        success_url: `${origin}${successPath}?session={CHECKOUT_SESSION_ID}`,
+        success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
         cancel_url:  `${origin}${cancelPath}`,
       });
     }
