@@ -28,7 +28,7 @@ const cards = [
     sub: "Hoppa in och spela med andra · 165 kr",
     sub2: "Fredagsklubben after work · 99 kr",
     cta: "Köp dagspass →",
-    to: "/membership",
+    to: "/openplay",
   },
   {
     title: "Bli medlem",
@@ -40,7 +40,7 @@ const cards = [
     title: "Aktiviteter",
     sub: "Tisdagsstegen, turneringar och community-events",
     cta: "Se vad som händer →",
-    to: "/community",
+    to: "/events",
   },
 ];
 
