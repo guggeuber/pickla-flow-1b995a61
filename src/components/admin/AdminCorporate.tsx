@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Building2, Copy, Users, Clock, Loader2, ShoppingCart, FileText, CheckCircle2, CreditCard } from "lucide-react";
+import { Plus, Building2, Copy, Clock, Loader2, ShoppingCart, FileText, CheckCircle2, CreditCard } from "lucide-react";
 import { toast } from "sonner";
 
 interface Props { venueId: string }
@@ -35,9 +35,21 @@ export default function AdminCorporate({ venueId }: Props) {
     queryFn: async () => {
       const { data } = await supabase
         .from("corporate_accounts")
-        .select("*, corporate_packages(*), corporate_members(id)")
+        .select("*")
         .eq("venue_id", venueId)
         .order("created_at", { ascending: false });
+      return data || [];
+    },
+  });
+
+  const { data: packages } = useQuery({
+    queryKey: ["admin-corporate-packages", venueId],
+    enabled: !!venueId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("corporate_packages")
+        .select("*")
+        .eq("venue_id", venueId);
       return data || [];
     },
   });
@@ -48,7 +60,7 @@ export default function AdminCorporate({ venueId }: Props) {
     queryFn: async () => {
       const { data } = await supabase
         .from("corporate_orders")
-        .select("*, corporate_accounts(company_name), corporate_order_items(id)")
+        .select("*")
         .eq("venue_id", venueId)
         .order("created_at", { ascending: false });
       return data || [];
@@ -147,8 +159,7 @@ export default function AdminCorporate({ venueId }: Props) {
         </div>
 
         {accounts?.map((acc: any) => {
-          const pkg = acc.corporate_packages?.[0];
-          const memberCount = acc.corporate_members?.length || 0;
+          const pkg = (packages || []).find((p: any) => p.corporate_account_id === acc.id);
           const remaining = pkg ? pkg.total_hours - pkg.used_hours : 0;
           return (
             <Card key={acc.id} className="glass-card">
@@ -164,9 +175,6 @@ export default function AdminCorporate({ venueId }: Props) {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Users className="w-3.5 h-3.5" /><span>{memberCount} medlemmar</span>
-                  </div>
                   {pkg && (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Clock className="w-3.5 h-3.5" /><span>{remaining}h / {pkg.total_hours}h</span>
@@ -202,6 +210,7 @@ export default function AdminCorporate({ venueId }: Props) {
         <p className="text-sm text-muted-foreground">{orders?.length || 0} ordrar</p>
 
         {orders?.map((o: any) => {
+          const companyName = (accounts || []).find((a: any) => a.id === o.corporate_account_id)?.company_name || "Företag";
           const nextAction = o.status === "pending" ? "invoiced" : o.status === "invoiced" ? "paid" : o.status === "paid" ? "fulfilled" : null;
           const nextLabel = nextAction === "invoiced" ? "Markera fakturerad" : nextAction === "paid" ? "Markera betald" : nextAction === "fulfilled" ? "Leverera & aktivera" : null;
           const NextIcon = nextAction === "invoiced" ? FileText : nextAction === "paid" ? CreditCard : nextAction === "fulfilled" ? CheckCircle2 : null;
@@ -213,7 +222,7 @@ export default function AdminCorporate({ venueId }: Props) {
                   <div>
                     <span className="font-mono text-sm font-bold">{o.order_number}</span>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {(o as any).corporate_accounts?.company_name || "Företag"}
+                      {companyName}
                     </p>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor[o.status] || "bg-muted"}`}>
@@ -222,7 +231,7 @@ export default function AdminCorporate({ venueId }: Props) {
                 </div>
 
                 <div className="text-sm text-muted-foreground">
-                  {o.order_type === "hours" ? `${o.total_hours}h timbank` : `Bokningsserie · ${o.corporate_order_items?.length || (o as any).corporate_order_items?.length || 0} tillfällen`}
+                  {o.order_type === "hours" ? `${o.total_hours}h timbank` : "Bokningsserie"}
                   {o.total_price > 0 && ` · ${o.total_price} ${o.currency || "SEK"}`}
                 </div>
 
