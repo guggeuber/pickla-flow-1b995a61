@@ -9,11 +9,15 @@ export async function getAuthenticatedClient(req: Request) {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
+  // Create client with the user's JWT forwarded in all requests (for RLS)
   const client = createClient(supabaseUrl, supabaseAnonKey, {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user }, error } = await client.auth.getUser();
+  // Pass token explicitly → forces HTTP call to /auth/v1/user on Supabase Auth server.
+  // This works regardless of JWT algorithm (ES256, HS256) and requires no local secret.
+  const token = authHeader.slice('Bearer '.length);
+  const { data: { user }, error } = await client.auth.getUser(token);
   if (error || !user) {
     return { client: null, userId: null, error: 'Unauthorized' };
   }
