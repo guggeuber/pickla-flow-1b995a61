@@ -40,7 +40,7 @@ const cards = [
     title: "Aktiviteter",
     sub: "Tisdagsstegen, turneringar och community-events",
     cta: "Se vad som händer →",
-    to: "/community",
+    to: "/events",
   },
 ];
 

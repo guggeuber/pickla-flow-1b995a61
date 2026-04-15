@@ -13,6 +13,8 @@ import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
 import CommunityPage from "./pages/CommunityPage";
 import PlayPage from "./pages/PlayPage";
+import EventsListPage from "./pages/EventsListPage";
+import OpenPlayPage from "./pages/OpenPlayPage";
 import EventPage from "./pages/EventPage";
 import BookingPage from "./pages/BookingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
