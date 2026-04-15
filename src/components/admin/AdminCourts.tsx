@@ -33,6 +33,17 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
     return maxNum + 1;
   }, [courts, sportType]);
 
+  // Group courts by sport type — must be before any early return (Rules of Hooks)
+  const groupedCourts = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    (courts || []).forEach((c: any) => {
+      const sport = c.sport_type || "pickleball";
+      if (!groups[sport]) groups[sport] = [];
+      groups[sport].push(c);
+    });
+    return groups;
+  }, [courts]);
+
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
   const handleAdd = () => {
@@ -75,17 +86,6 @@ const AdminCourts = ({ venueId }: { venueId: string }) => {
       }
     );
   };
-
-  // Group courts by sport type
-  const groupedCourts = useMemo(() => {
-    const groups: Record<string, any[]> = {};
-    (courts || []).forEach((c: any) => {
-      const sport = c.sport_type || "pickleball";
-      if (!groups[sport]) groups[sport] = [];
-      groups[sport].push(c);
-    });
-    return groups;
-  }, [courts]);
 
   return (
     <div className="space-y-4">
