@@ -6,5 +6,5 @@ ALTER TABLE public.bookings
 
 -- Unique code per venue per calendar day (UTC date of start_time)
 CREATE UNIQUE INDEX idx_bookings_venue_access_code_day
-  ON public.bookings (venue_id, access_code, (start_time::date))
+  ON public.bookings (venue_id, access_code, DATE(start_time AT TIME ZONE 'UTC'))
   WHERE access_code IS NOT NULL;
