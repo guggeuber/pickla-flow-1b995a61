@@ -599,7 +599,7 @@ const MyPage = () => {
           ) : (
             <motion.button
               variants={item}
-              onClick={() => navigate("/play")}
+              onClick={() => navigate("/membership")}
               className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
               style={{
                 background: BLUE_LIGHT,
