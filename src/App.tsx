@@ -27,6 +27,7 @@ import CorporateDashboard from "./pages/CorporateDashboard";
 import CorporateRegisterPage from "./pages/CorporateRegisterPage";
 import VenueDisplay from "./pages/VenueDisplay";
 import OpenPlayDisplay from "./pages/OpenPlayDisplay";
+import AuthCallback from "./pages/AuthCallback";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -60,6 +61,7 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/" element={<LinkHub />} />
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/hub" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
