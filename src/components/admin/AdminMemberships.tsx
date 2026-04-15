@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
+import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Plus, Crown, Trash2, ChevronDown, ChevronUp, Tag } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
@@ -166,7 +167,11 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
   const { data: tiers, isLoading } = useQuery<MembershipTier[]>({
     queryKey: ["membership-tiers", venueId],
     enabled: !!venueId,
-    queryFn: () => apiGet("api-memberships", "tiers", { venueId }),
+    queryFn: async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log("[AdminMemberships] token:", session?.access_token?.slice(0, 20) ?? "NULL");
+      return apiGet("api-memberships", "tiers", { venueId });
+    },
   });
 
   const [name, setName] = useState("");

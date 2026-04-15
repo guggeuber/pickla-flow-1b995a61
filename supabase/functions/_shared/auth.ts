@@ -13,13 +13,12 @@ export async function getAuthenticatedClient(req: Request) {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const token = authHeader.replace('Bearer ', '');
-  const { data, error } = await client.auth.getClaims(token);
-  if (error || !data?.claims) {
+  const { data: { user }, error } = await client.auth.getUser();
+  if (error || !user) {
     return { client: null, userId: null, error: 'Unauthorized' };
   }
 
-  return { client, userId: data.claims.sub as string, error: null };
+  return { client, userId: user.id, error: null };
 }
 
 export function getServiceClient() {
