@@ -54,10 +54,10 @@ Deno.serve(async (req) => {
 
   const session = event.data.object as Stripe.Checkout.Session;
   const meta = session.metadata || {};
-  const { product_type, venue_id } = meta;
+  const { product_type } = meta;
 
-  if (!product_type || !venue_id) {
-    console.error('Missing metadata in session', session.id);
+  if (!product_type) {
+    console.error('Missing product_type in session', session.id);
     return errorResponse('Missing session metadata', 400);
   }
 
@@ -68,6 +68,8 @@ Deno.serve(async (req) => {
       await handleCourtBooking(session, meta, serviceClient);
     } else if (product_type === 'day_pass') {
       await handleDayPass(session, meta, serviceClient);
+    } else if (product_type === 'membership') {
+      await handleMembership(session, meta, serviceClient);
     }
   } catch (err) {
     console.error('Error processing webhook:', err);
@@ -172,4 +174,49 @@ async function handleDayPass(
   });
 
   if (error) throw new Error(`Failed to insert day_pass: ${error.message}`);
+}
+
+// ── Membership ────────────────────────────────────────────────────────────────
+
+async function handleMembership(
+  session: Stripe.Checkout.Session,
+  meta: Record<string, string>,
+  serviceClient: any,
+): Promise<void> {
+  const { tier_id, user_id, customer_name, customer_email, customer_phone } = meta;
+
+  if (!tier_id) throw new Error('Missing tier_id in membership metadata');
+
+  // Idempotency: skip if already created for this session
+  const { data: existing } = await serviceClient
+    .from('memberships')
+    .select('id')
+    .eq('notes', `stripe_session:${session.id}`)
+    .maybeSingle();
+  if (existing) return;
+
+  // Resolve venue_id from the tier
+  const { data: tier, error: tierErr } = await serviceClient
+    .from('membership_tiers')
+    .select('id, venue_id')
+    .eq('id', tier_id)
+    .maybeSingle();
+  if (tierErr || !tier) throw new Error(`Membership tier not found: ${tier_id}`);
+
+  // Resolve user: use provided user_id or fall back to shared guest user
+  const resolvedUserId = user_id || await getOrCreatePublicBookingUserId(serviceClient);
+
+  const priceSek = Math.round((session.amount_total || 0) / 100);
+  const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
+
+  const { error } = await serviceClient.from('memberships').insert({
+    venue_id:    tier.venue_id,
+    user_id:     resolvedUserId,
+    tier_id,
+    status:      'active',
+    starts_at:   today,
+    notes:       `stripe_session:${session.id}`,
+  });
+
+  if (error) throw new Error(`Failed to insert membership: ${error.message}`);
 }

@@ -218,20 +218,23 @@ const MembershipPage = () => {
     e.preventDefault();
     if (!selectedTierId) return;
 
+    const tier = (tiers || []).find((t: any) => t.id === selectedTierId);
+    if (!tier) return;
+
     setSubmitting(true);
     try {
-      if (user) {
-        if (formData.phone) {
-          await supabase
-            .from("player_profiles")
-            .update({ phone: formData.phone })
-            .eq("auth_user_id", user.id);
-        }
-        toast.success("Tack! Vi kontaktar dig för att aktivera ditt medlemskap.");
+      // For free tiers: skip Stripe, keep manual activation flow
+      if (!tier.monthly_price || tier.monthly_price <= 0) {
+        toast.success("Tack! Vi kontaktar dig för att aktivera ditt kostnadsfria medlemskap.");
         setSelectedTierId(null);
-      } else {
-        if (!formData.name.trim()) {
-          toast.error("Ange ditt namn");
+        setSubmitting(false);
+        return;
+      }
+
+      // For paid tiers: create account if needed, then redirect to Stripe
+      if (!user) {
+        if (!formData.name.trim() || !formData.email.trim()) {
+          toast.error("Ange namn och e-post");
           setSubmitting(false);
           return;
         }
@@ -241,14 +244,25 @@ const MembershipPage = () => {
           setSubmitting(false);
           return;
         }
-        toast.success("Konto skapat! Kolla din e-post för att verifiera. Vi kontaktar dig för att aktivera medlemskapet.");
-        setSelectedTierId(null);
-        setFormData({ name: "", email: "", phone: "", password: "" });
       }
-    } catch {
-      toast.error("Något gick fel, försök igen.");
+
+      const result = await apiPost("api-bookings", "create-checkout", {
+        product_type: "membership",
+        amount_sek: Math.round(tier.monthly_price),
+        metadata: {
+          tier_id:        tier.id,
+          tier_name:      tier.name,
+          user_id:        user?.id || "",
+          customer_name:  user ? "" : formData.name.trim(),
+          customer_email: user ? (user.email || "") : formData.email.trim(),
+          customer_phone: formData.phone.trim(),
+        },
+      });
+      window.location.href = result.url;
+    } catch (err: any) {
+      toast.error(err.message || "Något gick fel, försök igen.");
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
 
   const bestValueIndex = tiers && tiers.length > 1 ? tiers.length - 1 : -1;

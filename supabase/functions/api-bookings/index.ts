@@ -18,9 +18,11 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const { product_type, amount_sek, venue_id, metadata } = body;
 
-    if (!product_type || !amount_sek || !venue_id) return errorResponse('Missing required fields');
-    if (!['court_booking', 'day_pass'].includes(product_type)) return errorResponse('Invalid product_type');
+    if (!product_type || !amount_sek) return errorResponse('Missing required fields');
+    if (!['court_booking', 'day_pass', 'membership'].includes(product_type)) return errorResponse('Invalid product_type');
     if (typeof amount_sek !== 'number' || amount_sek <= 0) return errorResponse('amount_sek must be positive');
+    // venue_id required for court_booking and day_pass, optional for membership
+    if (product_type !== 'membership' && !venue_id) return errorResponse('Missing venue_id');
 
     const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
     if (!stripeKey) return errorResponse('Stripe not configured', 500);
@@ -31,39 +33,84 @@ Deno.serve(async (req) => {
     const origin = req.headers.get('origin') || 'http://localhost:8080';
 
     const meta = metadata || {};
+    const isMembership = product_type === 'membership';
+
     const productName = product_type === 'court_booking'
       ? `Banbokning${meta.date ? ` · ${meta.date}` : ''}${meta.start_time ? ` ${meta.start_time}–${meta.end_time || ''}` : ''}`
+      : product_type === 'membership'
+      ? `Pickla Membership${meta.tier_name ? ` · ${meta.tier_name}` : ''}`
       : 'Dagspass';
 
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      mode: 'payment',
-      line_items: [{
-        price_data: {
-          currency: 'sek',
-          product_data: { name: productName },
-          unit_amount: Math.round(amount_sek) * 100,
-        },
-        quantity: 1,
-      }],
-      // All metadata values must be strings (Stripe limit: 500 chars each)
-      metadata: {
-        product_type,
-        venue_id,
-        slug:      String(meta.slug      || ''),
-        court_ids: String(meta.court_ids || '[]'),
-        date:      String(meta.date      || ''),
-        start_time:String(meta.start_time|| ''),
-        end_time:  String(meta.end_time  || ''),
-        name:      String(meta.name      || '').slice(0, 200),
-        phone:     String(meta.phone     || '').slice(0, 50),
-        user_id:   String(meta.user_id   || ''),
-      },
-      success_url: `${origin}/booking/confirmed?session={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${origin}/book${meta.slug ? `?v=${meta.slug}` : ''}`,
-    });
+    // Shared metadata (all values must be strings, max 500 chars each)
+    const stripeMetadata: Record<string, string> = {
+      product_type,
+      venue_id:         String(venue_id             || ''),
+      slug:             String(meta.slug             || ''),
+      court_ids:        String(meta.court_ids        || '[]'),
+      date:             String(meta.date             || ''),
+      start_time:       String(meta.start_time       || ''),
+      end_time:         String(meta.end_time         || ''),
+      name:             String(meta.name             || '').slice(0, 200),
+      phone:            String(meta.phone            || '').slice(0, 50),
+      user_id:          String(meta.user_id          || ''),
+      // Membership-specific
+      tier_id:          String(meta.tier_id          || ''),
+      customer_name:    String(meta.customer_name    || '').slice(0, 200),
+      customer_email:   String(meta.customer_email   || '').slice(0, 200),
+      customer_phone:   String(meta.customer_phone   || '').slice(0, 50),
+      // Day-pass-specific
+      open_play_session_id: String(meta.open_play_session_id || ''),
+      session_name:     String(meta.session_name     || ''),
+    };
 
-    return jsonResponse({ url: session.url });
+    const cancelPath = meta.slug ? `/book?v=${meta.slug}` : isMembership ? '/membership' : '/book';
+    const successPath = isMembership
+      ? '/membership/confirmed'
+      : product_type === 'day_pass'
+      ? '/booking/confirmed?type=day_pass'
+      : '/booking/confirmed';
+
+    let stripeSession: Stripe.Checkout.Session;
+
+    if (isMembership) {
+      // Subscription mode — recurring monthly charge
+      stripeSession = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        mode: 'subscription',
+        line_items: [{
+          price_data: {
+            currency: 'sek',
+            product_data: { name: productName },
+            unit_amount: Math.round(amount_sek) * 100,
+            recurring: { interval: 'month' },
+          },
+          quantity: 1,
+        }],
+        metadata: stripeMetadata,
+        subscription_data: { metadata: stripeMetadata },
+        success_url: `${origin}${successPath}?session={CHECKOUT_SESSION_ID}`,
+        cancel_url:  `${origin}${cancelPath}`,
+      });
+    } else {
+      // One-time payment (court_booking, day_pass)
+      stripeSession = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        mode: 'payment',
+        line_items: [{
+          price_data: {
+            currency: 'sek',
+            product_data: { name: productName },
+            unit_amount: Math.round(amount_sek) * 100,
+          },
+          quantity: 1,
+        }],
+        metadata: stripeMetadata,
+        success_url: `${origin}${successPath}?session={CHECKOUT_SESSION_ID}`,
+        cancel_url:  `${origin}${cancelPath}`,
+      });
+    }
+
+    return jsonResponse({ url: stripeSession.url });
   }
 
   // ── GET /by-session?session=xxx — look up a booking by Stripe session ID ──

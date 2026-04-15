@@ -12,13 +12,17 @@ const TIMEOUT_MS   = 30_000;
 export default function BookingConfirmed() {
   const [searchParams] = useSearchParams();
   const session  = searchParams.get("session") ?? "";
+  const type     = searchParams.get("type") ?? "";
   const navigate = useNavigate();
   const [timedOut, setTimedOut] = useState(false);
 
+  const isDayPass = type === "day_pass";
+
   // Poll until the webhook has created the booking (typically < 2 s)
+  // Not needed for day_pass — just show success
   const { data } = useQuery({
     queryKey:       ["booking-by-session", session],
-    enabled:        !!session && !timedOut,
+    enabled:        !!session && !timedOut && !isDayPass,
     queryFn:        () => apiGet("api-bookings", "by-session", { session }),
     staleTime:      0,
     refetchInterval: (query) => {
@@ -36,10 +40,10 @@ export default function BookingConfirmed() {
 
   // Fallback: give up after TIMEOUT_MS and show a static message
   useEffect(() => {
-    if (!session) return;
+    if (!session || isDayPass) return;
     const id = setTimeout(() => setTimedOut(true), TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [session]);
+  }, [session, isDayPass]);
 
   if (!session) {
     return (
@@ -68,13 +72,15 @@ export default function BookingConfirmed() {
           className="text-neutral-400 text-[12px] mt-2"
           style={{ fontFamily: FONT_MONO }}
         >
-          {timedOut
+          {isDayPass
+            ? "ditt dagspass är aktivt — välkommen in!"
+            : timedOut
             ? "din bokning bekräftas inom kort — kolla din e-post"
             : "bekräftar bokning…"}
         </p>
       </div>
 
-      {!timedOut && (
+      {!timedOut && !isDayPass && (
         <Loader2 className="w-5 h-5 animate-spin text-neutral-300" />
       )}
     </div>

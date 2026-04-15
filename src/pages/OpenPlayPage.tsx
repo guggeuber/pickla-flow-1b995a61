@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { apiPost } from "@/lib/api";
+import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { ArrowLeft, Zap } from "lucide-react";
+import { ArrowLeft, Loader2, Zap } from "lucide-react";
 import { DateTime } from "luxon";
 
 const CREAM = "#faf8f5";
@@ -23,14 +26,13 @@ function useOpenPlaySessions() {
   return useQuery({
     queryKey: ["open-play-sessions"],
     queryFn: async () => {
-      // First get venue id for pickla-arena-sthlm
       const { data: venue } = await supabase
         .from("venues")
         .select("id")
         .eq("slug", "pickla-arena-sthlm")
         .single();
 
-      if (!venue) return [];
+      if (!venue) return { sessions: [], venueId: null };
 
       const { data, error } = await supabase
         .from("open_play_sessions")
@@ -40,18 +42,42 @@ function useOpenPlaySessions() {
         .order("start_time", { ascending: true });
 
       if (error) throw error;
-      return data || [];
+      return { sessions: data || [], venueId: venue.id };
     },
   });
 }
 
 const OpenPlayPage = () => {
   const navigate = useNavigate();
-  const { data: sessions, isLoading } = useOpenPlaySessions();
+  const { data: queryData, isLoading } = useOpenPlaySessions();
+  const sessions = queryData?.sessions ?? [];
+  const venueId = queryData?.venueId ?? null;
+  const [loadingSlot, setLoadingSlot] = useState<string | null>(null);
 
   const now = DateTime.now().setZone("Europe/Stockholm");
-  const todayDow = now.weekday % 7; // Luxon: 1=Mon..7=Sun → JS: 0=Sun..6=Sat
-  
+
+  const handleBuyDayPass = async (slot: { session: typeof sessions[0]; date: DateTime }) => {
+    const slotKey = `${slot.session.id}-${slot.date.toISODate()}`;
+    if (loadingSlot || !venueId) return;
+    setLoadingSlot(slotKey);
+    try {
+      const result = await apiPost("api-bookings", "create-checkout", {
+        product_type: "day_pass",
+        amount_sek: slot.session.price_sek,
+        venue_id: venueId,
+        metadata: {
+          session_name: slot.session.name,
+          date: slot.date.toISODate(),
+          open_play_session_id: slot.session.id,
+        },
+      });
+      window.location.href = result.url;
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte starta betalning");
+      setLoadingSlot(null);
+    }
+  };
+
   // Build a list of upcoming session slots for the next 7 days
   const upcomingSlots = (() => {
     if (!sessions?.length) return [];
@@ -141,11 +167,16 @@ const OpenPlayPage = () => {
                   </span>
                 </div>
                 <button
-                  onClick={() => navigate("/membership")}
-                  className="mt-3 w-full py-2.5 rounded-xl text-[13px] font-bold transition-all active:scale-95"
+                  onClick={() => handleBuyDayPass(slot)}
+                  disabled={!!loadingSlot}
+                  className="mt-3 w-full py-2.5 rounded-xl text-[13px] font-bold transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-60"
                   style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
                 >
-                  Köp dagspass →
+                  {loadingSlot === `${slot.session.id}-${slot.date.toISODate()}` ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Öppnar betalning…</>
+                  ) : (
+                    `Köp dagspass · ${slot.session.price_sek} kr →`
+                  )}
                 </button>
               </motion.div>
             );
