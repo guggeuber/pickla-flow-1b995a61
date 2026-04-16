@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin, Building2 } from "lucide-react";
+import { ArrowLeft, Loader2, CheckCircle2, MapPin, Building2, Zap, Target, Shuffle } from "lucide-react";
 import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
@@ -16,6 +16,19 @@ const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
+
+// Brand colors
+const RED = "#CC2936";
+const DARK_BLUE = "#1a1f3a";
+const CREAM = "#faf8f5";
+const NEAR_BLACK = "#1a1a1a";
+const TEXT_MUTED = "rgba(26,26,26,0.5)";
+
+const SPORTS = [
+  { key: "pickleball", label: "Pickleball", emoji: "🏓" },
+  { key: "dart", label: "Dart", emoji: "🎯" },
+  { key: "padel", label: "Padel", emoji: "🎾" },
+] as const;
 
 function generateDates(count = 14) {
   const dates: Date[] = [];
@@ -44,7 +57,29 @@ interface CourtData {
   name: string;
   court_number: number;
   court_type: string | null;
+  sport_type: string | null;
   hourly_rate: number | null;
+}
+
+// Analyze booking history to find most common day+time
+function findBookingPattern(bookings: any[]) {
+  if (!bookings?.length) return null;
+  const freq: Record<string, { count: number; weekday: number; hour: number; dayName: string }> = {};
+  bookings.forEach((b) => {
+    const dt = DateTime.fromISO(b.start_time, { zone: "Europe/Stockholm" });
+    const key = `${dt.weekday}-${dt.hour}`;
+    if (!freq[key]) {
+      freq[key] = {
+        count: 0,
+        weekday: dt.weekday,
+        hour: dt.hour,
+        dayName: dt.setLocale("sv").toFormat("EEEE"),
+      };
+    }
+    freq[key].count++;
+  });
+  const sorted = Object.values(freq).sort((a, b) => b.count - a.count);
+  return sorted[0]?.count >= 2 ? sorted[0] : null;
 }
 
 export default function BookingPage() {
@@ -53,17 +88,27 @@ export default function BookingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
+  const [selectedSport, setSelectedSport] = useState<string>(() => {
+    return localStorage.getItem("pickla_preferred_sport") || "pickleball";
+  });
   const [selectedDate, setSelectedDate] = useState(() =>
     DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate()
   );
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [selectedCourts, setSelectedCourts] = useState<string[]>([]);
+  const [anyCourt, setAnyCourt] = useState(false);
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [confirmed, setConfirmed] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [useCorporate, setUseCorporate] = useState(false);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+  const [showContactForm, setShowContactForm] = useState(false);
+
+  // Remember sport preference
+  useEffect(() => {
+    localStorage.setItem("pickla_preferred_sport", selectedSport);
+  }, [selectedSport]);
 
   // Auto-fill name/phone from player profile when logged in
   useEffect(() => {
@@ -78,7 +123,6 @@ export default function BookingPage() {
         if (data.display_name && !name) setName(data.display_name);
         if (data.phone && !phone) setPhone(data.phone);
       } else {
-        // Fallback to user metadata
         const meta = user.user_metadata;
         if (meta?.display_name && !name) setName(meta.display_name);
       }
@@ -87,10 +131,11 @@ export default function BookingPage() {
     prefillFromProfile();
   }, [user, profileLoaded]);
 
+  const hasProfile = profileLoaded && !!name.trim() && !!phone.trim();
+
   const dateStr = format(selectedDate, "yyyy-MM-dd");
   const todayStr = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
 
-  // Guard: if selectedDate is somehow in the past, snap to today
   useEffect(() => {
     const todayStart = DateTime.now().setZone("Europe/Stockholm").startOf("day");
     const selStart = DateTime.fromJSDate(selectedDate).setZone("Europe/Stockholm").startOf("day");
@@ -103,6 +148,24 @@ export default function BookingPage() {
 
   const dates = useMemo(() => generateDates(), []);
 
+  // Fetch booking history for smart suggestions
+  const { data: bookingHistory } = useQuery({
+    queryKey: ["booking-history", user?.id],
+    enabled: !!user,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("bookings")
+        .select("start_time, venue_court_id")
+        .eq("user_id", user!.id)
+        .order("start_time", { ascending: false })
+        .limit(20);
+      return data || [];
+    },
+  });
+
+  const pattern = useMemo(() => findBookingPattern(bookingHistory || []), [bookingHistory]);
+
   // Fetch corporate packages for logged-in user
   const { data: corpData } = useQuery({
     queryKey: ["my-corporate-booking", user?.id],
@@ -113,10 +176,14 @@ export default function BookingPage() {
 
   const activePackages = useMemo(() => {
     if (!corpData?.packages?.length) return [];
-    return corpData.packages.filter((p: any) => p.status === 'active' && p.total_hours - p.used_hours > 0).map((p: any) => {
-      const membership = corpData.memberships?.find((m: any) => m.corporate_accounts?.id === p.corporate_account_id);
-      return { ...p, company_name: membership?.corporate_accounts?.company_name || 'Företag' };
-    });
+    return corpData.packages
+      .filter((p: any) => p.status === "active" && p.total_hours - p.used_hours > 0)
+      .map((p: any) => {
+        const membership = corpData.memberships?.find(
+          (m: any) => m.corporate_accounts?.id === p.corporate_account_id
+        );
+        return { ...p, company_name: membership?.corporate_accounts?.company_name || "Företag" };
+      });
   }, [corpData]);
 
   // Fetch courts + availability
@@ -131,13 +198,24 @@ export default function BookingPage() {
     },
   });
 
-  const courts: CourtData[] = data?.courts || [];
+  const allCourts: CourtData[] = data?.courts || [];
   const openingHours = data?.openingHours;
   const existingBookings = data?.bookings || [];
   const venueName = data?.venue?.name || "";
   const pricingRules: any[] = data?.pricingRules || [];
 
-  // Resolve price for a court based on pricing rules, selected day + time
+  // Filter courts by selected sport
+  const courts = useMemo(
+    () => allCourts.filter((c) => c.sport_type === selectedSport),
+    [allCourts, selectedSport]
+  );
+
+  // Count available sports
+  const availableSports = useMemo(() => {
+    const types = new Set(allCourts.map((c) => c.sport_type));
+    return SPORTS.filter((s) => types.has(s.key));
+  }, [allCourts]);
+
   const getCourtPrice = (court: CourtData): number => {
     if (!selectedTime) return court.hourly_rate || 0;
     const dayOfWeek = selectedDate.getDay();
@@ -160,7 +238,6 @@ export default function BookingPage() {
     [openingHours]
   );
 
-  // For today: filter out time slots whose start time has already passed
   const filteredTimeSlots = useMemo(() => {
     if (dateStr !== todayStr) return timeSlots;
     const now = DateTime.now().setZone("Europe/Stockholm");
@@ -170,13 +247,12 @@ export default function BookingPage() {
     });
   }, [timeSlots, dateStr, todayStr]);
 
-  // When date changes: auto-select first available slot
   useEffect(() => {
     setSelectedTime(filteredTimeSlots[0] ?? null);
     setSelectedCourts([]);
+    setAnyCourt(false);
   }, [dateStr]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When slots load or the current time advances past the selected slot: re-validate
   useEffect(() => {
     if (filteredTimeSlots.length === 0) {
       setSelectedTime(null);
@@ -188,7 +264,6 @@ export default function BookingPage() {
     }
   }, [filteredTimeSlots]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Check which courts are available for the selected time
   const courtAvailability = useMemo(() => {
     if (!selectedTime) return {};
     const startISO = DateTime.fromISO(`${dateStr}T${selectedTime}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
@@ -197,7 +272,7 @@ export default function BookingPage() {
     const endMs = new Date(endISO).getTime();
 
     const avail: Record<string, boolean> = {};
-    courts.forEach((c) => {
+    allCourts.forEach((c) => {
       const isBooked = existingBookings.some(
         (b: any) =>
           b.court_id === c.id &&
@@ -207,9 +282,22 @@ export default function BookingPage() {
       avail[c.id] = !isBooked;
     });
     return avail;
-  }, [courts, existingBookings, selectedTime, dateStr]);
+  }, [allCourts, existingBookings, selectedTime, dateStr]);
+
+  // Auto-select court when "any court" is toggled
+  useEffect(() => {
+    if (!anyCourt || !selectedTime) return;
+    const availableCourt = courts.find((c) => courtAvailability[c.id] !== false);
+    if (availableCourt) {
+      setSelectedCourts([availableCourt.id]);
+    } else {
+      setSelectedCourts([]);
+      toast.error("Inga lediga banor just nu");
+    }
+  }, [anyCourt, courts, courtAvailability, selectedTime]);
 
   const toggleCourt = (courtId: string) => {
+    setAnyCourt(false);
     setSelectedCourts((prev) =>
       prev.includes(courtId)
         ? prev.filter((id) => id !== courtId)
@@ -219,17 +307,21 @@ export default function BookingPage() {
 
   const totalPrice = useMemo(() => {
     return selectedCourts.reduce((sum, id) => {
-      const court = courts.find((c) => c.id === id);
+      const court = allCourts.find((c) => c.id === id);
       return sum + (court ? getCourtPrice(court) : 0);
     }, 0);
-  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate]);
+  }, [selectedCourts, allCourts, pricingRules, selectedTime, selectedDate]);
+
+  // Effective name/phone for booking
+  const bookingName = name.trim();
+  const bookingPhone = phone.trim();
+  const canBook = bookingName && bookingPhone && selectedTime && selectedCourts.length > 0;
 
   const bookMutation = useMutation({
     mutationFn: async () => {
       const isFree = useCorporate || totalPrice === 0;
 
       if (isFree) {
-        // Corporate / free booking — create immediately without Stripe
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         const { data: { session: currentSession } } = await supabase.auth.getSession();
         if (currentSession?.access_token) {
@@ -244,8 +336,8 @@ export default function BookingPage() {
             date: dateStr,
             startTime: selectedTime,
             endTime: addHour(selectedTime!),
-            name: name.trim(),
-            phone: phone.trim(),
+            name: bookingName,
+            phone: bookingPhone,
             corporatePackageId: useCorporate ? selectedPackageId : undefined,
           }),
         });
@@ -257,23 +349,22 @@ export default function BookingPage() {
         return { type: "direct" as const, bookings: result.bookings };
       }
 
-      // Paid booking — redirect to Stripe Checkout
       const venueId = data?.venue?.id;
       if (!venueId) throw new Error("Venue saknas");
 
       const result = await apiPost("api-bookings", "create-checkout", {
         product_type: "court_booking",
-        amount_sek:   totalPrice,
-        venue_id:     venueId,
+        amount_sek: totalPrice,
+        venue_id: venueId,
         metadata: {
           slug,
-          court_ids:  JSON.stringify(selectedCourts),
-          date:       dateStr,
+          court_ids: JSON.stringify(selectedCourts),
+          date: dateStr,
           start_time: selectedTime!,
-          end_time:   addHour(selectedTime!),
-          name:       name.trim(),
-          phone:      phone.trim(),
-          user_id:    user?.id || "",
+          end_time: addHour(selectedTime!),
+          name: bookingName,
+          phone: bookingPhone,
+          user_id: user?.id || "",
         },
       });
       return { type: "stripe" as const, url: result.url };
@@ -298,29 +389,45 @@ export default function BookingPage() {
 
   const handleBook = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim() || !selectedTime || !selectedCourts.length) return;
+    if (!canBook) return;
     bookMutation.mutate();
   };
 
-  const isToday = dateStr === todayStr;
+  // Smart suggestion: apply pattern
+  const handleApplyPattern = () => {
+    if (!pattern) return;
+    // Find the next occurrence of that weekday
+    const today = DateTime.now().setZone("Europe/Stockholm");
+    for (let i = 0; i < 14; i++) {
+      const d = today.plus({ days: i });
+      if (d.weekday === pattern.weekday) {
+        setSelectedDate(d.toJSDate());
+        const timeStr = `${String(pattern.hour).padStart(2, "0")}:00`;
+        setTimeout(() => setSelectedTime(timeStr), 100);
+        setAnyCourt(true);
+        break;
+      }
+    }
+  };
+
   const isClosed = openingHours?.is_closed;
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <Loader2 className="w-5 h-5 animate-spin text-neutral-300" />
+      <div className="min-h-screen flex items-center justify-center" style={{ background: CREAM }}>
+        <Loader2 className="w-5 h-5 animate-spin" style={{ color: TEXT_MUTED }} />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-white pb-16">
+    <div className="min-h-screen pb-24" style={{ background: CREAM }}>
       {/* Top bar */}
       <div className="px-4 pt-[env(safe-area-inset-top,12px)] pb-2 flex items-center justify-between">
         <Link
           to={`/?v=${slug}`}
-          className="inline-flex items-center gap-1 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO }}
+          className="inline-flex items-center gap-1 text-[11px] active:opacity-60 transition-opacity"
+          style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           tillbaka
@@ -331,15 +438,15 @@ export default function BookingPage() {
       {/* Header */}
       <div className="px-4 pb-3">
         <h1
-          className="text-[22px] font-bold text-neutral-900 tracking-tight leading-tight"
-          style={{ fontFamily: FONT_GROTESK }}
+          className="text-[26px] font-bold tracking-tight leading-tight"
+          style={{ fontFamily: FONT_GROTESK, color: NEAR_BLACK }}
         >
           boka bana
         </h1>
         {venueName && (
           <span
-            className="inline-flex items-center gap-1 text-[10px] text-neutral-400 mt-1"
-            style={{ fontFamily: FONT_MONO }}
+            className="inline-flex items-center gap-1 text-[10px] mt-1"
+            style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}
           >
             <MapPin className="w-3 h-3" />
             {venueName}
@@ -347,21 +454,11 @@ export default function BookingPage() {
         )}
       </div>
 
-      <div className="h-px bg-neutral-100 mx-4" />
-
       {confirmed ? (
         <div className="flex flex-col items-center gap-4 py-16 px-5">
-          <CheckCircle2 className="w-12 h-12 text-emerald-500" />
-          <p
-            className="text-neutral-900 font-bold text-lg"
-            style={{ fontFamily: FONT_GROTESK }}
-          >
-            bokad!
-          </p>
-          <p
-            className="text-[12px] text-neutral-400 text-center"
-            style={{ fontFamily: FONT_MONO }}
-          >
+          <CheckCircle2 className="w-12 h-12" style={{ color: "#22C55E" }} />
+          <p className="font-bold text-lg" style={{ fontFamily: FONT_GROTESK, color: NEAR_BLACK }}>bokad!</p>
+          <p className="text-[12px] text-center" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
             {selectedCourts.length} {selectedCourts.length === 1 ? "bana" : "banor"} ·{" "}
             {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}
           </p>
@@ -370,22 +467,78 @@ export default function BookingPage() {
               setConfirmed(false);
               setSelectedCourts([]);
               setSelectedTime(null);
-              setName("");
-              setPhone("");
+              setAnyCourt(false);
             }}
-            className="mt-4 text-[12px] text-neutral-500 underline underline-offset-4"
-            style={{ fontFamily: FONT_MONO }}
+            className="mt-4 text-[12px] underline underline-offset-4"
+            style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}
           >
             boka igen
           </button>
         </div>
       ) : (
-        <form onSubmit={handleBook} className="px-4 py-4 space-y-4">
-          {/* Date picker */}
+        <form onSubmit={handleBook} className="px-4 py-2 space-y-4">
+          {/* ─── Sport selector ─── */}
+          {availableSports.length > 1 && (
+            <div className="flex gap-2">
+              {availableSports.map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() => {
+                    setSelectedSport(s.key);
+                    setSelectedCourts([]);
+                    setAnyCourt(false);
+                  }}
+                  className="flex-1 py-3 rounded-2xl text-center transition-all active:scale-[0.97]"
+                  style={{
+                    background: selectedSport === s.key ? DARK_BLUE : "#fff",
+                    color: selectedSport === s.key ? "#fff" : NEAR_BLACK,
+                    fontFamily: FONT_GROTESK,
+                    fontWeight: 700,
+                    fontSize: "14px",
+                    boxShadow: selectedSport === s.key ? "none" : "0 1px 3px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <span className="text-lg block mb-0.5">{s.emoji}</span>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* ─── Smart suggestion ─── */}
+          {pattern && user && (
+            <button
+              type="button"
+              onClick={handleApplyPattern}
+              className="w-full rounded-2xl p-3.5 flex items-center gap-3 text-left active:scale-[0.98] transition-transform"
+              style={{
+                background: `${RED}10`,
+                border: `1.5px solid ${RED}25`,
+              }}
+            >
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${RED}15` }}>
+                <Zap className="w-4 h-4" style={{ color: RED }} />
+              </div>
+              <div className="flex-1">
+                <p className="text-[13px] font-bold" style={{ fontFamily: FONT_GROTESK, color: NEAR_BLACK }}>
+                  Boka igen?
+                </p>
+                <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                  Du brukar boka {pattern.dayName}ar {String(pattern.hour).padStart(2, "0")}:00
+                </p>
+              </div>
+              <span className="text-[11px] font-bold" style={{ fontFamily: FONT_MONO, color: RED }}>
+                Boka →
+              </span>
+            </button>
+          )}
+
+          {/* ─── Date picker ─── */}
           <div>
             <h2
-              className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
-              style={{ fontFamily: FONT_MONO }}
+              className="text-[10px] font-bold uppercase tracking-widest mb-2"
+              style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}
             >
               datum
             </h2>
@@ -394,10 +547,8 @@ export default function BookingPage() {
               style={{ scrollbarWidth: "none" }}
             >
               {dates.map((date, i) => {
-                const isSelected =
-                  date.toDateString() === selectedDate.toDateString();
-                const isTodayDate =
-                  date.toDateString() === new Date().toDateString();
+                const isSelected = date.toDateString() === selectedDate.toDateString();
+                const isTodayDate = date.toDateString() === new Date().toDateString();
                 return (
                   <button
                     key={i}
@@ -405,35 +556,28 @@ export default function BookingPage() {
                     onClick={() => {
                       setSelectedDate(date);
                       setSelectedCourts([]);
+                      setAnyCourt(false);
                     }}
-                    className={`flex-shrink-0 w-[44px] py-1.5 rounded-xl flex flex-col items-center gap-0 transition-all ${
-                      isSelected
-                        ? "bg-neutral-900 text-white"
-                        : "bg-neutral-50 text-neutral-600"
-                    }`}
+                    className="flex-shrink-0 w-[44px] py-1.5 rounded-xl flex flex-col items-center gap-0 transition-all"
+                    style={{
+                      background: isSelected ? RED : "#fff",
+                      color: isSelected ? "#fff" : NEAR_BLACK,
+                      boxShadow: isSelected ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
+                    }}
                   >
                     <span
-                      className={`text-[8px] font-bold uppercase leading-tight ${
-                        isSelected ? "text-white/60" : "text-neutral-400"
-                      }`}
-                      style={{ fontFamily: FONT_MONO }}
+                      className="text-[8px] font-bold uppercase leading-tight"
+                      style={{
+                        fontFamily: FONT_MONO,
+                        opacity: isSelected ? 0.7 : 0.4,
+                      }}
                     >
-                      {isTodayDate
-                        ? "idag"
-                        : format(date, "EEE", { locale: sv }).slice(0, 3)}
+                      {isTodayDate ? "idag" : format(date, "EEE", { locale: sv }).slice(0, 3)}
                     </span>
-                    <span
-                      className="text-[16px] font-bold leading-tight"
-                      style={{ fontFamily: FONT_GROTESK }}
-                    >
+                    <span className="text-[16px] font-bold leading-tight" style={{ fontFamily: FONT_GROTESK }}>
                       {date.getDate()}
                     </span>
-                    <span
-                      className={`text-[7px] font-medium leading-tight ${
-                        isSelected ? "text-white/50" : "text-neutral-300"
-                      }`}
-                      style={{ fontFamily: FONT_MONO }}
-                    >
+                    <span className="text-[7px] font-medium leading-tight" style={{ fontFamily: FONT_MONO, opacity: isSelected ? 0.6 : 0.3 }}>
                       {format(date, "MMM", { locale: sv })}
                     </span>
                   </button>
@@ -445,29 +589,18 @@ export default function BookingPage() {
           {/* Closed notice */}
           {isClosed && (
             <div className="text-center py-6">
-              <p
-                className="text-[13px] text-neutral-400"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                stängt denna dag
-              </p>
+              <p className="text-[13px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>stängt denna dag</p>
             </div>
           )}
 
-          {/* Time picker */}
+          {/* ─── Time picker ─── */}
           {!isClosed && (
             <div>
-              <h2
-                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
-                style={{ fontFamily: FONT_MONO }}
-              >
+              <h2 className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
                 tid
               </h2>
               {filteredTimeSlots.length === 0 ? (
-                <p
-                  className="text-[13px] text-neutral-400 text-center py-4"
-                  style={{ fontFamily: FONT_MONO }}
-                >
+                <p className="text-[13px] text-center py-4" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
                   inga fler tider idag
                 </p>
               ) : (
@@ -479,13 +612,15 @@ export default function BookingPage() {
                       onClick={() => {
                         setSelectedTime(time);
                         setSelectedCourts([]);
+                        if (anyCourt) setAnyCourt(false);
                       }}
-                      className={`py-2 rounded-xl text-[12px] font-bold transition-colors ${
-                        selectedTime === time
-                          ? "bg-neutral-900 text-white"
-                          : "bg-neutral-50 text-neutral-500"
-                      }`}
-                      style={{ fontFamily: FONT_MONO }}
+                      className="py-2 rounded-xl text-[12px] font-bold transition-colors"
+                      style={{
+                        background: selectedTime === time ? RED : "#fff",
+                        color: selectedTime === time ? "#fff" : NEAR_BLACK,
+                        fontFamily: FONT_MONO,
+                        boxShadow: selectedTime === time ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
+                      }}
                     >
                       {time}
                     </button>
@@ -495,126 +630,156 @@ export default function BookingPage() {
             </div>
           )}
 
-          {/* Court selection */}
+          {/* ─── Court selection ─── */}
           {selectedTime && !isClosed && (
             <div>
-              <h2
-                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                välj bana{courts.length > 1 ? "or" : ""}
-              </h2>
-              <div className="grid grid-cols-2 gap-1.5">
-                {courts.map((court) => {
-                  const available = courtAvailability[court.id] !== false;
-                  const selected = selectedCourts.includes(court.id);
-                  return (
-                    <button
-                      key={court.id}
-                      type="button"
-                      disabled={!available}
-                      onClick={() => available && toggleCourt(court.id)}
-                      className={`relative py-3 px-3 rounded-xl text-left transition-all ${
-                        !available
-                          ? "opacity-30 bg-neutral-50 cursor-not-allowed"
-                          : selected
-                          ? "bg-neutral-900 text-white"
-                          : "bg-neutral-50 text-neutral-700 active:scale-[0.98]"
-                      }`}
-                    >
-                      <p
-                        className="text-[12px] font-bold"
-                        style={{ fontFamily: FONT_GROTESK }}
-                      >
-                        {court.name}
-                      </p>
-                      <p
-                        className={`text-[10px] mt-0.5 ${
-                          selected ? "text-white/60" : "text-neutral-400"
-                        }`}
-                        style={{ fontFamily: FONT_MONO }}
-                      >
-                        {getCourtPrice(court)} kr/h
-                      </p>
-                      {!available && (
-                        <span
-                          className="text-[8px] text-neutral-400 mt-0.5 block"
-                          style={{ fontFamily: FONT_MONO }}
-                        >
-                          bokad
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {selectedCourts.length > 0 && (
-                <p
-                  className="text-[11px] text-neutral-400 mt-2 text-right"
-                  style={{ fontFamily: FONT_MONO }}
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-[10px] font-bold uppercase tracking-widest" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                  välj bana
+                </h2>
+                {/* Any court toggle */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnyCourt(!anyCourt);
+                    if (!anyCourt) setSelectedCourts([]);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold transition-all active:scale-95"
+                  style={{
+                    background: anyCourt ? `${RED}15` : "#fff",
+                    color: anyCourt ? RED : TEXT_MUTED,
+                    fontFamily: FONT_MONO,
+                    border: `1px solid ${anyCourt ? RED + "30" : "rgba(0,0,0,0.08)"}`,
+                  }}
                 >
-                  {selectedCourts.length}{" "}
-                  {selectedCourts.length === 1 ? "bana" : "banor"} · {totalPrice}{" "}
-                  kr
-                </p>
+                  <Shuffle className="w-3 h-3" />
+                  spelar ingen roll
+                </button>
+              </div>
+
+              {!anyCourt && (
+                <div className="grid grid-cols-2 gap-1.5">
+                  {courts.map((court) => {
+                    const available = courtAvailability[court.id] !== false;
+                    const selected = selectedCourts.includes(court.id);
+                    return (
+                      <button
+                        key={court.id}
+                        type="button"
+                        disabled={!available}
+                        onClick={() => available && toggleCourt(court.id)}
+                        className="relative py-3 px-3 rounded-xl text-left transition-all active:scale-[0.98]"
+                        style={{
+                          background: !available ? "rgba(0,0,0,0.03)" : selected ? RED : "#fff",
+                          color: !available ? TEXT_MUTED : selected ? "#fff" : NEAR_BLACK,
+                          opacity: !available ? 0.4 : 1,
+                          cursor: !available ? "not-allowed" : "pointer",
+                          boxShadow: selected ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          {available && !selected && (
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                          )}
+                          <p className="text-[12px] font-bold" style={{ fontFamily: FONT_GROTESK }}>
+                            {court.name}
+                          </p>
+                        </div>
+                        <p className="text-[10px] mt-0.5" style={{ fontFamily: FONT_MONO, opacity: 0.6 }}>
+                          {getCourtPrice(court)} kr/h
+                        </p>
+                        {!available && (
+                          <span className="text-[8px] mt-0.5 block" style={{ fontFamily: FONT_MONO }}>
+                            bokad
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {anyCourt && selectedCourts.length > 0 && (
+                <div className="rounded-xl p-3 flex items-center gap-2" style={{ background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
+                  <Target className="w-4 h-4" style={{ color: RED }} />
+                  <span className="text-[12px] font-medium" style={{ fontFamily: FONT_MONO, color: NEAR_BLACK }}>
+                    {allCourts.find((c) => c.id === selectedCourts[0])?.name} · {totalPrice} kr
+                  </span>
+                </div>
               )}
             </div>
           )}
 
-          {/* Contact info */}
+          {/* ─── Contact info: only show for anonymous or if edit requested ─── */}
           {selectedCourts.length > 0 && (
-            <div>
-              <div className="h-px bg-neutral-100 mb-4" />
-              <h2
-                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                dina uppgifter
-              </h2>
-              <div className="flex gap-2">
-                <input
-                  placeholder="ditt namn"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                  maxLength={100}
-                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[16px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
-                  style={{ fontFamily: FONT_MONO }}
-                />
-                <input
-                  type="tel"
-                  placeholder="telefon"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  required
-                  maxLength={20}
-                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[16px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
-                  style={{ fontFamily: FONT_MONO }}
-                />
-              </div>
-            </div>
+            <>
+              {user && hasProfile && !showContactForm ? (
+                <div className="flex items-center justify-between rounded-xl p-3" style={{ background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
+                  <div>
+                    <p className="text-[12px] font-medium" style={{ fontFamily: FONT_MONO, color: NEAR_BLACK }}>
+                      Bokar som: {name}
+                    </p>
+                    <p className="text-[10px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{phone}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowContactForm(true)}
+                    className="text-[10px] underline"
+                    style={{ fontFamily: FONT_MONO, color: RED }}
+                  >
+                    ändra
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div className="h-px mb-4" style={{ background: "rgba(0,0,0,0.06)" }} />
+                  <h2 className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                    dina uppgifter
+                  </h2>
+                  <div className="flex gap-2">
+                    <input
+                      placeholder="ditt namn"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      required
+                      maxLength={100}
+                      className="flex-1 min-w-0 px-3 py-3 rounded-xl text-[16px] placeholder:opacity-30 focus:outline-none transition-colors"
+                      style={{ fontFamily: FONT_MONO, background: "#fff", border: "1px solid rgba(0,0,0,0.08)", color: NEAR_BLACK }}
+                    />
+                    <input
+                      type="tel"
+                      placeholder="telefon"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      required
+                      maxLength={20}
+                      className="flex-1 min-w-0 px-3 py-3 rounded-xl text-[16px] placeholder:opacity-30 focus:outline-none transition-colors"
+                      style={{ fontFamily: FONT_MONO, background: "#fff", border: "1px solid rgba(0,0,0,0.08)", color: NEAR_BLACK }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
-          {/* Corporate payment option */}
+          {/* ─── Corporate payment option ─── */}
           {selectedCourts.length > 0 && activePackages.length > 0 && (
             <div>
-              <div className="h-px bg-neutral-100 mb-6" />
-              <h2
-                className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
-                style={{ fontFamily: FONT_MONO }}
-              >
+              <div className="h-px mb-4" style={{ background: "rgba(0,0,0,0.06)" }} />
+              <h2 className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
                 betalning
               </h2>
               <div className="space-y-2">
                 <button
                   type="button"
                   onClick={() => { setUseCorporate(false); setSelectedPackageId(null); }}
-                  className={`w-full py-3 px-4 rounded-2xl text-left text-[13px] font-medium transition-all ${
-                    !useCorporate
-                      ? "bg-neutral-900 text-white"
-                      : "bg-neutral-50 text-neutral-600"
-                  }`}
-                  style={{ fontFamily: FONT_MONO }}
+                  className="w-full py-3 px-4 rounded-2xl text-left text-[13px] font-medium transition-all"
+                  style={{
+                    background: !useCorporate ? DARK_BLUE : "#fff",
+                    color: !useCorporate ? "#fff" : NEAR_BLACK,
+                    fontFamily: FONT_MONO,
+                    boxShadow: !useCorporate ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
+                  }}
                 >
                   betala i kassan · {totalPrice} kr
                 </button>
@@ -626,59 +791,63 @@ export default function BookingPage() {
                       key={pkg.id}
                       type="button"
                       onClick={() => { setUseCorporate(true); setSelectedPackageId(pkg.id); }}
-                      className={`w-full py-3 px-4 rounded-2xl text-left flex items-center gap-3 transition-all ${
-                        isSelected
-                          ? "bg-neutral-900 text-white"
-                          : "bg-neutral-50 text-neutral-600"
-                      }`}
+                      className="w-full py-3 px-4 rounded-2xl text-left flex items-center gap-3 transition-all"
+                      style={{
+                        background: isSelected ? DARK_BLUE : "#fff",
+                        color: isSelected ? "#fff" : NEAR_BLACK,
+                        boxShadow: isSelected ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
+                      }}
                     >
-                      <Building2 className={`w-4 h-4 flex-shrink-0 ${isSelected ? "text-orange-400" : "text-neutral-400"}`} />
+                      <Building2 className="w-4 h-4 flex-shrink-0" style={{ opacity: 0.5 }} />
                       <div className="flex-1">
                         <span className="text-[13px] font-medium" style={{ fontFamily: FONT_MONO }}>
                           {pkg.company_name}
                         </span>
-                        <span className={`text-[11px] ml-2 ${isSelected ? "text-white/60" : "text-neutral-400"}`} style={{ fontFamily: FONT_MONO }}>
+                        <span className="text-[11px] ml-2" style={{ fontFamily: FONT_MONO, opacity: 0.5 }}>
                           {remaining}h kvar
                         </span>
                       </div>
-                      <span className="text-[13px] font-bold" style={{ fontFamily: FONT_GROTESK }}>
-                        0 kr
-                      </span>
+                      <span className="text-[13px] font-bold" style={{ fontFamily: FONT_GROTESK }}>0 kr</span>
                     </button>
                   );
                 })}
               </div>
             </div>
           )}
-
-          {/* Summary + Book button */}
-          {selectedCourts.length > 0 && name.trim() && phone.trim() && (
-            <div>
-              <div className="h-px bg-neutral-100 mb-3" />
-              <div className="flex items-center justify-between text-[12px] mb-3" style={{ fontFamily: FONT_MONO }}>
-                <span className="text-neutral-400">
-                  {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{addHour(selectedTime!)} · {selectedCourts.map((id) => courts.find((c) => c.id === id)?.name).join(", ")}
-                </span>
-                <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                  {useCorporate ? "0 kr" : `${totalPrice} kr`}
-                </span>
-              </div>
-
-              <button
-                type="submit"
-                disabled={bookMutation.isPending}
-                className="w-full py-3 rounded-xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                {bookMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-                ) : (
-                  "boka"
-                )}
-              </button>
-            </div>
-          )}
         </form>
+      )}
+
+      {/* ─── Sticky bottom CTA ─── */}
+      {!confirmed && canBook && (
+        <div
+          className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-[calc(env(safe-area-inset-bottom,8px)+8px)] pt-3"
+          style={{
+            background: "linear-gradient(to top, rgba(250,248,245,0.98) 0%, rgba(250,248,245,0.9) 60%, transparent 100%)",
+          }}
+        >
+          <button
+            onClick={() => bookMutation.mutate()}
+            disabled={bookMutation.isPending}
+            className="w-full py-4 rounded-2xl text-[14px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-3"
+            style={{
+              background: RED,
+              color: "#fff",
+              fontFamily: FONT_MONO,
+            }}
+          >
+            {bookMutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <>
+                <span>
+                  {selectedCourts.length} {selectedCourts.length === 1 ? "bana" : "banor"} · {useCorporate ? "0" : totalPrice} kr
+                </span>
+                <span style={{ opacity: 0.7 }}>·</span>
+                <span>BOKA</span>
+              </>
+            )}
+          </button>
+        </div>
       )}
     </div>
   );
