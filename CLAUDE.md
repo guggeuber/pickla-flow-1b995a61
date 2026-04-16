@@ -61,7 +61,7 @@ Located in `supabase/functions/`, each function handles one API domain: `api-adm
 - `auth.ts` — `getAuthenticatedClient(req)` / `getServiceClient()`
 - `bookings.ts` — `generateAccessCode()` / `getOrCreatePublicBookingUserId()`
 
-`api-stripe-webhook` must be deployed with `--no-verify-jwt`.
+**All** functions must be deployed with `--no-verify-jwt` (JWT is HS256 Standby Key; ECC revoked). Auth is handled manually in each function via `getAuthenticatedClient(req)` which calls `client.auth.getUser(token)` with the explicit token — this forces an HTTP call to `/auth/v1/user` and works regardless of algorithm.
 
 ### Design System
 Tailwind dark mode (default). Custom CSS variables in `index.css`:
@@ -122,6 +122,14 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 
 ### Venue Courts
 - 19 dart tables seeded in `venue_courts` with `sport_type = 'dart'`.
+- Seed also covers: venue row, 8 pickleball courts, opening hours, `open_play_sessions`, and `membership_tiers`.
+
+## Infrastructure
+
+- **Supabase project**: `pickla-base` — project ref `cqnjpudmsreubgviqptg`
+- **Frontend**: Vercel, live at `playpickla.com`, auto-deploys on every `git push` to `main`
+- **Email**: Resend — `playpickla.com` verified, SMTP configured in Supabase Auth
+- **Auth**: Supabase Auth with HS256 Standby Key (ECC/ES256 revoked). Site URL: `https://playpickla.com`, redirect URL: `https://playpickla.com/auth/callback`
 
 ## Workflow
 
@@ -130,10 +138,10 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 - **Claude Code**: logic, Edge Functions, database migrations
 
 **Deploy process:**
-1. Claude Code makes changes → `git push`
-2. Tell Lovable-chatten "Deploy edge functions" after each push
-3. Supabase migrations run manually in the SQL editor
-4. Stripe webhook URL: `https://qrzkxhnpxtsicqcpzplc.supabase.co/functions/v1/api-stripe-webhook`
+- Frontend: `git push` → Vercel deploys automatically (no Lovable step needed)
+- Edge Functions: `supabase functions deploy --no-verify-jwt --project-ref cqnjpudmsreubgviqptg`
+- Migrations: run manually in the Supabase SQL editor, then run `NOTIFY pgrst, 'reload schema'` to flush PostgREST cache
+- Stripe webhook URL: `https://cqnjpudmsreubgviqptg.supabase.co/functions/v1/api-stripe-webhook`
 
 **Git:** `git pull --rebase` before pushing if Lovable has made changes.
 
@@ -148,7 +156,17 @@ VITE_SUPABASE_PROJECT_ID=...
 
 Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 
+## Known Pitfalls
+
+- **PostgREST FK embeds + schema cache**: Running migrations via the SQL editor does NOT flush PostgREST's schema cache. If embedded resource queries (`table(col)`) return 500, run `NOTIFY pgrst, 'reload schema'` in the SQL editor, or replace embeds with flat queries merged client-side (see `AdminCorporate.tsx`).
+- **Rules of Hooks**: Never place a `useMemo`/`useCallback`/`useState` after an early return. Move all hooks before any `if (isLoading) return` (see `AdminCourts.tsx` — `groupedCourts` useMemo was after early return and caused React error #310).
+- **Edge Function JWT**: `getUser()` without args reads internal session (empty in Deno) and always fails. Always pass token explicitly: `client.auth.getUser(token)` where `token = authHeader.slice('Bearer '.length)`.
+- **Stripe success URL**: When `successPath` already contains `?`, use `&session=` not `?session=` to avoid double-`?`.
+- **signUp() async state**: After `supabase.auth.signUp()`, `useAuth().user` is still null. Call `supabase.auth.getUser()` directly to get the fresh user ID before continuing.
+
 ## Next Up
+- Design-uppdatering av hela appen
+- Membership visas på /my (webhook skapar korrekt, men query i MyPage kan behöva verifieras)
 - `access_code` on `day_passes` (shown to customer after purchase)
 - SMS to customer on day pass purchase
 - `/display/dart/:court_id` — dart kiosk webapp

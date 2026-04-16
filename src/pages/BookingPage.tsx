@@ -19,7 +19,7 @@ const FONT_MONO = "'Space Mono', monospace";
 
 function generateDates(count = 14) {
   const dates: Date[] = [];
-  const today = new Date();
+  const today = DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate();
   for (let i = 0; i < count; i++) dates.push(addDays(today, i));
   return dates;
 }
@@ -53,7 +53,9 @@ export default function BookingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(() =>
+    DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate()
+  );
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [selectedCourts, setSelectedCourts] = useState<string[]>([]);
   const [name, setName] = useState(searchParams.get("name") || "");
@@ -86,6 +88,19 @@ export default function BookingPage() {
   }, [user, profileLoaded]);
 
   const dateStr = format(selectedDate, "yyyy-MM-dd");
+  const todayStr = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
+
+  // Guard: if selectedDate is somehow in the past, snap to today
+  useEffect(() => {
+    const todayStart = DateTime.now().setZone("Europe/Stockholm").startOf("day");
+    const selStart = DateTime.fromJSDate(selectedDate).setZone("Europe/Stockholm").startOf("day");
+    if (selStart < todayStart) {
+      setSelectedDate(todayStart.toJSDate());
+      setSelectedTime(null);
+      setSelectedCourts([]);
+    }
+  }, []);
+
   const dates = useMemo(() => generateDates(), []);
 
   // Fetch corporate packages for logged-in user
@@ -144,6 +159,34 @@ export default function BookingPage() {
       ),
     [openingHours]
   );
+
+  // For today: filter out time slots whose start time has already passed
+  const filteredTimeSlots = useMemo(() => {
+    if (dateStr !== todayStr) return timeSlots;
+    const now = DateTime.now().setZone("Europe/Stockholm");
+    return timeSlots.filter((slot) => {
+      const slotStart = DateTime.fromISO(`${dateStr}T${slot}:00`, { zone: "Europe/Stockholm" });
+      return slotStart > now;
+    });
+  }, [timeSlots, dateStr, todayStr]);
+
+  // When date changes: auto-select first available slot
+  useEffect(() => {
+    setSelectedTime(filteredTimeSlots[0] ?? null);
+    setSelectedCourts([]);
+  }, [dateStr]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When slots load or the current time advances past the selected slot: re-validate
+  useEffect(() => {
+    if (filteredTimeSlots.length === 0) {
+      setSelectedTime(null);
+      setSelectedCourts([]);
+      return;
+    }
+    if (!selectedTime || !filteredTimeSlots.includes(selectedTime)) {
+      setSelectedTime(filteredTimeSlots[0]);
+    }
+  }, [filteredTimeSlots]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check which courts are available for the selected time
   const courtAvailability = useMemo(() => {
@@ -259,7 +302,7 @@ export default function BookingPage() {
     bookMutation.mutate();
   };
 
-  const isToday = selectedDate.toDateString() === new Date().toDateString();
+  const isToday = dateStr === todayStr;
   const isClosed = openingHours?.is_closed;
 
   if (isLoading) {
@@ -420,28 +463,35 @@ export default function BookingPage() {
               >
                 tid
               </h2>
-              <div
-                className="grid grid-cols-5 gap-1.5"
-              >
-                {timeSlots.map((time) => (
-                  <button
-                    key={time}
-                    type="button"
-                    onClick={() => {
-                      setSelectedTime(time);
-                      setSelectedCourts([]);
-                    }}
-                    className={`py-2 rounded-xl text-[12px] font-bold transition-colors ${
-                      selectedTime === time
-                        ? "bg-neutral-900 text-white"
-                        : "bg-neutral-50 text-neutral-500"
-                    }`}
-                    style={{ fontFamily: FONT_MONO }}
-                  >
-                    {time}
-                  </button>
-                ))}
-              </div>
+              {filteredTimeSlots.length === 0 ? (
+                <p
+                  className="text-[13px] text-neutral-400 text-center py-4"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  inga fler tider idag
+                </p>
+              ) : (
+                <div className="grid grid-cols-5 gap-1.5">
+                  {filteredTimeSlots.map((time) => (
+                    <button
+                      key={time}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTime(time);
+                        setSelectedCourts([]);
+                      }}
+                      className={`py-2 rounded-xl text-[12px] font-bold transition-colors ${
+                        selectedTime === time
+                          ? "bg-neutral-900 text-white"
+                          : "bg-neutral-50 text-neutral-500"
+                      }`}
+                      style={{ fontFamily: FONT_MONO }}
+                    >
+                      {time}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
