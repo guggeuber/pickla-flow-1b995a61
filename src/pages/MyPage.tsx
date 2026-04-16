@@ -619,7 +619,7 @@ const MyPage = () => {
                   <Zap className="w-4 h-4" style={{ color: RED }} />
                 </div>
                 <div className="flex-1">
-                  <p className="text-[12px] font-bold" style={{ fontFamily: FONT_GROTESK, color: NEAR_BLACK }}>
+                  <p className="text-[12px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>
                     Din vanliga {pattern.dayName} {String(pattern.hour).padStart(2, "0")}:00 är ledig
                   </p>
                   <p className="text-[10px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Tryck för att boka</p>
