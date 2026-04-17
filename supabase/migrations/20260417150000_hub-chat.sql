@@ -1,7 +1,17 @@
--- Pickla Hub: chat rooms, messages, participants
--- Each booking / event / daily session gets its own chat channel
+-- Pickla Hub: replace legacy chat_channels/chat_messages with new room-based schema
+-- The old tables (chat_channels, chat_messages) have no production data and are safe to drop.
 
-CREATE TABLE IF NOT EXISTS chat_rooms (
+-- ─── Drop old tables ─────────────────────────────────────────────────────────
+
+DROP TABLE IF EXISTS chat_messages CASCADE;
+DROP TABLE IF EXISTS chat_channels CASCADE;
+-- chat_rooms may exist from a failed previous run — drop for idempotency
+DROP TABLE IF EXISTS chat_rooms CASCADE;
+DROP TABLE IF EXISTS chat_participants CASCADE;
+
+-- ─── New tables ──────────────────────────────────────────────────────────────
+
+CREATE TABLE chat_rooms (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
   room_type TEXT NOT NULL CHECK (room_type IN ('daily', 'booking', 'event', 'ritual')),
@@ -16,11 +26,11 @@ CREATE TABLE IF NOT EXISTS chat_rooms (
 );
 
 -- One daily room per venue per day
-CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_rooms_daily
+CREATE UNIQUE INDEX idx_chat_rooms_daily
   ON chat_rooms(venue_id, session_date)
   WHERE room_type = 'daily' AND session_date IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS chat_messages (
+CREATE TABLE chat_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
   user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
@@ -35,9 +45,9 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_chat_messages_room ON chat_messages(room_id, created_at DESC);
+CREATE INDEX idx_chat_messages_room ON chat_messages(room_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS chat_participants (
+CREATE TABLE chat_participants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -45,7 +55,12 @@ CREATE TABLE IF NOT EXISTS chat_participants (
   UNIQUE(room_id, user_id)
 );
 
--- Trigger: bump room.updated_at on every new message (for list ordering)
+-- ─── Realtime ────────────────────────────────────────────────────────────────
+
+ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;
+
+-- ─── Trigger: bump room.updated_at on every new message ──────────────────────
+
 CREATE OR REPLACE FUNCTION fn_bump_room_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
@@ -59,7 +74,7 @@ CREATE TRIGGER trg_chat_messages_bump_room
   AFTER INSERT ON chat_messages
   FOR EACH ROW EXECUTE FUNCTION fn_bump_room_updated_at();
 
--- RLS ─────────────────────────────────────────────────────────────────────────
+-- ─── RLS ─────────────────────────────────────────────────────────────────────
 
 ALTER TABLE chat_rooms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
