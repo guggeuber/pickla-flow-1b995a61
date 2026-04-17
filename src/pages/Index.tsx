@@ -28,7 +28,7 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background max-w-md mx-auto relative">
       <div className="absolute top-3 right-4 z-10 flex items-center gap-1.5">
-        <motion.button whileTap={{ scale: 0.9 }} onClick={() => navigate("/hub")} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground" style={{ background: "hsl(var(--surface-1))" }}>
+        <motion.button whileTap={{ scale: 0.9 }} onClick={() => navigate("/hub/admin")} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground" style={{ background: "hsl(var(--surface-1))" }}>
           <Settings className="w-4 h-4" />
         </motion.button>
         <motion.button whileTap={{ scale: 0.9 }} onClick={signOut} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground" style={{ background: "hsl(var(--surface-1))" }}>

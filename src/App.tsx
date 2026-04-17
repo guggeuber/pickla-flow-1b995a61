@@ -9,6 +9,7 @@ import NotFound from "./pages/NotFound";
 import LinkHub from "./pages/LinkHub";
 import EventOps from "./pages/EventOps";
 import AdminPage from "./pages/AdminPage";
+import HubPage from "./pages/HubPage";
 import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
 import CommunityPage from "./pages/CommunityPage";
@@ -64,7 +65,8 @@ const App = () => (
             <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/" element={<LinkHub />} />
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
-            <Route path="/hub" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
+            <Route path="/hub" element={<HubPage />} />
+            <Route path="/hub/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/my" element={<MyPage />} />
             <Route path="/community" element={<CommunityPage />} />
             <Route path="/play" element={<PlayPage />} />
