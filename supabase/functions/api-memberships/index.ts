@@ -1,6 +1,13 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 
+async function assertVenueAdmin(admin: ReturnType<typeof getServiceClient>, userId: string, venueId: string): Promise<boolean> {
+  const { data: role } = await admin.from('user_roles').select('role').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
+  if (role) return true;
+  const { data: staff } = await admin.from('venue_staff').select('id').eq('user_id', userId).eq('venue_id', venueId).eq('is_active', true).maybeSingle();
+  return !!staff;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -35,6 +42,7 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const { venueId, name, description, color, discount_percent, monthly_price, sort_order } = body;
       if (!venueId || !name) return errorResponse('Missing venueId or name');
+      if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
 
       const { data, error: iErr } = await admin.from('membership_tiers').insert({
         venue_id: venueId,
@@ -55,6 +63,10 @@ Deno.serve(async (req) => {
       const { tierId, ...updates } = body;
       if (!tierId) return errorResponse('Missing tierId');
 
+      const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tierId).single();
+      if (!tier) return errorResponse('Tier not found', 404);
+      if (!await assertVenueAdmin(admin, userId, tier.venue_id)) return errorResponse('Forbidden', 403);
+
       const { data, error: uErr } = await admin.from('membership_tiers')
         .update(updates).eq('id', tierId).select().single();
       if (uErr) return errorResponse(uErr.message);
@@ -65,6 +77,11 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'tiers') {
       const tierId = url.searchParams.get('tierId');
       if (!tierId) return errorResponse('Missing tierId');
+
+      const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tierId).single();
+      if (!tier) return errorResponse('Tier not found', 404);
+      if (!await assertVenueAdmin(admin, userId, tier.venue_id)) return errorResponse('Forbidden', 403);
+
       const { error: dErr } = await admin.from('membership_tiers').delete().eq('id', tierId);
       if (dErr) return errorResponse(dErr.message);
       return jsonResponse({ ok: true });
@@ -89,6 +106,10 @@ Deno.serve(async (req) => {
       const { tierId, product_type, fixed_price, discount_percent, vat_rate, label } = body;
       if (!tierId || !product_type) return errorResponse('Missing tierId or product_type');
 
+      const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tierId).single();
+      if (!tier) return errorResponse('Tier not found', 404);
+      if (!await assertVenueAdmin(admin, userId, tier.venue_id)) return errorResponse('Forbidden', 403);
+
       const { data, error: iErr } = await admin.from('membership_tier_pricing').insert({
         tier_id: tierId,
         product_type,
@@ -105,6 +126,13 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'tier-pricing') {
       const id = url.searchParams.get('id');
       if (!id) return errorResponse('Missing id');
+
+      const { data: tp } = await admin.from('membership_tier_pricing').select('tier_id').eq('id', id).single();
+      if (!tp) return errorResponse('Pricing not found', 404);
+      const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tp.tier_id).single();
+      if (!tier) return errorResponse('Tier not found', 404);
+      if (!await assertVenueAdmin(admin, userId, tier.venue_id)) return errorResponse('Forbidden', 403);
+
       const { error: dErr } = await admin.from('membership_tier_pricing').delete().eq('id', id);
       if (dErr) return errorResponse(dErr.message);
       return jsonResponse({ ok: true });
@@ -153,6 +181,7 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const { venueId, customerUserId, tierId, expiresAt, notes } = body;
       if (!venueId || !customerUserId || !tierId) return errorResponse('Missing fields');
+      if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
 
       await admin.from('memberships')
         .update({ status: 'cancelled' })
@@ -177,6 +206,10 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const { membershipId, status, tierId, expiresAt, notes } = body;
       if (!membershipId) return errorResponse('Missing membershipId');
+
+      const { data: membership } = await admin.from('memberships').select('venue_id').eq('id', membershipId).single();
+      if (!membership) return errorResponse('Membership not found', 404);
+      if (!await assertVenueAdmin(admin, userId, membership.venue_id)) return errorResponse('Forbidden', 403);
 
       const updates: Record<string, any> = {};
       if (status) updates.status = status;

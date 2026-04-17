@@ -436,6 +436,16 @@ Deno.serve(async (req) => {
       const { id, status } = body;
       if (!id || !status) return errorResponse('Missing id or status');
 
+      // Verify pass exists and caller is venue staff for that venue
+      const { data: pass } = await adminClient.from('day_passes').select('venue_id, user_id').eq('id', id).single();
+      if (!pass) return errorResponse('Day pass not found', 404);
+
+      const { data: isStaff } = await adminClient.from('venue_staff')
+        .select('id').eq('user_id', userId).eq('venue_id', pass.venue_id).eq('is_active', true).maybeSingle();
+      const { data: isSuperAdmin } = await adminClient.from('user_roles')
+        .select('role').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
+      if (!isStaff && !isSuperAdmin) return errorResponse('Forbidden', 403);
+
       const { data, error: upErr } = await adminClient.from('day_passes')
         .update({ status }).eq('id', id).select().single();
       if (upErr) return errorResponse(upErr.message);
@@ -448,6 +458,16 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const { id } = body;
       if (!id) return errorResponse('Missing day pass id');
+
+      // Verify pass exists and caller is venue staff for that venue
+      const { data: pass } = await adminClient.from('day_passes').select('venue_id, user_id').eq('id', id).single();
+      if (!pass) return errorResponse('Day pass not found', 404);
+
+      const { data: isStaff } = await adminClient.from('venue_staff')
+        .select('id').eq('user_id', userId).eq('venue_id', pass.venue_id).eq('is_active', true).maybeSingle();
+      const { data: isSuperAdmin } = await adminClient.from('user_roles')
+        .select('role').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
+      if (!isStaff && !isSuperAdmin) return errorResponse('Forbidden', 403);
 
       const { data, error: upErr } = await adminClient.from('day_passes')
         .update({ status: 'used' }).eq('id', id).select().single();

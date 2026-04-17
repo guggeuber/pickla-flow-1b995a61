@@ -168,8 +168,6 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
     queryKey: ["membership-tiers", venueId],
     enabled: !!venueId,
     queryFn: async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log("[AdminMemberships] token:", session?.access_token?.slice(0, 20) ?? "NULL");
       return apiGet("api-memberships", "tiers", { venueId });
     },
   });
