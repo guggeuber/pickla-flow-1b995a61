@@ -498,8 +498,6 @@ function WalletSection() {
   const qc = useQueryClient();
   const [addingCard, setAddingCard] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
-  const [pushEnabled, setPushEnabled] = useState(false);
-  const [enablingPush, setEnablingPush] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["payment-methods"],
@@ -530,18 +528,6 @@ function WalletSection() {
       toast.error(err.message || "Kunde inte ta bort kort");
     }
     setRemovingId(null);
-  };
-
-  const handleEnablePush = async () => {
-    setEnablingPush(true);
-    const ok = await subscribeToPush();
-    if (ok) {
-      setPushEnabled(true);
-      toast.success("Notifikationer aktiverade!");
-    } else {
-      toast.error("Kunde inte aktivera notifikationer. Kontrollera webbläsarens inställningar.");
-    }
-    setEnablingPush(false);
   };
 
   return (
@@ -590,27 +576,75 @@ function WalletSection() {
           </div>
         )}
 
-        {/* Add card */}
         <button
           onClick={handleAddCard}
           disabled={addingCard}
           className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium active:bg-gray-50 transition-colors"
-          style={{ borderTop: `1px solid ${CARD_BORDER}`, color: BLUE, fontFamily: FONT_HEADING }}
+          style={{ borderTop: methods.length > 0 || !isLoading ? `1px solid ${CARD_BORDER}` : undefined, color: BLUE, fontFamily: FONT_HEADING }}
         >
           {addingCard ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           Lägg till kort
         </button>
+      </div>
+    </motion.div>
+  );
+}
 
-        {/* Push notifications */}
-        {"serviceWorker" in navigator && !pushEnabled && (
+function SettingsSection() {
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">(() => {
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) return "unsupported";
+    return Notification.permission;
+  });
+  const [enabling, setEnabling] = useState(false);
+
+  const handleEnablePush = async () => {
+    setEnabling(true);
+    const ok = await subscribeToPush();
+    setEnabling(false);
+    if (ok) {
+      setPermission("granted");
+      toast.success("Notiser aktiverade!");
+    } else {
+      setPermission(Notification.permission);
+      if (Notification.permission === "denied") {
+        toast.error("Notiser blockerade — ändra i Safari-inställningar");
+      }
+    }
+  };
+
+  if (permission === "unsupported") return null;
+
+  return (
+    <motion.div variants={item}>
+      <div className="flex items-center gap-2 mb-2">
+        <Bell className="w-4 h-4" style={{ color: TEXT_MUTED }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Inställningar</span>
+      </div>
+
+      <div className="rounded-2xl overflow-hidden" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+        {permission === "granted" ? (
+          <div className="flex items-center gap-2 px-4 py-3">
+            <Check className="w-4 h-4 shrink-0" style={{ color: "#22C55E" }} />
+            <span className="text-sm font-medium" style={{ color: "#22C55E", fontFamily: FONT_HEADING }}>
+              Notiser aktiverade
+            </span>
+          </div>
+        ) : permission === "denied" ? (
+          <div className="flex items-center gap-2 px-4 py-3">
+            <Bell className="w-4 h-4 shrink-0" style={{ color: "#EF4444" }} />
+            <span className="text-sm" style={{ color: "#EF4444", fontFamily: FONT_HEADING }}>
+              Notiser blockerade — ändra i Safari-inställningar
+            </span>
+          </div>
+        ) : (
           <button
             onClick={handleEnablePush}
-            disabled={enablingPush}
+            disabled={enabling}
             className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium active:bg-gray-50 transition-colors"
-            style={{ borderTop: `1px solid ${CARD_BORDER}`, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
+            style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
           >
-            {enablingPush ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
-            Aktivera notifikationer
+            {enabling ? <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} /> : <span>🔔</span>}
+            Aktivera notiser
           </button>
         )}
       </div>
@@ -792,11 +826,14 @@ const MyPage = () => {
           {/* QR Code for check-in */}
           <QrCodeCard userId={user.id} displayName={displayName} />
 
+          {/* Wallet: saved cards */}
+          <WalletSection />
+
           {/* Unified day pass section */}
           <DayPassSection />
 
-          {/* Wallet: saved cards + push notifications */}
-          <WalletSection />
+          {/* Settings: push notifications etc */}
+          <SettingsSection />
         </motion.div>
       </main>
 
