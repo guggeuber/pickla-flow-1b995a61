@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, Wallet, Clock, QrCode, Zap, CreditCard } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight } from "lucide-react";
 import QrCodeCard from "@/components/my/QrCodeCard";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -10,21 +10,23 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { DateTime } from "luxon";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-// Brand colors
-const RED = "#CC2936";
-const DARK_BLUE = "#1a1f3a";
-const CREAM = "#faf8f5";
-const NEAR_BLACK = "#1a1a1a";
-const TEXT_SECONDARY = "#6B7280";
-const TEXT_MUTED = "rgba(26,26,26,0.45)";
-const CARD_BG = "#FFFFFF";
-const CARD_BORDER = "rgba(0,0,0,0.06)";
+// Brand colors for player-facing light theme
+const BLUE = "#0066FF";
+const BLUE_LIGHT = "rgba(0,102,255,0.08)";
+const BLUE_BORDER = "rgba(0,102,255,0.15)";
 const GREEN = "#22C55E";
+const GREEN_LIGHT = "rgba(34,197,94,0.08)";
+const GREEN_BORDER = "rgba(34,197,94,0.15)";
+const TEXT_PRIMARY = "#111827";
+const TEXT_SECONDARY = "#6B7280";
+const TEXT_MUTED = "#9CA3AF";
+const CARD_BG = "#FFFFFF";
+const CARD_BORDER = "#E5E7EB";
+const PAGE_BG = "#F8FAFC";
 
 function usePlayerProfile() {
   const { user } = useAuth();
@@ -54,7 +56,7 @@ function useMyBookings() {
         .select("*, venue_courts(name)")
         .eq("user_id", user!.id)
         .order("start_time", { ascending: false })
-        .limit(20);
+        .limit(10);
       if (error) throw error;
       return data;
     },
@@ -100,42 +102,58 @@ function useCorporateMemberships() {
   });
 }
 
-// Smart suggestion from booking history
-function useBookingPattern() {
-  const { user } = useAuth();
-  const { data } = useQuery({
-    queryKey: ["booking-history", user?.id],
-    enabled: !!user,
-    staleTime: 60000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("bookings")
-        .select("start_time")
-        .eq("user_id", user!.id)
-        .order("start_time", { ascending: false })
-        .limit(20);
-      return data || [];
-    },
-  });
+function CorporateSection() {
+  const { data } = useCorporateMemberships();
+  const navigate = useNavigate();
 
-  return useMemo(() => {
-    if (!data?.length) return null;
-    const freq: Record<string, { count: number; weekday: number; hour: number; dayName: string }> = {};
-    data.forEach((b: any) => {
-      const dt = DateTime.fromISO(b.start_time, { zone: "Europe/Stockholm" });
-      const key = `${dt.weekday}-${dt.hour}`;
-      if (!freq[key]) {
-        freq[key] = { count: 0, weekday: dt.weekday, hour: dt.hour, dayName: dt.setLocale("sv").toFormat("EEEE") };
-      }
-      freq[key].count++;
-    });
-    const sorted = Object.values(freq).sort((a, b) => b.count - a.count);
-    return sorted[0]?.count >= 2 ? sorted[0] : null;
-  }, [data]);
+  if (!data?.memberships?.length) return null;
+
+  return (
+    <motion.div variants={item}>
+      <div className="flex items-center gap-2 mb-2">
+        <Building2 className="w-4 h-4" style={{ color: BLUE }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Företag</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {data.memberships.map((m: any) => {
+          const account = m.corporate_accounts;
+          const pkg = data.packages?.find((p: any) => p.corporate_account_id === account?.id);
+          const remaining = pkg ? pkg.total_hours - pkg.used_hours : null;
+
+          return (
+            <button
+              key={m.id}
+              onClick={() => {
+                if (m.role === 'admin') {
+                  navigate(`/corp/dashboard?id=${account?.id}`);
+                }
+              }}
+              className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
+              style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: BLUE_LIGHT }}>
+                  <Building2 className="w-4 h-4" style={{ color: BLUE }} />
+                </div>
+                <div>
+                  <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{account?.company_name || "Företag"}</p>
+                  <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                    {m.role === 'admin' ? 'Admin' : 'Medlem'}
+                    {remaining !== null && ` · ${remaining}h kvar`}
+                  </p>
+                </div>
+              </div>
+              {m.role === 'admin' && <ChevronRight className="w-4 h-4" style={{ color: TEXT_MUTED }} />}
+            </button>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
 }
 
-const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.06 } } };
-const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } };
+const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
+const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } };
 
 function ProfileCard({ profile, user, displayName }: { profile: any; user: any; displayName: string }) {
   const [editing, setEditing] = useState(false);
@@ -163,12 +181,17 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
   return (
     <motion.div
       variants={item}
-      className="rounded-2xl p-4"
-      style={{ background: CARD_BG, boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}
+      className="rounded-2xl p-5"
+      style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}`, boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
     >
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-full flex items-center justify-center" style={{ background: `${RED}12` }}>
-          <span className="text-lg font-bold" style={{ color: RED }}>{displayName.charAt(0).toUpperCase()}</span>
+        <div
+          className="w-12 h-12 rounded-full flex items-center justify-center"
+          style={{ background: BLUE_LIGHT }}
+        >
+          <span className="text-lg font-bold" style={{ color: BLUE }}>
+            {displayName.charAt(0).toUpperCase()}
+          </span>
         </div>
         <div className="flex-1">
           {editing ? (
@@ -178,7 +201,7 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
                 onChange={(e) => setEditName(e.target.value)}
                 className="text-sm rounded-lg px-3 py-1.5 outline-none"
                 placeholder="Namn"
-                style={{ fontFamily: FONT_HEADING, background: CREAM, border: `1px solid ${CARD_BORDER}`, color: NEAR_BLACK }}
+                style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
               />
               <div className="flex items-center gap-2">
                 <Phone className="w-3.5 h-3.5 shrink-0" style={{ color: TEXT_MUTED }} />
@@ -187,52 +210,75 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
                   onChange={(e) => setEditPhone(e.target.value)}
                   className="text-sm rounded-lg px-3 py-1.5 outline-none flex-1"
                   placeholder="Telefonnummer"
-                  style={{ fontFamily: FONT_MONO, background: CREAM, border: `1px solid ${CARD_BORDER}`, color: NEAR_BLACK }}
+                  style={{ fontFamily: FONT_MONO, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
                 />
               </div>
             </div>
           ) : (
             <div>
-              <p className="font-semibold text-[15px]" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>{displayName}</p>
-              <p className="text-[11px]" style={{ color: TEXT_MUTED }}>{user.email}</p>
+              <p className="font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
+              <p className="text-xs" style={{ color: TEXT_MUTED }}>{user.email}</p>
+              {profile?.phone && (
+                <p className="text-xs mt-0.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{profile.phone}</p>
+              )}
             </div>
           )}
         </div>
         {editing ? (
-          <button onClick={handleSave} disabled={saving} className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${RED}10` }}>
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} /> : <Save className="w-4 h-4" style={{ color: RED }} />}
-          </button>
-        ) : (
-          <button
-            onClick={() => { setEditName(displayName); setEditPhone(profile?.phone || ""); setEditing(true); }}
-            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: CREAM }}
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={handleSave}
+            disabled={saving}
+            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: BLUE_LIGHT }}
           >
-            <Pencil className="w-3.5 h-3.5" style={{ color: TEXT_MUTED }} />
-          </button>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} /> : <Save className="w-4 h-4" style={{ color: BLUE }} />}
+          </motion.button>
+        ) : (
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => { setEditName(displayName); setEditPhone(profile?.phone || ""); setEditing(true); }}
+            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}
+          >
+            <Pencil className="w-4 h-4" style={{ color: TEXT_MUTED }} />
+          </motion.button>
         )}
       </div>
+      {profile && !editing && (
+        <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: `1px solid ${CARD_BORDER}` }}>
+          <div className="text-center flex-1">
+            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_matches || 0}</p>
+            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Matcher</p>
+          </div>
+          <div className="text-center flex-1">
+            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_wins || 0}</p>
+            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Vinster</p>
+          </div>
+          <div className="text-center flex-1">
+            <p className="text-lg font-bold" style={{ color: BLUE }}>{profile.pickla_rating || 1000}</p>
+            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Rating</p>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
 
-function WalletSection() {
-  const { data: membership } = useActiveMembership();
-  const { data: passes, isLoading: passesLoading } = useMyPasses();
-  const { data: corpData } = useCorporateMemberships();
+function DayPassSection() {
+  const { data, isLoading } = useMyPasses();
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const [buying, setBuying] = useState(false);
   const [sharingPassId, setSharingPassId] = useState<string | null>(null);
   const [shareEmail, setShareEmail] = useState("");
   const [sharing, setSharing] = useState(false);
   const [justCreatedToken, setJustCreatedToken] = useState<string | null>(null);
 
-  const membershipTier = (membership as any)?.membership_tiers;
-  const activePasses = (passes?.passes || []).filter((p: any) => p.status === "active" && !p.share);
-  const sharedPasses = (passes?.passes || []).filter((p: any) => p.share?.status === "pending");
-  const allowance = passes?.allowance || { has_membership: false, passes_allowed: 0, passes_remaining: 0 };
-  const corpMemberships = corpData?.memberships || [];
+  const passes = data?.passes || [];
+  const allowance = data?.allowance || { has_membership: false, passes_allowed: 0, passes_remaining: 0 };
+
+  const activePasses = passes.filter((p: any) => p.status === 'active' && !p.share);
+  const sharedPasses = passes.filter((p: any) => p.share?.status === 'pending');
 
   const buildLink = (token: string) => `${window.location.origin}/pass/${token}`;
 
@@ -252,12 +298,15 @@ function WalletSection() {
     if (!shareEmail.trim()) { toast.error("Ange e-postadress"); return; }
     setSharing(true);
     try {
-      const result = await apiPost("api-day-passes", "share", { day_pass_id: dayPassId, recipient_email: shareEmail.trim() });
+      const result = await apiPost("api-day-passes", "share", {
+        day_pass_id: dayPassId,
+        recipient_email: shareEmail.trim(),
+      });
       setJustCreatedToken(result.token);
       setShareEmail("");
       setSharingPassId(null);
       queryClient.invalidateQueries({ queryKey: ["my-passes"] });
-      toast.success("Pass delat!");
+      toast.success("Pass delat! Kopiera länken och skicka till din vän.");
     } catch (err: any) {
       toast.error(err.message || "Kunde inte dela pass");
     }
@@ -279,154 +328,153 @@ function WalletSection() {
     toast.success("Länk kopierad!");
   };
 
+  if (isLoading) {
+    return (
+      <motion.div variants={item} className="flex justify-center py-4">
+        <Loader2 className="w-5 h-5 animate-spin" style={{ color: TEXT_MUTED }} />
+      </motion.div>
+    );
+  }
+
   return (
     <motion.div variants={item}>
-      <div className="flex items-center gap-2 mb-3">
-        <Wallet className="w-4 h-4" style={{ color: RED }} />
-        <span className="text-[13px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>Wallet</span>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Ticket className="w-4 h-4" style={{ color: BLUE }} />
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina dagspass</span>
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>
+            {activePasses.length}
+          </span>
+        </div>
       </div>
 
-      <div className="rounded-2xl overflow-hidden" style={{ background: CARD_BG, boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
-        {/* Membership */}
-        <div className="p-4" style={{ borderBottom: `1px solid ${CARD_BORDER}` }}>
-          {membership ? (
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${membershipTier?.color || GREEN}15` }}>
-                <Check className="w-4 h-4" style={{ color: membershipTier?.color || GREEN }} />
-              </div>
-              <div className="flex-1">
-                <p className="text-[13px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>
-                  {membershipTier?.name || "Medlem"}
-                </p>
-                <p className="text-[10px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Aktivt medlemskap</p>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => navigate("/membership")}
-              className="w-full flex items-center gap-3 text-left active:opacity-80 transition-opacity"
-            >
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${RED}10` }}>
-                <CreditCard className="w-4 h-4" style={{ color: RED }} />
-              </div>
-              <div className="flex-1">
-                <p className="text-[13px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>Bli medlem</p>
-                <p className="text-[10px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Se medlemskap och priser →</p>
-              </div>
-            </button>
-          )}
+      {/* Member allowance info */}
+      {allowance.has_membership && allowance.passes_allowed > 0 && (
+        <div className="rounded-xl px-3 py-2 mb-3 flex items-center gap-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
+          <Gift className="w-3.5 h-3.5 shrink-0" style={{ color: GREEN }} />
+          <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
+            <span className="font-bold" style={{ color: TEXT_PRIMARY }}>{allowance.passes_remaining}</span> av {allowance.passes_allowed} gratispass kvar denna månad
+          </p>
         </div>
+      )}
 
-        {/* Day passes */}
-        <div className="p-4" style={{ borderBottom: `1px solid ${CARD_BORDER}` }}>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <Ticket className="w-3.5 h-3.5" style={{ color: RED }} />
-              <span className="text-[12px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>Dagspass</span>
-              {activePasses.length > 0 && (
-                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: `${GREEN}15`, color: GREEN }}>
-                  {activePasses.length}
-                </span>
-              )}
-            </div>
-            <button
-              onClick={handleBuy}
-              disabled={buying}
-              className="px-3 py-1 rounded-full text-[10px] font-bold active:scale-95 transition-transform"
-              style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
-            >
-              {buying ? "..." : "+ Köp"}
+      {/* Buy button */}
+      <button
+        onClick={handleBuy}
+        disabled={buying}
+        className="w-full py-3 rounded-xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2 mb-3 disabled:opacity-40"
+        style={{ background: BLUE, fontFamily: FONT_MONO }}
+      >
+        {buying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><ShoppingBag className="w-3.5 h-3.5" /> Köp dagspass</>}
+      </button>
+
+      {/* Just created share link */}
+      <AnimatePresence>
+        {justCreatedToken && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            className="rounded-xl p-3 flex items-center gap-2 mb-3"
+            style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}
+          >
+            <Check className="w-3.5 h-3.5 shrink-0" style={{ color: GREEN }} />
+            <p className="text-xs flex-1 truncate" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{buildLink(justCreatedToken)}</p>
+            <button onClick={() => copyLink(buildLink(justCreatedToken))} className="shrink-0">
+              <Copy className="w-4 h-4" style={{ color: GREEN }} />
             </button>
-          </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          {allowance.has_membership && allowance.passes_allowed > 0 && (
-            <div className="rounded-lg px-2.5 py-1.5 mb-2 flex items-center gap-1.5" style={{ background: `${GREEN}08` }}>
-              <Gift className="w-3 h-3" style={{ color: GREEN }} />
-              <p className="text-[10px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
-                <b style={{ color: NEAR_BLACK }}>{allowance.passes_remaining}</b> av {allowance.passes_allowed} gratispass kvar
-              </p>
-            </div>
-          )}
-
-          {/* Just created share link */}
-          <AnimatePresence>
-            {justCreatedToken && (
-              <motion.div
-                initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                className="rounded-lg p-2.5 flex items-center gap-2 mb-2"
-                style={{ background: `${GREEN}08`, border: `1px solid ${GREEN}20` }}
-              >
-                <Check className="w-3 h-3 shrink-0" style={{ color: GREEN }} />
-                <p className="text-[10px] flex-1 truncate" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{buildLink(justCreatedToken)}</p>
-                <button onClick={() => copyLink(buildLink(justCreatedToken))} className="shrink-0">
-                  <Copy className="w-3.5 h-3.5" style={{ color: GREEN }} />
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {activePasses.length === 0 && sharedPasses.length === 0 ? (
-            <p className="text-[11px] text-center py-1" style={{ color: TEXT_MUTED }}>Inga aktiva dagspass</p>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {activePasses.map((p: any) => (
-                <div key={p.id}>
-                  <div className="flex items-center justify-between py-1.5">
-                    <div className="flex items-center gap-2 flex-1">
-                      <span className="text-[12px] font-medium" style={{ color: NEAR_BLACK }}>Dagspass</span>
-                      {p.is_free && <span className="px-1 py-0.5 rounded text-[8px] font-bold" style={{ background: `${GREEN}12`, color: GREEN }}>GRATIS</span>}
-                      <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
-                        {new Date(p.valid_date).toLocaleDateString("sv-SE", { day: "numeric", month: "short" })}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => { setSharingPassId(sharingPassId === p.id ? null : p.id); setShareEmail(""); setJustCreatedToken(null); }}
-                      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                      style={{ background: sharingPassId === p.id ? `${RED}10` : CREAM }}
-                    >
-                      <Send className="w-3 h-3" style={{ color: sharingPassId === p.id ? RED : TEXT_MUTED }} />
-                    </button>
-                  </div>
-                  <AnimatePresence>
-                    {sharingPassId === p.id && (
-                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                        <div className="pt-1 pb-2 flex gap-2">
-                          <input
-                            type="email"
-                            placeholder="Vännens e-post"
-                            value={shareEmail}
-                            onChange={(e) => setShareEmail(e.target.value)}
-                            className="flex-1 px-3 py-2 rounded-lg text-[11px] outline-none"
-                            style={{ fontFamily: FONT_MONO, background: CREAM, border: `1px solid ${CARD_BORDER}`, color: NEAR_BLACK }}
-                          />
-                          <button
-                            onClick={() => handleShare(p.id)}
-                            disabled={sharing}
-                            className="px-3 py-2 rounded-lg text-[11px] font-bold active:scale-95 transition-transform disabled:opacity-40"
-                            style={{ background: RED, color: "#fff", fontFamily: FONT_MONO }}
-                          >
-                            {sharing ? "..." : "Dela"}
-                          </button>
-                        </div>
-                      </motion.div>
+      {/* Active passes */}
+      {activePasses.length === 0 && sharedPasses.length === 0 ? (
+        <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+          <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga aktiva dagspass</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {activePasses.map((p: any) => (
+            <div key={p.id}>
+              <div className="rounded-xl p-3 flex items-center justify-between" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>Dagspass</p>
+                    {p.is_free && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: GREEN_LIGHT, color: GREEN }}>GRATIS</span>
                     )}
-                  </AnimatePresence>
+                  </div>
+                  <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                    {new Date(p.valid_date).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
+                  </p>
                 </div>
-              ))}
+                {!p.is_free && <span className="text-xs font-bold mr-2" style={{ color: TEXT_SECONDARY }}>{p.price} SEK</span>}
+                <button
+                  onClick={() => { setSharingPassId(sharingPassId === p.id ? null : p.id); setShareEmail(""); setJustCreatedToken(null); }}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ background: sharingPassId === p.id ? BLUE_LIGHT : PAGE_BG, border: `1px solid ${sharingPassId === p.id ? BLUE_BORDER : CARD_BORDER}` }}
+                >
+                  <Send className="w-3.5 h-3.5" style={{ color: sharingPassId === p.id ? BLUE : TEXT_MUTED }} />
+                </button>
+              </div>
+
+              {/* Share form inline */}
+              <AnimatePresence>
+                {sharingPassId === p.id && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="pt-2 flex gap-2">
+                      <input
+                        type="email"
+                        placeholder="Vännens e-post"
+                        value={shareEmail}
+                        onChange={(e) => setShareEmail(e.target.value)}
+                        className="flex-1 px-3 py-2.5 rounded-xl text-xs outline-none"
+                        style={{ fontFamily: FONT_MONO, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                      />
+                      <button
+                        onClick={() => handleShare(p.id)}
+                        disabled={sharing}
+                        className="px-4 py-2.5 rounded-xl text-white text-xs font-bold active:scale-[0.98] transition-transform disabled:opacity-40"
+                        style={{ background: BLUE, fontFamily: FONT_MONO }}
+                      >
+                        {sharing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Dela"}
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ))}
+
+          {/* Shared (pending) passes */}
+          {sharedPasses.length > 0 && (
+            <div className="pt-1">
+              <p className="text-[10px] uppercase tracking-wider mb-1.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Delade pass</p>
               {sharedPasses.map((p: any) => (
-                <div key={p.id} className="flex items-center gap-2 py-1.5">
-                  <Send className="w-3 h-3 shrink-0" style={{ color: RED }} />
-                  <span className="text-[11px] truncate flex-1" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
+                <div key={p.id} className="rounded-xl p-3 flex items-center gap-2 mb-1.5" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
+                  <Send className="w-3 h-3 shrink-0" style={{ color: BLUE }} />
+                  <span className="text-xs truncate flex-1" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
                     {p.share?.recipient_email || "Delat pass"}
                   </span>
-                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold" style={{ background: `${RED}10`, color: RED }}>Väntande</span>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold shrink-0" style={{ background: BLUE_LIGHT, color: BLUE }}>
+                    Väntande
+                  </span>
                   {p.share?.token && (
-                    <button onClick={() => copyLink(buildLink(p.share.token))} className="w-6 h-6 rounded flex items-center justify-center" style={{ background: CREAM }}>
+                    <button
+                      onClick={() => copyLink(buildLink(p.share.token))}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                      style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}
+                    >
                       <Copy className="w-3 h-3" style={{ color: TEXT_MUTED }} />
                     </button>
                   )}
                   {p.share && (
-                    <button onClick={() => handleRevoke(p.share.id)} className="w-6 h-6 rounded flex items-center justify-center" style={{ background: "rgba(239,68,68,0.06)" }}>
+                    <button
+                      onClick={() => handleRevoke(p.share.id)}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                      style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)" }}
+                    >
                       <Trash2 className="w-3 h-3 text-red-400" />
                     </button>
                   )}
@@ -434,126 +482,6 @@ function WalletSection() {
               ))}
             </div>
           )}
-        </div>
-
-        {/* Corporate */}
-        {corpMemberships.length > 0 && (
-          <div className="p-4">
-            {corpMemberships.map((m: any) => {
-              const account = m.corporate_accounts;
-              const pkg = corpData?.packages?.find((p: any) => p.corporate_account_id === account?.id);
-              const remaining = pkg ? pkg.total_hours - pkg.used_hours : null;
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => m.role === "admin" && navigate(`/corp/dashboard?id=${account?.id}`)}
-                  className="w-full flex items-center gap-3 text-left active:opacity-80 transition-opacity"
-                >
-                  <Building2 className="w-4 h-4" style={{ color: DARK_BLUE }} />
-                  <div className="flex-1">
-                    <p className="text-[12px] font-medium" style={{ color: NEAR_BLACK }}>{account?.company_name || "Företag"}</p>
-                    <p className="text-[10px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-                      {m.role === "admin" ? "Admin" : "Medlem"}{remaining !== null && ` · ${remaining}h kvar`}
-                    </p>
-                  </div>
-                  {m.role === "admin" && <ChevronRight className="w-3.5 h-3.5" style={{ color: TEXT_MUTED }} />}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
-function ActivitiesSection() {
-  const { data: bookings } = useMyBookings();
-  const [tab, setTab] = useState<"upcoming" | "history">("upcoming");
-
-  const now = new Date();
-  const upcoming = (bookings || []).filter(
-    (b) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time) > now
-  );
-  const history = (bookings || []).filter(
-    (b) => new Date(b.end_time) <= now || b.status === "cancelled"
-  );
-
-  const items = tab === "upcoming" ? upcoming : history;
-
-  return (
-    <motion.div variants={item}>
-      <div className="flex items-center gap-2 mb-3">
-        <Calendar className="w-4 h-4" style={{ color: RED }} />
-        <span className="text-[13px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>Aktiviteter</span>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 mb-3 p-0.5 rounded-xl" style={{ background: "rgba(0,0,0,0.04)" }}>
-        {(["upcoming", "history"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className="flex-1 py-2 rounded-lg text-[11px] font-bold transition-all"
-            style={{
-              background: tab === t ? CARD_BG : "transparent",
-              color: tab === t ? NEAR_BLACK : TEXT_MUTED,
-              fontFamily: FONT_MONO,
-              boxShadow: tab === t ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
-            }}
-          >
-            {t === "upcoming" ? `Kommande (${upcoming.length})` : `Historik (${history.length})`}
-          </button>
-        ))}
-      </div>
-
-      {items.length === 0 ? (
-        <div className="rounded-2xl p-5 text-center" style={{ background: CARD_BG, boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
-          <p className="text-[12px]" style={{ color: TEXT_MUTED }}>
-            {tab === "upcoming" ? "Inga kommande bokningar" : "Ingen historik ännu"}
-          </p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {items.slice(0, 8).map((b) => {
-            const dt = DateTime.fromISO(b.start_time, { zone: "Europe/Stockholm" });
-            const endDt = DateTime.fromISO(b.end_time, { zone: "Europe/Stockholm" });
-            const isToday = dt.hasSame(DateTime.now().setZone("Europe/Stockholm"), "day");
-            return (
-              <div
-                key={b.id}
-                className="rounded-xl p-3 flex items-center gap-3"
-                style={{ background: CARD_BG, boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
-              >
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="text-[13px] font-medium" style={{ color: NEAR_BLACK }}>
-                      {(b as any).venue_courts?.name || "Bana"}
-                    </p>
-                    {isToday && tab === "upcoming" && (
-                      <span className="px-1.5 py-0.5 rounded text-[8px] font-bold" style={{ background: `${GREEN}15`, color: GREEN }}>IDAG</span>
-                    )}
-                  </div>
-                  <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-                    {dt.setLocale("sv").toFormat("ccc d LLL")} · {dt.toFormat("HH:mm")}–{endDt.toFormat("HH:mm")}
-                  </p>
-                </div>
-                {tab === "upcoming" && b.access_code && (
-                  <div className="text-center">
-                    <p className="text-[16px] font-bold tracking-wider" style={{ fontFamily: FONT_MONO, color: RED }}>
-                      {b.access_code}
-                    </p>
-                    <p className="text-[8px] uppercase" style={{ color: TEXT_MUTED }}>kod</p>
-                  </div>
-                )}
-                {tab === "history" && (
-                  <span className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-                    {b.total_price ? `${b.total_price} kr` : "—"}
-                  </span>
-                )}
-              </div>
-            );
-          })}
         </div>
       )}
     </motion.div>
@@ -567,12 +495,13 @@ const MyPage = () => {
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
 
   const { data: profile } = usePlayerProfile();
-  const pattern = useBookingPattern();
+  const { data: bookings } = useMyBookings();
+  const { data: activeMembership } = useActiveMembership();
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: CREAM }}>
-        <Loader2 className="w-6 h-6 animate-spin" style={{ color: RED }} />
+      <div className="min-h-screen flex items-center justify-center" style={{ background: PAGE_BG }}>
+        <Loader2 className="w-6 h-6 animate-spin" style={{ color: BLUE }} />
       </div>
     );
   }
@@ -580,55 +509,47 @@ const MyPage = () => {
   if (!user) return <Navigate to={`/auth?redirect=/my&v=${venueSlug}`} replace />;
 
   const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
+  const activeBookings = bookings?.filter((b) => b.status === "confirmed" || b.status === "pending") || [];
+  const membershipTier = (activeMembership as any)?.membership_tiers;
 
   return (
-    <div className="min-h-screen" style={{ background: CREAM }}>
-      {/* ═══ STICKY TOP ═══ */}
+    <div className="min-h-screen" style={{ background: PAGE_BG }}>
+      {/* ═══ STICKY TOP: Logo ═══ */}
       <header
         className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
-        style={{ background: `linear-gradient(to bottom, ${CREAM}f2 0%, ${CREAM}b3 50%, transparent 100%)` }}
+        style={{
+          background: "linear-gradient(to bottom, rgba(248,250,252,0.95) 0%, rgba(248,250,252,0.7) 50%, transparent 100%)",
+        }}
       >
         <div className="pt-2">
-          <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
+          <img
+            src={picklaLogo}
+            alt="Pickla"
+            className="h-7 w-auto"
+          />
         </div>
         <motion.button
           whileTap={{ scale: 0.9 }}
-          onClick={async () => { await signOut(); navigate(`/?v=${venueSlug}`); }}
-          className="w-8 h-8 rounded-lg flex items-center justify-center mb-1"
-          style={{ background: CARD_BG, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}
+          onClick={async () => {
+            await signOut();
+            navigate(`/?v=${venueSlug}`);
+          }}
+          className="w-9 h-9 rounded-xl flex items-center justify-center mb-1"
+          style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}
         >
-          <LogOut className="w-3.5 h-3.5" style={{ color: TEXT_MUTED }} />
+          <LogOut className="w-4 h-4" style={{ color: TEXT_MUTED }} />
         </motion.button>
       </header>
 
       {/* ═══ MAIN CONTENT ═══ */}
       <main className="pt-24 px-5 pb-28">
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
-          {/* Smart greeting + suggestion */}
-          <motion.div variants={item}>
-            <p className="text-[20px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>
-              Hej {displayName.split(" ")[0]} 👋
-            </p>
-            {pattern && (
-              <button
-                onClick={() => navigate("/book")}
-                className="mt-2 w-full rounded-2xl p-3 flex items-center gap-3 text-left active:scale-[0.98] transition-transform"
-                style={{ background: `${RED}08`, border: `1.5px solid ${RED}18` }}
-              >
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${RED}12` }}>
-                  <Zap className="w-4 h-4" style={{ color: RED }} />
-                </div>
-                <div className="flex-1">
-                  <p className="text-[12px] font-bold" style={{ fontFamily: FONT_HEADING, color: NEAR_BLACK }}>
-                    Din vanliga {pattern.dayName} {String(pattern.hour).padStart(2, "0")}:00 är ledig
-                  </p>
-                  <p className="text-[10px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Tryck för att boka</p>
-                </div>
-              </button>
-            )}
-          </motion.div>
+          {/* Greeting */}
+          <motion.p variants={item} className="text-lg font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+            Hej {displayName} 👋
+          </motion.p>
 
-          {/* Quick actions */}
+          {/* Quick action pills */}
           <motion.div variants={item} className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
             {[
               { label: "+ Boka bana", to: "/book" },
@@ -638,50 +559,132 @@ const MyPage = () => {
               <button
                 key={a.label}
                 onClick={() => navigate(a.to)}
-                className="shrink-0 px-4 py-2 rounded-full text-[11px] font-bold whitespace-nowrap active:scale-95 transition-transform"
-                style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
+                className="shrink-0 px-4 py-2 rounded-full text-[12px] font-bold whitespace-nowrap active:scale-95 transition-transform"
+                style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_MONO }}
               >
                 {a.label}
               </button>
             ))}
           </motion.div>
 
-          {/* Profile card */}
+          {/* Profile card with edit */}
           <ProfileCard profile={profile} user={user} displayName={displayName} />
 
-          {/* Wallet */}
-          <WalletSection />
+          {/* Membership */}
+          {activeMembership ? (
+            <motion.div
+              variants={item}
+              className="rounded-2xl p-5"
+              style={{
+                background: membershipTier?.color
+                  ? `${membershipTier.color}10`
+                  : GREEN_LIGHT,
+                border: `1.5px solid ${membershipTier?.color ? membershipTier.color + "30" : GREEN_BORDER}`,
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: `${membershipTier?.color || GREEN}20` }}>
+                  <Check className="w-5 h-5" style={{ color: membershipTier?.color || GREEN }} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                    {membershipTier?.name || "Medlem"}
+                  </p>
+                  <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
+                    {membershipTier?.description || "Aktivt medlemskap"}
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.button
+              variants={item}
+              onClick={() => navigate("/membership")}
+              className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
+              style={{
+                background: BLUE_LIGHT,
+                border: `1.5px solid ${BLUE_BORDER}`,
+              }}
+            >
+              <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                Bli medlem
+              </p>
+              <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
+                Se medlemskap och priser →
+              </p>
+            </motion.button>
+          )}
 
-          {/* Activities */}
-          <ActivitiesSection />
+          {/* Active bookings */}
+          <motion.div variants={item}>
+            <div className="flex items-center gap-2 mb-2">
+              <Calendar className="w-4 h-4" style={{ color: BLUE }} />
+              <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookings.length}</span>
+            </div>
+            {activeBookings.length === 0 ? (
+              <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga aktiva bokningar</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {activeBookings.slice(0, 5).map((b) => (
+                  <div key={b.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                    <div>
+                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{(b as any).venue_courts?.name || "Bana"}</p>
+                      <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                        {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
+                        {" "}
+                        {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? GREEN_LIGHT : BLUE_LIGHT, color: b.status === "confirmed" ? GREEN : BLUE }}>
+                      {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
 
-          {/* QR Code */}
+          {/* Corporate memberships */}
+          <CorporateSection />
+
+          {/* QR Code for check-in */}
           <QrCodeCard userId={user.id} displayName={displayName} />
+
+          {/* Unified day pass section */}
+          <DayPassSection />
         </motion.div>
       </main>
 
       {/* ═══ FIXED BOTTOM NAV ═══ */}
       <nav
         className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-8 pt-12"
-        style={{ background: `linear-gradient(to top, ${CREAM}f8 0%, ${CREAM}cc 40%, ${CREAM}4d 70%, transparent 100%)` }}
+        style={{
+          background: "linear-gradient(to top, rgba(248,250,252,0.97) 0%, rgba(248,250,252,0.8) 40%, rgba(248,250,252,0.3) 70%, transparent 100%)",
+        }}
       >
         <a
           href="https://chat.whatsapp.com/HL1XcYaNFSuE56q7MqCpdw"
           target="_blank"
           rel="noopener noreferrer"
           className="text-[13px] font-bold underline underline-offset-4 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO, color: NEAR_BLACK, textDecorationColor: CARD_BORDER }}
+          style={{ fontFamily: FONT_MONO, color: TEXT_PRIMARY, textDecorationColor: CARD_BORDER }}
         >
           chat
         </a>
         <button
           onClick={() => navigate("/play")}
           className="text-[13px] font-bold underline underline-offset-4 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO, color: NEAR_BLACK, textDecorationColor: CARD_BORDER }}
+          style={{ fontFamily: FONT_MONO, color: TEXT_PRIMARY, textDecorationColor: CARD_BORDER }}
         >
           play
         </button>
-        <span className="text-[13px] font-bold underline underline-offset-4" style={{ fontFamily: FONT_MONO, color: RED, textDecorationColor: RED }}>
+        <span
+          className="text-[13px] font-bold underline underline-offset-4"
+          style={{ fontFamily: FONT_MONO, color: BLUE, textDecorationColor: BLUE }}
+        >
           me
         </span>
       </nav>

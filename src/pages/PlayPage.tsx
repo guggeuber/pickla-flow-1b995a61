@@ -2,11 +2,11 @@ import { useNavigate, Navigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { ArrowRight } from "lucide-react";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-const RED = "#CC2936";
 const CREAM = "#faf8f5";
 const DARK_BLUE = "#1a1f3a";
 const PINK = "#e8b4b8";
@@ -48,6 +48,7 @@ const PlayPage = () => {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
 
+  // Redirect authenticated users to /my
   if (!loading && user) {
     return <Navigate to="/my" replace />;
   }
@@ -56,22 +57,16 @@ const PlayPage = () => {
 
   return (
     <div
-      className="min-h-[100dvh] flex flex-col"
+      className="min-h-[100dvh] flex flex-col items-center px-5"
       style={{ background: CREAM, color: TEXT_DARK, paddingTop: "env(safe-area-inset-top, 0px)", paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      {/* Hero */}
-      <div className="px-5 pt-10 pb-6 text-center" style={{ background: RED }}>
-        <img src={picklaLogo} alt="Pickla" className="h-7 w-auto mx-auto mb-4 brightness-0 invert" />
-        <h1 className="text-[28px] font-bold tracking-tight leading-tight" style={{ fontFamily: FONT_HEADING, color: "#fff" }}>
-          kom och spela.
-        </h1>
-        <p className="text-[13px] mt-1" style={{ fontFamily: FONT_MONO, color: "rgba(255,255,255,0.7)" }}>
-          pickleball · dart · padel
-        </p>
+      {/* Logo */}
+      <div className="pt-10 pb-6">
+        <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
       </div>
 
       {/* Cards */}
-      <motion.div variants={container} initial="hidden" animate="show" className="flex-1 px-5 py-5 flex flex-col gap-3 max-w-md mx-auto w-full">
+      <motion.div variants={container} initial="hidden" animate="show" className="w-full max-w-md flex flex-col gap-3 pb-8">
         {cards.map((c) => (
           <motion.div
             key={c.title}
