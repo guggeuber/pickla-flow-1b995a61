@@ -56,7 +56,7 @@ All server state goes through **React Query** (`useQuery`/`useMutation`) → `ap
 `useAuth()` context (in `src/hooks/useAuth.tsx`) wraps the entire app. Protected routes use the `<ProtectedRoute>` component. Roles are stored in the `user_roles` and `venue_staff` DB tables.
 
 ### Edge Functions
-Located in `supabase/functions/`, each function handles one API domain: `api-admin`, `api-bookings`, `api-events`, `api-checkins`, `api-day-passes`, `api-matches`, `api-memberships`, `api-customers`, `api-corporate`, `api-stripe-webhook`. Shared utilities are in `_shared/`:
+Located in `supabase/functions/`, each function handles one API domain: `api-admin`, `api-bookings`, `api-events`, `api-checkins`, `api-day-passes`, `api-matches`, `api-memberships`, `api-customers`, `api-corporate`, `api-stripe-webhook`, `api-stripe`, `api-notifications`. Shared utilities are in `_shared/`:
 - `cors.ts` — CORS headers + `jsonResponse`/`errorResponse`
 - `auth.ts` — `getAuthenticatedClient(req)` / `getServiceClient()`
 - `bookings.ts` — `generateAccessCode()` / `getOrCreatePublicBookingUserId()`
@@ -120,6 +120,47 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 - Membership idempotency: `memberships.notes = 'stripe_session:<id>'`.
 - After `signUp()`, call `supabase.auth.getUser()` directly — `useAuth` React state lags behind.
 
+### Stripe Saved Cards (`api-stripe`)
+- `player_profiles.stripe_customer_id` stores Stripe Customer ID (migration `20260417120000`).
+- `POST api-stripe/setup-session` — Checkout in `setup` mode, returns hosted URL to save a card.
+- `GET api-stripe/payment-methods` — lists saved cards (brand, last4, exp).
+- `DELETE api-stripe/payment-method?pmId=X` — detaches after verifying customer ownership.
+- `WalletSection` in `MyPage.tsx` renders saved cards and links to add new ones.
+
+### Membership Entitlements (migration `20260417130000`)
+- `membership_entitlements`: per-tier rules — `entitlement_type`, `value`, `period` (week/month).
+  - Types: `court_hours_per_week`, `open_play_unlimited`, `free_day_pass_monthly`, `court_discount_pct`, `day_pass_discount_pct`.
+- `membership_usage`: tracks consumed value per user/venue/type/period.
+- `POST api-bookings/create-checkout` checks active membership entitlements before creating a Stripe session:
+  - Discount types reduce `finalAmountSek` by percentage.
+  - Quota types (court hours, free day pass) set `finalAmountSek = 0` if within limit — bypasses Stripe entirely, creates booking/day-pass directly, returns `{ free: true, redirect: "..." }`.
+  - Frontend (`BookingPage.tsx`) handles `result.free` with toast + navigate.
+
+### PWA + Web Push
+- `vite-plugin-pwa` in `vite.config.ts`: manifest with existing `pwa-192x192.png`/`pwa-512x512.png`, Workbox NetworkFirst for Supabase function URLs.
+- `push_subscriptions` table (migration `20260417140000`): endpoint, p256dh, auth per user/venue.
+- `src/lib/push.ts`: `subscribeToPush(venueId?)` / `unsubscribeFromPush()`.
+- `api-notifications`: `POST /subscribe`, `DELETE /subscribe`, `GET /vapid-key`, `POST /send` (staff-only, VAPID JWT signing in Deno).
+- `SettingsSection` in `MyPage.tsx`: shows notification permission state — granted (green, non-interactive), denied (red, instructions), default (clickable activate button).
+- **VAPID keys must be generated and set as Supabase secrets**: `npx web-push generate-vapid-keys` → `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`.
+
+### Pickla Hub (`/hub`)
+- Replaces old chat tab in bottom nav. Route: `/hub` → `HubPage`, `/hub/admin` → `AdminPage` (ProtectedRoute).
+- **DB** (migration `20260417150000`): drops old `chat_channels`/`chat_messages` (channel_id schema), creates:
+  - `chat_rooms`: `room_type` (daily|booking|event|ritual), `venue_id`, `session_date`, partial unique index for one daily room per venue per day.
+  - `chat_messages`: `room_id`, `user_id`, `message_type` (text|bot|action_card|booking_card), `metadata JSONB`.
+  - `chat_participants`: join table, unique per room+user.
+  - Trigger `fn_bump_room_updated_at` bumps `chat_rooms.updated_at` on each new message.
+  - `chat_messages` added to `supabase_realtime` publication.
+- **Components** in `src/components/hub/`:
+  - `ChannelCard` — emoji badge, LIVE indicator, unread badge, overlapping participant dots.
+  - `ActionCard` — navy card with segmented spots progress bar, red CTA button.
+  - `BotMessage` — 🤖 avatar, "PICKLA BOT" label, off-white bubble.
+- **HubPage** (`src/pages/HubPage.tsx`): channel list + slide-in ChatRoom (AnimatePresence, spring x: 100%→0).
+  - Daily room: upserted on load via `onConflict: "venue_id,session_date"`; bot content rendered synthetically from live DB data (free courts, next open play).
+  - Booking/event rooms: upserted on tap (not pre-created).
+  - Realtime: `postgres_changes` subscription on `chat_messages` per room with cleanup.
+
 ### Venue Courts
 - 19 dart tables seeded in `venue_courts` with `sport_type = 'dart'`.
 - Seed also covers: venue row, 8 pickleball courts, opening hours, `open_play_sessions`, and `membership_tiers`.
@@ -154,7 +195,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=...
 VITE_SUPABASE_PROJECT_ID=...
 ```
 
-Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`.
 
 ## Known Pitfalls
 
@@ -163,6 +204,29 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 - **Edge Function JWT**: `getUser()` without args reads internal session (empty in Deno) and always fails. Always pass token explicitly: `client.auth.getUser(token)` where `token = authHeader.slice('Bearer '.length)`.
 - **Stripe success URL**: When `successPath` already contains `?`, use `&session=` not `?session=` to avoid double-`?`.
 - **signUp() async state**: After `supabase.auth.signUp()`, `useAuth().user` is still null. Call `supabase.auth.getUser()` directly to get the fresh user ID before continuing.
+- **Hub daily room upsert**: `onConflict` on `"venue_id,session_date"` requires a partial unique index (`WHERE room_type = 'daily'`). If upsert errors, HubPage falls back to a plain `.select()` fetch.
+- **Old chat schema**: Pre-hub migrations created `chat_channels` (with `channel_id`/`sender_profile_id`). Migration `20260417150000` drops these and recreates with `room_id`/`user_id`. Do not reference the old column names.
+
+## Pending Deployment (as of 2026-04-17)
+
+Migrations to run in Supabase SQL editor (in order), then `NOTIFY pgrst, 'reload schema'`:
+1. `20260417100000_fix-rls-corporate-accounts.sql`
+2. `20260417110000_fix-rls-venue-checkins.sql`
+3. `20260417120000_stripe-customer-id.sql`
+4. `20260417130000_entitlements.sql`
+5. `20260417140000_push-subscriptions.sql`
+6. `20260417150000_hub-chat.sql`
+
+Edge Functions to deploy:
+```bash
+supabase functions deploy api-memberships api-bookings api-day-passes api-stripe api-notifications --no-verify-jwt --project-ref cqnjpudmsreubgviqptg
+```
+
+VAPID keys (one-time):
+```bash
+npx web-push generate-vapid-keys
+supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... --project-ref cqnjpudmsreubgviqptg
+```
 
 ## Next Up
 - Design-uppdatering av hela appen
