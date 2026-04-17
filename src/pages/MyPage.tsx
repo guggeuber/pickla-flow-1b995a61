@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell } from "lucide-react";
 import QrCodeCard from "@/components/my/QrCodeCard";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import { subscribeToPush } from "@/lib/push";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
@@ -488,6 +489,135 @@ function DayPassSection() {
   );
 }
 
+const CARD_BRAND_LABEL: Record<string, string> = {
+  visa: "Visa", mastercard: "Mastercard", amex: "Amex",
+  discover: "Discover", jcb: "JCB", unionpay: "UnionPay",
+};
+
+function WalletSection() {
+  const qc = useQueryClient();
+  const [addingCard, setAddingCard] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [enablingPush, setEnablingPush] = useState(false);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["payment-methods"],
+    queryFn: () => apiGet("api-stripe", "payment-methods"),
+    staleTime: 60000,
+  });
+
+  const methods: any[] = data?.methods || [];
+
+  const handleAddCard = async () => {
+    setAddingCard(true);
+    try {
+      const { url } = await apiPost("api-stripe", "setup-session", {});
+      if (url) window.location.href = url;
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte starta kortregistrering");
+      setAddingCard(false);
+    }
+  };
+
+  const handleRemoveCard = async (pmId: string) => {
+    setRemovingId(pmId);
+    try {
+      await apiDelete("api-stripe", "payment-method", { pmId });
+      qc.invalidateQueries({ queryKey: ["payment-methods"] });
+      toast.success("Kort borttaget");
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte ta bort kort");
+    }
+    setRemovingId(null);
+  };
+
+  const handleEnablePush = async () => {
+    setEnablingPush(true);
+    const ok = await subscribeToPush();
+    if (ok) {
+      setPushEnabled(true);
+      toast.success("Notifikationer aktiverade!");
+    } else {
+      toast.error("Kunde inte aktivera notifikationer. Kontrollera webbläsarens inställningar.");
+    }
+    setEnablingPush(false);
+  };
+
+  return (
+    <motion.div variants={item}>
+      <div className="flex items-center gap-2 mb-2">
+        <CreditCard className="w-4 h-4" style={{ color: BLUE }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Wallet</span>
+      </div>
+
+      <div className="rounded-2xl overflow-hidden" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} />
+          </div>
+        ) : methods.length === 0 ? (
+          <div className="px-4 py-4 text-center">
+            <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga sparade kort</p>
+          </div>
+        ) : (
+          <div className="divide-y" style={{ borderColor: CARD_BORDER }}>
+            {methods.map((m) => (
+              <div key={m.id} className="flex items-center gap-3 px-4 py-3">
+                <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+                  <CreditCard className="w-4 h-4" style={{ color: TEXT_MUTED }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>
+                    {CARD_BRAND_LABEL[m.brand] || m.brand} ···· {m.last4}
+                  </p>
+                  <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                    {m.exp_month}/{String(m.exp_year).slice(-2)}
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleRemoveCard(m.id)}
+                  disabled={removingId === m.id}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)" }}
+                >
+                  {removingId === m.id
+                    ? <Loader2 className="w-3 h-3 animate-spin text-red-400" />
+                    : <Trash2 className="w-3 h-3 text-red-400" />}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add card */}
+        <button
+          onClick={handleAddCard}
+          disabled={addingCard}
+          className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium active:bg-gray-50 transition-colors"
+          style={{ borderTop: `1px solid ${CARD_BORDER}`, color: BLUE, fontFamily: FONT_HEADING }}
+        >
+          {addingCard ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+          Lägg till kort
+        </button>
+
+        {/* Push notifications */}
+        {"serviceWorker" in navigator && !pushEnabled && (
+          <button
+            onClick={handleEnablePush}
+            disabled={enablingPush}
+            className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium active:bg-gray-50 transition-colors"
+            style={{ borderTop: `1px solid ${CARD_BORDER}`, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
+          >
+            {enablingPush ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
+            Aktivera notifikationer
+          </button>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
 const MyPage = () => {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
@@ -497,6 +627,15 @@ const MyPage = () => {
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
   const { data: activeMembership } = useActiveMembership();
+  const queryClient = useQueryClient();
+
+  // Show success toast when returning from Stripe card setup
+  useState(() => {
+    if (searchParams.get("card_saved") === "1") {
+      toast.success("Kort sparat!");
+      queryClient.invalidateQueries({ queryKey: ["payment-methods"] });
+    }
+  });
 
   if (loading) {
     return (
@@ -655,6 +794,9 @@ const MyPage = () => {
 
           {/* Unified day pass section */}
           <DayPassSection />
+
+          {/* Wallet: saved cards + push notifications */}
+          <WalletSection />
         </motion.div>
       </main>
 

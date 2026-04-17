@@ -35,6 +35,166 @@ Deno.serve(async (req) => {
     const meta = metadata || {};
     const isMembership = product_type === 'membership';
 
+    // ── Entitlement check — apply discounts / check limits ───────────────────
+    // user_id is set in metadata by the frontend from useAuth(); membership
+    // benefits are applied here. Hard cap (Founder 4h/week) blocks checkout.
+    let finalAmountSek = amount_sek;
+    const entitlementUserId = meta.user_id || '';
+
+    if (entitlementUserId && !isMembership && venue_id) {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const adminEnt = createClient(supabaseUrl, serviceKey);
+
+      // Fetch active membership + entitlements
+      const { data: membership } = await adminEnt
+        .from('memberships')
+        .select('id, tier_id, venue_id')
+        .eq('user_id', entitlementUserId)
+        .eq('venue_id', venue_id)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (membership?.tier_id) {
+        const { data: entitlements } = await adminEnt
+          .from('membership_entitlements')
+          .select('entitlement_type, value, period')
+          .eq('tier_id', membership.tier_id);
+
+        const ents = entitlements || [];
+        const hasEnt = (type: string) => ents.find((e: any) => e.entitlement_type === type);
+
+        if (product_type === 'court_booking') {
+          const courtDiscount = hasEnt('court_discount_pct');
+          if (courtDiscount) {
+            finalAmountSek = Math.round(amount_sek * (1 - (courtDiscount.value / 100)));
+          }
+
+          // Founder: hard cap 4h/week — check usage
+          const weekLimit = hasEnt('court_hours_per_week');
+          if (weekLimit) {
+            const bookingHours = parseFloat(meta.duration_hours || '0');
+            if (bookingHours > 0) {
+              const now = DateTime.now().setZone('Europe/Stockholm');
+              const weekStart = now.startOf('week').toISODate()!;
+              const weekEnd   = now.endOf('week').toISODate()!;
+
+              const { data: usage } = await adminEnt
+                .from('membership_usage')
+                .select('used_value')
+                .eq('user_id', entitlementUserId)
+                .eq('venue_id', venue_id)
+                .eq('entitlement_type', 'court_hours_per_week')
+                .eq('period_start', weekStart)
+                .maybeSingle();
+
+              const usedHours = (usage?.used_value || 0);
+              if (usedHours + bookingHours > weekLimit.value) {
+                return errorResponse(
+                  `Ditt Founder-memberskap inkluderar max ${weekLimit.value}h banbokning/vecka. Du har ${weekLimit.value - usedHours}h kvar denna vecka.`,
+                  403
+                );
+              }
+              // Make it free (included in membership)
+              finalAmountSek = 0;
+            }
+          }
+        }
+
+        if (product_type === 'day_pass') {
+          const passDiscount = hasEnt('day_pass_discount_pct');
+          const freePass = hasEnt('free_day_pass_monthly');
+
+          if (freePass) {
+            const now = DateTime.now().setZone('Europe/Stockholm');
+            const monthStart = now.startOf('month').toISODate()!;
+            const monthEnd   = now.endOf('month').toISODate()!;
+
+            const { data: usage } = await adminEnt
+              .from('membership_usage')
+              .select('used_value')
+              .eq('user_id', entitlementUserId)
+              .eq('venue_id', venue_id)
+              .eq('entitlement_type', 'free_day_pass_monthly')
+              .eq('period_start', monthStart)
+              .maybeSingle();
+
+            const usedPasses = (usage?.used_value || 0);
+            if (usedPasses < freePass.value) {
+              finalAmountSek = 0;
+              meta.entitlement_type = 'free_day_pass_monthly';
+              meta.entitlement_period_start = monthStart;
+              meta.entitlement_period_end = monthEnd;
+            }
+          } else if (passDiscount) {
+            finalAmountSek = Math.round(amount_sek * (1 - (passDiscount.value / 100)));
+          }
+        }
+      }
+    }
+
+    // Free entitlement bookings bypass Stripe entirely
+    if (finalAmountSek === 0 && !isMembership) {
+      // Create booking/day-pass directly and return success
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const adminFree = createClient(supabaseUrl, serviceKey);
+
+      if (product_type === 'court_booking' && meta.court_ids && meta.date) {
+        const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+        const endISO   = DateTime.fromISO(`${meta.date}T${meta.end_time}:00`,   { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+
+        let courtIds: string[];
+        try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
+
+        for (const courtId of courtIds) {
+          const accessCode = await generateAccessCode(adminFree, venue_id, meta.date);
+          await adminFree.from('bookings').insert({
+            venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
+            start_time: startISO, end_time: endISO, total_price: 0,
+            status: 'confirmed', access_code: accessCode, access_code_expires_at: endISO,
+          });
+        }
+
+        // Track usage
+        const now = DateTime.now().setZone('Europe/Stockholm');
+        const weekStart = now.startOf('week').toISODate()!;
+        const weekEnd   = now.endOf('week').toISODate()!;
+        const durationHours = parseFloat(meta.duration_hours || '0');
+        if (durationHours > 0) {
+          await adminFree.from('membership_usage').upsert({
+            user_id: entitlementUserId, venue_id, entitlement_type: 'court_hours_per_week',
+            period_start: weekStart, period_end: weekEnd, used_value: durationHours,
+          }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
+        }
+
+        const bookingRef = courtIds[0]; // simplified ref for redirect
+        return jsonResponse({ free: true, redirect: `/b/${bookingRef}` });
+      }
+
+      if (product_type === 'day_pass' && meta.entitlement_type === 'free_day_pass_monthly') {
+        const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+        const { data: newPass } = await adminFree.from('day_passes').insert({
+          venue_id, user_id: entitlementUserId, valid_date: today,
+          purchase_date: today, price: 0, status: 'active', is_free: true,
+        }).select('id').single();
+
+        // Track usage
+        await adminFree.from('membership_usage').upsert({
+          user_id: entitlementUserId, venue_id,
+          entitlement_type: 'free_day_pass_monthly',
+          period_start: meta.entitlement_period_start,
+          period_end: meta.entitlement_period_end,
+          used_value: 1,
+        }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
+
+        return jsonResponse({ free: true, redirect: '/my' });
+      }
+    }
+
+    // Use finalAmountSek for Stripe session (may be discounted)
+    const billedAmountSek = finalAmountSek > 0 ? finalAmountSek : amount_sek;
+
     const productName = product_type === 'court_booking'
       ? `Banbokning${meta.date ? ` · ${meta.date}` : ''}${meta.start_time ? ` ${meta.start_time}–${meta.end_time || ''}` : ''}`
       : product_type === 'membership'
@@ -81,7 +241,7 @@ Deno.serve(async (req) => {
           price_data: {
             currency: 'sek',
             product_data: { name: productName },
-            unit_amount: Math.round(amount_sek) * 100,
+            unit_amount: Math.round(billedAmountSek) * 100,
             recurring: { interval: 'month' },
           },
           quantity: 1,
@@ -100,7 +260,7 @@ Deno.serve(async (req) => {
           price_data: {
             currency: 'sek',
             product_data: { name: productName },
-            unit_amount: Math.round(amount_sek) * 100,
+            unit_amount: Math.round(billedAmountSek) * 100,
           },
           quantity: 1,
         }],

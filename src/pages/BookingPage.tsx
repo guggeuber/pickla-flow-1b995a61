@@ -267,20 +267,28 @@ export default function BookingPage() {
         venue_id:     venueId,
         metadata: {
           slug,
-          court_ids:  JSON.stringify(selectedCourts),
-          date:       dateStr,
-          start_time: selectedTime!,
-          end_time:   addHour(selectedTime!),
-          name:       name.trim(),
-          phone:      phone.trim(),
-          user_id:    user?.id || "",
+          court_ids:      JSON.stringify(selectedCourts),
+          date:           dateStr,
+          start_time:     selectedTime!,
+          end_time:       addHour(selectedTime!),
+          duration_hours: "1",
+          name:           name.trim(),
+          phone:          phone.trim(),
+          user_id:        user?.id || "",
         },
       });
+      // Free entitlement booking — no Stripe needed
+      if (result.free) return { type: "free" as const, redirect: result.redirect };
       return { type: "stripe" as const, url: result.url };
     },
     onSuccess: (result) => {
       if (result.type === "stripe") {
         window.location.href = result.url;
+        return;
+      }
+      if (result.type === "free") {
+        toast.success("Bokad via ditt medlemskap!");
+        navigate(result.redirect || "/my");
         return;
       }
       const firstRef = result.bookings?.[0]?.booking_ref;
