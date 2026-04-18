@@ -302,39 +302,34 @@ const LinkHub = () => {
 
       {/* ═══ FIXED BOTTOM NAV ═══ */}
       <nav
-        className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-8 pt-12"
+        className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around px-6 pb-8 pt-12"
         style={{
           background: "linear-gradient(to top, rgba(26,30,46,0.95) 0%, rgba(26,30,46,0.7) 40%, rgba(26,30,46,0.3) 70%, transparent 100%)",
         }}
       >
         <button
-          onClick={() => navigate("/community?tab=chat")}
-          className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
-          style={{ fontFamily: "'Space Mono', monospace" }}
+          onClick={() => navigate("/hub")}
+          className="flex items-center gap-1.5 text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
+          style={{ fontFamily: "'Space Grotesk', sans-serif" }}
         >
-          chat
+          <span className="w-2 h-2 rounded-full bg-[#22c55e] inline-block" style={{ boxShadow: "0 0 0 2px rgba(34,197,94,0.3)" }} />
+          Live
         </button>
 
         <button
-          onClick={() => navigate("/play")}
+          onClick={() => navigate("/book")}
           className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
-          style={{ fontFamily: "'Space Mono', monospace" }}
+          style={{ fontFamily: "'Space Grotesk', sans-serif" }}
         >
-          play
+          Boka
         </button>
 
         <button
-          onClick={() => {
-            if (user) {
-              navigate("/my");
-            } else {
-              navigate(`/auth?redirect=/my`);
-            }
-          }}
+          onClick={() => navigate(user ? "/my" : "/auth?redirect=/my")}
           className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
-          style={{ fontFamily: "'Space Mono', monospace" }}
+          style={{ fontFamily: "'Space Grotesk', sans-serif" }}
         >
-          me
+          Mig
         </button>
       </nav>
 
