@@ -10,7 +10,6 @@ const HUB_MUTED = "#9ca3af";
 const HUB_RED = "#CC2936";
 const HUB_GREEN = "#22c55e";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
-const FONT_MONO = "'Space Mono', monospace";
 
 interface ChannelCardProps {
   emoji: string;
@@ -43,7 +42,7 @@ export function ChannelCard({
 }: ChannelCardProps) {
   return (
     <motion.button
-      whileTap={{ scale: 0.985 }}
+      whileTap={{ scale: 0.97 }}
       onClick={onClick}
       className="w-full text-left"
       style={{
@@ -98,7 +97,7 @@ export function ChannelCard({
                 gap: 3,
                 fontSize: 9,
                 fontWeight: 700,
-                fontFamily: FONT_MONO,
+                fontFamily: "Inter, sans-serif",
                 color: HUB_GREEN,
                 letterSpacing: "0.05em",
               }}
@@ -121,7 +120,7 @@ export function ChannelCard({
           <p
             style={{
               fontSize: 11,
-              fontFamily: FONT_MONO,
+              fontFamily: "Inter, sans-serif",
               color: HUB_SUB,
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -189,7 +188,7 @@ export function ChannelCard({
         }}
       >
         {lastMessageTime && (
-          <span style={{ fontSize: 10, fontFamily: FONT_MONO, color: HUB_MUTED }}>
+          <span style={{ fontSize: 10, fontFamily: "Inter, sans-serif", color: HUB_MUTED }}>
             {lastMessageTime}
           </span>
         )}
@@ -203,7 +202,7 @@ export function ChannelCard({
               color: "#fff",
               fontSize: 10,
               fontWeight: 700,
-              fontFamily: FONT_MONO,
+              fontFamily: "Inter, sans-serif",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",

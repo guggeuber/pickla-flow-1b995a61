@@ -1,4 +1,4 @@
-const FONT_MONO = "'Space Mono', monospace";
+const FONT_HEADING = "'Space Grotesk', sans-serif";
 
 interface BotMessageProps {
   content: string;
@@ -32,7 +32,7 @@ export function BotMessage({ content, time }: BotMessageProps) {
             style={{
               fontSize: 10,
               fontWeight: 700,
-              fontFamily: FONT_MONO,
+              fontFamily: FONT_HEADING,
               color: "#1a1f3a",
               letterSpacing: "0.05em",
             }}
@@ -40,7 +40,7 @@ export function BotMessage({ content, time }: BotMessageProps) {
             PICKLA BOT
           </span>
           {time && (
-            <span style={{ fontSize: 9, fontFamily: FONT_MONO, color: "#9ca3af" }}>
+            <span style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: "#9ca3af" }}>
               {time}
             </span>
           )}

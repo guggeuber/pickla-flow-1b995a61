@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Send, Loader2, Share2, Check, ImageIcon, X } from "lucide-react";
+import { ArrowLeft, Send, Share2, Check, ImageIcon, X, Loader2 } from "lucide-react";
 import { apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -22,7 +22,6 @@ const HUB_TEXT = "#111827";
 const HUB_SUB = "#6b7280";
 const HUB_MUTED = "#9ca3af";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
-const FONT_MONO = "'Space Mono', monospace";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface ChatRoom {
@@ -76,7 +75,7 @@ function relativeTime(iso: string): string {
 }
 
 function formatSwedishTime(timeStr: string): string {
-  return timeStr.slice(0, 5); // "18:00:00" → "18:00"
+  return timeStr.slice(0, 5);
 }
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
@@ -128,7 +127,6 @@ function useDailyRoom(venueId: string | undefined) {
         p_name: "Pickla Idag",
       });
       if (error || !data?.length) {
-        // Fallback: plain fetch if RPC fails
         const { data: existing } = await supabase
           .from("chat_rooms")
           .select("*")
@@ -152,9 +150,8 @@ function useDailyBotData(venueId: string | undefined) {
     queryFn: async () => {
       const now = DateTime.now().setZone("Europe/Stockholm");
       const nowISO = now.toUTC().toISO()!;
-      const todayDow = now.weekday === 7 ? 0 : now.weekday; // 0=Sun,1=Mon,...6=Sat
+      const todayDow = now.weekday === 7 ? 0 : now.weekday;
 
-      // Free courts right now (pickleball only)
       const [{ data: allCourts }, { data: activeBookings }] = await Promise.all([
         supabase
           .from("venue_courts")
@@ -175,7 +172,6 @@ function useDailyBotData(venueId: string | undefined) {
       const freeCount = (allCourts || []).filter((c: any) => !bookedIds.has(c.id)).length;
       const totalCount = (allCourts || []).length;
 
-      // Next open play session
       const { data: sessions } = await supabase
         .from("open_play_sessions")
         .select("*")
@@ -359,7 +355,11 @@ function useLongPress(callback: () => void, delay = 500) {
   const fired = useRef(false);
   const start = useCallback(() => {
     fired.current = false;
-    timer.current = setTimeout(() => { fired.current = true; callback(); }, delay);
+    timer.current = setTimeout(() => {
+      fired.current = true;
+      navigator.vibrate?.(12);
+      callback();
+    }, delay);
   }, [callback, delay]);
   const cancel = useCallback(() => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } }, []);
   return {
@@ -428,6 +428,21 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // #3 — push chat up when iOS keyboard opens
+  const [vpHeight, setVpHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => setVpHeight(vv.height);
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    update();
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
+
   const shareRoom = async () => {
     const url = `${window.location.origin}/hub?join=${room.id}`;
     if (navigator.share) {
@@ -439,7 +454,6 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
     }
   };
 
-  // Fetch GIFs when picker opens or query changes
   useEffect(() => {
     if (!showGifPicker) return;
     const apiKey = import.meta.env.VITE_GIPHY_API_KEY;
@@ -495,7 +509,6 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
     setUploading(false);
   };
 
-  // Join room on mount
   useEffect(() => {
     if (!user?.id || !room.id) return;
     supabase.from("chat_participants").upsert(
@@ -504,7 +517,6 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
     );
   }, [room.id, user?.id]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, botData]);
@@ -524,7 +536,6 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
       ...(replyRef ? { reply_to_id: replyRef } : {}),
     });
     qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
-    // Fire-and-forget push notification
     const preview = content.length > 60 ? content.slice(0, 60) + "…" : content;
     apiPost("api-notifications", "chat-message", { room_id: room.id, preview }).catch(() => {});
     setSending(false);
@@ -532,6 +543,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
 
   const handleReact = async (messageId: string, emoji: string) => {
     if (!user?.id) return;
+    navigator.vibrate?.(10); // #7 haptics on reaction tap
     const existing = (reactions[messageId] ?? []).find((r) => r.emoji === emoji && r.user_id === user.id);
     if (existing) {
       await supabase.from("chat_reactions").delete().eq("id", existing.id);
@@ -549,17 +561,13 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  // Build booking-room display
-  const bookingMeta = room.room_type === "booking" && room.resource_id
-    ? { ref: room.resource_id, code: room.subtitle?.match(/\d{4}/)?.[0] }
-    : null;
-
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
-        height: "100dvh",
+        // #3 — shrink to visual viewport so input stays above keyboard
+        height: vpHeight ? `${vpHeight}px` : "100dvh",
         background: HUB_BG,
       }}
     >
@@ -577,7 +585,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           gap: 10,
         }}
       >
-        <button
+        <motion.button
+          whileTap={{ scale: 0.97 }}
           onClick={onBack}
           style={{
             width: 36,
@@ -592,7 +601,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           }}
         >
           <ArrowLeft style={{ width: 16, height: 16, color: HUB_TEXT }} />
-        </button>
+        </motion.button>
 
         <div
           style={{
@@ -615,14 +624,15 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
             {room.title}
           </p>
           {room.subtitle && (
-            <p style={{ fontSize: 10, fontFamily: FONT_MONO, color: HUB_MUTED }}>
+            <p style={{ fontSize: 10, fontFamily: "Inter, sans-serif", color: HUB_MUTED }}>
               {room.subtitle}
             </p>
           )}
         </div>
 
         {room.room_type === "booking" && (
-          <button
+          <motion.button
+            whileTap={{ scale: 0.97 }}
             onClick={shareRoom}
             title="Bjud in"
             style={{
@@ -642,15 +652,17 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
             {copied
               ? <Check style={{ width: 15, height: 15, color: HUB_GREEN }} />
               : <Share2 style={{ width: 15, height: 15, color: HUB_TEXT }} />}
-          </button>
+          </motion.button>
         )}
       </div>
 
-      {/* Messages */}
+      {/* Messages — #1 scroll feel */}
       <div
         style={{
           flex: 1,
           overflowY: "auto",
+          WebkitOverflowScrolling: "touch" as any,
+          overscrollBehavior: "contain",
           padding: "16px",
           paddingBottom: 8,
           display: "flex",
@@ -707,14 +719,14 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
               marginBottom: 4,
             }}
           >
-            <p style={{ fontFamily: FONT_MONO, fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 2 }}>
+            <p style={{ fontFamily: FONT_HEADING, fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 2, letterSpacing: "0.06em" }}>
               DIN BOKNING
             </p>
             <p style={{ fontFamily: FONT_HEADING, fontSize: 15, fontWeight: 700, color: "#fff" }}>
               {room.title}
             </p>
             {room.subtitle && (
-              <p style={{ fontSize: 12, fontFamily: FONT_MONO, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
+              <p style={{ fontSize: 12, fontFamily: "Inter, sans-serif", color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
                 {room.subtitle}
               </p>
             )}
@@ -731,11 +743,14 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           />
         )}
 
-        {/* Loading state */}
+        {/* #8 — message skeletons while loading */}
         {msgsLoading && (
-          <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
-            <Loader2 style={{ width: 18, height: 18, color: HUB_MUTED, animation: "spin 1s linear infinite" }} />
-          </div>
+          <>
+            <MessageSkeleton align="start" />
+            <MessageSkeleton align="end" wide />
+            <MessageSkeleton align="start" wide />
+            <MessageSkeleton align="end" />
+          </>
         )}
 
         {/* User messages */}
@@ -757,10 +772,12 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
+      {/* Input — #3 sticky so it hugs the bottom of the (shrinking) container */}
       {user ? (
         <div
           style={{
+            position: "sticky",
+            bottom: 0,
             borderTop: `1px solid ${HUB_BORDER}`,
             background: HUB_CARD,
             paddingBottom: "env(safe-area-inset-bottom, 0px)",
@@ -770,14 +787,14 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           {replyTo && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
               <div style={{ flex: 1, borderLeft: `2px solid ${HUB_RED}`, paddingLeft: 8 }}>
-                <p style={{ fontSize: 10, fontFamily: FONT_MONO, color: HUB_RED, fontWeight: 700, marginBottom: 1 }}>SVARA PÅ</p>
+                <p style={{ fontSize: 10, fontFamily: FONT_HEADING, color: HUB_RED, fontWeight: 700, marginBottom: 1, letterSpacing: "0.05em" }}>SVARA PÅ</p>
                 <p style={{ fontSize: 12, color: HUB_TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {replyTo.content?.slice(0, 60) ?? "Meddelande"}
                 </p>
               </div>
-              <button onClick={() => setReplyTo(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+              <motion.button whileTap={{ scale: 0.97 }} onClick={() => setReplyTo(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                 <X style={{ width: 14, height: 14, color: HUB_MUTED }} />
-              </button>
+              </motion.button>
             </div>
           )}
 
@@ -809,6 +826,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
                   gap: 4,
                   maxHeight: 180,
                   overflowY: "auto",
+                  WebkitOverflowScrolling: "touch" as any,
                 }}
               >
                 {gifLoading
@@ -819,8 +837,9 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
                       />
                     ))
                   : gifResults.map((gif) => (
-                      <button
+                      <motion.button
                         key={gif.id}
+                        whileTap={{ scale: 0.97 }}
                         onClick={() => sendGif(gif)}
                         style={{ padding: 0, border: "none", borderRadius: 8, overflow: "hidden", cursor: "pointer" }}
                       >
@@ -829,7 +848,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
                           alt=""
                           style={{ width: "100%", height: 72, objectFit: "cover", display: "block" }}
                         />
-                      </button>
+                      </motion.button>
                     ))}
               </div>
             </div>
@@ -837,7 +856,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
 
           <div style={{ padding: "10px 12px", display: "flex", gap: 6, alignItems: "flex-end" }}>
             {/* GIF toggle */}
-            <button
+            <motion.button
+              whileTap={{ scale: 0.97 }}
               onClick={() => setShowGifPicker((v) => !v)}
               style={{
                 height: 38,
@@ -845,8 +865,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
                 borderRadius: 10,
                 border: `1px solid ${showGifPicker ? HUB_RED : HUB_BORDER}`,
                 background: showGifPicker ? "rgba(204,41,54,0.07)" : HUB_BG,
-                fontFamily: FONT_MONO,
-                fontSize: 10,
+                fontFamily: FONT_HEADING,
+                fontSize: 11,
                 fontWeight: 700,
                 color: showGifPicker ? HUB_RED : HUB_MUTED,
                 cursor: "pointer",
@@ -855,7 +875,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
               }}
             >
               GIF
-            </button>
+            </motion.button>
 
             {/* Image upload */}
             <input
@@ -865,7 +885,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
               style={{ display: "none" }}
               onChange={(e) => e.target.files?.[0] && uploadImage(e.target.files[0])}
             />
-            <button
+            <motion.button
+              whileTap={{ scale: 0.97 }}
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
               style={{
@@ -884,7 +905,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
               {uploading
                 ? <Loader2 style={{ width: 15, height: 15, color: HUB_MUTED, animation: "spin 1s linear infinite" }} />
                 : <ImageIcon style={{ width: 15, height: 15, color: HUB_MUTED }} />}
-            </button>
+            </motion.button>
 
             <textarea
               value={input}
@@ -908,7 +929,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
                 overflowY: "auto",
               }}
             />
-            <button
+            <motion.button
+              whileTap={{ scale: 0.97 }}
               onClick={sendMessage}
               disabled={!input.trim() || sending}
               style={{
@@ -926,12 +948,14 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
               }}
             >
               <Send style={{ width: 15, height: 15, color: input.trim() ? "#fff" : HUB_MUTED }} />
-            </button>
+            </motion.button>
           </div>
         </div>
       ) : (
         <div
           style={{
+            position: "sticky",
+            bottom: 0,
             padding: "12px 16px",
             paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
             borderTop: `1px solid ${HUB_BORDER}`,
@@ -942,7 +966,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           <button
             onClick={() => navigate("/auth?redirect=/hub")}
             style={{
-              fontFamily: FONT_MONO,
+              fontFamily: FONT_HEADING,
               fontSize: 13,
               color: HUB_RED,
               fontWeight: 700,
@@ -989,15 +1013,15 @@ function ReactionBar({ reactions, currentUserId, onToggle }: {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
       {Object.entries(grouped).map(([emoji, { count, userReacted }]) => (
-        <button key={emoji} onClick={() => onToggle(emoji)} style={{
+        <motion.button key={emoji} whileTap={{ scale: 0.97 }} onClick={() => onToggle(emoji)} style={{
           padding: "2px 7px", borderRadius: 12,
           border: `1.5px solid ${userReacted ? HUB_RED : HUB_BORDER}`,
           background: userReacted ? "rgba(204,41,54,0.08)" : HUB_CARD,
           fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 3,
         }}>
           <span>{emoji}</span>
-          <span style={{ fontSize: 11, fontFamily: FONT_MONO, color: userReacted ? HUB_RED : HUB_MUTED }}>{count}</span>
-        </button>
+          <span style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: userReacted ? HUB_RED : HUB_MUTED }}>{count}</span>
+        </motion.button>
       ))}
     </div>
   );
@@ -1023,7 +1047,7 @@ function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, o
         style={{ background: HUB_CARD, borderRadius: "20px 20px 0 0", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}>
         {/* Message preview */}
         <div style={{ padding: "14px 16px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
-          <p style={{ fontSize: 10, fontFamily: FONT_MONO, color: HUB_MUTED, marginBottom: 3 }}>{isOwn ? "DITT MEDDELANDE" : "MEDDELANDE"}</p>
+          <p style={{ fontSize: 10, fontFamily: FONT_HEADING, fontWeight: 700, color: HUB_MUTED, marginBottom: 3, letterSpacing: "0.06em" }}>{isOwn ? "DITT MEDDELANDE" : "MEDDELANDE"}</p>
           <p style={{ fontSize: 14, color: HUB_TEXT, lineHeight: 1.4 }}>
             {message.content?.slice(0, 100) ?? "Meddelande raderat"}{(message.content?.length ?? 0) > 100 ? "…" : ""}
           </p>
@@ -1033,15 +1057,15 @@ function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, o
           {QUICK_EMOJIS.map((emoji) => {
             const active = reactions.some((r) => r.emoji === emoji && r.user_id === currentUserId);
             return (
-              <button key={emoji} onClick={() => onReact(emoji)} style={{
+              <motion.button key={emoji} whileTap={{ scale: 0.97 }} onClick={() => onReact(emoji)} style={{
                 width: 44, height: 44, borderRadius: 22, fontSize: 22, cursor: "pointer",
                 border: `${active ? "2px" : "1px"} solid ${active ? HUB_RED : HUB_BORDER}`,
                 background: active ? "rgba(204,41,54,0.07)" : HUB_BG,
                 display: "flex", alignItems: "center", justifyContent: "center",
-              }}>{emoji}</button>
+              }}>{emoji}</motion.button>
             );
           })}
-          <button onClick={() => {}} style={{ width: 44, height: 44, borderRadius: 22, border: `1px solid ${HUB_BORDER}`, background: HUB_BG, fontSize: 18, color: HUB_MUTED, cursor: "pointer" }}>+</button>
+          <motion.button whileTap={{ scale: 0.97 }} onClick={() => {}} style={{ width: 44, height: 44, borderRadius: 22, border: `1px solid ${HUB_BORDER}`, background: HUB_BG, fontSize: 18, color: HUB_MUTED, cursor: "pointer" }}>+</motion.button>
         </div>
         {/* Actions */}
         {[
@@ -1049,14 +1073,14 @@ function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, o
           { label: "Kopiera", icon: "📋", action: onCopy, show: !!message.content },
           { label: "Radera", icon: "🗑️", action: onDelete, show: isOwn, danger: true },
         ].filter((a) => a.show).map(({ label, icon, action, danger }) => (
-          <button key={label} onClick={action} style={{
+          <motion.button key={label} whileTap={{ scale: 0.98 }} onClick={action} style={{
             width: "100%", padding: "15px 16px", background: "none", border: "none",
             borderBottom: `1px solid ${HUB_BORDER}`, display: "flex", alignItems: "center",
             gap: 12, cursor: "pointer", textAlign: "left",
           }}>
             <span style={{ fontSize: 18 }}>{icon}</span>
             <span style={{ fontSize: 15, color: (danger as boolean | undefined) ? HUB_RED : HUB_TEXT, fontFamily: "Inter, sans-serif" }}>{label}</span>
-          </button>
+          </motion.button>
         ))}
       </motion.div>
     </div>
@@ -1104,7 +1128,6 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
           userSelect: "none",
         }}
       >
-        {/* Reply quote */}
         {replyToMessage && (
           <div style={{ borderLeft: `2px solid ${isOwn ? "rgba(255,255,255,0.35)" : HUB_RED}`, paddingLeft: 7, marginBottom: 6, opacity: 0.75 }}>
             <p style={{ fontSize: 11, color: isOwn ? "rgba(255,255,255,0.8)" : HUB_MUTED, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1129,11 +1152,46 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
             {message.content}
           </p>
         )}
-        <p style={{ fontSize: 9, fontFamily: FONT_MONO, color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: isMedia ? 2 : 3, textAlign: "right", padding: isMedia ? "0 4px 2px" : 0 }}>
+        <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: isMedia ? 2 : 3, textAlign: "right", padding: isMedia ? "0 4px 2px" : 0 }}>
           {relativeTime(message.created_at)}
         </p>
       </div>
       <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
+    </div>
+  );
+}
+
+// ── Skeletons ─────────────────────────────────────────────────────────────────
+function MessageSkeleton({ align = "start", wide = false }: { align?: "start" | "end"; wide?: boolean }) {
+  return (
+    <div style={{ display: "flex", justifyContent: align === "end" ? "flex-end" : "flex-start" }}>
+      <div
+        style={{
+          width: wide ? "60%" : "40%",
+          height: 36,
+          borderRadius: align === "end" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
+          background: align === "end" ? "rgba(26,31,58,0.12)" : HUB_CARD,
+          border: align === "end" ? "none" : `1px solid ${HUB_BORDER}`,
+          animation: "pulse 1.5s ease-in-out infinite",
+        }}
+      />
+    </div>
+  );
+}
+
+function HubSkeleton() {
+  return (
+    <div style={{ padding: "16px 16px 0" }}>
+      {/* Section label */}
+      <div style={{ width: 40, height: 10, borderRadius: 4, background: HUB_BORDER, marginBottom: 10, marginTop: 18, animation: "pulse 1.5s ease-in-out infinite" }} />
+      {/* Cards */}
+      {[72, 72, 72].map((h, i) => (
+        <div key={i} style={{ height: h, borderRadius: 16, background: HUB_CARD, border: `1px solid ${HUB_BORDER}`, marginBottom: 8, animation: "pulse 1.5s ease-in-out infinite" }} />
+      ))}
+      <div style={{ width: 80, height: 10, borderRadius: 4, background: HUB_BORDER, marginBottom: 10, marginTop: 18, animation: "pulse 1.5s ease-in-out infinite" }} />
+      {[72].map((h, i) => (
+        <div key={i} style={{ height: h, borderRadius: 16, background: HUB_CARD, border: `1px solid ${HUB_BORDER}`, marginBottom: 8, animation: "pulse 1.5s ease-in-out infinite" }} />
+      ))}
     </div>
   );
 }
@@ -1227,10 +1285,10 @@ function HubList({
           <div>
             <p
               style={{
-                fontFamily: FONT_MONO,
-                fontSize: 12,
+                fontFamily: FONT_HEADING,
+                fontSize: 13,
                 fontWeight: 700,
-                letterSpacing: "0.1em",
+                letterSpacing: "0.08em",
                 color: HUB_TEXT,
               }}
             >
@@ -1247,11 +1305,11 @@ function HubList({
                   boxShadow: `0 0 0 2px rgba(34,197,94,0.2)`,
                 }}
               />
-              <span style={{ fontSize: 11, fontFamily: FONT_MONO, color: HUB_GREEN, fontWeight: 700 }}>
+              <span style={{ fontSize: 11, fontFamily: FONT_HEADING, color: HUB_GREEN, fontWeight: 700 }}>
                 LIVE
               </span>
               {playerCount > 0 && (
-                <span style={{ fontSize: 11, fontFamily: FONT_MONO, color: HUB_MUTED }}>
+                <span style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: HUB_MUTED }}>
                   · {playerCount} inne just nu
                 </span>
               )}
@@ -1260,8 +1318,8 @@ function HubList({
         </div>
       </div>
 
-      {/* Channel list */}
-      <div style={{ padding: "16px 16px 120px" }}>
+      {/* Channel list — #1 overscroll contain, #6 prevent pull-to-refresh propagation */}
+      <div style={{ padding: "16px 16px 120px", overscrollBehavior: "contain" }}>
 
         {/* ── Pickla Idag ──────────────────────────────────────────── */}
         <SectionLabel label="Idag" />
@@ -1380,7 +1438,7 @@ function HubList({
       >
         <span
           style={{
-            fontFamily: FONT_MONO,
+            fontFamily: FONT_HEADING,
             fontSize: 13,
             fontWeight: 700,
             color: HUB_RED,
@@ -1391,10 +1449,11 @@ function HubList({
         >
           hub
         </span>
-        <button
+        <motion.button
+          whileTap={{ scale: 0.97 }}
           onClick={() => navigate("/book")}
           style={{
-            fontFamily: FONT_MONO,
+            fontFamily: FONT_HEADING,
             fontSize: 13,
             fontWeight: 700,
             color: HUB_TEXT,
@@ -1407,11 +1466,12 @@ function HubList({
           }}
         >
           boka
-        </button>
-        <button
+        </motion.button>
+        <motion.button
+          whileTap={{ scale: 0.97 }}
           onClick={() => navigate("/my")}
           style={{
-            fontFamily: FONT_MONO,
+            fontFamily: FONT_HEADING,
             fontSize: 13,
             fontWeight: 700,
             color: HUB_TEXT,
@@ -1424,7 +1484,7 @@ function HubList({
           }}
         >
           me
-        </button>
+        </motion.button>
       </nav>
     </div>
   );
@@ -1435,7 +1495,7 @@ function SectionLabel({ label }: { label: string }) {
   return (
     <p
       style={{
-        fontFamily: FONT_MONO,
+        fontFamily: FONT_HEADING,
         fontSize: 10,
         fontWeight: 700,
         color: HUB_MUTED,
@@ -1481,7 +1541,6 @@ const HubPage = () => {
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
 
-  // Auto-join room when arriving via invite link
   useEffect(() => {
     if (!joinRoomId || !user?.id || activeRoom) return;
     supabase.rpc("join_chat_room", { p_room_id: joinRoomId }).then(({ data }) => {
@@ -1489,10 +1548,19 @@ const HubPage = () => {
     });
   }, [joinRoomId, user?.id]);
 
+  // #8 — skeleton instead of spinner while venue loads
   if (!venueId) {
     return (
-      <div style={{ minHeight: "100dvh", background: HUB_BG, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <Loader2 style={{ width: 24, height: 24, color: HUB_MUTED, animation: "spin 1s linear infinite" }} />
+      <div style={{ minHeight: "100dvh", background: HUB_BG }}>
+        <div style={{
+          position: "sticky", top: 0, zIndex: 10, background: HUB_BG,
+          padding: "env(safe-area-inset-top,14px) 20px 14px",
+          borderBottom: `1px solid ${HUB_BORDER}`,
+        }}>
+          <div style={{ width: 90, height: 14, borderRadius: 6, background: HUB_BORDER, animation: "pulse 1.5s ease-in-out infinite" }} />
+          <div style={{ width: 60, height: 10, borderRadius: 4, background: HUB_BORDER, marginTop: 6, animation: "pulse 1.5s ease-in-out infinite" }} />
+        </div>
+        <HubSkeleton />
       </div>
     );
   }
@@ -1516,6 +1584,12 @@ const HubPage = () => {
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 340, damping: 32 }}
+            // #4 — swipe right to dismiss
+            drag="x"
+            dragConstraints={{ left: 0, right: 0 }}
+            dragElastic={{ left: 0, right: 0.4 }}
+            dragDirectionLock
+            onDragEnd={(_, info) => { if (info.offset.x > 80) setActiveRoom(null); }}
             style={{
               position: "fixed",
               inset: 0,

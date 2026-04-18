@@ -2,7 +2,6 @@ import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
-const FONT_MONO = "'Space Mono', monospace";
 
 interface ActionCardProps {
   title: string;
@@ -31,7 +30,8 @@ export function ActionCard({
   const isFull = hasSpots && spotsLeft === 0;
 
   return (
-    <div
+    <motion.div
+      whileTap={{ scale: 0.97 }}
       style={{
         background: "#1a1f3a",
         borderRadius: 14,
@@ -57,7 +57,7 @@ export function ActionCard({
           style={{
             fontSize: 12,
             color: "rgba(255,255,255,0.6)",
-            fontFamily: FONT_MONO,
+            fontFamily: "Inter, sans-serif",
             marginBottom: 10,
           }}
         >
@@ -82,7 +82,7 @@ export function ActionCard({
               />
             ))}
           </div>
-          <p style={{ fontSize: 11, fontFamily: FONT_MONO, color: "rgba(255,255,255,0.55)" }}>
+          <p style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: "rgba(255,255,255,0.55)" }}>
             {isFull ? (
               <span style={{ color: "#CC2936" }}>Fullbokad</span>
             ) : (
@@ -109,7 +109,7 @@ export function ActionCard({
           border: "none",
           borderRadius: 10,
           padding: "10px 0",
-          fontFamily: FONT_MONO,
+          fontFamily: FONT_HEADING,
           fontSize: 13,
           fontWeight: 700,
           cursor: isFull ? "not-allowed" : "pointer",
@@ -131,6 +131,6 @@ export function ActionCard({
           </>
         )}
       </motion.button>
-    </div>
+    </motion.div>
   );
 }

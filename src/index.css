@@ -85,14 +85,29 @@
   * {
     @apply border-border;
   }
+  html {
+    overscroll-behavior: none;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
   }
   h1, h2, h3, h4, h5, h6 {
     font-family: 'Space Grotesk', system-ui, sans-serif;
+  }
+  /* #2 — remove 300ms tap delay, no tap highlight on interactive elements */
+  button, a, [role="button"], input, textarea, select {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* #2 — instant opacity feedback on all buttons (no hover states on mobile) */
+  button:active:not([disabled]) {
+    opacity: 0.65;
+    transition: opacity 0.08s ease;
   }
 }
 
