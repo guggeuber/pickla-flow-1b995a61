@@ -47,6 +47,13 @@ interface ChatMessage {
   created_at: string;
 }
 
+interface RoomPreview {
+  lastMessage: string;
+  lastMessageAt: string;
+  senderName: string | null;
+  senderAvatarUrl: string | null;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function relativeTime(iso: string): string {
   const dt = DateTime.fromISO(iso, { zone: "utc" }).setZone("Europe/Stockholm");
@@ -259,6 +266,75 @@ function useRoomMessages(roomId: string | null) {
   return { messages, loading };
 }
 
+function useExistingResourceRooms(venueId: string | undefined, resourceIds: string[]) {
+  const key = resourceIds.slice().sort().join(",");
+  return useQuery({
+    queryKey: ["hub-resource-rooms", venueId, key],
+    enabled: !!venueId && resourceIds.length > 0,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("chat_rooms")
+        .select("id, resource_id")
+        .eq("venue_id", venueId!)
+        .in("resource_id", resourceIds);
+      const map: Record<string, string> = {};
+      for (const r of data ?? []) map[r.resource_id] = r.id;
+      return map;
+    },
+  });
+}
+
+function useRoomPreviews(roomIds: string[]) {
+  const key = roomIds.slice().sort().join(",");
+  return useQuery({
+    queryKey: ["hub-room-previews", key],
+    enabled: roomIds.length > 0,
+    staleTime: 15000,
+    refetchInterval: 30000,
+    queryFn: async () => {
+      const { data: messages } = await supabase
+        .from("chat_messages")
+        .select("room_id, content, created_at, user_id, message_type")
+        .in("room_id", roomIds)
+        .order("created_at", { ascending: false });
+
+      if (!messages?.length) return {} as Record<string, RoomPreview>;
+
+      const lastByRoom: Record<string, typeof messages[0]> = {};
+      for (const msg of messages) {
+        if (!lastByRoom[msg.room_id]) lastByRoom[msg.room_id] = msg;
+      }
+
+      const userIds = [
+        ...new Set(Object.values(lastByRoom).map((m) => m.user_id).filter((id): id is string => !!id)),
+      ];
+      const profileMap: Record<string, { display_name: string | null; avatar_url: string | null }> = {};
+      if (userIds.length) {
+        const { data: profiles } = await supabase
+          .from("player_profiles")
+          .select("auth_user_id, display_name, avatar_url")
+          .in("auth_user_id", userIds);
+        for (const p of profiles ?? []) {
+          profileMap[p.auth_user_id] = { display_name: p.display_name, avatar_url: p.avatar_url };
+        }
+      }
+
+      const result: Record<string, RoomPreview> = {};
+      for (const [roomId, msg] of Object.entries(lastByRoom)) {
+        const profile = msg.user_id ? profileMap[msg.user_id] : null;
+        result[roomId] = {
+          lastMessage: msg.content,
+          lastMessageAt: msg.created_at,
+          senderName: profile?.display_name ?? null,
+          senderAvatarUrl: profile?.avatar_url ?? null,
+        };
+      }
+      return result;
+    },
+  });
+}
+
 // ── ChatRoom ─────────────────────────────────────────────────────────────────
 interface ChatRoomProps {
   room: ChatRoom;
@@ -269,6 +345,7 @@ interface ChatRoomProps {
 function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { messages, loading: msgsLoading } = useRoomMessages(room.id);
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -300,6 +377,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
       message_type: "text",
       content,
     });
+    qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
     setSending(false);
   };
 
@@ -631,6 +709,20 @@ function HubList({
   const navigate = useNavigate();
   const { user } = useAuth();
 
+  const bookingResourceIds = bookings.map((b) => b.booking_ref).filter(Boolean);
+  const eventResourceIds = events.map((e) => e.id).filter(Boolean);
+  const { data: resourceRoomMap = {} } = useExistingResourceRooms(venueId, [
+    ...bookingResourceIds,
+    ...eventResourceIds,
+  ]);
+
+  const allRoomIds = [
+    dailyRoom?.id,
+    ...Object.values(resourceRoomMap),
+  ].filter((id): id is string => !!id);
+
+  const { data: previews = {} } = useRoomPreviews(allRoomIds);
+
   const openBookingRoom = useCallback(async (booking: any) => {
     const courtName = booking.venue_courts?.name || "Bana";
     const time = DateTime.fromISO(booking.start_time, { zone: "utc" })
@@ -732,6 +824,10 @@ function HubList({
             subtitle="Öppen kanal · lediga banor & Open Play"
             isLive
             isPinned
+            lastMessage={previews[dailyRoom.id]?.lastMessage}
+            lastMessageTime={previews[dailyRoom.id]?.lastMessageAt ? relativeTime(previews[dailyRoom.id].lastMessageAt) : undefined}
+            senderName={previews[dailyRoom.id]?.senderName ?? undefined}
+            senderAvatarUrl={previews[dailyRoom.id]?.senderAvatarUrl ?? undefined}
             onClick={() => onSelectRoom(dailyRoom)}
           />
         ) : (
@@ -754,6 +850,10 @@ function HubList({
                     emoji="🎾"
                     title={`${courtName} · ${timeStr}`}
                     subtitle={`${dateStr} · Kod: ${b.access_code || "—"}`}
+                    lastMessage={b.booking_ref && resourceRoomMap[b.booking_ref] ? previews[resourceRoomMap[b.booking_ref]]?.lastMessage : undefined}
+                    lastMessageTime={b.booking_ref && resourceRoomMap[b.booking_ref] && previews[resourceRoomMap[b.booking_ref]]?.lastMessageAt ? relativeTime(previews[resourceRoomMap[b.booking_ref]].lastMessageAt) : undefined}
+                    senderName={b.booking_ref && resourceRoomMap[b.booking_ref] ? previews[resourceRoomMap[b.booking_ref]]?.senderName ?? undefined : undefined}
+                    senderAvatarUrl={b.booking_ref && resourceRoomMap[b.booking_ref] ? previews[resourceRoomMap[b.booking_ref]]?.senderAvatarUrl ?? undefined : undefined}
                     onClick={() => openBookingRoom(b)}
                   />
                 );
@@ -777,6 +877,10 @@ function HubList({
                     emoji="🏆"
                     title={ev.display_name || ev.name}
                     subtitle={dateStr || ev.event_type}
+                    lastMessage={resourceRoomMap[ev.id] ? previews[resourceRoomMap[ev.id]]?.lastMessage : undefined}
+                    lastMessageTime={resourceRoomMap[ev.id] && previews[resourceRoomMap[ev.id]]?.lastMessageAt ? relativeTime(previews[resourceRoomMap[ev.id]].lastMessageAt) : undefined}
+                    senderName={resourceRoomMap[ev.id] ? previews[resourceRoomMap[ev.id]]?.senderName ?? undefined : undefined}
+                    senderAvatarUrl={resourceRoomMap[ev.id] ? previews[resourceRoomMap[ev.id]]?.senderAvatarUrl ?? undefined : undefined}
                     onClick={() => openEventRoom(ev)}
                   />
                 );

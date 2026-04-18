@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 
 const HUB_CARD = "#ffffff";
 const HUB_BORDER = "rgba(0,0,0,0.07)";
+const HUB_NAVY = "#1a1f3a";
 const HUB_SHADOW = "0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)";
 const HUB_TEXT = "#111827";
 const HUB_SUB = "#6b7280";
@@ -17,6 +18,8 @@ interface ChannelCardProps {
   subtitle?: string;
   lastMessage?: string;
   lastMessageTime?: string;
+  senderName?: string;
+  senderAvatarUrl?: string;
   unreadCount?: number;
   participantCount?: number;
   isLive?: boolean;
@@ -30,6 +33,8 @@ export function ChannelCard({
   subtitle,
   lastMessage,
   lastMessageTime,
+  senderName,
+  senderAvatarUrl,
   unreadCount = 0,
   participantCount = 0,
   isLive = false,
@@ -129,18 +134,47 @@ export function ChannelCard({
         )}
 
         {lastMessage && (
-          <p
-            style={{
-              fontSize: 12,
-              color: unreadCount > 0 ? HUB_TEXT : HUB_MUTED,
-              fontWeight: unreadCount > 0 ? 500 : 400,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {lastMessage}
-          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 1 }}>
+            {senderAvatarUrl ? (
+              <img
+                src={senderAvatarUrl}
+                alt=""
+                style={{ width: 14, height: 14, borderRadius: "50%", flexShrink: 0, objectFit: "cover" }}
+              />
+            ) : senderName ? (
+              <div
+                style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: "50%",
+                  background: HUB_NAVY,
+                  color: "#fff",
+                  fontSize: 7,
+                  fontWeight: 700,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                {senderName.charAt(0).toUpperCase()}
+              </div>
+            ) : null}
+            <p
+              style={{
+                fontSize: 12,
+                color: unreadCount > 0 ? HUB_TEXT : HUB_MUTED,
+                fontWeight: unreadCount > 0 ? 500 : 400,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                flex: 1,
+                minWidth: 0,
+              }}
+            >
+              {senderName ? `${senderName.split(" ")[0]}: ${lastMessage}` : lastMessage}
+            </p>
+          </div>
         )}
       </div>
 
