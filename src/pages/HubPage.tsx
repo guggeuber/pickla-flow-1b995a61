@@ -641,47 +641,33 @@ function HubList({
       .toFormat("d MMM");
     const subtitle = `${date} · ${time} · Kod: ${booking.access_code || "—"}`;
 
-    const { data } = await supabase
-      .from("chat_rooms")
-      .upsert(
-        {
-          venue_id: venueId,
-          room_type: "booking",
-          title: `${courtName} · ${time}`,
-          subtitle,
-          emoji: "🎾",
-          resource_id: booking.booking_ref,
-          is_public: false,
-        },
-        { onConflict: "resource_id" }
-      )
-      .select()
-      .single();
+    const { data } = await supabase.rpc("upsert_resource_chat_room", {
+      p_venue_id: venueId,
+      p_resource_id: booking.booking_ref,
+      p_room_type: "booking",
+      p_title: `${courtName} · ${time}`,
+      p_subtitle: subtitle,
+      p_emoji: "🎾",
+      p_is_public: false,
+    });
 
-    if (data) onSelectRoom(data as ChatRoom);
+    if (data?.[0]) onSelectRoom(data[0] as ChatRoom);
   }, [venueId, onSelectRoom]);
 
   const openEventRoom = useCallback(async (event: any) => {
-    const { data } = await supabase
-      .from("chat_rooms")
-      .upsert(
-        {
-          venue_id: venueId,
-          room_type: "event",
-          title: event.display_name || event.name,
-          subtitle: event.start_date
-            ? DateTime.fromISO(event.start_date).toFormat("d MMM")
-            : undefined,
-          emoji: "🏆",
-          resource_id: event.id,
-          is_public: true,
-        },
-        { onConflict: "resource_id" }
-      )
-      .select()
-      .single();
+    const { data } = await supabase.rpc("upsert_resource_chat_room", {
+      p_venue_id: venueId,
+      p_resource_id: event.id,
+      p_room_type: "event",
+      p_title: event.display_name || event.name,
+      p_subtitle: event.start_date
+        ? DateTime.fromISO(event.start_date).toFormat("d MMM")
+        : null,
+      p_emoji: "🏆",
+      p_is_public: true,
+    });
 
-    if (data) onSelectRoom(data as ChatRoom);
+    if (data?.[0]) onSelectRoom(data[0] as ChatRoom);
   }, [venueId, onSelectRoom]);
 
   return (
