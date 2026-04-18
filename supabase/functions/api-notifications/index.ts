@@ -151,6 +151,58 @@ Deno.serve(async (req) => {
       return jsonResponse({ sent, total: subs.length });
     }
 
+    // ── POST /chat-message — push to all room participants except sender ──────
+    if (req.method === 'POST' && path === 'chat-message') {
+      const body = await req.json();
+      const { room_id, preview } = body;
+      if (!room_id || !preview) return errorResponse('Missing room_id or preview');
+
+      const vapidPublicKey  = Deno.env.get('VAPID_PUBLIC_KEY');
+      const vapidPrivateKey = Deno.env.get('VAPID_PRIVATE_KEY');
+      const vapidSubject    = Deno.env.get('VAPID_SUBJECT') || 'mailto:info@playpickla.com';
+      if (!vapidPublicKey || !vapidPrivateKey) return jsonResponse({ sent: 0 });
+
+      // Participants excluding the sender
+      const { data: participants } = await admin
+        .from('chat_participants')
+        .select('user_id')
+        .eq('room_id', room_id)
+        .neq('user_id', userId);
+      if (!participants?.length) return jsonResponse({ sent: 0 });
+
+      const participantIds = participants.map((p: { user_id: string }) => p.user_id);
+
+      // Push subscriptions for those users
+      const { data: subs } = await admin
+        .from('push_subscriptions')
+        .select('endpoint, p256dh, auth')
+        .in('user_id', participantIds);
+      if (!subs?.length) return jsonResponse({ sent: 0 });
+
+      // Room title for notification header
+      const { data: room } = await admin
+        .from('chat_rooms')
+        .select('title')
+        .eq('id', room_id)
+        .maybeSingle();
+
+      const payload = JSON.stringify({
+        title: room?.title || 'Pickla Hub',
+        body: preview,
+        url: `/hub?join=${room_id}`,
+      });
+
+      const results = await Promise.allSettled(
+        subs.map((sub: { endpoint: string; p256dh: string; auth: string }) =>
+          sendWebPush(sub, payload, vapidPublicKey, vapidPrivateKey, vapidSubject)
+        )
+      );
+      const sent = results.filter(
+        (r) => r.status === 'fulfilled' && (r as PromiseFulfilledResult<{ ok: boolean }>).value?.ok
+      ).length;
+      return jsonResponse({ sent, total: subs.length });
+    }
+
     return errorResponse('Not found', 404);
   } catch (e) {
     return errorResponse((e as Error).message, 500);

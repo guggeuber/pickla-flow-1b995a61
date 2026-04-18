@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Send, Loader2, Share2, Check, ImageIcon } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Share2, Check, ImageIcon, X } from "lucide-react";
+import { apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { DateTime } from "luxon";
@@ -42,9 +43,18 @@ interface ChatMessage {
   room_id: string;
   user_id: string | null;
   message_type: "text" | "bot" | "action_card" | "booking_card";
-  content: string;
+  content: string | null;
   metadata: Record<string, any>;
   created_at: string;
+  reply_to_id?: string | null;
+}
+
+interface Reaction {
+  id: string;
+  message_id: string;
+  room_id: string;
+  user_id: string;
+  emoji: string;
 }
 
 interface RoomPreview {
@@ -258,6 +268,11 @@ function useRoomMessages(roomId: string | null) {
         { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${roomId}` },
         (payload) => setMessages((prev) => [...prev, payload.new as ChatMessage])
       )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "chat_messages", filter: `room_id=eq.${roomId}` },
+        (payload) => setMessages((prev) => prev.map((m) => m.id === payload.new.id ? payload.new as ChatMessage : m))
+      )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -323,8 +338,12 @@ function useRoomPreviews(roomIds: string[]) {
       const result: Record<string, RoomPreview> = {};
       for (const [roomId, msg] of Object.entries(lastByRoom)) {
         const profile = msg.user_id ? profileMap[msg.user_id] : null;
+        const previewText =
+          msg.metadata?.type === "gif" ? "🎬 GIF" :
+          msg.metadata?.type === "image" ? "📷 Bild" :
+          msg.content ?? "Meddelande raderat";
         result[roomId] = {
-          lastMessage: msg.content,
+          lastMessage: previewText,
           lastMessageAt: msg.created_at,
           senderName: profile?.display_name ?? null,
           senderAvatarUrl: profile?.avatar_url ?? null,
@@ -333,6 +352,53 @@ function useRoomPreviews(roomIds: string[]) {
       return result;
     },
   });
+}
+
+function useLongPress(callback: () => void, delay = 500) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fired = useRef(false);
+  const start = useCallback(() => {
+    fired.current = false;
+    timer.current = setTimeout(() => { fired.current = true; callback(); }, delay);
+  }, [callback, delay]);
+  const cancel = useCallback(() => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } }, []);
+  return {
+    onMouseDown: start, onMouseUp: cancel, onMouseLeave: cancel,
+    onTouchStart: start, onTouchEnd: cancel, onTouchMove: cancel,
+    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); if (fired.current) e.stopPropagation(); },
+  };
+}
+
+function useRoomReactions(roomId: string | null) {
+  const [reactions, setReactions] = useState<Record<string, Reaction[]>>({});
+  useEffect(() => {
+    if (!roomId) { setReactions({}); return; }
+    supabase.from("chat_reactions").select("id, message_id, room_id, user_id, emoji")
+      .eq("room_id", roomId)
+      .then(({ data }) => {
+        const grouped: Record<string, Reaction[]> = {};
+        for (const r of (data ?? []) as Reaction[]) {
+          if (!grouped[r.message_id]) grouped[r.message_id] = [];
+          grouped[r.message_id].push(r);
+        }
+        setReactions(grouped);
+      });
+    const channel = supabase.channel(`reactions:${roomId}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_reactions", filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          const r = payload.new as Reaction;
+          setReactions((prev) => ({ ...prev, [r.message_id]: [...(prev[r.message_id] ?? []), r] }));
+        })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "chat_reactions", filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          const r = payload.old as Partial<Reaction>;
+          if (!r.message_id || !r.id) return;
+          setReactions((prev) => ({ ...prev, [r.message_id!]: (prev[r.message_id!] ?? []).filter((x) => x.id !== r.id) }));
+        })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [roomId]);
+  return reactions;
 }
 
 // ── ChatRoom ─────────────────────────────────────────────────────────────────
@@ -349,6 +415,9 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const { messages, loading: msgsLoading } = useRoomMessages(room.id);
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const reactions = useRoomReactions(room.id);
+  const [contextMsg, setContextMsg] = useState<ChatMessage | null>(null);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -445,14 +514,35 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
     setSending(true);
     const content = input.trim();
     setInput("");
+    const replyRef = replyTo?.id ?? null;
+    setReplyTo(null);
     await supabase.from("chat_messages").insert({
       room_id: room.id,
       user_id: user.id,
       message_type: "text",
       content,
+      ...(replyRef ? { reply_to_id: replyRef } : {}),
     });
     qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+    // Fire-and-forget push notification
+    const preview = content.length > 60 ? content.slice(0, 60) + "…" : content;
+    apiPost("api-notifications", "chat-message", { room_id: room.id, preview }).catch(() => {});
     setSending(false);
+  };
+
+  const handleReact = async (messageId: string, emoji: string) => {
+    if (!user?.id) return;
+    const existing = (reactions[messageId] ?? []).find((r) => r.emoji === emoji && r.user_id === user.id);
+    if (existing) {
+      await supabase.from("chat_reactions").delete().eq("id", existing.id);
+    } else {
+      await supabase.from("chat_reactions").insert({ message_id: messageId, room_id: room.id, user_id: user.id, emoji });
+    }
+  };
+
+  const handleDelete = async (msg: ChatMessage) => {
+    if (!user?.id) return;
+    await supabase.from("chat_messages").update({ content: null }).eq("id", msg.id).eq("user_id", user.id);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -650,8 +740,18 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
 
         {/* User messages */}
         {messages.map((msg) => {
-          const isOwn = msg.user_id === (typeof window !== "undefined" ? null : null); // resolved below
-          return <MessageBubble key={msg.id} message={msg} currentUserId={user?.id} />;
+          const replyToMsg = msg.reply_to_id ? messages.find((m) => m.id === msg.reply_to_id) : undefined;
+          return (
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              currentUserId={user?.id}
+              replyToMessage={replyToMsg}
+              reactions={reactions[msg.id] ?? []}
+              onLongPress={() => setContextMsg(msg)}
+              onReactionToggle={(emoji) => handleReact(msg.id, emoji)}
+            />
+          );
         })}
 
         <div ref={messagesEndRef} />
@@ -666,6 +766,21 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
             paddingBottom: "env(safe-area-inset-bottom, 0px)",
           }}
         >
+          {/* Reply preview bar */}
+          {replyTo && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
+              <div style={{ flex: 1, borderLeft: `2px solid ${HUB_RED}`, paddingLeft: 8 }}>
+                <p style={{ fontSize: 10, fontFamily: FONT_MONO, color: HUB_RED, fontWeight: 700, marginBottom: 1 }}>SVARA PÅ</p>
+                <p style={{ fontSize: 12, color: HUB_TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {replyTo.content?.slice(0, 60) ?? "Meddelande"}
+                </p>
+              </div>
+              <button onClick={() => setReplyTo(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                <X style={{ width: 14, height: 14, color: HUB_MUTED }} />
+              </button>
+            </div>
+          )}
+
           {/* GIF picker panel */}
           {showGifPicker && (
             <div style={{ borderBottom: `1px solid ${HUB_BORDER}`, padding: "10px 12px" }}>
@@ -840,64 +955,185 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           </button>
         </div>
       )}
+
+      {/* Context menu overlay */}
+      {contextMsg && (
+        <ContextOverlay
+          message={contextMsg}
+          currentUserId={user?.id}
+          reactions={reactions[contextMsg.id] ?? []}
+          onReact={(emoji) => { handleReact(contextMsg.id, emoji); setContextMsg(null); }}
+          onReply={() => { setReplyTo(contextMsg); setContextMsg(null); }}
+          onCopy={() => { if (contextMsg.content) navigator.clipboard.writeText(contextMsg.content); setContextMsg(null); }}
+          onDelete={() => { handleDelete(contextMsg); setContextMsg(null); }}
+          onDismiss={() => setContextMsg(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── ReactionBar ───────────────────────────────────────────────────────────────
+function ReactionBar({ reactions, currentUserId, onToggle }: {
+  reactions: Reaction[];
+  currentUserId?: string;
+  onToggle: (emoji: string) => void;
+}) {
+  if (!reactions.length) return null;
+  const grouped: Record<string, { count: number; userReacted: boolean }> = {};
+  for (const r of reactions) {
+    if (!grouped[r.emoji]) grouped[r.emoji] = { count: 0, userReacted: false };
+    grouped[r.emoji].count++;
+    if (r.user_id === currentUserId) grouped[r.emoji].userReacted = true;
+  }
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+      {Object.entries(grouped).map(([emoji, { count, userReacted }]) => (
+        <button key={emoji} onClick={() => onToggle(emoji)} style={{
+          padding: "2px 7px", borderRadius: 12,
+          border: `1.5px solid ${userReacted ? HUB_RED : HUB_BORDER}`,
+          background: userReacted ? "rgba(204,41,54,0.08)" : HUB_CARD,
+          fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 3,
+        }}>
+          <span>{emoji}</span>
+          <span style={{ fontSize: 11, fontFamily: FONT_MONO, color: userReacted ? HUB_RED : HUB_MUTED }}>{count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── ContextOverlay ────────────────────────────────────────────────────────────
+const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, onCopy, onDelete, onDismiss }: {
+  message: ChatMessage;
+  currentUserId?: string;
+  reactions: Reaction[];
+  onReact: (emoji: string) => void;
+  onReply: () => void;
+  onCopy: () => void;
+  onDelete: () => void;
+  onDismiss: () => void;
+}) {
+  const isOwn = message.user_id === currentUserId;
+  return (
+    <div onClick={onDismiss} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.55)", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+      <motion.div onClick={(e) => e.stopPropagation()} initial={{ y: 80, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 80, opacity: 0 }} transition={{ type: "spring", stiffness: 380, damping: 32 }}
+        style={{ background: HUB_CARD, borderRadius: "20px 20px 0 0", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}>
+        {/* Message preview */}
+        <div style={{ padding: "14px 16px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
+          <p style={{ fontSize: 10, fontFamily: FONT_MONO, color: HUB_MUTED, marginBottom: 3 }}>{isOwn ? "DITT MEDDELANDE" : "MEDDELANDE"}</p>
+          <p style={{ fontSize: 14, color: HUB_TEXT, lineHeight: 1.4 }}>
+            {message.content?.slice(0, 100) ?? "Meddelande raderat"}{(message.content?.length ?? 0) > 100 ? "…" : ""}
+          </p>
+        </div>
+        {/* Emoji row */}
+        <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", gap: 6, justifyContent: "space-around", borderBottom: `1px solid ${HUB_BORDER}` }}>
+          {QUICK_EMOJIS.map((emoji) => {
+            const active = reactions.some((r) => r.emoji === emoji && r.user_id === currentUserId);
+            return (
+              <button key={emoji} onClick={() => onReact(emoji)} style={{
+                width: 44, height: 44, borderRadius: 22, fontSize: 22, cursor: "pointer",
+                border: `${active ? "2px" : "1px"} solid ${active ? HUB_RED : HUB_BORDER}`,
+                background: active ? "rgba(204,41,54,0.07)" : HUB_BG,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>{emoji}</button>
+            );
+          })}
+          <button onClick={() => {}} style={{ width: 44, height: 44, borderRadius: 22, border: `1px solid ${HUB_BORDER}`, background: HUB_BG, fontSize: 18, color: HUB_MUTED, cursor: "pointer" }}>+</button>
+        </div>
+        {/* Actions */}
+        {[
+          { label: "Svara", icon: "↩️", action: onReply, show: true },
+          { label: "Kopiera", icon: "📋", action: onCopy, show: !!message.content },
+          { label: "Radera", icon: "🗑️", action: onDelete, show: isOwn, danger: true },
+        ].filter((a) => a.show).map(({ label, icon, action, danger }) => (
+          <button key={label} onClick={action} style={{
+            width: "100%", padding: "15px 16px", background: "none", border: "none",
+            borderBottom: `1px solid ${HUB_BORDER}`, display: "flex", alignItems: "center",
+            gap: 12, cursor: "pointer", textAlign: "left",
+          }}>
+            <span style={{ fontSize: 18 }}>{icon}</span>
+            <span style={{ fontSize: 15, color: (danger as boolean | undefined) ? HUB_RED : HUB_TEXT, fontFamily: "Inter, sans-serif" }}>{label}</span>
+          </button>
+        ))}
+      </motion.div>
     </div>
   );
 }
 
 // ── MessageBubble ─────────────────────────────────────────────────────────────
-function MessageBubble({ message, currentUserId }: { message: ChatMessage; currentUserId?: string }) {
+function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLongPress, onReactionToggle }: {
+  message: ChatMessage;
+  currentUserId?: string;
+  replyToMessage?: ChatMessage;
+  reactions: Reaction[];
+  onLongPress: () => void;
+  onReactionToggle: (emoji: string) => void;
+}) {
   const isOwn = message.user_id === currentUserId;
   const isBot = message.message_type === "bot";
-  const isMedia = message.metadata?.type === "gif" || message.metadata?.type === "image";
+  const isDeleted = message.content === null;
+  const isMedia = !isDeleted && (message.metadata?.type === "gif" || message.metadata?.type === "image");
+  const longPress = useLongPress(onLongPress);
 
   if (isBot) {
-    return <BotMessage content={message.content} time={relativeTime(message.created_at)} />;
+    return <BotMessage content={message.content ?? ""} time={relativeTime(message.created_at)} />;
   }
 
   return (
     <div
       style={{
         display: "flex",
-        justifyContent: isOwn ? "flex-end" : "flex-start",
+        flexDirection: "column",
+        alignItems: isOwn ? "flex-end" : "flex-start",
         marginBottom: 2,
       }}
     >
       <div
+        {...longPress}
         style={{
           maxWidth: "75%",
-          padding: isMedia ? "4px" : "8px 12px",
+          padding: isDeleted || isMedia ? "8px 12px" : "8px 12px",
           borderRadius: isOwn ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
           background: isMedia ? "transparent" : isOwn ? HUB_NAVY : HUB_CARD,
           border: isMedia ? "none" : isOwn ? "none" : `1px solid ${HUB_BORDER}`,
           boxShadow: isMedia ? "none" : isOwn ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
           overflow: "hidden",
+          userSelect: "none",
         }}
       >
-        {isMedia ? (
+        {/* Reply quote */}
+        {replyToMessage && (
+          <div style={{ borderLeft: `2px solid ${isOwn ? "rgba(255,255,255,0.35)" : HUB_RED}`, paddingLeft: 7, marginBottom: 6, opacity: 0.75 }}>
+            <p style={{ fontSize: 11, color: isOwn ? "rgba(255,255,255,0.8)" : HUB_MUTED, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {replyToMessage.content?.slice(0, 60) ?? "Meddelande raderat"}
+            </p>
+          </div>
+        )}
+
+        {isDeleted ? (
+          <p style={{ fontSize: 13, color: isOwn ? "rgba(255,255,255,0.5)" : HUB_MUTED, fontStyle: "italic" }}>
+            Meddelande raderat
+          </p>
+        ) : isMedia ? (
           <img
-            src={message.metadata?.thumb || message.content}
+            src={message.metadata?.thumb || message.content!}
             alt=""
             style={{ maxWidth: 220, maxHeight: 180, borderRadius: 10, display: "block" }}
-            onClick={() => window.open(message.content, "_blank")}
+            onClick={() => window.open(message.content!, "_blank")}
           />
         ) : (
           <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4 }}>
             {message.content}
           </p>
         )}
-        <p
-          style={{
-            fontSize: 9,
-            fontFamily: FONT_MONO,
-            color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED,
-            marginTop: isMedia ? 2 : 3,
-            textAlign: "right",
-            padding: isMedia ? "0 4px 2px" : 0,
-          }}
-        >
+        <p style={{ fontSize: 9, fontFamily: FONT_MONO, color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: isMedia ? 2 : 3, textAlign: "right", padding: isMedia ? "0 4px 2px" : 0 }}>
           {relativeTime(message.created_at)}
         </p>
       </div>
+      <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
     </div>
   );
 }
