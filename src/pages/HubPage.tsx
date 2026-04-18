@@ -428,15 +428,16 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // #3 — push chat up when iOS keyboard opens
-  const [vpHeight, setVpHeight] = useState<number | null>(null);
+  // #3 — push input above keyboard on iOS
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    const update = () => setVpHeight(vv.height);
+    const update = () => {
+      setKeyboardOffset(Math.max(0, window.innerHeight - vv.height - vv.offsetTop));
+    };
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
-    update();
     return () => {
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
@@ -566,8 +567,10 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
       style={{
         display: "flex",
         flexDirection: "column",
-        // #3 — shrink to visual viewport so input stays above keyboard
-        height: vpHeight ? `${vpHeight}px` : "100dvh",
+        height: "100%",
+        boxSizing: "border-box",
+        // #3 — pad bottom by keyboard height so input floats above it
+        paddingBottom: keyboardOffset,
         background: HUB_BG,
       }}
     >
@@ -776,8 +779,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
       {user ? (
         <div
           style={{
-            position: "sticky",
-            bottom: 0,
+            flexShrink: 0,
             borderTop: `1px solid ${HUB_BORDER}`,
             background: HUB_CARD,
             paddingBottom: "env(safe-area-inset-bottom, 0px)",
@@ -954,8 +956,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
       ) : (
         <div
           style={{
-            position: "sticky",
-            bottom: 0,
+            flexShrink: 0,
             padding: "12px 16px",
             paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
             borderTop: `1px solid ${HUB_BORDER}`,
@@ -1011,12 +1012,13 @@ function ReactionBar({ reactions, currentUserId, onToggle }: {
     if (r.user_id === currentUserId) grouped[r.emoji].userReacted = true;
   }
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
       {Object.entries(grouped).map(([emoji, { count, userReacted }]) => (
         <motion.button key={emoji} whileTap={{ scale: 0.97 }} onClick={() => onToggle(emoji)} style={{
           padding: "2px 7px", borderRadius: 12,
           border: `1.5px solid ${userReacted ? HUB_RED : HUB_BORDER}`,
           background: userReacted ? "rgba(204,41,54,0.08)" : HUB_CARD,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
           fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 3,
         }}>
           <span>{emoji}</span>
@@ -1101,6 +1103,7 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
   const isDeleted = message.content === null;
   const isMedia = !isDeleted && (message.metadata?.type === "gif" || message.metadata?.type === "image");
   const longPress = useLongPress(onLongPress);
+  const hasReactions = reactions.length > 0;
 
   if (isBot) {
     return <BotMessage content={message.content ?? ""} time={relativeTime(message.created_at)} />;
@@ -1109,17 +1112,19 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
   return (
     <div
       style={{
+        position: "relative",
         display: "flex",
         flexDirection: "column",
         alignItems: isOwn ? "flex-end" : "flex-start",
-        marginBottom: 2,
+        // make room below bubble for overlapping reaction pills
+        marginBottom: hasReactions ? 22 : 2,
       }}
     >
       <div
         {...longPress}
         style={{
           maxWidth: "75%",
-          padding: isDeleted || isMedia ? "8px 12px" : "8px 12px",
+          padding: "8px 12px",
           borderRadius: isOwn ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
           background: isMedia ? "transparent" : isOwn ? HUB_NAVY : HUB_CARD,
           border: isMedia ? "none" : isOwn ? "none" : `1px solid ${HUB_BORDER}`,
@@ -1156,7 +1161,17 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
           {relativeTime(message.created_at)}
         </p>
       </div>
-      <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
+
+      {/* Reactions overlapping bubble bottom-edge, iMessage style */}
+      {hasReactions && (
+        <div style={{
+          position: "absolute",
+          bottom: -12,
+          ...(isOwn ? { right: 8 } : { left: 8 }),
+        }}>
+          <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
+        </div>
+      )}
     </div>
   );
 }
