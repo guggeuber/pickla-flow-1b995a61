@@ -10,6 +10,7 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
+import { PlayerNav } from "@/components/PlayerNav";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -688,6 +689,7 @@ export default function BookingPage() {
           )}
         </form>
       )}
+      <PlayerNav />
     </div>
   );
 }

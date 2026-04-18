@@ -10,6 +10,7 @@ import { DateTime } from "luxon";
 import { ChannelCard } from "@/components/hub/ChannelCard";
 import { ActionCard } from "@/components/hub/ActionCard";
 import { BotMessage } from "@/components/hub/BotMessage";
+import { PlayerNav } from "@/components/PlayerNav";
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const HUB_BG = "#faf8f5";
@@ -1435,72 +1436,7 @@ function HubList({
         )}
       </div>
 
-      {/* Bottom nav */}
-      <nav
-        style={{
-          position: "fixed",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "14px 32px",
-          paddingBottom: "calc(14px + env(safe-area-inset-bottom, 0px))",
-          background: `linear-gradient(to top, ${HUB_BG} 0%, ${HUB_BG} 60%, transparent 100%)`,
-          zIndex: 20,
-        }}
-      >
-        <span
-          style={{
-            fontFamily: FONT_HEADING,
-            fontSize: 13,
-            fontWeight: 700,
-            color: HUB_RED,
-            textDecoration: "underline",
-            textDecorationColor: HUB_RED,
-            textUnderlineOffset: 3,
-          }}
-        >
-          hub
-        </span>
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          onClick={() => navigate("/book")}
-          style={{
-            fontFamily: FONT_HEADING,
-            fontSize: 13,
-            fontWeight: 700,
-            color: HUB_TEXT,
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            textDecoration: "underline",
-            textDecorationColor: "rgba(0,0,0,0.12)",
-            textUnderlineOffset: 3,
-          }}
-        >
-          boka
-        </motion.button>
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          onClick={() => navigate("/my")}
-          style={{
-            fontFamily: FONT_HEADING,
-            fontSize: 13,
-            fontWeight: 700,
-            color: HUB_TEXT,
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            textDecoration: "underline",
-            textDecorationColor: "rgba(0,0,0,0.12)",
-            textUnderlineOffset: 3,
-          }}
-        >
-          me
-        </motion.button>
-      </nav>
+      <PlayerNav />
     </div>
   );
 }

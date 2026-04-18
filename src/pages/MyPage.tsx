@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell } from "lucide-react";
 import QrCodeCard from "@/components/my/QrCodeCard";
+import { PlayerNav } from "@/components/PlayerNav";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -837,36 +838,7 @@ const MyPage = () => {
         </motion.div>
       </main>
 
-      {/* ═══ FIXED BOTTOM NAV ═══ */}
-      <nav
-        className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 pb-8 pt-12"
-        style={{
-          background: "linear-gradient(to top, rgba(248,250,252,0.97) 0%, rgba(248,250,252,0.8) 40%, rgba(248,250,252,0.3) 70%, transparent 100%)",
-        }}
-      >
-        <a
-          href="https://chat.whatsapp.com/HL1XcYaNFSuE56q7MqCpdw"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[13px] font-bold underline underline-offset-4 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO, color: TEXT_PRIMARY, textDecorationColor: CARD_BORDER }}
-        >
-          chat
-        </a>
-        <button
-          onClick={() => navigate("/play")}
-          className="text-[13px] font-bold underline underline-offset-4 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO, color: TEXT_PRIMARY, textDecorationColor: CARD_BORDER }}
-        >
-          play
-        </button>
-        <span
-          className="text-[13px] font-bold underline underline-offset-4"
-          style={{ fontFamily: FONT_MONO, color: BLUE, textDecorationColor: BLUE }}
-        >
-          me
-        </span>
-      </nav>
+      <PlayerNav />
     </div>
   );
 };
