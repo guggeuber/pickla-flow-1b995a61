@@ -105,34 +105,23 @@ function useDailyRoom(venueId: string | undefined) {
     staleTime: 300000,
     queryFn: async () => {
       const today = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
-      const { data, error } = await supabase
-        .from("chat_rooms")
-        .upsert(
-          {
-            venue_id: venueId!,
-            room_type: "daily",
-            title: "Pickla Idag",
-            subtitle: "Öppen kanal · alla välkomna",
-            emoji: "📅",
-            is_public: true,
-            session_date: today,
-          },
-          { onConflict: "venue_id,session_date", ignoreDuplicates: false }
-        )
-        .select()
-        .single();
-      if (error) {
-        // If upsert fails (e.g. no unique index yet), try a plain fetch
+      const { data, error } = await supabase.rpc("upsert_daily_chat_room", {
+        p_venue_id: venueId!,
+        p_session_date: today,
+        p_name: "Pickla Idag",
+      });
+      if (error || !data?.length) {
+        // Fallback: plain fetch if RPC fails
         const { data: existing } = await supabase
           .from("chat_rooms")
           .select("*")
           .eq("venue_id", venueId!)
           .eq("room_type", "daily")
           .eq("session_date", today)
-          .single();
+          .maybeSingle();
         return existing as ChatRoom | null;
       }
-      return data as ChatRoom;
+      return data[0] as ChatRoom;
     },
   });
 }
