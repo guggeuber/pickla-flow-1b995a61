@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Send, Loader2 } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Share2, Check, ImageIcon } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { DateTime } from "luxon";
@@ -351,6 +351,80 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [gifQuery, setGifQuery] = useState("");
+  const [gifResults, setGifResults] = useState<{ id: string; url: string; thumb: string }[]>([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const shareRoom = async () => {
+    const url = `${window.location.origin}/hub?join=${room.id}`;
+    if (navigator.share) {
+      await navigator.share({ title: room.title, text: "Gå med i min bokningschat på Pickla!", url });
+    } else {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  // Fetch GIFs when picker opens or query changes
+  useEffect(() => {
+    if (!showGifPicker) return;
+    const apiKey = import.meta.env.VITE_GIPHY_API_KEY;
+    if (!apiKey) return;
+    const timer = setTimeout(async () => {
+      setGifLoading(true);
+      const endpoint = gifQuery.trim()
+        ? `https://api.giphy.com/v1/gifs/search?api_key=${apiKey}&q=${encodeURIComponent(gifQuery)}&limit=18&rating=g`
+        : `https://api.giphy.com/v1/gifs/trending?api_key=${apiKey}&limit=18&rating=g`;
+      const res = await fetch(endpoint).then((r) => r.json()).catch(() => null);
+      setGifResults(
+        (res?.data ?? []).map((g: any) => ({
+          id: g.id,
+          url: g.images.original.url,
+          thumb: g.images.fixed_height_small.url,
+        }))
+      );
+      setGifLoading(false);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [showGifPicker, gifQuery]);
+
+  const sendGif = async (gif: { url: string; thumb: string }) => {
+    if (!user?.id) return;
+    setShowGifPicker(false);
+    await supabase.from("chat_messages").insert({
+      room_id: room.id,
+      user_id: user.id,
+      message_type: "text",
+      content: gif.url,
+      metadata: { type: "gif", thumb: gif.thumb },
+    });
+    qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+  };
+
+  const uploadImage = async (file: File) => {
+    if (!user?.id || uploading) return;
+    setUploading(true);
+    const ext = file.name.split(".").pop();
+    const path = `${user.id}/${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from("chat-images").upload(path, file);
+    if (!error) {
+      const { data: urlData } = supabase.storage.from("chat-images").getPublicUrl(path);
+      await supabase.from("chat_messages").insert({
+        room_id: room.id,
+        user_id: user.id,
+        message_type: "text",
+        content: urlData.publicUrl,
+        metadata: { type: "image" },
+      });
+      qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+    }
+    setUploading(false);
+  };
 
   // Join room on mount
   useEffect(() => {
@@ -456,6 +530,30 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
             </p>
           )}
         </div>
+
+        {room.room_type === "booking" && (
+          <button
+            onClick={shareRoom}
+            title="Bjud in"
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              border: `1px solid ${copied ? HUB_GREEN : HUB_BORDER}`,
+              background: copied ? "rgba(34,197,94,0.08)" : HUB_CARD,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              transition: "all 0.2s",
+              cursor: "pointer",
+            }}
+          >
+            {copied
+              ? <Check style={{ width: 15, height: 15, color: HUB_GREEN }} />
+              : <Share2 style={{ width: 15, height: 15, color: HUB_TEXT }} />}
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -563,56 +661,158 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
       {user ? (
         <div
           style={{
-            padding: "10px 16px",
-            paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
             borderTop: `1px solid ${HUB_BORDER}`,
             background: HUB_CARD,
-            display: "flex",
-            gap: 8,
-            alignItems: "flex-end",
+            paddingBottom: "env(safe-area-inset-bottom, 0px)",
           }}
         >
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Skriv ett meddelande..."
-            rows={1}
-            style={{
-              flex: 1,
-              background: HUB_BG,
-              border: `1px solid ${HUB_BORDER}`,
-              borderRadius: 12,
-              padding: "9px 12px",
-              fontSize: 14,
-              fontFamily: "Inter, sans-serif",
-              color: HUB_TEXT,
-              resize: "none",
-              outline: "none",
-              lineHeight: 1.4,
-              maxHeight: 88,
-              overflowY: "auto",
-            }}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={!input.trim() || sending}
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: 10,
-              background: input.trim() ? HUB_RED : HUB_BORDER,
-              border: "none",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-              cursor: input.trim() ? "pointer" : "default",
-              transition: "background 0.15s",
-            }}
-          >
-            <Send style={{ width: 15, height: 15, color: input.trim() ? "#fff" : HUB_MUTED }} />
-          </button>
+          {/* GIF picker panel */}
+          {showGifPicker && (
+            <div style={{ borderBottom: `1px solid ${HUB_BORDER}`, padding: "10px 12px" }}>
+              <input
+                autoFocus
+                value={gifQuery}
+                onChange={(e) => setGifQuery(e.target.value)}
+                placeholder="Sök GIF..."
+                style={{
+                  width: "100%",
+                  background: HUB_BG,
+                  border: `1px solid ${HUB_BORDER}`,
+                  borderRadius: 8,
+                  padding: "7px 10px",
+                  fontSize: 13,
+                  color: HUB_TEXT,
+                  outline: "none",
+                  marginBottom: 8,
+                  boxSizing: "border-box",
+                }}
+              />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 4,
+                  maxHeight: 180,
+                  overflowY: "auto",
+                }}
+              >
+                {gifLoading
+                  ? Array.from({ length: 6 }).map((_, i) => (
+                      <div
+                        key={i}
+                        style={{ height: 72, borderRadius: 8, background: HUB_BG, animation: "pulse 1.5s infinite" }}
+                      />
+                    ))
+                  : gifResults.map((gif) => (
+                      <button
+                        key={gif.id}
+                        onClick={() => sendGif(gif)}
+                        style={{ padding: 0, border: "none", borderRadius: 8, overflow: "hidden", cursor: "pointer" }}
+                      >
+                        <img
+                          src={gif.thumb}
+                          alt=""
+                          style={{ width: "100%", height: 72, objectFit: "cover", display: "block" }}
+                        />
+                      </button>
+                    ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ padding: "10px 12px", display: "flex", gap: 6, alignItems: "flex-end" }}>
+            {/* GIF toggle */}
+            <button
+              onClick={() => setShowGifPicker((v) => !v)}
+              style={{
+                height: 38,
+                padding: "0 10px",
+                borderRadius: 10,
+                border: `1px solid ${showGifPicker ? HUB_RED : HUB_BORDER}`,
+                background: showGifPicker ? "rgba(204,41,54,0.07)" : HUB_BG,
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                fontWeight: 700,
+                color: showGifPicker ? HUB_RED : HUB_MUTED,
+                cursor: "pointer",
+                flexShrink: 0,
+                letterSpacing: "0.05em",
+              }}
+            >
+              GIF
+            </button>
+
+            {/* Image upload */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={(e) => e.target.files?.[0] && uploadImage(e.target.files[0])}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 10,
+                border: `1px solid ${HUB_BORDER}`,
+                background: HUB_BG,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                cursor: uploading ? "default" : "pointer",
+              }}
+            >
+              {uploading
+                ? <Loader2 style={{ width: 15, height: 15, color: HUB_MUTED, animation: "spin 1s linear infinite" }} />
+                : <ImageIcon style={{ width: 15, height: 15, color: HUB_MUTED }} />}
+            </button>
+
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Skriv ett meddelande..."
+              rows={1}
+              style={{
+                flex: 1,
+                background: HUB_BG,
+                border: `1px solid ${HUB_BORDER}`,
+                borderRadius: 12,
+                padding: "9px 12px",
+                fontSize: 14,
+                fontFamily: "Inter, sans-serif",
+                color: HUB_TEXT,
+                resize: "none",
+                outline: "none",
+                lineHeight: 1.4,
+                maxHeight: 88,
+                overflowY: "auto",
+              }}
+            />
+            <button
+              onClick={sendMessage}
+              disabled={!input.trim() || sending}
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 10,
+                background: input.trim() ? HUB_RED : HUB_BORDER,
+                border: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                cursor: input.trim() ? "pointer" : "default",
+                transition: "background 0.15s",
+              }}
+            >
+              <Send style={{ width: 15, height: 15, color: input.trim() ? "#fff" : HUB_MUTED }} />
+            </button>
+          </div>
         </div>
       ) : (
         <div
@@ -648,6 +848,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
 function MessageBubble({ message, currentUserId }: { message: ChatMessage; currentUserId?: string }) {
   const isOwn = message.user_id === currentUserId;
   const isBot = message.message_type === "bot";
+  const isMedia = message.metadata?.type === "gif" || message.metadata?.type === "image";
 
   if (isBot) {
     return <BotMessage content={message.content} time={relativeTime(message.created_at)} />;
@@ -664,23 +865,34 @@ function MessageBubble({ message, currentUserId }: { message: ChatMessage; curre
       <div
         style={{
           maxWidth: "75%",
-          padding: "8px 12px",
+          padding: isMedia ? "4px" : "8px 12px",
           borderRadius: isOwn ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
-          background: isOwn ? HUB_NAVY : HUB_CARD,
-          border: isOwn ? "none" : `1px solid ${HUB_BORDER}`,
-          boxShadow: isOwn ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
+          background: isMedia ? "transparent" : isOwn ? HUB_NAVY : HUB_CARD,
+          border: isMedia ? "none" : isOwn ? "none" : `1px solid ${HUB_BORDER}`,
+          boxShadow: isMedia ? "none" : isOwn ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
+          overflow: "hidden",
         }}
       >
-        <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4 }}>
-          {message.content}
-        </p>
+        {isMedia ? (
+          <img
+            src={message.metadata?.thumb || message.content}
+            alt=""
+            style={{ maxWidth: 220, maxHeight: 180, borderRadius: 10, display: "block" }}
+            onClick={() => window.open(message.content, "_blank")}
+          />
+        ) : (
+          <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4 }}>
+            {message.content}
+          </p>
+        )}
         <p
           style={{
             fontSize: 9,
             fontFamily: FONT_MONO,
             color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED,
-            marginTop: 3,
+            marginTop: isMedia ? 2 : 3,
             textAlign: "right",
+            padding: isMedia ? "0 4px 2px" : 0,
           }}
         >
           {relativeTime(message.created_at)}
@@ -1019,6 +1231,7 @@ function SkeletonCard() {
 const HubPage = () => {
   const [searchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
+  const joinRoomId = searchParams.get("join");
   const { user } = useAuth();
 
   const { data: venue } = useVenue(slug);
@@ -1031,6 +1244,14 @@ const HubPage = () => {
   const { data: events = [] } = useEventRooms(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
+
+  // Auto-join room when arriving via invite link
+  useEffect(() => {
+    if (!joinRoomId || !user?.id || activeRoom) return;
+    supabase.rpc("join_chat_room", { p_room_id: joinRoomId }).then(({ data }) => {
+      if (data?.[0]) setActiveRoom(data[0] as ChatRoom);
+    });
+  }, [joinRoomId, user?.id]);
 
   if (!venueId) {
     return (
