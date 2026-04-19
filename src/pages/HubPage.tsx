@@ -351,19 +351,27 @@ function useRoomPreviews(roomIds: string[]) {
   });
 }
 
-// iOS Safari/PWA doesn't support navigator.vibrate — use a silent AudioContext pulse instead
+// iOS Safari/PWA doesn't support navigator.vibrate — fire a silent AudioContext
+// click instead. Must resume() because iOS suspends new contexts by default,
+// and must close via onended so the context isn't torn down before it plays.
+const _AC = (window.AudioContext ?? (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+
 function haptic(ms = 10) {
   if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+    if (!_AC) return;
     try {
-      const ctx = new AudioContext();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      gain.gain.value = 0.001;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.001);
-      ctx.close().catch(() => {});
+      const ctx = new _AC();
+      const play = () => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0.01;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.002);
+        osc.onended = () => ctx.close().catch(() => {});
+      };
+      ctx.state === "suspended" ? ctx.resume().then(play) : play();
     } catch {}
   } else {
     navigator.vibrate?.(ms);
@@ -1510,17 +1518,13 @@ const HubPage = () => {
   const { data: events = [] } = useEventRooms(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
-  const closingByDrag = useRef(false);
 
   // Push a history entry when ChatRoom opens so the native PWA back gesture
   // closes the overlay instead of navigating away from /hub
   useEffect(() => {
     if (!activeRoom) return;
     history.pushState({ chatRoom: true }, "");
-    const handlePop = () => {
-      if (!closingByDrag.current) setActiveRoom(null);
-      closingByDrag.current = false;
-    };
+    const handlePop = () => setActiveRoom(null);
     window.addEventListener("popstate", handlePop);
     return () => window.removeEventListener("popstate", handlePop);
   }, [activeRoom?.id]);
@@ -1577,11 +1581,7 @@ const HubPage = () => {
             dragDirectionLock
             onDragEnd={(e, info) => {
               e.stopPropagation();
-              if (info.offset.x > 80) {
-                closingByDrag.current = true;
-                setActiveRoom(null);
-                history.back(); // pop the state we pushed on open
-              }
+              if (info.offset.x > 80) setActiveRoom(null);
             }}
             style={{
               position: "fixed",
