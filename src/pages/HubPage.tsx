@@ -351,6 +351,25 @@ function useRoomPreviews(roomIds: string[]) {
   });
 }
 
+// iOS Safari/PWA doesn't support navigator.vibrate — use a silent AudioContext pulse instead
+function haptic(ms = 10) {
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+    try {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.001;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.001);
+      ctx.close().catch(() => {});
+    } catch {}
+  } else {
+    navigator.vibrate?.(ms);
+  }
+}
+
 function useLongPress(callback: () => void, delay = 500) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fired = useRef(false);
@@ -358,7 +377,7 @@ function useLongPress(callback: () => void, delay = 500) {
     fired.current = false;
     timer.current = setTimeout(() => {
       fired.current = true;
-      navigator.vibrate?.(12);
+      haptic(12);
       callback();
     }, delay);
   }, [callback, delay]);
@@ -545,7 +564,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
 
   const handleReact = async (messageId: string, emoji: string) => {
     if (!user?.id) return;
-    navigator.vibrate?.(10); // #7 haptics on reaction tap
+    haptic(10);
     const existing = (reactions[messageId] ?? []).find((r) => r.emoji === emoji && r.user_id === user.id);
     if (existing) {
       await supabase.from("chat_reactions").delete().eq("id", existing.id);
@@ -1491,6 +1510,20 @@ const HubPage = () => {
   const { data: events = [] } = useEventRooms(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
+  const closingByDrag = useRef(false);
+
+  // Push a history entry when ChatRoom opens so the native PWA back gesture
+  // closes the overlay instead of navigating away from /hub
+  useEffect(() => {
+    if (!activeRoom) return;
+    history.pushState({ chatRoom: true }, "");
+    const handlePop = () => {
+      if (!closingByDrag.current) setActiveRoom(null);
+      closingByDrag.current = false;
+    };
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, [activeRoom?.id]);
 
   useEffect(() => {
     if (!joinRoomId || !user?.id || activeRoom) return;
@@ -1535,12 +1568,21 @@ const HubPage = () => {
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 340, damping: 32 }}
-            // #4 — swipe right to dismiss
+            // #4 — swipe right to dismiss; dragElastic=0 prevents rubber-band
+            // that iOS mistakes for native back gesture
             drag="x"
-            dragConstraints={{ left: 0, right: 0 }}
-            dragElastic={{ left: 0, right: 0.4 }}
+            dragConstraints={{ left: 0, right: 300 }}
+            dragElastic={0}
+            dragMomentum={false}
             dragDirectionLock
-            onDragEnd={(_, info) => { if (info.offset.x > 80) setActiveRoom(null); }}
+            onDragEnd={(e, info) => {
+              e.stopPropagation();
+              if (info.offset.x > 80) {
+                closingByDrag.current = true;
+                setActiveRoom(null);
+                history.back(); // pop the state we pushed on open
+              }
+            }}
             style={{
               position: "fixed",
               inset: 0,
