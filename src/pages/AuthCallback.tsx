@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
+import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const CREAM = "#faf8f5";
@@ -10,30 +11,33 @@ const TEXT_MUTED = "rgba(26,26,26,0.55)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-const REDIRECT_DELAY = 4000;
-
 export default function AuthCallback() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [secondsLeft, setSecondsLeft] = useState(Math.round(REDIRECT_DELAY / 1000));
+  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+  const [errorMsg, setErrorMsg] = useState("");
 
-  // Detect Supabase auth callback — ?type=signup or hash #access_token
   const type = searchParams.get("type");
-  const hasAccessToken = window.location.hash.includes("access_token");
-  const isSignup = type === "signup" || hasAccessToken;
+  const isSignup = type === "signup" || type === "email_change";
 
   useEffect(() => {
-    const timer = setTimeout(() => navigate("/play", { replace: true }), REDIRECT_DELAY);
-
-    const interval = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) { clearInterval(interval); return 0; }
-        return s - 1;
-      });
-    }, 1000);
-
-    return () => { clearTimeout(timer); clearInterval(interval); };
-  }, [navigate]);
+    const exchange = async () => {
+      // PKCE flow: Supabase sends ?code= — must exchange for session
+      const code = searchParams.get("code");
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+        if (error) {
+          setErrorMsg(error.message);
+          setStatus("error");
+          return;
+        }
+      }
+      // Implicit flow fallback: #access_token already handled by Supabase client on load
+      setStatus("success");
+      setTimeout(() => navigate("/my", { replace: true }), 3000);
+    };
+    exchange();
+  }, []);
 
   return (
     <div
@@ -48,54 +52,60 @@ export default function AuthCallback() {
       >
         <img src={picklaLogo} alt="Pickla" className="h-10 w-auto" />
 
-        <motion.div
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ delay: 0.2, type: "spring", stiffness: 300, damping: 22 }}
-          className="text-5xl"
-        >
-          🎯
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.35 }}
-        >
-          <h1
-            className="text-[26px] font-bold tracking-tight"
-            style={{ fontFamily: FONT_HEADING, color: TEXT_DARK }}
-          >
-            Välkommen till Pickla!
-          </h1>
-          <p
-            className="text-[13px] mt-2"
-            style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}
-          >
-            {isSignup ? "Din e-post är bekräftad" : "Du är inloggad"}
+        {status === "loading" && (
+          <p className="text-[13px]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+            Bekräftar…
           </p>
-        </motion.div>
+        )}
 
-        <motion.button
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          onClick={() => navigate("/play", { replace: true })}
-          className="mt-2 px-8 py-3 rounded-2xl text-[14px] font-bold active:scale-95 transition-transform"
-          style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
-        >
-          Kom igång →
-        </motion.button>
+        {status === "error" && (
+          <>
+            <div className="text-5xl">❌</div>
+            <div>
+              <h1 className="text-[22px] font-bold" style={{ fontFamily: FONT_HEADING }}>
+                Något gick fel
+              </h1>
+              <p className="text-[12px] mt-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                {errorMsg}
+              </p>
+            </div>
+            <button
+              onClick={() => navigate("/auth", { replace: true })}
+              className="px-8 py-3 rounded-2xl text-[14px] font-bold active:scale-95 transition-transform"
+              style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
+            >
+              Tillbaka →
+            </button>
+          </>
+        )}
 
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.7 }}
-          className="text-[11px]"
-          style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}
-        >
-          Vidarebefordrar om {secondsLeft}s…
-        </motion.p>
+        {status === "success" && (
+          <>
+            <motion.div
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: "spring", stiffness: 300, damping: 22 }}
+              className="text-5xl"
+            >
+              🎯
+            </motion.div>
+            <div>
+              <h1 className="text-[26px] font-bold tracking-tight" style={{ fontFamily: FONT_HEADING }}>
+                Välkommen till Pickla!
+              </h1>
+              <p className="text-[13px] mt-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                {isSignup ? "Din e-post är bekräftad" : "Du är inloggad"}
+              </p>
+            </div>
+            <button
+              onClick={() => navigate("/my", { replace: true })}
+              className="px-8 py-3 rounded-2xl text-[14px] font-bold active:scale-95 transition-transform"
+              style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
+            >
+              Kom igång →
+            </button>
+          </>
+        )}
       </motion.div>
     </div>
   );
