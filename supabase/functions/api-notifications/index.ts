@@ -9,8 +9,8 @@
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { SignJWT, importJWK } from 'https://esm.sh/jose@5.9.6';
 
-// Minimal Web Push implementation using Deno's native crypto
 async function sendWebPush(
   subscription: { endpoint: string; p256dh: string; auth: string },
   payload: string,
@@ -18,41 +18,28 @@ async function sendWebPush(
   vapidPrivateKey: string,
   vapidSubject: string,
 ): Promise<{ ok: boolean; status?: number }> {
-  // Decode base64url keys
-  const urlToBase64 = (str: string) => str.replace(/-/g, '+').replace(/_/g, '/');
-  const pubKeyBytes = Uint8Array.from(atob(urlToBase64(vapidPublicKey)), c => c.charCodeAt(0));
+  // web-push generates base64url keys:
+  //   public key  = 65-byte uncompressed P-256 point (0x04 || x || y)
+  //   private key = raw 32-byte scalar
+  // Build a JWK so jose can import without any PKCS#8 wrapping.
+  const b64urlDecode = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+  const toB64url    = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 
-  // web-push generates a raw 32-byte private key; Deno requires PKCS#8 wrapping
-  const rawPriv = Uint8Array.from(atob(urlToBase64(vapidPrivateKey)), c => c.charCodeAt(0));
-  const pkcs8Header = new Uint8Array([48,65,2,1,0,48,19,6,7,42,134,72,206,61,2,1,6,8,42,134,72,206,61,3,1,7,4,39,48,37,2,1,1,4,32]);
-  const pkcs8 = new Uint8Array([...pkcs8Header, ...rawPriv]);
+  const pubBytes = b64urlDecode(vapidPublicKey); // 65 bytes: 0x04 | x(32) | y(32)
+  const x = toB64url(pubBytes.slice(1, 33));
+  const y = toB64url(pubBytes.slice(33, 65));
 
-  const privKey = await crypto.subtle.importKey(
-    'pkcs8',
-    pkcs8,
-    { name: 'ECDSA', namedCurve: 'P-256' },
-    false,
-    ['sign'],
+  const privateKey = await importJWK(
+    { kty: 'EC', crv: 'P-256', d: vapidPrivateKey, x, y },
+    'ES256',
   );
 
-  // Build VAPID JWT
   const audience = new URL(subscription.endpoint).origin;
-  const expiry = Math.floor(Date.now() / 1000) + 12 * 3600;
-  const header = btoa(JSON.stringify({ typ: 'JWT', alg: 'ES256' })).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const claims = btoa(JSON.stringify({ aud: audience, exp: expiry, sub: vapidSubject })).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const signingInput = `${header}.${claims}`;
-  const sigBytes = await crypto.subtle.sign(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    privKey,
-    new TextEncoder().encode(signingInput),
-  );
-  const sig = btoa(String.fromCharCode(...new Uint8Array(sigBytes))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const jwt = `${signingInput}.${sig}`;
-
-  // Encrypt payload with ECDH + AES-128-GCM (simplified — using fetch to FCM/VAPID endpoint)
-  // For full encryption, use a library. Here we send the push request with Authorization header only.
-  // The payload encryption is handled by the push service if we send the Authorization header correctly.
-  // Note: For production, use the web-push npm package via a fetch wrapper or a Deno-compatible library.
+  const jwt = await new SignJWT({ sub: vapidSubject })
+    .setProtectedHeader({ typ: 'JWT', alg: 'ES256' })
+    .setAudience(audience)
+    .setExpirationTime('12h')
+    .sign(privateKey);
 
   const res = await fetch(subscription.endpoint, {
     method: 'POST',
