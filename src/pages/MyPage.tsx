@@ -592,6 +592,17 @@ function WalletSection() {
 }
 
 function SettingsSection() {
+  const [searchParams] = useSearchParams();
+  const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
+  const { data: venueId } = useQuery({
+    queryKey: ["venue-id-for-push", venueSlug],
+    staleTime: Infinity,
+    queryFn: async () => {
+      const { data } = await supabase.from("venues").select("id").eq("slug", venueSlug).maybeSingle();
+      return data?.id as string | undefined;
+    },
+  });
+
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(() => {
     if (!("Notification" in window) || !("serviceWorker" in navigator)) return "unsupported";
     return Notification.permission;
@@ -600,7 +611,7 @@ function SettingsSection() {
 
   const handleEnablePush = async () => {
     setEnabling(true);
-    const ok = await subscribeToPush();
+    const ok = await subscribeToPush(venueId);
     setEnabling(false);
     if (ok) {
       setPermission("granted");

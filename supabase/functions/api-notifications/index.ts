@@ -70,10 +70,48 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const path = url.pathname.split('/').pop() || '';
 
+  const admin = getServiceClient();
+
+  // test-push is unauthenticated — handle before auth check
+  if (req.method === 'POST' && path === 'test-push') {
+    try {
+      const body = await req.json();
+      const { user_id } = body;
+      if (!user_id) return errorResponse('Missing user_id');
+
+      const vapidPublicKey  = Deno.env.get('VAPID_PUBLIC_KEY');
+      const vapidPrivateKey = Deno.env.get('VAPID_PRIVATE_KEY');
+      const vapidSubject    = Deno.env.get('VAPID_SUBJECT') || 'mailto:info@playpickla.com';
+      if (!vapidPublicKey || !vapidPrivateKey) return errorResponse('VAPID not configured', 500);
+
+      const { data: subs, error: subErr } = await admin
+        .from('push_subscriptions')
+        .select('endpoint, p256dh, auth')
+        .eq('user_id', user_id);
+
+      if (subErr) return errorResponse(subErr.message);
+      if (!subs?.length) return jsonResponse({ sent: 0, total: 0, note: 'No subscriptions found for this user_id' });
+
+      const payload = JSON.stringify({ title: 'Pickla test', body: 'Push funkar! 🎯', url: '/hub' });
+      const results = await Promise.allSettled(
+        subs.map((sub: { endpoint: string; p256dh: string; auth: string }) =>
+          sendWebPush(sub, payload, vapidPublicKey, vapidPrivateKey, vapidSubject)
+        )
+      );
+      const details = results.map((r, i) =>
+        r.status === 'fulfilled'
+          ? { endpoint: (subs[i] as { endpoint: string }).endpoint.slice(-20), ok: (r as PromiseFulfilledResult<{ ok: boolean; status?: number }>).value.ok, status: (r as PromiseFulfilledResult<{ ok: boolean; status?: number }>).value.status }
+          : { endpoint: (subs[i] as { endpoint: string }).endpoint.slice(-20), ok: false, error: (r as PromiseRejectedResult).reason?.message }
+      );
+      const sent = details.filter((d) => d.ok).length;
+      return jsonResponse({ sent, total: subs.length, details });
+    } catch (e) {
+      return errorResponse((e as Error).message, 500);
+    }
+  }
+
   const { client, userId, error } = await getAuthenticatedClient(req);
   if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
-
-  const admin = getServiceClient();
 
   try {
     // ── POST /subscribe — save a push subscription ────────────────────────────

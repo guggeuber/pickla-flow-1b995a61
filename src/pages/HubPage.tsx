@@ -1561,7 +1561,10 @@ const HubPage = () => {
         dailyRoom={dailyRoom}
         bookings={bookings}
         events={events}
-        onSelectRoom={setActiveRoom}
+        onSelectRoom={async (room) => {
+          await supabase.rpc("join_chat_room", { p_room_id: room.id });
+          setActiveRoom(room);
+        }}
       />
 
       <AnimatePresence>
