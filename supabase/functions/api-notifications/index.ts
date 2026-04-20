@@ -21,12 +21,15 @@ async function sendWebPush(
   // Decode base64url keys
   const urlToBase64 = (str: string) => str.replace(/-/g, '+').replace(/_/g, '/');
   const pubKeyBytes = Uint8Array.from(atob(urlToBase64(vapidPublicKey)), c => c.charCodeAt(0));
-  const privKeyBytes = Uint8Array.from(atob(urlToBase64(vapidPrivateKey)), c => c.charCodeAt(0));
 
-  // Import ECDH keys for VAPID JWT signing (ES256)
+  // web-push generates a raw 32-byte private key; Deno requires PKCS#8 wrapping
+  const rawPriv = Uint8Array.from(atob(urlToBase64(vapidPrivateKey)), c => c.charCodeAt(0));
+  const pkcs8Header = new Uint8Array([48,65,2,1,0,48,19,6,7,42,134,72,206,61,2,1,6,8,42,134,72,206,61,3,1,7,4,39,48,37,2,1,1,4,32]);
+  const pkcs8 = new Uint8Array([...pkcs8Header, ...rawPriv]);
+
   const privKey = await crypto.subtle.importKey(
     'pkcs8',
-    privKeyBytes,
+    pkcs8,
     { name: 'ECDSA', namedCurve: 'P-256' },
     false,
     ['sign'],
