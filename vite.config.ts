@@ -32,7 +32,7 @@ export default defineConfig(({ mode }) => ({
         theme_color: "#1a1f3a",
         background_color: "#1a1f3a",
         display: "standalone",
-        display_override: ["window-controls-overlay", "standalone"],
+        display_override: ["standalone"],
         orientation: "portrait",
         scope: "/",
         start_url: "/",
@@ -55,15 +55,6 @@ export default defineConfig(({ mode }) => ({
             sizes: "512x512",
             type: "image/png",
             purpose: "maskable",
-          },
-        ],
-        screenshots: [
-          {
-            src: "/pwa-512x512.png",
-            sizes: "512x512",
-            type: "image/png",
-            form_factor: "narrow",
-            label: "Pickla – boka banor och spela pickleball",
           },
         ],
         shortcuts: [
