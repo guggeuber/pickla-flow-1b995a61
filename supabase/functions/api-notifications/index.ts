@@ -9,7 +9,9 @@
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
-import { SignJWT, importJWK } from 'https://esm.sh/jose@5.9.6';
+// web-push handles RFC 8291 payload encryption, correct Content-Encoding,
+// apns-topic header, and VAPID JWT auth — all in one call.
+import webpush from 'https://esm.sh/web-push@3.6.7';
 
 async function sendWebPush(
   subscription: { endpoint: string; p256dh: string; auth: string },
@@ -17,41 +19,18 @@ async function sendWebPush(
   vapidPublicKey: string,
   vapidPrivateKey: string,
   vapidSubject: string,
-): Promise<{ ok: boolean; status?: number }> {
-  // web-push generates base64url keys:
-  //   public key  = 65-byte uncompressed P-256 point (0x04 || x || y)
-  //   private key = raw 32-byte scalar
-  // Build a JWK so jose can import without any PKCS#8 wrapping.
-  const b64urlDecode = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-  const toB64url    = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-
-  const pubBytes = b64urlDecode(vapidPublicKey); // 65 bytes: 0x04 | x(32) | y(32)
-  const x = toB64url(pubBytes.slice(1, 33));
-  const y = toB64url(pubBytes.slice(33, 65));
-
-  const privateKey = await importJWK(
-    { kty: 'EC', crv: 'P-256', d: vapidPrivateKey, x, y },
-    'ES256',
-  );
-
-  const audience = new URL(subscription.endpoint).origin;
-  const jwt = await new SignJWT({ sub: vapidSubject })
-    .setProtectedHeader({ typ: 'JWT', alg: 'ES256' })
-    .setAudience(audience)
-    .setExpirationTime('12h')
-    .sign(privateKey);
-
-  const res = await fetch(subscription.endpoint, {
-    method: 'POST',
-    headers: {
-      'Authorization': `vapid t=${jwt},k=${vapidPublicKey}`,
-      'Content-Type': 'application/json',
-      'TTL': '86400',
-    },
-    body: payload,
-  });
-
-  return { ok: res.ok, status: res.status };
+): Promise<{ ok: boolean; status?: number; body?: string }> {
+  webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+  try {
+    const result = await webpush.sendNotification(
+      { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
+      payload,
+    );
+    return { ok: true, status: result.statusCode };
+  } catch (err: any) {
+    console.error('Push delivery failed', { status: err.statusCode, body: err.body, endpoint: subscription.endpoint.slice(-30) });
+    return { ok: false, status: err.statusCode, body: err.body };
+  }
 }
 
 Deno.serve(async (req) => {
@@ -88,11 +67,14 @@ Deno.serve(async (req) => {
           sendWebPush(sub, payload, vapidPublicKey, vapidPrivateKey, vapidSubject)
         )
       );
-      const details = results.map((r, i) =>
-        r.status === 'fulfilled'
-          ? { endpoint: (subs[i] as { endpoint: string }).endpoint.slice(-20), ok: (r as PromiseFulfilledResult<{ ok: boolean; status?: number }>).value.ok, status: (r as PromiseFulfilledResult<{ ok: boolean; status?: number }>).value.status }
-          : { endpoint: (subs[i] as { endpoint: string }).endpoint.slice(-20), ok: false, error: (r as PromiseRejectedResult).reason?.message }
-      );
+      const details = results.map((r, i) => {
+        const ep = (subs[i] as { endpoint: string }).endpoint.slice(-30);
+        if (r.status === 'fulfilled') {
+          const v = (r as PromiseFulfilledResult<{ ok: boolean; status?: number; body?: string }>).value;
+          return { endpoint: ep, ok: v.ok, status: v.status, body: v.body };
+        }
+        return { endpoint: ep, ok: false, error: (r as PromiseRejectedResult).reason?.message };
+      });
       const sent = details.filter((d) => d.ok).length;
       return jsonResponse({ sent, total: subs.length, details });
     } catch (e) {
