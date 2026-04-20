@@ -13,6 +13,19 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 // apns-topic header, and VAPID JWT auth — all in one call.
 import webpush from 'https://esm.sh/web-push@3.6.7';
 
+function buildPayload(title: string, body: string, url: string): string {
+  // APNs format — required for iOS Web Push to display alert when app is closed/background.
+  // Service worker push handler also reads aps.alert for foreground delivery.
+  return JSON.stringify({
+    aps: {
+      alert: { title, body },
+      sound: 'default',
+      badge: 1,
+    },
+    url,
+  });
+}
+
 async function sendWebPush(
   subscription: { endpoint: string; p256dh: string; auth: string },
   payload: string,
@@ -21,10 +34,17 @@ async function sendWebPush(
   vapidSubject: string,
 ): Promise<{ ok: boolean; status?: number; body?: string }> {
   webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+
+  const isApple = subscription.endpoint.includes('web.push.apple.com');
+  const extraHeaders = isApple
+    ? { 'apns-push-type': 'alert', 'apns-priority': '10', 'apns-expiration': '0' }
+    : {};
+
   try {
     const result = await webpush.sendNotification(
       { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
       payload,
+      { headers: extraHeaders },
     );
     return { ok: true, status: result.statusCode };
   } catch (err: any) {
@@ -61,7 +81,7 @@ Deno.serve(async (req) => {
       if (subErr) return errorResponse(subErr.message);
       if (!subs?.length) return jsonResponse({ sent: 0, total: 0, note: 'No subscriptions found for this user_id' });
 
-      const payload = JSON.stringify({ title: 'Pickla test', body: 'Push funkar! 🎯', url: '/hub' });
+      const payload = buildPayload('Pickla test', 'Push funkar! 🎯', '/hub');
       const results = await Promise.allSettled(
         subs.map((sub: { endpoint: string; p256dh: string; auth: string }) =>
           sendWebPush(sub, payload, vapidPublicKey, vapidPrivateKey, vapidSubject)
@@ -152,7 +172,7 @@ Deno.serve(async (req) => {
       const { data: subs } = await query;
       if (!subs?.length) return jsonResponse({ sent: 0 });
 
-      const payload = JSON.stringify({ title, body: message, url: linkUrl || '/' });
+      const payload = buildPayload(title, message, linkUrl || '/');
       const results = await Promise.allSettled(
         subs.map((sub) => sendWebPush(sub, payload, vapidPublicKey, vapidPrivateKey, vapidSubject))
       );
@@ -196,11 +216,7 @@ Deno.serve(async (req) => {
         .eq('id', room_id)
         .maybeSingle();
 
-      const payload = JSON.stringify({
-        title: room?.title || 'Pickla Hub',
-        body: preview,
-        url: `/hub?join=${room_id}`,
-      });
+      const payload = buildPayload(room?.title || 'Pickla Hub', preview, `/hub?join=${room_id}`);
 
       const results = await Promise.allSettled(
         subs.map((sub: { endpoint: string; p256dh: string; auth: string }) =>
