@@ -207,26 +207,67 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - **Hub daily room upsert**: `onConflict` on `"venue_id,session_date"` requires a partial unique index (`WHERE room_type = 'daily'`). If upsert errors, HubPage falls back to a plain `.select()` fetch.
 - **Old chat schema**: Pre-hub migrations created `chat_channels` (with `channel_id`/`sender_profile_id`). Migration `20260417150000` drops these and recreates with `room_id`/`user_id`. Do not reference the old column names.
 
-## Pending Deployment (as of 2026-04-17)
+## Session 2026-04-18 to 2026-04-20
 
-Migrations to run in Supabase SQL editor (in order), then `NOTIFY pgrst, 'reload schema'`:
-1. `20260417100000_fix-rls-corporate-accounts.sql`
-2. `20260417110000_fix-rls-venue-checkins.sql`
-3. `20260417120000_stripe-customer-id.sql`
-4. `20260417130000_entitlements.sql`
-5. `20260417140000_push-subscriptions.sql`
-6. `20260417150000_hub-chat.sql`
+### Pickla Hub
+- `/hub` route replaces chat in bottom nav. Shared `PlayerNav` component: Live → /hub, Boka → /book, Mig → /my (used in HubPage, MyPage, BookingPage, LinkHub)
+- DB tables: `chat_rooms` (room_type: daily|booking|event|ritual), `chat_messages`, `chat_participants`, `chat_reactions`
+- Realtime via Supabase `postgres_changes` on `chat_messages` and `chat_reactions` per room
+- Channel list preview shows sender avatar + "🎬 GIF" / "📷 Bild" for media messages
 
-Edge Functions to deploy:
-```bash
-supabase functions deploy api-memberships api-bookings api-day-passes api-stripe api-notifications --no-verify-jwt --project-ref cqnjpudmsreubgviqptg
-```
+### Hub features
+- GIF picker via Giphy API — requires `VITE_GIPHY_API_KEY` in Vercel env
+- Image upload to Supabase Storage bucket `chat-images`
+- Emoji reactions: `chat_reactions` table, toggle on/off, rendered absolute at bubble bottom edge (iMessage style)
+- Long-press context menu: Reply, Copy, Delete (soft delete — sets `content = null`, `is_deleted = true`)
+- Share/invite: generates `/hub?join=<room_id>` link; recipient lands on HubPage which calls `join_chat_room` RPC
 
-VAPID keys (one-time):
-```bash
-npx web-push generate-vapid-keys
-supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... --project-ref cqnjpudmsreubgviqptg
-```
+### Hub bugs fixed
+- **RLS infinite recursion** on `chat_rooms` UPDATE policy — fixed by rewriting policy without self-referencing subquery
+- **Upsert via REST fails with partial index** — `onConflict: "venue_id,session_date"` not supported via REST for partial unique indexes. Fixed with SECURITY DEFINER RPCs: `upsert_daily_chat_room(venue_id, session_date, name)` and `upsert_resource_chat_room(venue_id, resource_id, room_type, name)`
+- **`chat_participants` always empty** — `join_chat_room` was only called via invite link. Fixed: `onSelectRoom` in HubPage now always calls `join_chat_room` RPC before opening a room
+- **`venue_id` null on push_subscriptions** — `subscribeToPush()` was called without `venueId`. Fixed: `SettingsSection` in MyPage now fetches venue by slug and passes ID to `subscribeToPush(venueId)`
+- **Double close on swipe-to-dismiss** — drag handler called `history.back()` which triggered the `popstate` listener a second time. Fixed: removed `history.back()` from drag handler; `popstate` listener alone handles history cleanup
+- **iOS haptics silent** — `AudioContext` was closed synchronously before oscillator finished. Fixed: close via `osc.onended` callback; added `webkitAudioContext` fallback; `ctx.resume()` for suspended state
+
+### PWA native-feel (8 fixes applied)
+- `-webkit-overflow-scrolling: touch` + `overscroll-behavior: contain` on all scroll containers
+- `whileTap={{ scale: 0.97 }}` on all interactive surfaces in hub
+- `visualViewport` resize listener for keyboard push-up on iOS — applied as `paddingBottom` on container (not height shrink, which caused header jump)
+- Swipe-to-dismiss ChatRoom overlay: `drag="x"`, threshold 80px, `dragElastic={0}`, `dragMomentum={false}`
+- Fonts consolidated: Space Grotesk (labels/headings), Inter (body/timestamps) — Space Mono completely removed from hub components
+- `overscroll-behavior: none` on `html` and `body` in `index.css`
+- Haptics: `AudioContext` oscillator (2ms, gain 0.01) on iOS; `navigator.vibrate(10)` on Android
+- Skeleton loaders replace `Loader2` spinners in HubPage channel list and ChatRoom
+
+### Push notifications
+- VAPID private key: `web-push` generates raw base64url scalar — imported via `jose importJWK` using `{kty:'EC', crv:'P-256', d, x, y}` (x/y extracted from public key bytes 1-32 and 33-64). PKCS#8 wrapping does not work in Deno.
+- Uses `web-push` npm library (`https://esm.sh/web-push@3.6.7`) for RFC 8291 payload encryption, correct `Content-Encoding: aes128gcm`, and VAPID JWT auth
+- Apple-specific headers added only for `web.push.apple.com` endpoints: `apns-push-type: alert`, `apns-priority: 10`, `apns-expiration: 0`
+- Payload format for all endpoints: `{ aps: { alert: { title, body }, sound: "default", badge: 1 }, url }`
+- Custom service worker `src/sw.ts` (injectManifest strategy) handles `push` event (calls `showNotification`) and `notificationclick` event (focuses or opens window, navigates to `data.url`). Without the push handler the notification never appears even if APNs returns 201.
+- `POST api-notifications/chat-message` sends push to all `chat_participants` in room except sender. No `venue_id` filter — queries by `user_id` array.
+- `POST api-notifications/test-push` — no auth required, takes `{user_id}`, sends test push to all their subscriptions, returns per-endpoint `{ok, status, body}` for debugging
+- iOS PWA: must be installed via Safari Add to Home Screen; requires iOS 16.4+
+
+### Auth fixes
+- **`AuthCallback.tsx` never confirmed users** — page showed success screen and redirected without calling any Supabase API. The `?code=` token was silently discarded. Fixed: `exchangeCodeForSession(window.location.href)` now called on mount.
+- **`emailRedirectTo` pointed to root** — `signUp()` used `window.location.origin` which sent confirmation link to `https://www.playpickla.com/` (LinkHub). Fixed: now `${window.location.origin}/auth/callback`.
+- **Two unconfirmed users** manually confirmed via `UPDATE auth.users SET email_confirmed_at = now()` (jonaswallenman, magnus.ehntorp)
+- Added forgot password flow: "Glömt lösenord?" link on login → email input → `resetPasswordForEmail(email, { redirectTo: 'https://playpickla.com/auth/reset' })` → `/auth/reset` page handles `PASSWORD_RECOVERY` event → `updateUser({ password })` → redirect to `/my`
+
+### PWA manifest (Android install)
+- Removed `display_override: ["window-controls-overlay"]` — desktop-only feature blocked Android Chrome install
+- Removed `screenshots` array — 512×512 image is below Chrome's minimum (1280px); undersized screenshots block install prompt on Chrome 119+
+- Added `mobile-web-app-capable` meta tag alongside Apple variant
+- Split icon entries: separate objects for `purpose: "any"` and `purpose: "maskable"` (combined `"any maskable"` is deprecated)
+- Added `id: "/"` to manifest
+
+### Migrations deployed (2026-04-18 to 2026-04-20, all applied)
+- `20260418100000` — `upsert_daily_chat_room` RPC (SECURITY DEFINER)
+- `20260418110000` — `upsert_resource_chat_room` RPC (SECURITY DEFINER)
+- `20260418120000` — `join_chat_room` RPC + `chat_rooms` SELECT policy fix (participant access)
+- `20260418130000` — `chat_reactions` table, RLS policies, realtime publication, reply + soft-delete columns on `chat_messages`
 
 ## Next Up
 - Design-uppdatering av hela appen
