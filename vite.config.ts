@@ -32,25 +32,38 @@ export default defineConfig(({ mode }) => ({
         theme_color: "#1a1f3a",
         background_color: "#1a1f3a",
         display: "standalone",
+        display_override: ["window-controls-overlay", "standalone"],
         orientation: "portrait",
         scope: "/",
         start_url: "/",
+        id: "/",
         icons: [
           {
             src: "/pwa-192x192.png",
             sizes: "192x192",
             type: "image/png",
+            purpose: "any",
           },
           {
             src: "/pwa-512x512.png",
             sizes: "512x512",
             type: "image/png",
+            purpose: "any",
           },
           {
             src: "/pwa-512x512.png",
             sizes: "512x512",
             type: "image/png",
-            purpose: "any maskable",
+            purpose: "maskable",
+          },
+        ],
+        screenshots: [
+          {
+            src: "/pwa-512x512.png",
+            sizes: "512x512",
+            type: "image/png",
+            form_factor: "narrow",
+            label: "Pickla – boka banor och spela pickleball",
           },
         ],
         shortcuts: [
