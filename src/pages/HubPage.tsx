@@ -79,6 +79,25 @@ function formatSwedishTime(timeStr: string): string {
   return timeStr.slice(0, 5);
 }
 
+function groupTimestampLabel(iso: string): string {
+  const dt = DateTime.fromISO(iso, { zone: "utc" }).setZone("Europe/Stockholm");
+  const now = DateTime.now().setZone("Europe/Stockholm");
+  const diffDays = Math.floor(now.startOf("day").diff(dt.startOf("day"), "days").days);
+  if (diffDays === 0) return `Idag ${dt.toFormat("HH:mm")}`;
+  if (diffDays === 1) return `Igår ${dt.toFormat("HH:mm")}`;
+  return dt.toFormat("d/M HH:mm");
+}
+
+function TimeSeparator({ label }: { label: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", margin: "4px 0", flexShrink: 0 }}>
+      <div style={{ flex: 1, height: 1, background: HUB_BORDER }} />
+      <span style={{ fontSize: 10, fontFamily: "Inter, sans-serif", color: HUB_MUTED, letterSpacing: "0.02em" }}>{label}</span>
+      <div style={{ flex: 1, height: 1, background: HUB_BORDER }} />
+    </div>
+  );
+}
+
 // ── Hooks ────────────────────────────────────────────────────────────────────
 function useVenue(slug: string) {
   return useQuery({
@@ -796,19 +815,32 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           </>
         )}
 
-        {/* User messages */}
-        {messages.map((msg) => {
+        {/* User messages — grouped with time separators */}
+        {messages.map((msg, index) => {
+          const prev = index > 0 ? messages[index - 1] : null;
+          const next = messages[index + 1];
+          const gapMinutes = prev
+            ? DateTime.fromISO(msg.created_at).diff(DateTime.fromISO(prev.created_at), "minutes").minutes
+            : Infinity;
+          const showSeparator = gapMinutes > 5;
+          const nextGap = next
+            ? DateTime.fromISO(next.created_at).diff(DateTime.fromISO(msg.created_at), "minutes").minutes
+            : Infinity;
+          const isLastInGroup = nextGap > 5 || !next || next.user_id !== msg.user_id;
           const replyToMsg = msg.reply_to_id ? messages.find((m) => m.id === msg.reply_to_id) : undefined;
           return (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              currentUserId={user?.id}
-              replyToMessage={replyToMsg}
-              reactions={reactions[msg.id] ?? []}
-              onLongPress={() => setContextMsg(msg)}
-              onReactionToggle={(emoji) => handleReact(msg.id, emoji)}
-            />
+            <span key={msg.id}>
+              {showSeparator && <TimeSeparator label={groupTimestampLabel(msg.created_at)} />}
+              <MessageBubble
+                message={msg}
+                currentUserId={user?.id}
+                replyToMessage={replyToMsg}
+                reactions={reactions[msg.id] ?? []}
+                showTimestamp={isLastInGroup}
+                onLongPress={() => setContextMsg(msg)}
+                onReactionToggle={(emoji) => handleReact(msg.id, emoji)}
+              />
+            </span>
           );
         })}
 
@@ -826,19 +858,35 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           }}
         >
           {/* Reply preview bar */}
-          {replyTo && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
-              <div style={{ flex: 1, borderLeft: `2px solid ${HUB_RED}`, paddingLeft: 8 }}>
-                <p style={{ fontSize: 10, fontFamily: FONT_HEADING, color: HUB_RED, fontWeight: 700, marginBottom: 1, letterSpacing: "0.05em" }}>SVARA PÅ</p>
-                <p style={{ fontSize: 12, color: HUB_TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {replyTo.content?.slice(0, 60) ?? "Meddelande"}
-                </p>
+          {replyTo && (() => {
+            const isReplyMedia = replyTo.metadata?.type === "image" || replyTo.metadata?.type === "gif";
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
+                <div style={{ flex: 1, borderLeft: `2px solid ${HUB_RED}`, paddingLeft: 8, display: "flex", alignItems: "center", gap: 8, overflow: "hidden" }}>
+                  <div style={{ flex: 1, overflow: "hidden" }}>
+                    <p style={{ fontSize: 10, fontFamily: FONT_HEADING, color: HUB_RED, fontWeight: 700, marginBottom: 1, letterSpacing: "0.05em" }}>SVARA PÅ</p>
+                    {isReplyMedia ? (
+                      <p style={{ fontSize: 12, color: HUB_MUTED }}>🖼 Bild</p>
+                    ) : (
+                      <p style={{ fontSize: 12, color: HUB_TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {replyTo.content?.slice(0, 60) ?? "Meddelande"}
+                      </p>
+                    )}
+                  </div>
+                  {isReplyMedia && (
+                    <img
+                      src={replyTo.metadata?.thumb || replyTo.content!}
+                      alt=""
+                      style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }}
+                    />
+                  )}
+                </div>
+                <motion.button whileTap={{ scale: 0.97 }} onClick={() => setReplyTo(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                  <X style={{ width: 14, height: 14, color: HUB_MUTED }} />
+                </motion.button>
               </div>
-              <motion.button whileTap={{ scale: 0.97 }} onClick={() => setReplyTo(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
-                <X style={{ width: 14, height: 14, color: HUB_MUTED }} />
-              </motion.button>
-            </div>
-          )}
+            );
+          })()}
           {/* Edit mode bar */}
           {editingMessage && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
@@ -1371,11 +1419,12 @@ function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, o
 }
 
 // ── MessageBubble ─────────────────────────────────────────────────────────────
-function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLongPress, onReactionToggle }: {
+function MessageBubble({ message, currentUserId, replyToMessage, reactions, showTimestamp, onLongPress, onReactionToggle }: {
   message: ChatMessage;
   currentUserId?: string;
   replyToMessage?: ChatMessage;
   reactions: Reaction[];
+  showTimestamp?: boolean;
   onLongPress: () => void;
   onReactionToggle: (emoji: string) => void;
 }) {
@@ -1435,9 +1484,11 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
               style={{ maxWidth: 220, maxHeight: 180, borderRadius: 10, display: "block" }}
               onClick={() => window.open(message.content!, "_blank")}
             />
-            <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: HUB_MUTED, marginTop: 2, textAlign: "right", padding: "0 4px 2px" }}>
-              {relativeTime(message.created_at)}
-            </p>
+            {showTimestamp && (
+              <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: HUB_MUTED, marginTop: 2, textAlign: "right", padding: "0 4px 2px" }}>
+                {relativeTime(message.created_at)}
+              </p>
+            )}
             {hasReactions && (
               <div style={{ position: "absolute", bottom: 8, right: 8 }}>
                 <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
@@ -1445,16 +1496,18 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
             )}
           </div>
         ) : (
-          <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4, padding: isMedia ? 0 : undefined }}>
+          <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4 }}>
             {message.content}
           </p>
         )}
 
         {!isMedia && (
           <>
-            <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: 3, textAlign: "right" }}>
-              {relativeTime(message.created_at)}
-            </p>
+            {showTimestamp && (
+              <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: 3, textAlign: "right" }}>
+                {relativeTime(message.created_at)}
+              </p>
+            )}
             {hasReactions && (
               <div style={{ position: "absolute", bottom: -12, ...(isOwn ? { right: 8 } : { left: 8 }) }}>
                 <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
@@ -1781,13 +1834,21 @@ const HubPage = () => {
   const { data: events = [] } = useEventRooms(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
+  const dismissedRef = useRef(false);
+
+  const closeRoom = () => {
+    if (dismissedRef.current) return;
+    dismissedRef.current = true;
+    setActiveRoom(null);
+  };
 
   // Push a history entry when ChatRoom opens so the native PWA back gesture
   // closes the overlay instead of navigating away from /hub
   useEffect(() => {
     if (!activeRoom) return;
+    dismissedRef.current = false;
     history.pushState({ chatRoom: true }, "");
-    const handlePop = () => setActiveRoom(null);
+    const handlePop = () => closeRoom();
     window.addEventListener("popstate", handlePop);
     return () => window.removeEventListener("popstate", handlePop);
   }, [activeRoom?.id]);
@@ -1846,7 +1907,7 @@ const HubPage = () => {
             dragMomentum={false}
             dragDirectionLock
             onDragEnd={(_, info) => {
-              if (info.offset.x > 80) setActiveRoom(null);
+              if (info.offset.x > 80) closeRoom();
             }}
             style={{
               position: "fixed",
@@ -1858,7 +1919,7 @@ const HubPage = () => {
             <ChatRoom
               room={activeRoom}
               venueId={venueId}
-              onBack={() => setActiveRoom(null)}
+              onBack={closeRoom}
             />
           </motion.div>
         )}
