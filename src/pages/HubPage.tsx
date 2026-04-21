@@ -826,7 +826,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           const nextGap = next
             ? DateTime.fromISO(next.created_at).diff(DateTime.fromISO(msg.created_at), "minutes").minutes
             : Infinity;
-          const isLastInGroup = nextGap > 5 || !next || next.user_id !== msg.user_id;
+          const isLastInGroup = !next; // only the very last message in conversation
           const replyToMsg = msg.reply_to_id ? messages.find((m) => m.id === msg.reply_to_id) : undefined;
           return (
             <span key={msg.id}>
