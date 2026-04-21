@@ -1044,13 +1044,13 @@ function ReactionBar({ reactions, currentUserId, onToggle }: {
       {Object.entries(grouped).map(([emoji, { count, userReacted }]) => (
         <motion.button key={emoji} whileTap={{ scale: 0.97 }} onClick={() => onToggle(emoji)} style={{
           padding: "2px 7px", borderRadius: 12,
-          border: `1.5px solid ${userReacted ? HUB_RED : HUB_BORDER}`,
-          background: userReacted ? "rgba(204,41,54,0.08)" : HUB_CARD,
-          boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
+          border: "none",
+          background: "#fff",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.13)",
           fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 3,
         }}>
           <span>{emoji}</span>
-          <span style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: userReacted ? HUB_RED : HUB_MUTED }}>{count}</span>
+          <span style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: userReacted ? HUB_RED : HUB_MUTED, fontWeight: userReacted ? 700 : 400 }}>{count}</span>
         </motion.button>
       ))}
     </div>
@@ -1140,24 +1140,25 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
   return (
     <div
       style={{
-        position: "relative",
         display: "flex",
         flexDirection: "column",
         alignItems: isOwn ? "flex-end" : "flex-start",
-        // make room below bubble for overlapping reaction pills
         marginBottom: hasReactions ? 22 : 2,
       }}
     >
+      {/* position: relative on the bubble itself so reactions anchor to its corner,
+          not the full-width outer flex container (matters for transparent image bubbles) */}
       <div
         {...longPress}
         style={{
+          position: "relative",
           maxWidth: "75%",
           padding: "8px 12px",
           borderRadius: isOwn ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
           background: isMedia ? "transparent" : isOwn ? HUB_NAVY : HUB_CARD,
           border: isMedia ? "none" : isOwn ? "none" : `1px solid ${HUB_BORDER}`,
           boxShadow: isMedia ? "none" : isOwn ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
-          overflow: "hidden",
+          overflow: "visible",
           userSelect: "none",
         }}
       >
@@ -1188,18 +1189,18 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
         <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: isMedia ? 2 : 3, textAlign: "right", padding: isMedia ? "0 4px 2px" : 0 }}>
           {relativeTime(message.created_at)}
         </p>
-      </div>
 
-      {/* Reactions overlapping bubble bottom-edge, iMessage style */}
-      {hasReactions && (
-        <div style={{
-          position: "absolute",
-          bottom: -12,
-          ...(isOwn ? { right: 8 } : { left: 8 }),
-        }}>
-          <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
-        </div>
-      )}
+        {/* Reactions anchored to bubble's bottom corner — works for text, image, and GIF */}
+        {hasReactions && (
+          <div style={{
+            position: "absolute",
+            bottom: -12,
+            ...(isOwn ? { right: 8 } : { left: 8 }),
+          }}>
+            <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
