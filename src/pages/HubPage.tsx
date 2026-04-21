@@ -1848,7 +1848,6 @@ const HubPage = () => {
   const [roomOpen, setRoomOpen] = useState(false);
   const dismissingRef = useRef(false);
   const closedByPopstateRef = useRef(false);
-  const isDragging = useRef(false);
 
   const openRoom = useCallback((room: ChatRoom) => {
     dismissingRef.current = false;
@@ -1864,22 +1863,12 @@ const HubPage = () => {
     setRoomOpen(false);
   }, []);
 
-  // iOS fires popstate mid-drag (before onDragEnd) when it interprets the swipe as a back gesture.
-  // Wait 50ms, then check: if still dragging, our drag handler owns the close — re-push the history
-  // entry iOS already popped so the stack stays consistent. If not dragging, it's a real back
-  // gesture and the entry is already gone, so mark closedByPopstateRef to skip history.back().
+  // iOS back gesture pops our pushState entry and fires popstate — handle close visually.
+  // closedByPopstateRef tells onAnimationComplete not to call history.back() (already done by iOS).
   useEffect(() => {
     const onPopState = () => {
-      setTimeout(() => {
-        if (isDragging.current) {
-          // drag is in progress — iOS stole our history entry, put it back
-          history.pushState({ chatOpen: true }, "");
-        } else {
-          // genuine iOS back gesture — entry already popped, close visually
-          closedByPopstateRef.current = true;
-          closeRoom();
-        }
-      }, 50);
+      closedByPopstateRef.current = true;
+      closeRoom();
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -1930,23 +1919,13 @@ const HubPage = () => {
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
           onAnimationComplete={(def: any) => {
             if (def?.x === "100%") {
-              // swipe-close: entry still in history, need to pop it
-              // popstate-close (iOS back): entry already popped by browser, skip
+              // popstate-close (iOS back): entry already popped by browser, skip history.back()
+              // button-close: entry still in history, pop it
               if (!closedByPopstateRef.current) history.back();
               closedByPopstateRef.current = false;
               setActiveRoom(null);
               dismissingRef.current = false;
             }
-          }}
-          drag="x"
-          dragConstraints={{ left: 0, right: 300 }}
-          dragElastic={0}
-          dragMomentum={false}
-          dragDirectionLock
-          onDragStart={() => { isDragging.current = true; }}
-          onDragEnd={(_, info) => {
-            isDragging.current = false;
-            if (info.offset.x > 80) closeRoom();
           }}
           style={{
             position: "fixed",
