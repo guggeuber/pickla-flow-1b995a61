@@ -1849,6 +1849,13 @@ const HubPage = () => {
   const dismissingRef = useRef(false);
   const closedByPopstateRef = useRef(false);
 
+  // Clear any stale chatOpen history entry left over from a previous session
+  useEffect(() => {
+    if (history.state?.chatOpen) {
+      history.back();
+    }
+  }, []);
+
   const openRoom = useCallback((room: ChatRoom) => {
     dismissingRef.current = false;
     closedByPopstateRef.current = false;
