@@ -1847,8 +1847,8 @@ const HubPage = () => {
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [roomOpen, setRoomOpen] = useState(false);
   const dismissingRef = useRef(false);
-  // true when close was triggered by the popstate event (iOS back gesture already popped the entry)
   const closedByPopstateRef = useRef(false);
+  const isDragging = useRef(false);
 
   const openRoom = useCallback((room: ChatRoom) => {
     dismissingRef.current = false;
@@ -1859,20 +1859,27 @@ const HubPage = () => {
   }, []);
 
   const closeRoom = useCallback(() => {
-    console.log('[CLOSE] closeRoom called, dismissing=', dismissingRef.current, Date.now());
     if (dismissingRef.current) return;
     dismissingRef.current = true;
     setRoomOpen(false);
   }, []);
 
-  // Intercept iOS native back gesture. iOS pops the pushState entry and fires popstate —
-  // the entry is already gone, so we mark closedByPopstateRef so onAnimationComplete knows
-  // NOT to call history.back() a second time.
+  // iOS fires popstate mid-drag (before onDragEnd) when it interprets the swipe as a back gesture.
+  // Wait 50ms, then check: if still dragging, our drag handler owns the close — re-push the history
+  // entry iOS already popped so the stack stays consistent. If not dragging, it's a real back
+  // gesture and the entry is already gone, so mark closedByPopstateRef to skip history.back().
   useEffect(() => {
     const onPopState = () => {
-      console.log('[POPSTATE] fired', Date.now());
-      closedByPopstateRef.current = true;
-      closeRoom();
+      setTimeout(() => {
+        if (isDragging.current) {
+          // drag is in progress — iOS stole our history entry, put it back
+          history.pushState({ chatOpen: true }, "");
+        } else {
+          // genuine iOS back gesture — entry already popped, close visually
+          closedByPopstateRef.current = true;
+          closeRoom();
+        }
+      }, 50);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -1922,7 +1929,6 @@ const HubPage = () => {
           animate={{ x: roomOpen ? 0 : "100%" }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
           onAnimationComplete={(def: any) => {
-            console.log('[ANIM] complete', JSON.stringify(def), Date.now());
             if (def?.x === "100%") {
               // swipe-close: entry still in history, need to pop it
               // popstate-close (iOS back): entry already popped by browser, skip
@@ -1937,9 +1943,9 @@ const HubPage = () => {
           dragElastic={0}
           dragMomentum={false}
           dragDirectionLock
-          onDragStart={() => console.log('[DRAG] start', Date.now())}
+          onDragStart={() => { isDragging.current = true; }}
           onDragEnd={(_, info) => {
-            console.log('[DRAG] end', { vx: info.velocity.x, ox: info.offset.x });
+            isDragging.current = false;
             if (info.offset.x > 80) closeRoom();
           }}
           style={{
