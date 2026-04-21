@@ -1464,13 +1464,24 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
           userSelect: "none",
         }}
       >
-        {replyToMessage && (
-          <div style={{ borderLeft: `2px solid ${isOwn ? "rgba(255,255,255,0.35)" : HUB_RED}`, paddingLeft: 7, marginBottom: 6, opacity: 0.75 }}>
-            <p style={{ fontSize: 11, color: isOwn ? "rgba(255,255,255,0.8)" : HUB_MUTED, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {replyToMessage.content?.slice(0, 60) ?? "Meddelande raderat"}
-            </p>
-          </div>
-        )}
+        {replyToMessage && (() => {
+          const rIsMedia = replyToMessage.metadata?.type === "image" || replyToMessage.metadata?.type === "gif";
+          return (
+            <div style={{ borderLeft: `2px solid ${isOwn ? "rgba(255,255,255,0.35)" : HUB_RED}`, paddingLeft: 7, marginBottom: 6, opacity: 0.75, display: "flex", alignItems: "center", gap: 6 }}>
+              {rIsMedia ? (
+                <img
+                  src={replyToMessage.metadata?.thumb || replyToMessage.content!}
+                  alt=""
+                  style={{ width: 40, height: 32, objectFit: "cover", borderRadius: 5, flexShrink: 0 }}
+                />
+              ) : (
+                <p style={{ fontSize: 11, color: isOwn ? "rgba(255,255,255,0.8)" : HUB_MUTED, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {replyToMessage.content?.slice(0, 60) ?? "Meddelande raderat"}
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
         {isDeleted ? (
           <p style={{ fontSize: 13, color: isOwn ? "rgba(255,255,255,0.5)" : HUB_MUTED, fontStyle: "italic", padding: "8px 12px" }}>
@@ -1834,24 +1845,23 @@ const HubPage = () => {
   const { data: events = [] } = useEventRooms(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
-  const dismissedRef = useRef(false);
+  const hasDismissed = useRef(false);
 
-  const closeRoom = () => {
-    if (dismissedRef.current) return;
-    dismissedRef.current = true;
+  const closeRoom = useCallback(() => {
+    if (hasDismissed.current) return;
+    hasDismissed.current = true;
     setActiveRoom(null);
-  };
+  }, []);
 
   // Push a history entry when ChatRoom opens so the native PWA back gesture
   // closes the overlay instead of navigating away from /hub
   useEffect(() => {
     if (!activeRoom) return;
-    dismissedRef.current = false;
+    hasDismissed.current = false;
     history.pushState({ chatRoom: true }, "");
-    const handlePop = () => closeRoom();
-    window.addEventListener("popstate", handlePop);
-    return () => window.removeEventListener("popstate", handlePop);
-  }, [activeRoom?.id]);
+    window.addEventListener("popstate", closeRoom);
+    return () => window.removeEventListener("popstate", closeRoom);
+  }, [activeRoom?.id, closeRoom]);
 
   useEffect(() => {
     if (!joinRoomId || !user?.id || activeRoom) return;
@@ -1907,7 +1917,11 @@ const HubPage = () => {
             dragMomentum={false}
             dragDirectionLock
             onDragEnd={(_, info) => {
-              if (info.offset.x > 80) closeRoom();
+              if (info.offset.x > 80) {
+                if (hasDismissed.current) return;
+                hasDismissed.current = true;
+                setActiveRoom(null);
+              }
             }}
             style={{
               position: "fixed",
