@@ -1845,19 +1845,22 @@ const HubPage = () => {
   const { data: events = [] } = useEventRooms(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
-  const hasDismissed = useRef(false);
+  const dismissingRef = useRef(false);
 
   const closeRoom = useCallback(() => {
-    if (hasDismissed.current) return;
-    hasDismissed.current = true;
+    console.log("closeRoom called", new Date().toISOString(), "guard:", dismissingRef.current);
+    if (dismissingRef.current) return;
+    dismissingRef.current = true;
     setActiveRoom(null);
+    // Hold the guard for 1s to block any second fire during exit animation
+    setTimeout(() => { dismissingRef.current = false; }, 1000);
   }, []);
 
   // Push a history entry when ChatRoom opens so the native PWA back gesture
   // closes the overlay instead of navigating away from /hub
   useEffect(() => {
     if (!activeRoom) return;
-    hasDismissed.current = false;
+    dismissingRef.current = false;
     history.pushState({ chatRoom: true }, "");
     window.addEventListener("popstate", closeRoom);
     return () => window.removeEventListener("popstate", closeRoom);
@@ -1917,11 +1920,7 @@ const HubPage = () => {
             dragMomentum={false}
             dragDirectionLock
             onDragEnd={(_, info) => {
-              if (info.offset.x > 80) {
-                if (hasDismissed.current) return;
-                hasDismissed.current = true;
-                setActiveRoom(null);
-              }
+              if (info.offset.x > 80) closeRoom();
             }}
             style={{
               position: "fixed",
