@@ -35,7 +35,7 @@ export default defineConfig(({ mode }) => ({
         display_override: ["standalone"],
         orientation: "portrait",
         scope: "/",
-        start_url: "/",
+        start_url: "/hub",
         id: "/",
         icons: [
           {
@@ -72,6 +72,9 @@ export default defineConfig(({ mode }) => ({
       },
     }),
   ].filter(Boolean),
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString().slice(0, 16)),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

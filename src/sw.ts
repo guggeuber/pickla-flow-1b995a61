@@ -5,6 +5,9 @@ import { NetworkFirst } from 'workbox-strategies';
 
 declare const self: ServiceWorkerGlobalScope;
 
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 

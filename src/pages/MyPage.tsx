@@ -1,4 +1,6 @@
 import { useState } from "react";
+
+declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
 import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell } from "lucide-react";
 import QrCodeCard from "@/components/my/QrCodeCard";
@@ -660,6 +662,10 @@ function SettingsSection() {
           </button>
         )}
       </div>
+
+      <p className="text-xs mt-2 text-right" style={{ color: TEXT_MUTED, fontFamily: FONT_HEADING }}>
+        Version {__BUILD_TIME__.replace("T", " ")}
+      </p>
     </motion.div>
   );
 }
