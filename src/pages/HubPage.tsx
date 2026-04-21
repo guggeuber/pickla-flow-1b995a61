@@ -455,9 +455,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const [gifResults, setGifResults] = useState<{ id: string; url: string; thumb: string }[]>([]);
   const [gifLoading, setGifLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [showEmojiTip, setShowEmojiTip] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // #3 — push input above keyboard on iOS
   const [keyboardOffset, setKeyboardOffset] = useState(0);
@@ -907,16 +905,6 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
             </div>
           )}
 
-          {/* Emoji keyboard tip */}
-          {showEmojiTip && (
-            <div style={{ padding: "6px 14px", borderBottom: `1px solid ${HUB_BORDER}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12, color: HUB_MUTED, fontFamily: "Inter, sans-serif" }}>Tryck 🌐 för emojis</span>
-              <motion.button whileTap={{ scale: 0.97 }} onClick={() => setShowEmojiTip(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}>
-                <X style={{ width: 12, height: 12, color: HUB_MUTED }} />
-              </motion.button>
-            </div>
-          )}
-
           <div style={{ padding: "10px 12px", display: "flex", gap: 6, alignItems: "flex-end" }}>
             {/* GIF toggle */}
             <motion.button
@@ -971,15 +959,11 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
             </motion.button>
 
             <textarea
-              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Skriv ett meddelande..."
               rows={1}
-              inputMode="text"
-              autoComplete="off"
-              autoCorrect="on"
               style={{
                 flex: 1,
                 background: HUB_BG,
@@ -1060,11 +1044,6 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           onCopy={() => { if (contextMsg.content) navigator.clipboard.writeText(contextMsg.content); setContextMsg(null); }}
           onDelete={() => { handleDelete(contextMsg); setContextMsg(null); }}
           onEdit={() => { setEditingMessage(contextMsg); setInput(contextMsg.content ?? ""); setContextMsg(null); }}
-          onOpenEmojiKeyboard={() => {
-            setContextMsg(null);
-            setShowEmojiTip(true);
-            setTimeout(() => { textareaRef.current?.focus(); }, 50);
-          }}
           onDismiss={() => setContextMsg(null)}
         />
       )}
@@ -1105,8 +1084,9 @@ function ReactionBar({ reactions, currentUserId, onToggle }: {
 
 // ── ContextOverlay ────────────────────────────────────────────────────────────
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+const ALL_EMOJIS = ["😀","😂","😍","🥰","😎","🤔","😅","😭","😡","🥳","👍","👎","❤️","🔥","💯","🎉","🙏","👏","💪","🤝","⚡","✅","🏆","🎯","🚀","💡","😴","🤯","👀","💬","🎾","🏓","⭐","🌟","💥","🤣","😬","🙈","🤷","💃"];
 
-function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, onCopy, onDelete, onEdit, onOpenEmojiKeyboard, onDismiss }: {
+function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, onCopy, onDelete, onEdit, onDismiss }: {
   message: ChatMessage;
   currentUserId?: string;
   reactions: Reaction[];
@@ -1115,53 +1095,75 @@ function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, o
   onCopy: () => void;
   onDelete: () => void;
   onEdit: () => void;
-  onOpenEmojiKeyboard: () => void;
   onDismiss: () => void;
 }) {
   const isOwn = message.user_id === currentUserId;
   const isMedia = message.metadata?.type === "gif" || message.metadata?.type === "image";
+  const [showGrid, setShowGrid] = useState(false);
   return (
     <div onClick={onDismiss} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.55)", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
       <motion.div onClick={(e) => e.stopPropagation()} initial={{ y: 80, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 80, opacity: 0 }} transition={{ type: "spring", stiffness: 380, damping: 32 }}
         style={{ background: HUB_CARD, borderRadius: "20px 20px 0 0", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}>
-        {/* Message preview */}
-        <div style={{ padding: "14px 16px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
-          <p style={{ fontSize: 10, fontFamily: FONT_HEADING, fontWeight: 700, color: HUB_MUTED, marginBottom: 3, letterSpacing: "0.06em" }}>{isOwn ? "DITT MEDDELANDE" : "MEDDELANDE"}</p>
-          <p style={{ fontSize: 14, color: HUB_TEXT, lineHeight: 1.4 }}>
-            {message.content?.slice(0, 100) ?? "Meddelande raderat"}{(message.content?.length ?? 0) > 100 ? "…" : ""}
-          </p>
-        </div>
-        {/* Emoji row */}
-        <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", gap: 6, justifyContent: "space-around", borderBottom: `1px solid ${HUB_BORDER}` }}>
-          {QUICK_EMOJIS.map((emoji) => {
-            const active = reactions.some((r) => r.emoji === emoji && r.user_id === currentUserId);
-            return (
-              <motion.button key={emoji} whileTap={{ scale: 0.97 }} onClick={() => onReact(emoji)} style={{
-                width: 44, height: 44, borderRadius: 22, fontSize: 22, cursor: "pointer",
-                border: `${active ? "2px" : "1px"} solid ${active ? HUB_RED : HUB_BORDER}`,
-                background: active ? "rgba(204,41,54,0.07)" : HUB_BG,
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>{emoji}</motion.button>
-            );
-          })}
-          <motion.button whileTap={{ scale: 0.97 }} onClick={onOpenEmojiKeyboard} style={{ width: 44, height: 44, borderRadius: 22, border: `1px solid ${HUB_BORDER}`, background: HUB_BG, fontSize: 18, color: HUB_MUTED, cursor: "pointer" }}>+</motion.button>
-        </div>
-        {/* Actions */}
-        {[
-          { label: "Svara", icon: "↩️", action: onReply, show: true },
-          { label: "Redigera", icon: "✏️", action: onEdit, show: isOwn && !isMedia && !!message.content },
-          { label: "Kopiera", icon: "📋", action: onCopy, show: !!message.content && !isMedia },
-          { label: "Radera", icon: "🗑️", action: onDelete, show: isOwn, danger: true },
-        ].filter((a) => a.show).map(({ label, icon, action, danger }) => (
-          <motion.button key={label} whileTap={{ scale: 0.98 }} onClick={action} style={{
-            width: "100%", padding: "15px 16px", background: "none", border: "none",
-            borderBottom: `1px solid ${HUB_BORDER}`, display: "flex", alignItems: "center",
-            gap: 12, cursor: "pointer", textAlign: "left",
-          }}>
-            <span style={{ fontSize: 18 }}>{icon}</span>
-            <span style={{ fontSize: 15, color: (danger as boolean | undefined) ? HUB_RED : HUB_TEXT, fontFamily: "Inter, sans-serif" }}>{label}</span>
-          </motion.button>
-        ))}
+        {showGrid ? (
+          <>
+            <div style={{ padding: "12px 16px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${HUB_BORDER}` }}>
+              <p style={{ fontSize: 10, fontFamily: FONT_HEADING, fontWeight: 700, color: HUB_MUTED, letterSpacing: "0.06em" }}>VÄLJ REAKTION</p>
+              <motion.button whileTap={{ scale: 0.97 }} onClick={() => setShowGrid(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                <X style={{ width: 16, height: 16, color: HUB_MUTED }} />
+              </motion.button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", padding: "10px 8px 4px", maxHeight: 240, overflowY: "auto", WebkitOverflowScrolling: "touch" as any }}>
+              {ALL_EMOJIS.map((emoji) => (
+                <motion.button key={emoji} whileTap={{ scale: 0.85 }} onClick={() => onReact(emoji)} style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  fontSize: 28, lineHeight: 1, padding: "6px 0",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>{emoji}</motion.button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Message preview */}
+            <div style={{ padding: "14px 16px 12px", borderBottom: `1px solid ${HUB_BORDER}` }}>
+              <p style={{ fontSize: 10, fontFamily: FONT_HEADING, fontWeight: 700, color: HUB_MUTED, marginBottom: 3, letterSpacing: "0.06em" }}>{isOwn ? "DITT MEDDELANDE" : "MEDDELANDE"}</p>
+              <p style={{ fontSize: 14, color: HUB_TEXT, lineHeight: 1.4 }}>
+                {message.content?.slice(0, 100) ?? "Meddelande raderat"}{(message.content?.length ?? 0) > 100 ? "…" : ""}
+              </p>
+            </div>
+            {/* Emoji row */}
+            <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", gap: 6, justifyContent: "space-around", borderBottom: `1px solid ${HUB_BORDER}` }}>
+              {QUICK_EMOJIS.map((emoji) => {
+                const active = reactions.some((r) => r.emoji === emoji && r.user_id === currentUserId);
+                return (
+                  <motion.button key={emoji} whileTap={{ scale: 0.97 }} onClick={() => onReact(emoji)} style={{
+                    width: 44, height: 44, borderRadius: 22, fontSize: 22, cursor: "pointer",
+                    border: `${active ? "2px" : "1px"} solid ${active ? HUB_RED : HUB_BORDER}`,
+                    background: active ? "rgba(204,41,54,0.07)" : HUB_BG,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>{emoji}</motion.button>
+                );
+              })}
+              <motion.button whileTap={{ scale: 0.97 }} onClick={() => setShowGrid(true)} style={{ width: 44, height: 44, borderRadius: 22, border: `1px solid ${HUB_BORDER}`, background: HUB_BG, fontSize: 18, color: HUB_MUTED, cursor: "pointer" }}>+</motion.button>
+            </div>
+            {/* Actions */}
+            {[
+              { label: "Svara", icon: "↩️", action: onReply, show: true },
+              { label: "Redigera", icon: "✏️", action: onEdit, show: isOwn && !isMedia && !!message.content },
+              { label: "Kopiera", icon: "📋", action: onCopy, show: !!message.content && !isMedia },
+              { label: "Radera", icon: "🗑️", action: onDelete, show: isOwn, danger: true },
+            ].filter((a) => a.show).map(({ label, icon, action, danger }) => (
+              <motion.button key={label} whileTap={{ scale: 0.98 }} onClick={action} style={{
+                width: "100%", padding: "15px 16px", background: "none", border: "none",
+                borderBottom: `1px solid ${HUB_BORDER}`, display: "flex", alignItems: "center",
+                gap: 12, cursor: "pointer", textAlign: "left",
+              }}>
+                <span style={{ fontSize: 18 }}>{icon}</span>
+                <span style={{ fontSize: 15, color: (danger as boolean | undefined) ? HUB_RED : HUB_TEXT, fontFamily: "Inter, sans-serif" }}>{label}</span>
+              </motion.button>
+            ))}
+          </>
+        )}
       </motion.div>
     </div>
   );
