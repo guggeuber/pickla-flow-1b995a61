@@ -1849,14 +1849,17 @@ const HubPage = () => {
   const dismissingRef = useRef(false);
 
   const openRoom = useCallback((room: ChatRoom) => {
+    console.log("[HUB] openRoom called", room.id, new Error().stack);
     dismissingRef.current = false;
     setActiveRoom(room);
     setRoomOpen(true);
   }, []);
 
   const closeRoom = useCallback(() => {
+    console.log("[HUB] closeRoom called, dismissingRef=", dismissingRef.current, new Error().stack);
     if (dismissingRef.current) return;
     dismissingRef.current = true;
+    console.log("[HUB] setRoomOpen(false)", new Date().toISOString(), new Error().stack);
     setRoomOpen(false);
     // activeRoom is cleared in onAnimationComplete after slide-out finishes
   }, []);
@@ -1864,9 +1867,13 @@ const HubPage = () => {
   // Push a history entry when a room opens so the native back gesture works
   useEffect(() => {
     if (!roomOpen) return;
+    console.log("[HUB] pushState + add popstate listener", new Date().toISOString());
     history.pushState({ chatRoom: true }, "");
     window.addEventListener("popstate", closeRoom);
-    return () => window.removeEventListener("popstate", closeRoom);
+    return () => {
+      console.log("[HUB] remove popstate listener", new Date().toISOString());
+      window.removeEventListener("popstate", closeRoom);
+    };
   }, [roomOpen, closeRoom]);
 
   useEffect(() => {
@@ -1912,8 +1919,10 @@ const HubPage = () => {
           initial={{ x: "100%" }}
           animate={{ x: roomOpen ? 0 : "100%" }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          onAnimationComplete={() => {
+          onAnimationComplete={(def: any) => {
+            console.log("[HUB] onAnimationComplete fired", def, "roomOpen=", roomOpen, new Date().toISOString(), new Error().stack);
             if (!roomOpen) {
+              console.log("[HUB] clearing activeRoom");
               setActiveRoom(null);
               dismissingRef.current = false;
             }
