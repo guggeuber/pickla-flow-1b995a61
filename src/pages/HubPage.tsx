@@ -1075,7 +1075,7 @@ function ReactionBar({ reactions, currentUserId, onToggle }: {
           fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 3,
         }}>
           <span>{emoji}</span>
-          <span style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: userReacted ? HUB_RED : HUB_MUTED, fontWeight: userReacted ? 700 : 400 }}>{count}</span>
+          <span style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: "#333", fontWeight: userReacted ? 700 : 400 }}>{count}</span>
         </motion.button>
       ))}
     </div>
@@ -1205,7 +1205,7 @@ function EmojiSheet({ reactions, currentUserId, onSelect, onClose }: {
   };
 
   const SectionLabel = ({ text }: { text: string }) => (
-    <p style={{ fontSize: 9, fontFamily: FONT_HEADING, fontWeight: 700, color: "rgba(255,255,255,0.35)", letterSpacing: "0.08em", padding: "10px 4px 5px", margin: 0 }}>{text}</p>
+    <p style={{ fontSize: 9, fontFamily: FONT_HEADING, fontWeight: 700, color: "rgba(0,0,0,0.35)", letterSpacing: "0.08em", padding: "10px 4px 5px", margin: 0 }}>{text}</p>
   );
 
   return (
@@ -1216,26 +1216,26 @@ function EmojiSheet({ reactions, currentUserId, onSelect, onClose }: {
         onDragEnd={(_, info) => { if (info.offset.y > 80) onClose(); }}
         initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
         transition={{ type: "spring", stiffness: 360, damping: 30 }}
-        style={{ background: "#1a1a1a", borderRadius: "20px 20px 0 0", maxHeight: "72vh", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}
+        style={{ background: "#faf8f5", borderRadius: "20px 20px 0 0", maxHeight: "72vh", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}
       >
         {/* Drag handle */}
         <div style={{ display: "flex", justifyContent: "center", padding: "10px 0 4px", flexShrink: 0 }}>
-          <div style={{ width: 36, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.18)" }} />
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: "rgba(0,0,0,0.12)" }} />
         </div>
 
         {/* Search */}
         <div style={{ padding: "6px 14px 10px", flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.08)", borderRadius: 12, padding: "9px 12px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(0,0,0,0.06)", borderRadius: 12, padding: "9px 12px" }}>
             <span style={{ fontSize: 15 }}>🔍</span>
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Sök emojis..."
-              style={{ flex: 1, background: "none", border: "none", outline: "none", fontSize: 14, fontFamily: "Inter, sans-serif", color: "#fff" }}
+              style={{ flex: 1, background: "none", border: "none", outline: "none", fontSize: 14, fontFamily: "Inter, sans-serif", color: "#111" }}
             />
             {query && (
               <motion.button whileTap={{ scale: 0.9 }} onClick={() => setQuery("")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-                <X style={{ width: 14, height: 14, color: "rgba(255,255,255,0.4)" }} />
+                <X style={{ width: 14, height: 14, color: "rgba(0,0,0,0.3)" }} />
               </motion.button>
             )}
           </div>
@@ -1251,7 +1251,7 @@ function EmojiSheet({ reactions, currentUserId, onSelect, onClose }: {
                   {searchResults.map(({ e }) => <EBtn key={e} emoji={e} />)}
                 </div>
               ) : (
-                <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", fontFamily: "Inter, sans-serif", padding: "12px 0" }}>Inga emojis hittades</p>
+                <p style={{ fontSize: 13, color: "rgba(0,0,0,0.35)", fontFamily: "Inter, sans-serif", padding: "12px 0" }}>Inga emojis hittades</p>
               )}
             </>
           ) : (
@@ -1401,9 +1401,9 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
         style={{
           position: "relative",
           maxWidth: "75%",
-          padding: "8px 12px",
+          padding: isMedia ? "0" : "8px 12px",
           borderRadius: isOwn ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
-          background: isMedia ? "transparent" : isOwn ? HUB_NAVY : HUB_CARD,
+          background: isMedia ? "transparent" : isOwn ? "linear-gradient(135deg, #1a1f3a 0%, #2d3561 100%)" : HUB_CARD,
           border: isMedia ? "none" : isOwn ? "none" : `1px solid ${HUB_BORDER}`,
           boxShadow: isMedia ? "none" : isOwn ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
           overflow: "visible",
@@ -1419,34 +1419,43 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
         )}
 
         {isDeleted ? (
-          <p style={{ fontSize: 13, color: isOwn ? "rgba(255,255,255,0.5)" : HUB_MUTED, fontStyle: "italic" }}>
+          <p style={{ fontSize: 13, color: isOwn ? "rgba(255,255,255,0.5)" : HUB_MUTED, fontStyle: "italic", padding: "8px 12px" }}>
             Meddelande raderat
           </p>
         ) : isMedia ? (
-          <img
-            src={message.metadata?.thumb || message.content!}
-            alt=""
-            style={{ maxWidth: 220, maxHeight: 180, borderRadius: 10, display: "block" }}
-            onClick={() => window.open(message.content!, "_blank")}
-          />
+          <div style={{ position: "relative", display: "inline-block" }}>
+            <img
+              src={message.metadata?.thumb || message.content!}
+              alt=""
+              style={{ maxWidth: 220, maxHeight: 180, borderRadius: 10, display: "block" }}
+              onClick={() => window.open(message.content!, "_blank")}
+            />
+            <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: HUB_MUTED, marginTop: 2, textAlign: "right", padding: "0 4px 2px" }}>
+              {relativeTime(message.created_at)}
+            </p>
+            {hasReactions && (
+              <div style={{ position: "absolute", bottom: 24, ...(isOwn ? { right: 4 } : { left: 4 }) }}>
+                <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
+              </div>
+            )}
+          </div>
         ) : (
-          <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4 }}>
+          <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4, padding: isMedia ? 0 : undefined }}>
             {message.content}
           </p>
         )}
-        <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: isMedia ? 2 : 3, textAlign: "right", padding: isMedia ? "0 4px 2px" : 0 }}>
-          {relativeTime(message.created_at)}
-        </p>
 
-        {/* Reactions anchored to bubble's bottom corner — works for text, image, and GIF */}
-        {hasReactions && (
-          <div style={{
-            position: "absolute",
-            bottom: -12,
-            ...(isOwn ? { right: 8 } : { left: 8 }),
-          }}>
-            <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
-          </div>
+        {!isMedia && (
+          <>
+            <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: 3, textAlign: "right" }}>
+              {relativeTime(message.created_at)}
+            </p>
+            {hasReactions && (
+              <div style={{ position: "absolute", bottom: -12, ...(isOwn ? { right: 8 } : { left: 8 }) }}>
+                <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
