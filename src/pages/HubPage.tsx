@@ -1845,31 +1845,34 @@ const HubPage = () => {
   const { data: events = [] } = useEventRooms(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
+  const [roomOpen, setRoomOpen] = useState(false);
   const dismissingRef = useRef(false);
 
-  const closeRoom = useCallback(() => {
-    console.log("closeRoom called", new Date().toISOString(), "guard:", dismissingRef.current);
-    if (dismissingRef.current) return;
-    dismissingRef.current = true;
-    setActiveRoom(null);
-    // Hold the guard for 1s to block any second fire during exit animation
-    setTimeout(() => { dismissingRef.current = false; }, 1000);
+  const openRoom = useCallback((room: ChatRoom) => {
+    dismissingRef.current = false;
+    setActiveRoom(room);
+    setRoomOpen(true);
   }, []);
 
-  // Push a history entry when ChatRoom opens so the native PWA back gesture
-  // closes the overlay instead of navigating away from /hub
+  const closeRoom = useCallback(() => {
+    if (dismissingRef.current) return;
+    dismissingRef.current = true;
+    setRoomOpen(false);
+    // activeRoom is cleared in onAnimationComplete after slide-out finishes
+  }, []);
+
+  // Push a history entry when a room opens so the native back gesture works
   useEffect(() => {
-    if (!activeRoom) return;
-    dismissingRef.current = false;
+    if (!roomOpen) return;
     history.pushState({ chatRoom: true }, "");
     window.addEventListener("popstate", closeRoom);
     return () => window.removeEventListener("popstate", closeRoom);
-  }, [activeRoom?.id, closeRoom]);
+  }, [roomOpen, closeRoom]);
 
   useEffect(() => {
     if (!joinRoomId || !user?.id || activeRoom) return;
     supabase.rpc("join_chat_room", { p_room_id: joinRoomId }).then(({ data }) => {
-      if (data?.[0]) setActiveRoom(data[0] as ChatRoom);
+      if (data?.[0]) openRoom(data[0] as ChatRoom);
     });
   }, [joinRoomId, user?.id]);
 
@@ -1900,43 +1903,43 @@ const HubPage = () => {
         events={events}
         onSelectRoom={async (room) => {
           await supabase.rpc("join_chat_room", { p_room_id: room.id });
-          setActiveRoom(room);
+          openRoom(room);
         }}
       />
 
-      <AnimatePresence>
-        {activeRoom && (
-          <motion.div
-            key={activeRoom.id}
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", stiffness: 340, damping: 32 }}
-            // #4 — swipe right to dismiss; dragElastic=0 prevents rubber-band
-            // that iOS mistakes for native back gesture
-            drag="x"
-            dragConstraints={{ left: 0, right: 300 }}
-            dragElastic={0}
-            dragMomentum={false}
-            dragDirectionLock
-            onDragEnd={(_, info) => {
-              if (info.offset.x > 80) closeRoom();
-            }}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 50,
-              background: HUB_BG,
-            }}
-          >
-            <ChatRoom
-              room={activeRoom}
-              venueId={venueId}
-              onBack={closeRoom}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {activeRoom && (
+        <motion.div
+          initial={{ x: "100%" }}
+          animate={{ x: roomOpen ? 0 : "100%" }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          onAnimationComplete={() => {
+            if (!roomOpen) {
+              setActiveRoom(null);
+              dismissingRef.current = false;
+            }
+          }}
+          drag="x"
+          dragConstraints={{ left: 0, right: 300 }}
+          dragElastic={0}
+          dragMomentum={false}
+          dragDirectionLock
+          onDragEnd={(_, info) => {
+            if (info.offset.x > 80) closeRoom();
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            background: HUB_BG,
+          }}
+        >
+          <ChatRoom
+            room={activeRoom}
+            venueId={venueId}
+            onBack={closeRoom}
+          />
+        </motion.div>
+      )}
     </div>
   );
 };
