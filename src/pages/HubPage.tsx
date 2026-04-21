@@ -547,9 +547,14 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
     );
   }, [room.id, user?.id]);
 
+  // Scroll to bottom on mount (instant) then on new messages / keyboard
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
+  }, []);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, botData]);
+  }, [messages, botData, keyboardOffset]);
 
   const sendMessage = async () => {
     if (!input.trim() || !user?.id || sending) return;
@@ -1196,8 +1201,8 @@ function EmojiSheet({ reactions, currentUserId, onSelect, onClose }: {
     const active = reactions.some((r) => r.emoji === emoji && r.user_id === currentUserId);
     return (
       <motion.button whileTap={{ scale: 0.82 }} onClick={() => handleSelect(emoji)} style={{
-        background: active ? "rgba(204,41,54,0.18)" : "none",
-        border: active ? `1.5px solid ${HUB_RED}` : "1.5px solid transparent",
+        background: active ? "rgba(0,0,0,0.07)" : "none",
+        border: "none",
         borderRadius: 10, cursor: "pointer", fontSize: 28, lineHeight: 1,
         padding: "4px 0", display: "flex", alignItems: "center", justifyContent: "center",
       }}>{emoji}</motion.button>
@@ -1403,7 +1408,7 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
           maxWidth: "75%",
           padding: isMedia ? "0" : "8px 12px",
           borderRadius: isOwn ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
-          background: isMedia ? "transparent" : isOwn ? "linear-gradient(135deg, #1a1f3a 0%, #2d3561 100%)" : HUB_CARD,
+          background: isMedia ? "transparent" : isOwn ? "linear-gradient(135deg, #2d3a8c 0%, #4a5cc7 100%)" : HUB_CARD,
           border: isMedia ? "none" : isOwn ? "none" : `1px solid ${HUB_BORDER}`,
           boxShadow: isMedia ? "none" : isOwn ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
           overflow: "visible",
@@ -1434,7 +1439,7 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, onLo
               {relativeTime(message.created_at)}
             </p>
             {hasReactions && (
-              <div style={{ position: "absolute", bottom: 24, ...(isOwn ? { right: 4 } : { left: 4 }) }}>
+              <div style={{ position: "absolute", bottom: 8, right: 8 }}>
                 <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
               </div>
             )}
@@ -1840,8 +1845,7 @@ const HubPage = () => {
             dragElastic={0}
             dragMomentum={false}
             dragDirectionLock
-            onDragEnd={(e, info) => {
-              e.stopPropagation();
+            onDragEnd={(_, info) => {
               if (info.offset.x > 80) setActiveRoom(null);
             }}
             style={{

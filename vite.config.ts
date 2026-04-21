@@ -36,7 +36,7 @@ export default defineConfig(({ mode }) => ({
         orientation: "portrait",
         scope: "/",
         start_url: "/hub",
-        id: "/",
+        id: "/hub",
         icons: [
           {
             src: "/pwa-192x192.png",
