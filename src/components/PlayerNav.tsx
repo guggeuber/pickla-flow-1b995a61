@@ -36,7 +36,7 @@ export function PlayerNav() {
       {/* Live → /hub */}
       <motion.button
         whileTap={{ scale: 0.9 }}
-        onClick={() => navigate("/hub", { replace: true })}
+        onClick={() => navigate("/hub")}
         style={{
           display: "flex",
           alignItems: "center",
@@ -72,7 +72,7 @@ export function PlayerNav() {
       {/* Boka → /book */}
       <motion.button
         whileTap={{ scale: 0.9 }}
-        onClick={() => navigate("/book", { replace: true })}
+        onClick={() => navigate("/book")}
         style={{
           background: "none",
           border: "none",
@@ -93,7 +93,7 @@ export function PlayerNav() {
       {/* Mig → /my */}
       <motion.button
         whileTap={{ scale: 0.9 }}
-        onClick={() => navigate("/my", { replace: true })}
+        onClick={() => navigate("/my")}
         style={{
           background: "none",
           border: "none",

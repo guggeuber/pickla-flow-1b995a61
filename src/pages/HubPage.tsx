@@ -651,8 +651,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           whileTap={{ scale: 0.97 }}
           onClick={onBack}
           style={{
-            width: 36,
-            height: 36,
+            width: 44,
+            height: 44,
             borderRadius: 10,
             border: `1px solid ${HUB_BORDER}`,
             background: HUB_CARD,
@@ -725,6 +725,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           overflowY: "auto",
           WebkitOverflowScrolling: "touch" as any,
           overscrollBehavior: "contain",
+          touchAction: "pan-y",
           padding: "16px",
           paddingBottom: 8,
           display: "flex",
