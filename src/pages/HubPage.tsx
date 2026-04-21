@@ -1859,6 +1859,7 @@ const HubPage = () => {
   }, []);
 
   const closeRoom = useCallback(() => {
+    console.log('[CLOSE] closeRoom called, dismissing=', dismissingRef.current, Date.now());
     if (dismissingRef.current) return;
     dismissingRef.current = true;
     setRoomOpen(false);
@@ -1869,6 +1870,7 @@ const HubPage = () => {
   // NOT to call history.back() a second time.
   useEffect(() => {
     const onPopState = () => {
+      console.log('[POPSTATE] fired', Date.now());
       closedByPopstateRef.current = true;
       closeRoom();
     };
@@ -1920,6 +1922,7 @@ const HubPage = () => {
           animate={{ x: roomOpen ? 0 : "100%" }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
           onAnimationComplete={(def: any) => {
+            console.log('[ANIM] complete', JSON.stringify(def), Date.now());
             if (def?.x === "100%") {
               // swipe-close: entry still in history, need to pop it
               // popstate-close (iOS back): entry already popped by browser, skip
@@ -1934,7 +1937,9 @@ const HubPage = () => {
           dragElastic={0}
           dragMomentum={false}
           dragDirectionLock
+          onDragStart={() => console.log('[DRAG] start', Date.now())}
           onDragEnd={(_, info) => {
+            console.log('[DRAG] end', { vx: info.velocity.x, ox: info.offset.x });
             if (info.offset.x > 80) closeRoom();
           }}
           style={{
