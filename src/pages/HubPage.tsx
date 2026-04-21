@@ -1847,19 +1847,34 @@ const HubPage = () => {
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [roomOpen, setRoomOpen] = useState(false);
   const dismissingRef = useRef(false);
+  // true when close was triggered by the popstate event (iOS back gesture already popped the entry)
+  const closedByPopstateRef = useRef(false);
 
   const openRoom = useCallback((room: ChatRoom) => {
     dismissingRef.current = false;
+    closedByPopstateRef.current = false;
     setActiveRoom(room);
     setRoomOpen(true);
+    history.pushState({ chatOpen: true }, "");
   }, []);
 
   const closeRoom = useCallback(() => {
     if (dismissingRef.current) return;
     dismissingRef.current = true;
     setRoomOpen(false);
-    // activeRoom is cleared in onAnimationComplete after slide-out finishes
   }, []);
+
+  // Intercept iOS native back gesture. iOS pops the pushState entry and fires popstate —
+  // the entry is already gone, so we mark closedByPopstateRef so onAnimationComplete knows
+  // NOT to call history.back() a second time.
+  useEffect(() => {
+    const onPopState = () => {
+      closedByPopstateRef.current = true;
+      closeRoom();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [closeRoom]);
 
   useEffect(() => {
     if (!joinRoomId || !user?.id || activeRoom) return;
@@ -1906,6 +1921,10 @@ const HubPage = () => {
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
           onAnimationComplete={(def: any) => {
             if (def?.x === "100%") {
+              // swipe-close: entry still in history, need to pop it
+              // popstate-close (iOS back): entry already popped by browser, skip
+              if (!closedByPopstateRef.current) history.back();
+              closedByPopstateRef.current = false;
               setActiveRoom(null);
               dismissingRef.current = false;
             }
