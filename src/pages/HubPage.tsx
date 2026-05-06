@@ -11,6 +11,7 @@ import { ChannelCard } from "@/components/hub/ChannelCard";
 import { ActionCard } from "@/components/hub/ActionCard";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { PlayerNav } from "@/components/PlayerNav";
+import { EventCard } from "@/components/hub/EventCard";
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const HUB_BG = "#faf8f5";
@@ -798,12 +799,10 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
 
         {/* Event room: action card */}
         {room.room_type === "event" && room.resource_id && (
-          <ActionCard
-          title={room.title}
-          description={room.subtitle}
-          ctaLabel={room.subtitle?.toLowerCase().includes("fredags") || room.title?.toLowerCase().includes("fredags") ? "Drop-in · 99 kr" : "Köp plats"}
-          onAction={() => navigate(room.subtitle?.toLowerCase().includes("fredags") ? "/openplay" : `/event/${room.resource_id}`)}
-        />
+           <EventCard
+           eventId={room.resource_id}
+           venueId={venueId}
+         />
         )}
 
         {/* #8 — message skeletons while loading */}
