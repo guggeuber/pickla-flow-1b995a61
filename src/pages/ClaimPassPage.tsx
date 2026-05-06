@@ -114,7 +114,7 @@ const ClaimPassPage = () => {
             <Gift className="w-8 h-8" style={{ color: "#E86C24" }} />
           </div>
           <h1 className="text-xl font-black text-white mb-2" style={{ fontFamily: FONT_HEADING }}>
-            Du har fått ett dagspass!
+            {shareInfo.recipient_name ? `${shareInfo.recipient_name}, du har fått ett dagspass!` : "Du har fått ett dagspass!"}
           </h1>
           <p className="text-sm text-white/50 mb-1" style={{ fontFamily: FONT_MONO }}>
             Från {shareInfo.sharer_name}

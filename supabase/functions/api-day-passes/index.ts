@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
       const adminClient = getServiceClient();
       const { data: share } = await adminClient
         .from('day_pass_shares')
-        .select('id, status, token, shared_by, day_passes(valid_date, venue_id)')
+        .select('id, status, token, shared_by, recipient_name, day_passes(valid_date, venue_id)')
         .eq('token', token)
         .single();
 
@@ -108,7 +108,7 @@ Deno.serve(async (req) => {
       // Get shares created by this user
       const { data: shares } = await adminClient
         .from('day_pass_shares')
-        .select('id, token, status, recipient_email, day_pass_id, claimed_by, created_at')
+        .select('id, token, status, recipient_email, recipient_name, day_pass_id, claimed_by, created_at')
         .eq('shared_by', userId)
         .order('created_at', { ascending: false });
 
@@ -255,7 +255,7 @@ Deno.serve(async (req) => {
 
       const { data: shares } = await adminClient
         .from('day_pass_shares')
-        .select('id, token, status, recipient_email, recipient_phone, claimed_by, created_at')
+        .select('id, token, status, recipient_email, recipient_name, recipient_phone, claimed_by, created_at')
         .eq('shared_by', userId)
         .gte('created_at', monthYear)
         .order('created_at', { ascending: false });
@@ -278,9 +278,10 @@ Deno.serve(async (req) => {
     // ─── POST /share ── share an existing pass ───
     if (req.method === 'POST' && path === 'share') {
       const body = await req.json();
-      const { day_pass_id, recipient_email } = body;
+      const { day_pass_id, recipient_email, recipient_name } = body;
       if (!day_pass_id) return errorResponse('Missing day_pass_id');
-      if (!recipient_email) return errorResponse('Missing recipient_email');
+      const recipientName = String(recipient_name || recipient_email || '').trim();
+      if (!recipientName) return errorResponse('Missing recipient_name');
 
       // Verify the pass belongs to the user and is active
       const { data: pass, error: passErr } = await adminClient
@@ -308,7 +309,8 @@ Deno.serve(async (req) => {
       const { data: share, error: shareErr } = await adminClient.from('day_pass_shares').insert({
         day_pass_id,
         shared_by: userId,
-        recipient_email,
+        recipient_name: recipientName,
+        recipient_email: recipient_email || null,
         token,
         status: 'pending',
       }).select().single();
