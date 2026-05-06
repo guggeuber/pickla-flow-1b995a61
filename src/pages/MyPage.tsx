@@ -2,7 +2,8 @@ import { useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles } from "lucide-react";
+import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import QrCodeCard from "@/components/my/QrCodeCard";
 import { PlayerNav } from "@/components/PlayerNav";
 import { useQueryClient } from "@tanstack/react-query";
@@ -249,23 +250,115 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
           </motion.button>
         )}
       </div>
-      {profile && !editing && (
-        <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: `1px solid ${CARD_BORDER}` }}>
-          <div className="text-center flex-1">
-            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_matches || 0}</p>
-            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Matcher</p>
-          </div>
-          <div className="text-center flex-1">
-            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_wins || 0}</p>
-            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Vinster</p>
-          </div>
-          <div className="text-center flex-1">
-            <p className="text-lg font-bold" style={{ color: BLUE }}>{profile.pickla_rating || 1000}</p>
-            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Rating</p>
+    </motion.div>
+  );
+}
+
+function BookingDetailsSheet({
+  booking,
+  open,
+  onOpenChange,
+}: {
+  booking: any | null;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [cancelling, setCancelling] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
+  if (!booking) return null;
+
+  const courtName = booking.venue_courts?.name || "Bana";
+  const start = new Date(booking.start_time);
+  const end = new Date(booking.end_time);
+  const dateLabel = start.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
+  const timeLabel = `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    const { error } = await supabase
+      .from("bookings")
+      .update({ status: "cancelled" })
+      .eq("id", booking.id);
+    setCancelling(false);
+    if (error) {
+      toast.error("Kunde inte avboka");
+    } else {
+      toast.success("Bokningen är avbokad");
+      queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      onOpenChange(false);
+      setConfirmCancel(false);
+    }
+  };
+
+  return (
+    <Drawer open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setConfirmCancel(false); }}>
+      <DrawerContent style={{ background: CARD_BG }}>
+        <div className="px-5 pb-6 pt-2 max-w-md mx-auto w-full">
+          <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+            Bokning
+          </p>
+          <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{courtName}</p>
+          <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{dateLabel}</p>
+          <p className="text-sm" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{timeLabel}</p>
+          {booking.access_code && (
+            <div className="mt-3 rounded-xl px-3 py-2 inline-flex items-center gap-2" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
+              <span className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Kod</span>
+              <span className="text-base font-bold" style={{ fontFamily: FONT_MONO, color: BLUE }}>{booking.access_code}</span>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 mt-5">
+            <button
+              onClick={() => { onOpenChange(false); navigate(`/hub?room=${booking.id}`); }}
+              className="w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform"
+              style={{ background: BLUE, fontFamily: FONT_HEADING }}
+            >
+              Gå till chatt
+            </button>
+            <button
+              onClick={() => { onOpenChange(false); navigate(`/b/${booking.access_code || booking.id}`); }}
+              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
+              style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+            >
+              Visa kvitto
+            </button>
+            {confirmCancel ? (
+              <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                <p className="text-xs text-center" style={{ color: TEXT_SECONDARY }}>Säker på att du vill avboka?</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setConfirmCancel(false)}
+                    className="flex-1 py-2.5 rounded-lg text-xs font-bold"
+                    style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+                  >
+                    Behåll
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    disabled={cancelling}
+                    className="flex-1 py-2.5 rounded-lg text-xs font-bold text-white disabled:opacity-50 flex items-center justify-center"
+                    style={{ background: "#EF4444", fontFamily: FONT_HEADING }}
+                  >
+                    {cancelling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Ja, avboka"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmCancel(true)}
+                className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
+                style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444", fontFamily: FONT_HEADING }}
+              >
+                Avboka
+              </button>
+            )}
           </div>
         </div>
-      )}
-    </motion.div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 
@@ -681,6 +774,9 @@ const MyPage = () => {
   const { data: activeMembership } = useActiveMembership();
   const queryClient = useQueryClient();
 
+  const [selectedBooking, setSelectedBooking] = useState<any | null>(null);
+  const [showPast, setShowPast] = useState(false);
+
   // Show success toast when returning from Stripe card setup
   useState(() => {
     if (searchParams.get("card_saved") === "1") {
@@ -700,7 +796,9 @@ const MyPage = () => {
   if (!user) return <Navigate to={`/auth?redirect=/my&v=${venueSlug}`} replace />;
 
   const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
-  const activeBookings = bookings?.filter((b) => b.status === "confirmed" || b.status === "pending") || [];
+  const now = Date.now();
+  const activeBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now);
+  const pastBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now);
   const membershipTier = (activeMembership as any)?.membership_tiers;
 
   return (
@@ -745,7 +843,7 @@ const MyPage = () => {
             {[
               { label: "+ Boka bana", to: "/book" },
               { label: "Köp dagspass", to: "/membership" },
-              { label: "Aktiviteter", to: "/community" },
+              { label: "Bli medlem", to: "/membership" },
             ].map((a) => (
               <button
                 key={a.label}
@@ -815,14 +913,19 @@ const MyPage = () => {
             </div>
             {activeBookings.length === 0 ? (
               <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
-                <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga aktiva bokningar</p>
+                <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga kommande bokningar</p>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                {activeBookings.slice(0, 5).map((b) => (
-                  <div key={b.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                {activeBookings.slice(0, 5).map((b: any) => (
+                  <button
+                    key={b.id}
+                    onClick={() => setSelectedBooking(b)}
+                    className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
+                    style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                  >
                     <div>
-                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{(b as any).venue_courts?.name || "Bana"}</p>
+                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{b.venue_courts?.name || "Bana"}</p>
                       <p className="text-xs" style={{ color: TEXT_MUTED }}>
                         {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
                         {" "}
@@ -832,11 +935,57 @@ const MyPage = () => {
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? GREEN_LIGHT : BLUE_LIGHT, color: b.status === "confirmed" ? GREEN : BLUE }}>
                       {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
+
+            {pastBookings.length > 0 && (
+              <div className="mt-2">
+                <button
+                  onClick={() => setShowPast(!showPast)}
+                  className="w-full flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:scale-[0.98] transition-transform"
+                  style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
+                >
+                  {showPast ? "Dölj tidigare bokningar" : `Visa tidigare bokningar (${pastBookings.length})`}
+                  <ChevronDown className="w-3.5 h-3.5 transition-transform" style={{ transform: showPast ? "rotate(180deg)" : "none" }} />
+                </button>
+                <AnimatePresence>
+                  {showPast && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="flex flex-col gap-2 pt-1">
+                        {pastBookings.map((b: any) => (
+                          <button
+                            key={b.id}
+                            onClick={() => setSelectedBooking(b)}
+                            className="rounded-xl p-3 flex items-center justify-between text-left opacity-70 active:scale-[0.98] transition-transform"
+                            style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                          >
+                            <div>
+                              <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{b.venue_courts?.name || "Bana"}</p>
+                              <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                                {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
+                                {" "}
+                                {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
           </motion.div>
+
+          {/* Day passes — directly under bookings */}
+          <DayPassSection />
 
           {/* Corporate memberships */}
           <CorporateSection />
@@ -847,13 +996,16 @@ const MyPage = () => {
           {/* Wallet: saved cards */}
           <WalletSection />
 
-          {/* Unified day pass section */}
-          <DayPassSection />
-
           {/* Settings: push notifications etc */}
           <SettingsSection />
         </motion.div>
       </main>
+
+      <BookingDetailsSheet
+        booking={selectedBooking}
+        open={!!selectedBooking}
+        onOpenChange={(o) => { if (!o) setSelectedBooking(null); }}
+      />
 
       <PlayerNav />
     </div>
