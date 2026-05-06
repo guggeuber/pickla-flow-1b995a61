@@ -799,11 +799,11 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
         {/* Event room: action card */}
         {room.room_type === "event" && room.resource_id && (
           <ActionCard
-            title={room.title}
-            description={room.subtitle}
-            ctaLabel="Se event"
-            onAction={() => navigate(`/event/${room.resource_id}`)}
-          />
+          title={room.title}
+          description={room.subtitle}
+          ctaLabel={room.subtitle?.toLowerCase().includes("fredags") || room.title?.toLowerCase().includes("fredags") ? "Drop-in · 99 kr" : "Köp plats"}
+          onAction={() => navigate(room.subtitle?.toLowerCase().includes("fredags") ? "/openplay" : `/event/${room.resource_id}`)}
+        />
         )}
 
         {/* #8 — message skeletons while loading */}
@@ -1742,7 +1742,7 @@ function HubList({
         {/* ── Events & Ritualer ─────────────────────────────────────── */}
         {events.length > 0 && (
           <>
-            <SectionLabel label="Events & Ritualer" />
+            <SectionLabel label="Pickla i veckan" />
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {events.map((ev) => {
                 const dateStr = ev.start_date

@@ -1,0 +1,11 @@
+- generic [ref=e2]:
+  - region "Notifications (F8)":
+    - list
+  - region "Notifications alt+T"
+  - generic [ref=e4]:
+    - img "Pickla" [ref=e5]
+    - generic [ref=e6]: 🎯
+    - generic [ref=e7]:
+      - heading "Välkommen till Pickla!" [level=1] [ref=e8]
+      - paragraph [ref=e9]: Du är inloggad
+    - button "Kom igång →" [ref=e10] [cursor=pointer]
