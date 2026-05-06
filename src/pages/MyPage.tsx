@@ -461,6 +461,14 @@ function DayPassSection() {
             {activePasses.length}
           </span>
         </div>
+        <button
+          onClick={handleBuy}
+          disabled={buying}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold active:scale-95 transition-transform disabled:opacity-40"
+          style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
+        >
+          {buying ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Plus className="w-3 h-3" /> Köp dagspass</>}
+        </button>
       </div>
 
       {/* Member allowance info */}
@@ -472,16 +480,6 @@ function DayPassSection() {
           </p>
         </div>
       )}
-
-      {/* Buy button */}
-      <button
-        onClick={handleBuy}
-        disabled={buying}
-        className="w-full py-3 rounded-xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2 mb-3 disabled:opacity-40"
-        style={{ background: BLUE, fontFamily: FONT_MONO }}
-      >
-        {buying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><ShoppingBag className="w-3.5 h-3.5" /> Köp dagspass</>}
-      </button>
 
       {/* Just created share link */}
       <AnimatePresence>
