@@ -45,6 +45,7 @@ interface CourtData {
   name: string;
   court_number: number;
   court_type: string | null;
+  sport_type?: string | null;
   hourly_rate: number | null;
 }
 
@@ -138,6 +139,13 @@ export default function BookingPage() {
   const venueName = data?.venue?.name || "";
   const pricingRules: any[] = data?.pricingRules || [];
 
+  const { data: membership } = useQuery({
+    queryKey: ["booking-membership", user?.id, data?.venue?.id],
+    enabled: !!user?.id && !!data?.venue?.id,
+    staleTime: 30000,
+    queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: data!.venue.id }),
+  });
+
   // Resolve price for a court based on pricing rules, selected day + time
   const getCourtPrice = (court: CourtData): number => {
     if (!selectedTime) return court.hourly_rate || 0;
@@ -150,6 +158,24 @@ export default function BookingPage() {
       return daysMatch && selectedTime >= timeFrom && selectedTime < timeTo;
     });
     return matchingRule ? matchingRule.price : (court.hourly_rate || 0);
+  };
+
+  const courtPricing = (membership?.tier_pricing || []).find((p: any) => p.product_type === "court_hourly");
+
+  const getMemberCourtPrice = (court: CourtData): number => {
+    const basePrice = getCourtPrice(court);
+    const sportType = court.sport_type || "pickleball";
+    if (sportType !== "pickleball" || !courtPricing) return basePrice;
+
+    if (courtPricing.fixed_price != null) {
+      return Math.round(Number(courtPricing.fixed_price));
+    }
+
+    if (courtPricing.discount_percent) {
+      return Math.round(basePrice * (1 - Number(courtPricing.discount_percent) / 100));
+    }
+
+    return basePrice;
   };
 
   const timeSlots = useMemo(
@@ -218,16 +244,25 @@ export default function BookingPage() {
     );
   };
 
-  const totalPrice = useMemo(() => {
+  const baseTotalPrice = useMemo(() => {
     return selectedCourts.reduce((sum, id) => {
       const court = courts.find((c) => c.id === id);
       return sum + (court ? getCourtPrice(court) : 0);
     }, 0);
   }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate]);
 
+  const totalPrice = useMemo(() => {
+    return selectedCourts.reduce((sum, id) => {
+      const court = courts.find((c) => c.id === id);
+      return sum + (court ? getMemberCourtPrice(court) : 0);
+    }, 0);
+  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, courtPricing]);
+
+  const hasMemberCourtPrice = totalPrice < baseTotalPrice;
+
   const bookMutation = useMutation({
     mutationFn: async () => {
-      const isFree = useCorporate || totalPrice === 0;
+      const isFree = useCorporate || baseTotalPrice === 0;
 
       if (isFree) {
         // Corporate / free booking — create immediately without Stripe
@@ -264,7 +299,7 @@ export default function BookingPage() {
 
       const result = await apiPost("api-bookings", "create-checkout", {
         product_type: "court_booking",
-        amount_sek:   totalPrice,
+        amount_sek:   baseTotalPrice,
         venue_id:     venueId,
         metadata: {
           slug,
@@ -517,6 +552,9 @@ export default function BookingPage() {
                 {courts.map((court) => {
                   const available = courtAvailability[court.id] !== false;
                   const selected = selectedCourts.includes(court.id);
+                  const basePrice = getCourtPrice(court);
+                  const memberPrice = getMemberCourtPrice(court);
+                  const hasDiscount = memberPrice < basePrice;
                   return (
                     <button
                       key={court.id}
@@ -537,14 +575,19 @@ export default function BookingPage() {
                       >
                         {court.name}
                       </p>
-                      <p
-                        className={`text-[10px] mt-0.5 ${
+                      <div
+                        className={`text-[10px] mt-0.5 flex items-center gap-1 ${
                           selected ? "text-white/60" : "text-neutral-400"
                         }`}
                         style={{ fontFamily: FONT_MONO }}
                       >
-                        {getCourtPrice(court)} kr/h
-                      </p>
+                        {hasDiscount && (
+                          <span className="line-through opacity-60">{basePrice} kr/h</span>
+                        )}
+                        <span className={hasDiscount ? (selected ? "text-emerald-200" : "text-emerald-600") : undefined}>
+                          {memberPrice} kr/h
+                        </span>
+                      </div>
                       {!available && (
                         <span
                           className="text-[8px] text-neutral-400 mt-0.5 block"
@@ -563,8 +606,9 @@ export default function BookingPage() {
                   style={{ fontFamily: FONT_MONO }}
                 >
                   {selectedCourts.length}{" "}
-                  {selectedCourts.length === 1 ? "bana" : "banor"} · {totalPrice}{" "}
-                  kr
+                  {selectedCourts.length === 1 ? "bana" : "banor"} ·{" "}
+                  {hasMemberCourtPrice && <span className="line-through opacity-60">{baseTotalPrice} kr</span>}{" "}
+                  <span className={hasMemberCourtPrice ? "text-emerald-600" : undefined}>{totalPrice} kr</span>
                 </p>
               )}
             </div>
@@ -625,7 +669,7 @@ export default function BookingPage() {
                   }`}
                   style={{ fontFamily: FONT_MONO }}
                 >
-                  betala i kassan · {totalPrice} kr
+                  betala i kassan · {hasMemberCourtPrice ? `${totalPrice} kr` : `${baseTotalPrice} kr`}
                 </button>
                 {activePackages.map((pkg: any) => {
                   const remaining = pkg.total_hours - pkg.used_hours;
@@ -672,6 +716,11 @@ export default function BookingPage() {
                   {useCorporate ? "0 kr" : `${totalPrice} kr`}
                 </span>
               </div>
+              {!useCorporate && hasMemberCourtPrice && (
+                <p className="text-[11px] text-emerald-600 -mt-2 mb-3 text-right" style={{ fontFamily: FONT_MONO }}>
+                  medlemspris · ord. {baseTotalPrice} kr
+                </p>
+              )}
 
               <button
                 type="submit"

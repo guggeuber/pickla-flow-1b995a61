@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { ArrowLeft, Loader2, Zap } from "lucide-react";
@@ -57,6 +57,29 @@ const OpenPlayPage = () => {
   const [loadingSlot, setLoadingSlot] = useState<string | null>(null);
 
   const now = DateTime.now().setZone("Europe/Stockholm");
+
+  const { data: membership } = useQuery({
+    queryKey: ["openplay-membership", user?.id, venueId],
+    enabled: !!user?.id && !!venueId,
+    staleTime: 30000,
+    queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: venueId! }),
+  });
+
+  const dayPassPricing = (membership?.tier_pricing || []).find((p: any) => p.product_type === "day_pass");
+
+  const getMemberDayPassPrice = (basePrice: number) => {
+    if (!dayPassPricing) return basePrice;
+
+    if (dayPassPricing.fixed_price != null) {
+      return Math.round(Number(dayPassPricing.fixed_price));
+    }
+
+    if (dayPassPricing.discount_percent) {
+      return Math.round(basePrice * (1 - Number(dayPassPricing.discount_percent) / 100));
+    }
+
+    return basePrice;
+  };
 
   const handleBuyDayPass = async (slot: { session: typeof sessions[0]; date: DateTime }) => {
     const slotKey = `${slot.session.id}-${slot.date.toISODate()}`;
@@ -147,6 +170,9 @@ const OpenPlayPage = () => {
         <motion.div variants={container} initial="hidden" animate="show" className="w-full max-w-md flex flex-col gap-2.5 pb-8">
           {upcomingSlots.map((slot, i) => {
             const isFriday = slot.date.weekday === 5;
+            const basePrice = slot.session.price_sek;
+            const memberPrice = getMemberDayPassPrice(basePrice);
+            const hasDiscount = memberPrice < basePrice;
             return (
               <motion.div
                 key={`${slot.session.id}-${slot.date.toISODate()}`}
@@ -170,10 +196,18 @@ const OpenPlayPage = () => {
                       {slot.dayName} {slot.date.toFormat("d/M")} · {slot.session.start_time.slice(0, 5)}–{slot.session.end_time.slice(0, 5)}
                     </p>
                   </div>
-                  <span className="text-[15px] font-bold" style={{ fontFamily: FONT_MONO, color: DARK_BLUE }}>
-                    {slot.session.price_sek} kr
+                  <span className="text-[15px] font-bold flex items-center gap-1" style={{ fontFamily: FONT_MONO, color: hasDiscount ? "#16a34a" : DARK_BLUE }}>
+                    {hasDiscount && (
+                      <span className="text-[12px] line-through" style={{ color: TEXT_MUTED }}>{basePrice} kr</span>
+                    )}
+                    {memberPrice} kr
                   </span>
                 </div>
+                {hasDiscount && (
+                  <p className="text-[11px] mt-2" style={{ color: "#16a34a", fontFamily: FONT_MONO }}>
+                    medlemspris
+                  </p>
+                )}
                 <button
                   onClick={() => handleBuyDayPass(slot)}
                   disabled={!!loadingSlot}
@@ -183,7 +217,7 @@ const OpenPlayPage = () => {
                   {loadingSlot === `${slot.session.id}-${slot.date.toISODate()}` ? (
                     <><Loader2 className="w-4 h-4 animate-spin" /> Öppnar betalning…</>
                   ) : (
-                    `Köp dagspass · ${slot.session.price_sek} kr →`
+                    `Köp dagspass · ${memberPrice} kr →`
                   )}
                 </button>
               </motion.div>
