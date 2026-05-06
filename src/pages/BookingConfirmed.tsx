@@ -18,10 +18,10 @@ export default function BookingConfirmed() {
 
   const isDayPass = type === "day_pass";
 
-  // Day pass: show success immediately, redirect to /my after 3 s
+  // Day pass: show success immediately, redirect to /hub after 3 s
   useEffect(() => {
     if (!isDayPass) return;
-    const id = setTimeout(() => navigate("/my", { replace: true }), 3000);
+    const id = setTimeout(() => navigate("/hub", { replace: true }), 3000);
     return () => clearTimeout(id);
   }, [isDayPass, navigate]);
 
