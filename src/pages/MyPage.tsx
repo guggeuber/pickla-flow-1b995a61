@@ -191,14 +191,14 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
     >
       <div className="flex items-center gap-3">
         <div
-          className="w-12 h-12 rounded-full flex items-center justify-center"
+          className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
           style={{ background: BLUE_LIGHT }}
         >
           <span className="text-lg font-bold" style={{ color: BLUE }}>
             {displayName.charAt(0).toUpperCase()}
           </span>
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           {editing ? (
             <div className="flex flex-col gap-2">
               <input
@@ -220,15 +220,33 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
               </div>
             </div>
           ) : (
-            <div>
-              <p className="font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
-              <p className="text-xs" style={{ color: TEXT_MUTED }}>{user.email}</p>
+            <div className="min-w-0">
+              <p className="font-semibold truncate" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
+              <p className="text-xs truncate" style={{ color: TEXT_MUTED }}>{user.email}</p>
               {profile?.phone && (
                 <p className="text-xs mt-0.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{profile.phone}</p>
               )}
             </div>
           )}
         </div>
+
+        {/* Compact QR membership card */}
+        {!editing && (
+          <div
+            className="rounded-xl p-1.5 shrink-0 bg-white"
+            style={{ border: `1.5px solid ${CARD_BORDER}`, boxShadow: "0 1px 2px rgba(0,0,0,0.04)" }}
+            title="Min incheckning"
+          >
+            <QRCodeSVG
+              value={JSON.stringify({ type: "pickla_user", uid: user.id })}
+              size={52}
+              level="M"
+              bgColor="#ffffff"
+              fgColor="#1a1e2e"
+            />
+          </div>
+        )}
+
         {editing ? (
           <motion.button
             whileTap={{ scale: 0.9 }}
