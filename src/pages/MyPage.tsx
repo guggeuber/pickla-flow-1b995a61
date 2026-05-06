@@ -2,7 +2,8 @@ import { useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles } from "lucide-react";
+import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import QrCodeCard from "@/components/my/QrCodeCard";
 import { PlayerNav } from "@/components/PlayerNav";
 import { useQueryClient } from "@tanstack/react-query";
