@@ -1670,19 +1670,37 @@ function HubList({
 
   return (
     <div style={{ minHeight: "100dvh", background: HUB_BG }}>
-      <div style={{ padding: "calc(env(safe-area-inset-top, 18px) + 24px) 16px 120px", overscrollBehavior: "contain" }}>
-        <header style={{ padding: "0 4px", marginBottom: 26 }}>
+      <header
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 40,
+          padding: "env(safe-area-inset-top, 12px) 20px 12px",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          background: "linear-gradient(to bottom, rgba(250,248,245,0.96) 0%, rgba(250,248,245,0.72) 52%, transparent 100%)",
+          pointerEvents: "none",
+        }}
+      >
+        <div style={{ paddingTop: 8 }}>
           <img
             src={picklaLogo}
             alt="Pickla"
             style={{
-              width: 118,
+              width: 92,
               height: "auto",
               display: "block",
-              opacity: 0.82,
+              opacity: 0.7,
             }}
           />
-        </header>
+        </div>
+        <div style={{ width: 36, height: 36 }} />
+      </header>
+
+      <div style={{ padding: "calc(env(safe-area-inset-top, 18px) + 92px) 16px 120px", overscrollBehavior: "contain" }}>
 
         <section
           style={{
