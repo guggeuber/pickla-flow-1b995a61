@@ -838,7 +838,7 @@ const MyPage = () => {
             {[
               { label: "+ Boka bana", to: "/book" },
               { label: "Köp dagspass", to: "/membership" },
-              { label: "Aktiviteter", to: "/community" },
+              { label: "Bli medlem", to: "/membership" },
             ].map((a) => (
               <button
                 key={a.label}
