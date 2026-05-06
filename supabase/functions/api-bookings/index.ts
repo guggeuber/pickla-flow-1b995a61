@@ -211,6 +211,7 @@ Deno.serve(async (req) => {
           const freePass = hasEnt('free_day_pass_monthly');
           const tierPricingAmount = bestTierPricingAmount();
           const fallbackTierAmount = tierDiscountAmount();
+          let usedFreePass = false;
 
           if (freePass) {
             const now = DateTime.now().setZone('Europe/Stockholm');
@@ -232,13 +233,19 @@ Deno.serve(async (req) => {
               meta.entitlement_type = 'free_day_pass_monthly';
               meta.entitlement_period_start = monthStart;
               meta.entitlement_period_end = monthEnd;
+              usedFreePass = true;
             }
-          } else if (tierPricingAmount != null) {
-            finalAmountSek = tierPricingAmount;
-          } else if (passDiscount) {
-            finalAmountSek = applyPercentDiscount(baseAmountSek, Number(passDiscount.value));
-          } else if (fallbackTierAmount != null) {
-            finalAmountSek = fallbackTierAmount;
+          }
+
+          if (!usedFreePass) {
+            // If the monthly free pass is already used, keep applying the paid member price.
+            if (tierPricingAmount != null) {
+              finalAmountSek = tierPricingAmount;
+            } else if (passDiscount) {
+              finalAmountSek = applyPercentDiscount(baseAmountSek, Number(passDiscount.value));
+            } else if (fallbackTierAmount != null) {
+              finalAmountSek = fallbackTierAmount;
+            }
           }
         }
       }
