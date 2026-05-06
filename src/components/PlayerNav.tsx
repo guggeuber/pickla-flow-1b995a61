@@ -14,7 +14,7 @@ export function PlayerNav() {
   const { pathname } = useLocation();
 
   const isHub = pathname.startsWith("/hub");
-  const isBook = pathname.startsWith("/book");
+  const isActivity = pathname.startsWith("/activity");
   const isMy = pathname.startsWith("/my");
 
   return (
@@ -33,7 +33,7 @@ export function PlayerNav() {
         background: `linear-gradient(to top, ${BG} 0%, ${BG} 65%, transparent 100%)`,
       }}
     >
-      {/* Live → /hub */}
+      {/* Spela → /hub */}
       <motion.button
         whileTap={{ scale: 0.9 }}
         onClick={() => navigate("/hub")}
@@ -66,13 +66,13 @@ export function PlayerNav() {
             display: "inline-block",
           }}
         />
-        Live
+        Spela
       </motion.button>
 
-      {/* Boka → /book */}
+      {/* Aktivitet → /activity */}
       <motion.button
         whileTap={{ scale: 0.9 }}
-        onClick={() => navigate("/book")}
+        onClick={() => navigate("/activity")}
         style={{
           background: "none",
           border: "none",
@@ -80,17 +80,17 @@ export function PlayerNav() {
           fontFamily: FONT,
           fontSize: 13,
           fontWeight: 700,
-          color: isBook ? NAVY : MUTED,
-          textDecoration: isBook ? "underline" : "none",
+          color: isActivity ? NAVY : MUTED,
+          textDecoration: isActivity ? "underline" : "none",
           textDecorationColor: NAVY,
           textUnderlineOffset: 3,
           padding: 0,
         }}
       >
-        Boka
+        Aktivitet
       </motion.button>
 
-      {/* Mig → /my */}
+      {/* Konto → /my */}
       <motion.button
         whileTap={{ scale: 0.9 }}
         onClick={() => navigate("/my")}
@@ -108,7 +108,7 @@ export function PlayerNav() {
           padding: 0,
         }}
       >
-        Mig
+        Konto
       </motion.button>
     </nav>
   );

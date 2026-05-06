@@ -41,8 +41,8 @@ const ClaimPassPage = () => {
     try {
       await apiPost("api-day-passes", "claim", { token });
       clearPendingClaimToken();
-      toast.success("Dagspass hämtat! Du hittar det under Mitt konto.");
-      navigate("/my");
+      toast.success("Dagspass hämtat! Du hittar det under Aktivitet.");
+      navigate("/activity");
     } catch (err: any) {
       toast.error(err.message || "Kunde inte hämta passet");
     }
@@ -92,8 +92,8 @@ const ClaimPassPage = () => {
         <p className="text-white/60 text-sm text-center" style={{ fontFamily: FONT_MONO }}>
           {shareInfo?.status === "claimed" ? "Det här passet har redan hämtats." : "Passet hittades inte."}
         </p>
-        <button onClick={() => navigate("/my")} className="mt-4 text-sm underline" style={{ color: "#E86C24", fontFamily: FONT_MONO }}>
-          Gå till mitt konto
+        <button onClick={() => navigate("/activity")} className="mt-4 text-sm underline" style={{ color: "#E86C24", fontFamily: FONT_MONO }}>
+          Gå till mina aktiviteter
         </button>
       </div>
     );

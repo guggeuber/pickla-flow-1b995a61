@@ -9,7 +9,7 @@ import { PlayerNav } from "@/components/PlayerNav";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
-import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
@@ -646,11 +646,6 @@ function DayPassSection() {
     }
   };
 
-  const copyLink = (link: string) => {
-    navigator.clipboard.writeText(link);
-    toast.success("Länk kopierad!");
-  };
-
   const copyGiftMessage = (token: string, name: string) => {
     navigator.clipboard.writeText(buildGiftMessage(token, name));
     toast.success("Meddelande kopierat!");
@@ -1039,8 +1034,11 @@ function SettingsSection() {
 const MyPage = () => {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
+  const isActivityPage = pathname.startsWith("/activity");
+  const authRedirectPath = isActivityPage ? "/activity" : "/my";
 
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
@@ -1068,7 +1066,7 @@ const MyPage = () => {
     );
   }
 
-  if (!user) return <Navigate to={`/auth?redirect=/my&v=${venueSlug}`} replace />;
+  if (!user) return <Navigate to={`/auth?redirect=${authRedirectPath}&v=${venueSlug}`} replace />;
 
   const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
   const now = Date.now();
@@ -1102,96 +1100,91 @@ const MyPage = () => {
             className="h-7 w-auto"
           />
         </div>
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={async () => {
-            await signOut();
-            navigate(`/?v=${venueSlug}`);
-          }}
-          className="w-9 h-9 rounded-xl flex items-center justify-center mb-1"
-          style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}
-        >
-          <LogOut className="w-4 h-4" style={{ color: TEXT_MUTED }} />
-        </motion.button>
+        {!isActivityPage ? (
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={async () => {
+              await signOut();
+              navigate(`/?v=${venueSlug}`);
+            }}
+            className="w-9 h-9 rounded-xl flex items-center justify-center mb-1"
+            style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}
+          >
+            <LogOut className="w-4 h-4" style={{ color: TEXT_MUTED }} />
+          </motion.button>
+        ) : (
+          <div className="w-9 h-9 mb-1" />
+        )}
       </header>
 
       {/* ═══ MAIN CONTENT ═══ */}
       <main className="pt-24 px-5 pb-28">
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
-          {/* Greeting */}
-          <motion.p variants={item} className="text-lg font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-            Hej {displayName} 👋
-          </motion.p>
-
-          {/* Primary actions */}
-          <motion.div variants={item} className="grid grid-cols-2 gap-2">
-            {[
-              { label: "Boka bana", to: "/book", icon: Calendar },
-              { label: "Köp dagspass", to: "/openplay", icon: Ticket },
-            ].map((a) => (
-              <button
-                key={a.label}
-                onClick={() => navigate(a.to)}
-                className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
-                style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_HEADING }}
-              >
-                <a.icon className="w-4 h-4 mb-2 opacity-80" />
-                <span className="text-sm font-bold">{a.label}</span>
-              </button>
-            ))}
+          <motion.div variants={item}>
+            <p className="text-lg font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+              {isActivityPage ? "Aktivitet" : `Hej ${displayName} 👋`}
+            </p>
+            <p className="text-xs mt-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+              {isActivityPage ? "Kommande, tidigare och delade spel." : "Konto, medlemskap och betalning."}
+            </p>
           </motion.div>
 
-          {/* Profile card with edit */}
-          <ProfileCard profile={profile} user={user} displayName={displayName} />
+          {!isActivityPage && (
+            <>
+              {/* Profile card with edit */}
+              <ProfileCard profile={profile} user={user} displayName={displayName} />
 
-          {/* Membership */}
-          {activeMembership ? (
-            <motion.button
-              variants={item}
-              onClick={() => setShowMembershipDetails(true)}
-              className="rounded-2xl p-5 text-left active:scale-[0.98] transition-transform"
-              style={{
-                background: membershipTier?.color
-                  ? `${membershipTier.color}10`
-                  : GREEN_LIGHT,
-                border: `1.5px solid ${membershipTier?.color ? membershipTier.color + "30" : GREEN_BORDER}`,
-              }}
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: `${membershipTier?.color || GREEN}20` }}>
-                  <Check className="w-5 h-5" style={{ color: membershipTier?.color || GREEN }} />
-                </div>
-                <div>
+              {/* Membership */}
+              {activeMembership ? (
+                <motion.button
+                  variants={item}
+                  onClick={() => setShowMembershipDetails(true)}
+                  className="rounded-2xl p-5 text-left active:scale-[0.98] transition-transform"
+                  style={{
+                    background: membershipTier?.color
+                      ? `${membershipTier.color}10`
+                      : GREEN_LIGHT,
+                    border: `1.5px solid ${membershipTier?.color ? membershipTier.color + "30" : GREEN_BORDER}`,
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: `${membershipTier?.color || GREEN}20` }}>
+                      <Check className="w-5 h-5" style={{ color: membershipTier?.color || GREEN }} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                        {membershipTier?.name || "Medlem"}
+                      </p>
+                      <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
+                        {membershipTier?.description || "Aktivt medlemskap"}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 ml-auto shrink-0" style={{ color: TEXT_MUTED }} />
+                  </div>
+                </motion.button>
+              ) : (
+                <motion.button
+                  variants={item}
+                  onClick={() => navigate("/membership")}
+                  className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
+                  style={{
+                    background: BLUE_LIGHT,
+                    border: `1.5px solid ${BLUE_BORDER}`,
+                  }}
+                >
                   <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-                    {membershipTier?.name || "Medlem"}
+                    Bli medlem
                   </p>
                   <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
-                    {membershipTier?.description || "Aktivt medlemskap"}
+                    Se medlemskap och priser →
                   </p>
-                </div>
-                <ChevronRight className="w-4 h-4 ml-auto shrink-0" style={{ color: TEXT_MUTED }} />
-              </div>
-            </motion.button>
-          ) : (
-            <motion.button
-              variants={item}
-              onClick={() => navigate("/membership")}
-              className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
-              style={{
-                background: BLUE_LIGHT,
-                border: `1.5px solid ${BLUE_BORDER}`,
-              }}
-            >
-              <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-                Bli medlem
-              </p>
-              <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
-                Se medlemskap och priser →
-              </p>
-            </motion.button>
+                </motion.button>
+              )}
+            </>
           )}
 
           {/* Active bookings */}
+          {isActivityPage && (
           <motion.div variants={item}>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
@@ -1327,18 +1320,19 @@ const MyPage = () => {
               </div>
             )}
           </motion.div>
+          )}
 
           {/* Day passes — directly under bookings */}
-          <DayPassSection />
+          {isActivityPage && <DayPassSection />}
 
           {/* Corporate memberships */}
-          <CorporateSection />
+          {!isActivityPage && <CorporateSection />}
 
           {/* Wallet: saved cards */}
-          <WalletSection />
+          {!isActivityPage && <WalletSection />}
 
           {/* Settings: push notifications etc */}
-          <SettingsSection />
+          {!isActivityPage && <SettingsSection />}
         </motion.div>
       </main>
 
