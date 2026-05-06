@@ -27,6 +27,7 @@ import { ActionCard } from "@/components/hub/ActionCard";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { PlayerNav } from "@/components/PlayerNav";
 import { EventCard } from "@/components/hub/EventCard";
+import picklaLogo from "@/assets/pickla-logo.svg";
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const HUB_BG = "#faf8f5";
@@ -39,6 +40,7 @@ const HUB_TEXT = "#111827";
 const HUB_SUB = "#6b7280";
 const HUB_MUTED = "#9ca3af";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
+const PICKLA_MAP_URL = "https://maps.google.com/?q=Svetsarvägen+22,+171+41+Solna";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface ChatRoom {
@@ -1668,14 +1670,27 @@ function HubList({
 
   return (
     <div style={{ minHeight: "100dvh", background: HUB_BG }}>
-      <div style={{ padding: "env(safe-area-inset-top,18px) 16px 120px", overscrollBehavior: "contain" }}>
+      <div style={{ padding: "calc(env(safe-area-inset-top, 18px) + 24px) 16px 120px", overscrollBehavior: "contain" }}>
+        <header style={{ padding: "0 4px", marginBottom: 26 }}>
+          <img
+            src={picklaLogo}
+            alt="Pickla"
+            style={{
+              width: 118,
+              height: "auto",
+              display: "block",
+              opacity: 0.82,
+            }}
+          />
+        </header>
+
         <section
           style={{
             background: HUB_CARD,
             border: `1px solid ${HUB_BORDER}`,
-            borderRadius: 24,
-            padding: "16px 16px 14px",
-            boxShadow: "0 8px 26px rgba(17,24,39,0.06)",
+            borderRadius: 26,
+            padding: "16px 16px 15px",
+            boxShadow: "0 14px 40px rgba(17,24,39,0.07)",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
@@ -1696,10 +1711,14 @@ function HubList({
               <h1 style={{ fontFamily: FONT_HEADING, fontSize: 24, lineHeight: 1.08, margin: "3px 0 0", fontWeight: 800, color: HUB_TEXT }}>
                 {venueName.replace("Pickla Arena ", "Pickla ")}
               </h1>
+              <p style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_SUB, margin: "7px 0 0" }}>
+                <MapPin style={{ width: 13, height: 13, color: HUB_MUTED }} />
+                Svetsarvägen 22, Solna
+              </p>
             </div>
             <motion.button
               whileTap={{ scale: 0.96 }}
-              onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueName)}`, "_blank", "noopener,noreferrer")}
+              onClick={() => window.open(PICKLA_MAP_URL, "_blank", "noopener,noreferrer")}
               style={{
                 width: 44,
                 height: 44,
