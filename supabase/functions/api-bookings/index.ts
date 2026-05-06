@@ -80,10 +80,40 @@ Deno.serve(async (req) => {
           entitlementSportType && (e.sport_type || 'pickleball') === entitlementSportType
         );
         const hasEnt = (type: string) => ents.find((e: any) => e.entitlement_type === type);
+        const pricingProductType = product_type === 'court_booking' ? 'court_hourly' : product_type;
+        const { data: tierPricingRows } = await adminEnt
+          .from('membership_tier_pricing')
+          .select('product_type, fixed_price, discount_percent')
+          .eq('tier_id', membership.tier_id)
+          .eq('product_type', pricingProductType);
+        const tierPricing = entitlementSportType === 'pickleball' ? (tierPricingRows || [])[0] : null;
+
+        const applyTierPricing = (baseAmount: number) => {
+          if (!tierPricing) return baseAmount;
+
+          if (tierPricing.fixed_price != null) {
+            if (product_type === 'court_booking') {
+              let courtIds: string[] = [];
+              try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
+              const durationHours = parseFloat(meta.duration_hours || '1') || 1;
+              return Math.round(Number(tierPricing.fixed_price) * Math.max(courtIds.length, 1) * durationHours);
+            }
+
+            return Math.round(Number(tierPricing.fixed_price));
+          }
+
+          if (tierPricing.discount_percent) {
+            return Math.round(baseAmount * (1 - (Number(tierPricing.discount_percent) / 100)));
+          }
+
+          return baseAmount;
+        };
 
         if (product_type === 'court_booking') {
           const courtDiscount = hasEnt('court_discount_pct');
-          if (courtDiscount) {
+          if (tierPricing) {
+            finalAmountSek = applyTierPricing(finalAmountSek);
+          } else if (courtDiscount) {
             finalAmountSek = Math.round(amount_sek * (1 - (courtDiscount.value / 100)));
           }
 
@@ -143,6 +173,8 @@ Deno.serve(async (req) => {
               meta.entitlement_period_start = monthStart;
               meta.entitlement_period_end = monthEnd;
             }
+          } else if (tierPricing) {
+            finalAmountSek = applyTierPricing(finalAmountSek);
           } else if (passDiscount) {
             finalAmountSek = Math.round(amount_sek * (1 - (passDiscount.value / 100)));
           }

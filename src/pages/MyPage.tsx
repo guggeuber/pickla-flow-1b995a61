@@ -163,7 +163,7 @@ function useActiveMembership() {
     queryFn: async () => {
       const { data } = await supabase
         .from("memberships")
-        .select("id, tier_id, status, starts_at, expires_at, membership_tiers(name, color, description, monthly_price, membership_entitlements(entitlement_type, value, period, sport_type))")
+        .select("id, tier_id, status, starts_at, expires_at, membership_tiers(name, color, description, monthly_price, membership_tier_pricing(product_type, fixed_price, discount_percent, label), membership_entitlements(entitlement_type, value, period, sport_type))")
         .eq("user_id", user!.id)
         .eq("status", "active")
         .limit(1)
@@ -255,6 +255,25 @@ function formatMembershipBenefit(entitlement: any) {
   }
 }
 
+function formatTierPricingBenefit(pricing: any) {
+  const label = pricing.label || {
+    court_hourly: "Bana per timme",
+    day_pass: "Dagspass",
+    event_fee: "Event-avgift",
+    guest_pass: "Gästpass",
+  }[pricing.product_type] || pricing.product_type;
+
+  if (pricing.fixed_price != null) {
+    return `${label}: ${Math.round(Number(pricing.fixed_price))} kr`;
+  }
+
+  if (pricing.discount_percent) {
+    return `${label}: ${pricing.discount_percent}% rabatt`;
+  }
+
+  return label;
+}
+
 function MembershipDetailsSheet({
   membership,
   open,
@@ -270,7 +289,8 @@ function MembershipDetailsSheet({
   if (!membership) return null;
 
   const tier = membership.membership_tiers;
-  const entitlements = tier?.membership_entitlements || [];
+  const tierPricing = tier?.membership_tier_pricing || [];
+  const entitlements = tierPricing.length > 0 ? [] : (tier?.membership_entitlements || []);
   const startsAt = membership.starts_at ? new Date(membership.starts_at) : null;
   const expiresAt = membership.expires_at ? new Date(membership.expires_at) : null;
   const nextBillingDate = expiresAt || (startsAt ? new Date(startsAt.getFullYear(), startsAt.getMonth() + 1, startsAt.getDate()) : null);
@@ -326,7 +346,12 @@ function MembershipDetailsSheet({
           <div className="mt-5">
             <p className="text-sm font-semibold mb-2" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Förmåner</p>
             <div className="flex flex-col gap-2">
-              {entitlements.length > 0 ? entitlements.map((entitlement: any, idx: number) => (
+              {tierPricing.length > 0 ? tierPricing.map((pricing: any, idx: number) => (
+                <div key={`${pricing.product_type}-${idx}`} className="flex items-start gap-2 rounded-xl px-3 py-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
+                  <Check className="w-4 h-4 shrink-0 mt-0.5" style={{ color: GREEN }} />
+                  <p className="text-sm" style={{ color: TEXT_PRIMARY }}>{formatTierPricingBenefit(pricing)}</p>
+                </div>
+              )) : entitlements.length > 0 ? entitlements.map((entitlement: any, idx: number) => (
                 <div key={`${entitlement.entitlement_type}-${idx}`} className="flex items-start gap-2 rounded-xl px-3 py-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
                   <Check className="w-4 h-4 shrink-0 mt-0.5" style={{ color: GREEN }} />
                   <p className="text-sm" style={{ color: TEXT_PRIMARY }}>{formatMembershipBenefit(entitlement)}</p>
@@ -574,7 +599,6 @@ function BookingDetailsSheet({
 function DayPassSection() {
   const { data, isLoading } = useMyPasses();
   const queryClient = useQueryClient();
-  const [buying, setBuying] = useState(false);
   const [sharingPassId, setSharingPassId] = useState<string | null>(null);
   const [shareEmail, setShareEmail] = useState("");
   const [sharing, setSharing] = useState(false);
@@ -587,18 +611,6 @@ function DayPassSection() {
   const sharedPasses = passes.filter((p: any) => p.share?.status === 'pending');
 
   const buildLink = (token: string) => `${window.location.origin}/pass/${token}`;
-
-  const handleBuy = async () => {
-    setBuying(true);
-    try {
-      const result = await apiPost("api-day-passes", "buy", {});
-      queryClient.invalidateQueries({ queryKey: ["my-passes"] });
-      toast.success(`Dagspass köpt (${result.price} SEK) – betalas i disk`);
-    } catch (err: any) {
-      toast.error(err.message || "Kunde inte köpa dagspass");
-    }
-    setBuying(false);
-  };
 
   const handleShare = async (dayPassId: string) => {
     if (!shareEmail.trim()) { toast.error("Ange e-postadress"); return; }
@@ -652,14 +664,6 @@ function DayPassSection() {
             {activePasses.length}
           </span>
         </div>
-        <button
-          onClick={handleBuy}
-          disabled={buying}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold active:scale-95 transition-transform disabled:opacity-40"
-          style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
-        >
-          {buying ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Plus className="w-3 h-3" /> Köp dagspass</>}
-        </button>
       </div>
 
       {/* Member allowance info */}
@@ -1057,19 +1061,20 @@ const MyPage = () => {
             Hej {displayName} 👋
           </motion.p>
 
-          {/* Quick action pills */}
-          <motion.div variants={item} className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
+          {/* Primary actions */}
+          <motion.div variants={item} className="grid grid-cols-2 gap-2">
             {[
-              { label: "+ Boka bana", to: "/book" },
-              { label: "Bli medlem", to: "/membership" },
+              { label: "Boka bana", to: "/book", icon: Calendar },
+              { label: "Köp dagspass", to: "/openplay", icon: Ticket },
             ].map((a) => (
               <button
                 key={a.label}
                 onClick={() => navigate(a.to)}
-                className="shrink-0 px-4 py-2 rounded-full text-[12px] font-bold whitespace-nowrap active:scale-95 transition-transform"
-                style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_MONO }}
+                className="rounded-2xl p-4 text-left active:scale-[0.98] transition-transform"
+                style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_HEADING }}
               >
-                {a.label}
+                <a.icon className="w-4 h-4 mb-2 opacity-80" />
+                <span className="text-sm font-bold">{a.label}</span>
               </button>
             ))}
           </motion.div>
@@ -1132,13 +1137,6 @@ const MyPage = () => {
                 <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
                 <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookingCount}</span>
               </div>
-              <button
-                onClick={() => navigate("/book")}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold active:scale-95 transition-transform"
-                style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
-              >
-                <Plus className="w-3 h-3" /> Boka
-              </button>
             </div>
             {activeBookingCount === 0 ? (
               <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>

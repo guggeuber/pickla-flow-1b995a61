@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { ArrowLeft, Loader2, Zap } from "lucide-react";
 import { DateTime } from "luxon";
+import { useAuth } from "@/hooks/useAuth";
 
 const CREAM = "#faf8f5";
 const DARK_BLUE = "#1a1f3a";
@@ -49,6 +50,7 @@ function useOpenPlaySessions() {
 
 const OpenPlayPage = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { data: queryData, isLoading } = useOpenPlaySessions();
   const sessions = queryData?.sessions ?? [];
   const venueId = queryData?.venueId ?? null;
@@ -69,8 +71,14 @@ const OpenPlayPage = () => {
           session_name: slot.session.name,
           date: slot.date.toISODate(),
           open_play_session_id: slot.session.id,
+          user_id: user?.id || "",
         },
       });
+      if (result.free) {
+        toast.success("Dagspass aktiverat via ditt medlemskap!");
+        navigate(result.redirect || "/my");
+        return;
+      }
       window.location.href = result.url;
     } catch (err: any) {
       toast.error(err.message || "Kunde inte starta betalning");

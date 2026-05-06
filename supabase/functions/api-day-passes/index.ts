@@ -14,29 +14,7 @@ Deno.serve(async (req) => {
   try {
     // ─── PUBLIC: POST /public-purchase ───
     if (req.method === 'POST' && path === 'public-purchase') {
-      const body = await req.json();
-      const { name, phone, price } = body;
-      if (!name || !phone) return errorResponse('Missing name or phone');
-
-      const adminClient = getServiceClient();
-      const { data: venue } = await adminClient.from('venues').select('id').limit(1).single();
-      if (!venue) return errorResponse('No venue found');
-
-      const today = new Date().toISOString().slice(0, 10);
-      const ref = 'DP-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-      const ANON_USER_ID = '00000000-0000-0000-0000-000000000000';
-
-      const { data, error: insertErr } = await adminClient.from('day_passes').insert({
-        venue_id: venue.id,
-        user_id: body.user_id || ANON_USER_ID,
-        valid_date: today,
-        purchase_date: today,
-        price: price || 165,
-        status: 'active',
-      }).select('id').single();
-
-      if (insertErr) return errorResponse(insertErr.message);
-      return jsonResponse({ id: data.id, ref, name, phone, price: price || 165 }, 201);
+      return errorResponse('Day passes must be purchased through Stripe checkout', 410);
     }
 
     // ─── PUBLIC: POST /claim ───
@@ -294,34 +272,7 @@ Deno.serve(async (req) => {
 
     // ─── POST /buy ── self-purchase a day pass ───
     if (req.method === 'POST' && path === 'buy') {
-      // Get venue
-      const { data: venue } = await adminClient.from('venues').select('id').limit(1).single();
-      if (!venue) return errorResponse('No venue found');
-
-      // Get day pass price from pricing rules
-      const { data: pricing } = await adminClient
-        .from('pricing_rules')
-        .select('price')
-        .eq('venue_id', venue.id)
-        .eq('type', 'day_pass')
-        .eq('is_active', true)
-        .limit(1)
-        .single();
-
-      const price = pricing?.price || 165;
-      const today = new Date().toISOString().slice(0, 10);
-
-      const { data, error: insertErr } = await adminClient.from('day_passes').insert({
-        venue_id: venue.id,
-        user_id: userId,
-        valid_date: today,
-        purchase_date: today,
-        price,
-        status: 'active',
-      }).select('id').single();
-
-      if (insertErr) return errorResponse(insertErr.message);
-      return jsonResponse({ id: data.id, price }, 201);
+      return errorResponse('Day passes must be purchased through Stripe checkout', 410);
     }
 
     // ─── POST /share ── share an existing pass ───
