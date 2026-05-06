@@ -39,7 +39,17 @@ Deno.serve(async (req) => {
     // user_id is set in metadata by the frontend from useAuth(); membership
     // benefits are applied here. Hard cap (Founder 4h/week) blocks checkout.
     let finalAmountSek = amount_sek;
-    const entitlementUserId = meta.user_id || '';
+    let entitlementUserId = meta.user_id || '';
+
+    if (!entitlementUserId) {
+      const authHeader = req.headers.get('authorization') || '';
+      if (authHeader.startsWith('Bearer ')) {
+        const token = authHeader.slice('Bearer '.length);
+        const { data: { user: authUser } } = await getServiceClient().auth.getUser(token);
+        entitlementUserId = authUser?.id || '';
+        if (entitlementUserId) meta.user_id = entitlementUserId;
+      }
+    }
 
     if (entitlementUserId && !isMembership && venue_id) {
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -465,7 +475,7 @@ Deno.serve(async (req) => {
 
     // Get active pricing rules for this venue
     const { data: pricingRules } = await admin.from('pricing_rules')
-      .select('id, name, type, price, days_of_week, time_from, time_to')
+      .select('id, name, type, price, days_of_week, time_from, time_to, sport_type, court_type')
       .eq('venue_id', venue.id).eq('is_active', true)
       .order('price', { ascending: false });
 
@@ -568,7 +578,7 @@ Deno.serve(async (req) => {
 
     // Fetch pricing rules for this venue
     const { data: pricingRules } = await admin.from('pricing_rules')
-      .select('type, price, days_of_week, time_from, time_to')
+      .select('type, price, days_of_week, time_from, time_to, sport_type, court_type')
       .eq('venue_id', venue.id).eq('is_active', true).eq('type', 'hourly')
       .order('price', { ascending: false });
 
@@ -578,16 +588,18 @@ Deno.serve(async (req) => {
     let totalHoursBooked = 0;
     for (const courtId of courtIds) {
       const { data: court } = await admin.from('venue_courts')
-        .select('hourly_rate').eq('id', courtId).single();
+        .select('hourly_rate, sport_type, court_type').eq('id', courtId).single();
 
       // Find matching pricing rule: day + time window
       let hourlyRate = court?.hourly_rate || 350;
       if (pricingRules && pricingRules.length > 0) {
         const matchingRule = pricingRules.find((r: any) => {
           const daysMatch = !r.days_of_week || r.days_of_week.length === 0 || r.days_of_week.includes(bookingDayOfWeek);
+          const sportMatches = !r.sport_type || r.sport_type === (court?.sport_type || 'pickleball');
+          const courtTypeMatches = !r.court_type || r.court_type === (court?.court_type || null);
           const timeFrom = r.time_from || '00:00';
           const timeTo = r.time_to || '23:59';
-          return daysMatch && startTime >= timeFrom.slice(0, 5) && startTime < timeTo.slice(0, 5);
+          return sportMatches && courtTypeMatches && daysMatch && startTime >= timeFrom.slice(0, 5) && startTime < timeTo.slice(0, 5);
         });
         if (matchingRule) hourlyRate = matchingRule.price;
       }

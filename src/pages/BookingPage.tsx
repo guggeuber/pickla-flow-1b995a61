@@ -153,9 +153,11 @@ export default function BookingPage() {
     const matchingRule = pricingRules.find((r: any) => {
       if (r.type !== "hourly") return false;
       const daysMatch = !r.days_of_week || r.days_of_week.length === 0 || r.days_of_week.includes(dayOfWeek);
+      const sportMatches = !r.sport_type || r.sport_type === (court.sport_type || "pickleball");
+      const courtTypeMatches = !r.court_type || r.court_type === court.court_type;
       const timeFrom = (r.time_from || "00:00").slice(0, 5);
       const timeTo = (r.time_to || "23:59").slice(0, 5);
-      return daysMatch && selectedTime >= timeFrom && selectedTime < timeTo;
+      return sportMatches && courtTypeMatches && daysMatch && selectedTime >= timeFrom && selectedTime < timeTo;
     });
     return matchingRule ? matchingRule.price : (court.hourly_rate || 0);
   };
