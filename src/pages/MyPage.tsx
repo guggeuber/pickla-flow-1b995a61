@@ -774,6 +774,9 @@ const MyPage = () => {
   const { data: activeMembership } = useActiveMembership();
   const queryClient = useQueryClient();
 
+  const [selectedBooking, setSelectedBooking] = useState<any | null>(null);
+  const [showPast, setShowPast] = useState(false);
+
   // Show success toast when returning from Stripe card setup
   useState(() => {
     if (searchParams.get("card_saved") === "1") {
@@ -797,8 +800,6 @@ const MyPage = () => {
   const activeBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now);
   const pastBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now);
   const membershipTier = (activeMembership as any)?.membership_tiers;
-  const [selectedBooking, setSelectedBooking] = useState<any | null>(null);
-  const [showPast, setShowPast] = useState(false);
 
   return (
     <div className="min-h-screen" style={{ background: PAGE_BG }}>
