@@ -793,8 +793,12 @@ const MyPage = () => {
   if (!user) return <Navigate to={`/auth?redirect=/my&v=${venueSlug}`} replace />;
 
   const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
-  const activeBookings = bookings?.filter((b) => b.status === "confirmed" || b.status === "pending") || [];
+  const now = Date.now();
+  const activeBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now);
+  const pastBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now);
   const membershipTier = (activeMembership as any)?.membership_tiers;
+  const [selectedBooking, setSelectedBooking] = useState<any | null>(null);
+  const [showPast, setShowPast] = useState(false);
 
   return (
     <div className="min-h-screen" style={{ background: PAGE_BG }}>
