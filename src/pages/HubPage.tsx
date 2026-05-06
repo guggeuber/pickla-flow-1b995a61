@@ -1610,7 +1610,7 @@ function HubList({
     ? `${botData.freeCount} av ${botData.totalCount} banor lediga nu`
     : "Lediga banor uppdateras live";
   const nextSessionLabel = nextSession
-    ? `${nextSession.daysOffset === 0 ? "Idag" : nextSession.daysOffset === 1 ? "Imorgon" : "Snart"} ${formatTime(nextSession.start_time)}`
+    ? `${nextSession.daysOffset === 0 ? "Idag" : nextSession.daysOffset === 1 ? "Imorgon" : "Snart"} ${formatSwedishTime(nextSession.start_time)}`
     : "Nästa drop-in kommer snart";
 
   const bookingResourceIds = bookings.map((b) => b.booking_ref).filter(Boolean);
