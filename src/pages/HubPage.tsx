@@ -1,13 +1,28 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Send, Share2, Check, ImageIcon, X, Loader2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Send,
+  Share2,
+  Check,
+  ImageIcon,
+  X,
+  Loader2,
+  CalendarDays,
+  Clock3,
+  MapPin,
+  MessageCircle,
+  Sparkles,
+  Ticket,
+  Trophy,
+  Zap,
+} from "lucide-react";
 import { apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { DateTime } from "luxon";
-import { ChannelCard } from "@/components/hub/ChannelCard";
 import { ActionCard } from "@/components/hub/ActionCard";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { PlayerNav } from "@/components/PlayerNav";
@@ -1568,22 +1583,35 @@ function HubSkeleton() {
 
 // ── Hub List ─────────────────────────────────────────────────────────────────
 function HubList({
+  slug,
+  venueName,
   venueId,
   playerCount,
   dailyRoom,
+  botData,
   bookings,
   events,
   onSelectRoom,
 }: {
+  slug: string;
+  venueName: string;
   venueId: string;
   playerCount: number;
   dailyRoom: ChatRoom | null | undefined;
+  botData?: { freeCount: number; totalCount: number; nextSession: any } | null;
   bookings: any[];
   events: any[];
   onSelectRoom: (room: ChatRoom) => void;
 }) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const nextSession = botData?.nextSession;
+  const courtSummary = botData?.totalCount
+    ? `${botData.freeCount} av ${botData.totalCount} banor lediga nu`
+    : "Lediga banor uppdateras live";
+  const nextSessionLabel = nextSession
+    ? `${nextSession.daysOffset === 0 ? "Idag" : nextSession.daysOffset === 1 ? "Imorgon" : "Snart"} ${formatTime(nextSession.start_time)}`
+    : "Nästa drop-in kommer snart";
 
   const bookingResourceIds = bookings.map((b) => b.booking_ref).filter(Boolean);
   const eventResourceIds = events.map((e) => e.id).filter(Boolean);
@@ -1640,129 +1668,282 @@ function HubList({
 
   return (
     <div style={{ minHeight: "100dvh", background: HUB_BG }}>
-      {/* Header */}
-      <div
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-          background: HUB_BG,
-          padding: "env(safe-area-inset-top,14px) 20px 14px",
-          borderBottom: `1px solid ${HUB_BORDER}`,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <p
-              style={{
-                fontFamily: FONT_HEADING,
-                fontSize: 13,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                color: HUB_TEXT,
-              }}
-            >
-              PICKLA HUB
-            </p>
-            <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 1 }}>
-              <span
+      <div style={{ padding: "env(safe-area-inset-top,18px) 16px 120px", overscrollBehavior: "contain" }}>
+        <section
+          style={{
+            background: "linear-gradient(145deg, #10162f 0%, #1c2447 58%, #22365f 100%)",
+            color: "#fff",
+            borderRadius: 28,
+            padding: "22px 18px 18px",
+            boxShadow: "0 18px 42px rgba(16,22,47,0.22)",
+            overflow: "hidden",
+            position: "relative",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              right: -42,
+              top: -48,
+              width: 150,
+              height: 150,
+              borderRadius: "50%",
+              background: "rgba(134,239,172,0.18)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              right: 16,
+              bottom: -58,
+              width: 180,
+              height: 180,
+              borderRadius: "50%",
+              background: "rgba(204,41,54,0.12)",
+            }}
+          />
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <p
+                  style={{
+                    fontFamily: FONT_HEADING,
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: "0.1em",
+                    color: "rgba(255,255,255,0.58)",
+                    textTransform: "uppercase",
+                    margin: 0,
+                  }}
+                >
+                  Spela hos
+                </p>
+                <h1 style={{ fontFamily: FONT_HEADING, fontSize: 28, lineHeight: 1.03, margin: "4px 0 0", fontWeight: 800 }}>
+                  {venueName.replace("Pickla Arena ", "Pickla ")}
+                </h1>
+              </div>
+              <motion.button
+                whileTap={{ scale: 0.96 }}
+                onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueName)}`, "_blank", "noopener,noreferrer")}
                 style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: HUB_GREEN,
-                  display: "inline-block",
-                  boxShadow: `0 0 0 2px rgba(34,197,94,0.2)`,
+                  width: 48,
+                  height: 48,
+                  borderRadius: 18,
+                  border: "1px solid rgba(255,255,255,0.16)",
+                  background: "rgba(255,255,255,0.11)",
+                  display: "grid",
+                  placeItems: "center",
+                  cursor: "pointer",
+                  flexShrink: 0,
                 }}
-              />
-              <span style={{ fontSize: 11, fontFamily: FONT_HEADING, color: HUB_GREEN, fontWeight: 700 }}>
-                LIVE
-              </span>
-              {playerCount > 0 && (
-                <span style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: HUB_MUTED }}>
-                  · {playerCount} inne just nu
-                </span>
-              )}
+                aria-label="Öppna karta"
+              >
+                <MapPin style={{ width: 20, height: 20, color: "#fff" }} />
+              </motion.button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 22 }}>
+              <div style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 18, padding: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: HUB_GREEN, boxShadow: "0 0 0 4px rgba(34,197,94,0.18)" }} />
+                  <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: "#86efac" }}>
+                    Live
+                  </span>
+                </div>
+                <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.25, color: "rgba(255,255,255,0.78)", margin: "9px 0 0" }}>
+                  {courtSummary}
+                </p>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 18, padding: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <Clock3 style={{ width: 14, height: 14, color: "#fff" }} />
+                  <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: "#fff" }}>
+                    Drop-in
+                  </span>
+                </div>
+                <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.25, color: "rgba(255,255,255,0.78)", margin: "9px 0 0" }}>
+                  {nextSessionLabel}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
+        </section>
 
-      {/* Channel list — #1 overscroll contain, #6 prevent pull-to-refresh propagation */}
-      <div style={{ padding: "16px 16px 120px", overscrollBehavior: "contain" }}>
-
-        {/* ── Pickla Idag ──────────────────────────────────────────── */}
-        <SectionLabel label="Idag" />
-        {dailyRoom ? (
-          <ChannelCard
-            emoji="📅"
-            title="Pickla Idag"
-            subtitle="Öppen kanal · lediga banor & Open Play"
-            isLive
-            isPinned
-            lastMessage={previews[dailyRoom.id]?.lastMessage}
-            lastMessageTime={previews[dailyRoom.id]?.lastMessageAt ? relativeTime(previews[dailyRoom.id].lastMessageAt) : undefined}
-            senderName={previews[dailyRoom.id]?.senderName ?? undefined}
-            senderAvatarUrl={previews[dailyRoom.id]?.senderAvatarUrl ?? undefined}
-            onClick={() => onSelectRoom(dailyRoom)}
+        <SectionLabel label="For you" />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <QuickActionCard
+            title="Boka pickleball"
+            subtitle="Hitta första bästa bana"
+            icon={<Zap style={{ width: 21, height: 21 }} />}
+            tone="dark"
+            onClick={() => navigate(`/book?v=${slug}`)}
           />
-        ) : (
-          <SkeletonCard />
-        )}
+          <QuickActionCard
+            title="Köp dagspass"
+            subtitle={nextSession?.price_sek ? `${nextSession.price_sek} kr · Stripe` : "Open Play & drop-in"}
+            icon={<Ticket style={{ width: 21, height: 21 }} />}
+            tone="red"
+            onClick={() => navigate(`/openplay?v=${slug}`)}
+          />
+          <QuickActionCard
+            title="Boka dart"
+            subtitle="Välj bana och tid"
+            icon={<Sparkles style={{ width: 21, height: 21 }} />}
+            onClick={() => navigate(`/book?v=${slug}&sport=dart`)}
+          />
+          <QuickActionCard
+            title="Pickla idag"
+            subtitle={playerCount > 0 ? `${playerCount} spelar just nu` : "Chat, läge och spontanspel"}
+            icon={<MessageCircle style={{ width: 21, height: 21 }} />}
+            onClick={() => dailyRoom && onSelectRoom(dailyRoom)}
+            disabled={!dailyRoom}
+          />
+        </div>
 
-        {/* ── Mina bokningar ────────────────────────────────────────── */}
-        {user && bookings.length > 0 && (
-          <>
-            <SectionLabel label="Mina bokningar" />
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {bookings.map((b) => {
-                const dt = DateTime.fromISO(b.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
-                const courtName = b.venue_courts?.name || "Bana";
-                const timeStr = dt.toFormat("HH:mm");
-                const dateStr = dt.toFormat("EEE d/M", { locale: "sv" });
-                return (
-                  <ChannelCard
-                    key={b.id}
-                    emoji="🎾"
-                    title={`${courtName} · ${timeStr}`}
-                    subtitle={`${dateStr} · Kod: ${b.access_code || "—"}`}
-                    lastMessage={b.booking_ref && resourceRoomMap[b.booking_ref] ? previews[resourceRoomMap[b.booking_ref]]?.lastMessage : undefined}
-                    lastMessageTime={b.booking_ref && resourceRoomMap[b.booking_ref] && previews[resourceRoomMap[b.booking_ref]]?.lastMessageAt ? relativeTime(previews[resourceRoomMap[b.booking_ref]].lastMessageAt) : undefined}
-                    senderName={b.booking_ref && resourceRoomMap[b.booking_ref] ? previews[resourceRoomMap[b.booking_ref]]?.senderName ?? undefined : undefined}
-                    senderAvatarUrl={b.booking_ref && resourceRoomMap[b.booking_ref] ? previews[resourceRoomMap[b.booking_ref]]?.senderAvatarUrl ?? undefined : undefined}
-                    onClick={() => openBookingRoom(b)}
-                  />
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {/* ── Events & Ritualer ─────────────────────────────────────── */}
         {events.length > 0 && (
           <>
             <SectionLabel label="Pickla i veckan" />
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                overflowX: "auto",
+                padding: "2px 2px 10px",
+                margin: "0 -2px",
+                WebkitOverflowScrolling: "touch",
+              }}
+            >
               {events.map((ev) => {
                 const dateStr = ev.start_date
                   ? DateTime.fromISO(ev.start_date).toFormat("d MMM", { locale: "sv" })
-                  : "";
+                  : "Snart";
+                const roomId = resourceRoomMap[ev.id];
+                const preview = roomId ? previews[roomId] : undefined;
                 return (
-                  <ChannelCard
+                  <motion.button
                     key={ev.id}
-                    emoji="🏆"
-                    title={ev.display_name || ev.name}
-                    subtitle={dateStr || ev.event_type}
-                    lastMessage={resourceRoomMap[ev.id] ? previews[resourceRoomMap[ev.id]]?.lastMessage : undefined}
-                    lastMessageTime={resourceRoomMap[ev.id] && previews[resourceRoomMap[ev.id]]?.lastMessageAt ? relativeTime(previews[resourceRoomMap[ev.id]].lastMessageAt) : undefined}
-                    senderName={resourceRoomMap[ev.id] ? previews[resourceRoomMap[ev.id]]?.senderName ?? undefined : undefined}
-                    senderAvatarUrl={resourceRoomMap[ev.id] ? previews[resourceRoomMap[ev.id]]?.senderAvatarUrl ?? undefined : undefined}
+                    whileTap={{ scale: 0.97 }}
                     onClick={() => openEventRoom(ev)}
-                  />
+                    style={{
+                      minWidth: 238,
+                      textAlign: "left",
+                      border: `1px solid ${HUB_BORDER}`,
+                      borderRadius: 24,
+                      padding: 16,
+                      background: "linear-gradient(145deg, #ffffff 0%, #fff7f7 100%)",
+                      boxShadow: "0 12px 28px rgba(17,24,39,0.08)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ width: 46, height: 46, borderRadius: 17, background: HUB_NAVY, display: "grid", placeItems: "center", color: "#fff" }}>
+                        <Trophy style={{ width: 21, height: 21 }} />
+                      </div>
+                      <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: HUB_RED }}>
+                        {dateStr}
+                      </span>
+                    </div>
+                    <h3 style={{ fontFamily: FONT_HEADING, fontSize: 20, lineHeight: 1.1, fontWeight: 800, color: HUB_TEXT, margin: "14px 0 5px" }}>
+                      {ev.display_name || ev.name}
+                    </h3>
+                    <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.35, color: HUB_SUB, margin: 0 }}>
+                      {preview?.lastMessage ? `${preview.senderName || "Någon"}: ${preview.lastMessage}` : "Öppen eventkanal och anmälan"}
+                    </p>
+                  </motion.button>
                 );
               })}
             </div>
           </>
+        )}
+
+        {user && bookings.length > 0 && (
+          <>
+            <SectionLabel label="Mina aktiviteter" />
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {bookings.map((b) => {
+                const dt = DateTime.fromISO(b.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+                const courtName = b.venue_courts?.name || "Bana";
+                const roomId = b.booking_ref ? resourceRoomMap[b.booking_ref] : undefined;
+                const preview = roomId ? previews[roomId] : undefined;
+                return (
+                  <motion.button
+                    key={b.id}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => openBookingRoom(b)}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      border: `1px solid ${HUB_BORDER}`,
+                      borderRadius: 22,
+                      background: HUB_CARD,
+                      padding: 14,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 13,
+                      boxShadow: "0 8px 24px rgba(17,24,39,0.06)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div style={{ width: 50, height: 50, borderRadius: 18, background: "#f3f4f6", display: "grid", placeItems: "center", color: HUB_NAVY, flexShrink: 0 }}>
+                      <CalendarDays style={{ width: 22, height: 22 }} />
+                    </div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <p style={{ fontFamily: FONT_HEADING, fontSize: 18, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
+                        {courtName} · {dt.toFormat("HH:mm")}
+                      </p>
+                      <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
+                        {dt.toFormat("EEE d/M", { locale: "sv" })} · Kod: {b.access_code || "—"}
+                      </p>
+                      {preview?.lastMessage && (
+                        <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_MUTED, margin: "5px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {preview.senderName || "Någon"}: {preview.lastMessage}
+                        </p>
+                      )}
+                    </div>
+                  </motion.button>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {dailyRoom ? (
+          <>
+            <SectionLabel label="Live på Pickla" />
+            <motion.button
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onSelectRoom(dailyRoom)}
+              style={{
+                width: "100%",
+                border: `1px solid ${HUB_BORDER}`,
+                borderRadius: 24,
+                background: HUB_CARD,
+                padding: 16,
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                textAlign: "left",
+                boxShadow: "0 10px 28px rgba(17,24,39,0.07)",
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ width: 54, height: 54, borderRadius: 20, background: "#e9fbea", display: "grid", placeItems: "center", color: HUB_GREEN, flexShrink: 0 }}>
+                <MessageCircle style={{ width: 23, height: 23 }} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <p style={{ fontFamily: FONT_HEADING, fontSize: 18, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
+                  Pickla Idag
+                </p>
+                <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
+                  {previews[dailyRoom.id]?.lastMessage
+                    ? `${previews[dailyRoom.id]?.senderName || "Någon"}: ${previews[dailyRoom.id]?.lastMessage}`
+                    : "Öppen kanal · lediga banor & Open Play"}
+                </p>
+              </div>
+            </motion.button>
+          </>
+        ) : (
+          <SkeletonCard />
         )}
 
         {!user && (
@@ -1811,6 +1992,83 @@ function SectionLabel({ label }: { label: string }) {
     >
       {label}
     </p>
+  );
+}
+
+function QuickActionCard({
+  title,
+  subtitle,
+  icon,
+  tone = "light",
+  disabled = false,
+  onClick,
+}: {
+  title: string;
+  subtitle: string;
+  icon: ReactNode;
+  tone?: "light" | "dark" | "red";
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const isDark = tone === "dark";
+  const isRed = tone === "red";
+  return (
+    <motion.button
+      whileTap={{ scale: disabled ? 1 : 0.97 }}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      style={{
+        minHeight: 132,
+        border: isDark || isRed ? "none" : `1px solid ${HUB_BORDER}`,
+        borderRadius: 24,
+        padding: 15,
+        textAlign: "left",
+        background: isDark
+          ? HUB_NAVY
+          : isRed
+            ? "linear-gradient(145deg, #CC2936 0%, #ef4444 100%)"
+            : HUB_CARD,
+        color: isDark || isRed ? "#fff" : HUB_TEXT,
+        boxShadow: isDark || isRed
+          ? "0 14px 30px rgba(26,31,58,0.16)"
+          : "0 10px 26px rgba(17,24,39,0.07)",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.55 : 1,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+      }}
+    >
+      <div
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 16,
+          background: isDark || isRed ? "rgba(255,255,255,0.14)" : "#f3f4f6",
+          color: isDark || isRed ? "#fff" : HUB_NAVY,
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        {icon}
+      </div>
+      <div>
+        <p style={{ fontFamily: FONT_HEADING, fontSize: 17, fontWeight: 800, lineHeight: 1.05, margin: 0 }}>
+          {title}
+        </p>
+        <p
+          style={{
+            fontFamily: "Inter, sans-serif",
+            fontSize: 12,
+            lineHeight: 1.3,
+            color: isDark || isRed ? "rgba(255,255,255,0.72)" : HUB_SUB,
+            margin: "6px 0 0",
+          }}
+        >
+          {subtitle}
+        </p>
+      </div>
+    </motion.button>
   );
 }
 
@@ -1887,9 +2145,12 @@ const HubPage = () => {
   return (
     <div style={{ position: "relative", overflow: "hidden" }}>
       <HubList
+        slug={slug}
+        venueName={venue.name}
         venueId={venueId}
         playerCount={playerCount}
         dailyRoom={dailyRoom}
+        botData={botData}
         bookings={bookings}
         events={events}
         onSelectRoom={async (room) => {
