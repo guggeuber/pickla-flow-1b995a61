@@ -11,7 +11,7 @@ import { ChannelCard } from "@/components/hub/ChannelCard";
 import { ActionCard } from "@/components/hub/ActionCard";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { PlayerNav } from "@/components/PlayerNav";
-import { EventCard } from "@/components/hub/Eventcard";
+import { EventCard } from "@/components/hub/EventCard";
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const HUB_BG = "#faf8f5";
