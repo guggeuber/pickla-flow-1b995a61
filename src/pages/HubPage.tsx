@@ -1591,6 +1591,7 @@ function HubList({
   dailyRoom,
   botData,
   autoOpenBookingRef,
+  directBookingMode = false,
   bookings,
   events,
   onSelectRoom,
@@ -1602,6 +1603,7 @@ function HubList({
   dailyRoom: ChatRoom | null | undefined;
   botData?: { freeCount: number; totalCount: number; nextSession: any } | null;
   autoOpenBookingRef?: string | null;
+  directBookingMode?: boolean;
   bookings: any[];
   events: any[];
   onSelectRoom: (room: ChatRoom) => void;
@@ -1677,6 +1679,35 @@ function HubList({
 
     if (data?.[0]) onSelectRoom(data[0] as ChatRoom);
   }, [venueId, onSelectRoom]);
+
+  if (directBookingMode) {
+    return (
+      <div style={{ minHeight: "100dvh", background: HUB_BG }}>
+        <header
+          className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
+          style={{
+            background: "linear-gradient(to bottom, rgba(250,248,245,0.95) 0%, rgba(250,248,245,0.7) 50%, transparent 100%)",
+          }}
+        >
+          <div className="pt-2">
+            <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
+          </div>
+          <div className="w-9 h-9 mb-1" />
+        </header>
+        <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", padding: "96px 24px 120px" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 34, height: 34, borderRadius: "50%", border: `3px solid ${HUB_BORDER}`, borderTopColor: HUB_NAVY, margin: "0 auto 14px", animation: "spin 0.8s linear infinite" }} />
+            <p style={{ fontFamily: FONT_HEADING, fontSize: 16, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
+              Öppnar bokningschatten
+            </p>
+            <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_MUTED, margin: "5px 0 0" }}>
+              Aktivitet → chat, utan omväg.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100dvh", background: HUB_BG }}>
@@ -2105,6 +2136,7 @@ const HubPage = () => {
         dailyRoom={dailyRoom}
         botData={botData}
         autoOpenBookingRef={bookingRoomRef}
+        directBookingMode={!!bookingRoomRef && !activeRoom}
         bookings={bookings}
         events={events}
         onSelectRoom={async (room) => {
