@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiGet, apiPost } from "@/lib/api";
@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { sv } from "date-fns/locale";
 import { CalendarDays, MapPin, Users, ArrowLeft, CheckCircle2, Loader2, MessageCircle, ChevronRight, Share2, Crown, Tag } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
@@ -84,6 +85,39 @@ export default function EventPage() {
   const [email, setEmail] = useState("");
   const [level, setLevel] = useState("");
   const [registered, setRegistered] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+
+  const fromHub = location.state?.from === "hub";
+
+  useEffect(() => {
+    setRegistered(false);
+    setProfileLoaded(false);
+  }, [event?.id]);
+
+  // Auto-fill contact details for logged-in players so event sign-up feels like one tap.
+  useEffect(() => {
+    if (!user || profileLoaded) return;
+
+    const prefillFromProfile = async () => {
+      const { data } = await supabase
+        .from("player_profiles")
+        .select("display_name, phone")
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
+
+      if (data) {
+        if (data.display_name && !name) setName(data.display_name);
+        if (data.phone && !phone) setPhone(data.phone);
+      } else if (user.user_metadata?.display_name && !name) {
+        setName(user.user_metadata.display_name);
+      }
+
+      if (user.email && !email) setEmail(user.email);
+      setProfileLoaded(true);
+    };
+
+    prefillFromProfile();
+  }, [user, profileLoaded, name, phone, email]);
 
   const registerMutation = useMutation({
     mutationFn: (vars: { eventId: string; name: string; phone: string; email: string; level: string }) =>
@@ -160,14 +194,26 @@ export default function EventPage() {
     <div className="min-h-screen bg-white pb-20">
       {/* Top bar */}
       <div className="px-5 pt-12 pb-3 flex items-center justify-between">
-        <Link
-          to="/"
-          className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
-          style={{ fontFamily: FONT_MONO }}
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          tillbaka
-        </Link>
+        {fromHub ? (
+          <button
+            type="button"
+            onClick={() => navigate("/hub")}
+            className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
+            style={{ fontFamily: FONT_MONO }}
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            hubben
+          </button>
+        ) : (
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1.5 text-[11px] text-neutral-400 active:opacity-60 transition-opacity"
+            style={{ fontFamily: FONT_MONO }}
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            tillbaka
+          </Link>
+        )}
         <button
           onClick={handleShare}
           className="p-2 -mr-2 text-neutral-400 active:opacity-60 transition-opacity"
@@ -440,7 +486,9 @@ export default function EventPage() {
                     setPhone("");
                     setEmail("");
                     setLevel("");
-                    navigate(evt.slug ? `/e/${evt.slug}` : `/event/${evt.id}`);
+                    navigate(evt.slug ? `/e/${evt.slug}` : `/event/${evt.id}`, {
+                      state: fromHub ? { from: "hub" } : undefined,
+                    });
                   }}
                   className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl bg-neutral-50 active:bg-neutral-100 transition-colors text-left"
                 >

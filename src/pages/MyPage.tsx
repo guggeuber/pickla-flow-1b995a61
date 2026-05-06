@@ -33,6 +33,33 @@ const CARD_BG = "#FFFFFF";
 const CARD_BORDER = "#E5E7EB";
 const PAGE_BG = "#F8FAFC";
 
+type PlayerProfileContact = {
+  phone?: string | null;
+};
+
+type MyEventSummary = {
+  id: string;
+  name: string | null;
+  display_name: string | null;
+  slug: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  status: string | null;
+  venues?: { name: string | null } | null;
+};
+
+type MyEventRegistration = {
+  id: string;
+  event_id: string;
+  name: string;
+  email: string | null;
+  auth_user_id: string | null;
+  created_at: string | null;
+  events: MyEventSummary | null;
+};
+
 function usePlayerProfile() {
   const { user } = useAuth();
   return useQuery({
@@ -64,6 +91,55 @@ function useMyBookings() {
         .limit(10);
       if (error) throw error;
       return data;
+    },
+  });
+}
+
+function getEventDateTime(event?: MyEventSummary | null, end = false) {
+  const date = (end ? event?.end_date : event?.start_date) || event?.start_date || event?.end_date;
+  const time = (end ? event?.end_time : event?.start_time) || event?.start_time || event?.end_time;
+  if (!date) return null;
+
+  const datePart = String(date).slice(0, 10);
+  return new Date(time ? `${datePart}T${time}` : `${datePart}T${end ? "23:59:59" : "00:00:00"}`);
+}
+
+function useMyEventRegistrations(profile?: PlayerProfileContact | null) {
+  const { user } = useAuth();
+  return useQuery<MyEventRegistration[]>({
+    queryKey: ["my-event-registrations", user?.id, user?.email, profile?.phone],
+    enabled: !!user,
+    queryFn: async () => {
+      const selectFields = "id, event_id, name, email, auth_user_id, created_at, events(id, name, display_name, slug, start_date, end_date, start_time, end_time, status, venues(name))";
+      const queries = [
+        supabase.from("players").select(selectFields).eq("auth_user_id", user!.id),
+      ];
+
+      if (user?.email) {
+        queries.push(supabase.from("players").select(selectFields).eq("email", user.email));
+      }
+
+      if (profile?.phone) {
+        queries.push(supabase.from("players").select(selectFields).eq("email", profile.phone));
+      }
+
+      const results = await Promise.all(queries);
+      const firstError = results.find((result) => result.error)?.error;
+      if (firstError) throw firstError;
+
+      const seen = new Set<string>();
+      return results
+        .flatMap((result) => (result.data || []) as unknown as MyEventRegistration[])
+        .filter((registration) => {
+          if (seen.has(registration.id)) return false;
+          seen.add(registration.id);
+          return true;
+        })
+        .sort((a, b) => {
+          const aTime = getEventDateTime(a.events)?.getTime() ?? 0;
+          const bTime = getEventDateTime(b.events)?.getTime() ?? 0;
+          return bTime - aTime;
+        });
     },
   });
 }
@@ -787,6 +863,7 @@ const MyPage = () => {
 
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
+  const { data: eventRegistrations } = useMyEventRegistrations(profile);
   const { data: activeMembership } = useActiveMembership();
   const queryClient = useQueryClient();
 
@@ -815,6 +892,16 @@ const MyPage = () => {
   const now = Date.now();
   const activeBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now);
   const pastBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now);
+  const activeEventRegistrations = (eventRegistrations || []).filter((registration) => {
+    const eventEnd = getEventDateTime(registration.events, true);
+    return eventEnd ? eventEnd.getTime() >= now : true;
+  });
+  const pastEventRegistrations = (eventRegistrations || []).filter((registration) => {
+    const eventEnd = getEventDateTime(registration.events, true);
+    return eventEnd ? eventEnd.getTime() < now : false;
+  });
+  const activeBookingCount = activeBookings.length + activeEventRegistrations.length;
+  const pastBookingCount = pastBookings.length + pastEventRegistrations.length;
   const membershipTier = (activeMembership as any)?.membership_tiers;
 
   return (
@@ -925,7 +1012,7 @@ const MyPage = () => {
               <div className="flex items-center gap-2">
                 <Calendar className="w-4 h-4" style={{ color: BLUE }} />
                 <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
-                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookings.length}</span>
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookingCount}</span>
               </div>
               <button
                 onClick={() => navigate("/book")}
@@ -935,7 +1022,7 @@ const MyPage = () => {
                 <Plus className="w-3 h-3" /> Boka
               </button>
             </div>
-            {activeBookings.length === 0 ? (
+            {activeBookingCount === 0 ? (
               <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
                 <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga kommande bokningar</p>
               </div>
@@ -961,17 +1048,46 @@ const MyPage = () => {
                     </span>
                   </button>
                 ))}
+                {activeEventRegistrations.map((registration) => {
+                  const event = registration.events;
+                  const eventStart = getEventDateTime(event);
+                  const eventEnd = getEventDateTime(event, true);
+                  const eventPath = event?.slug ? `/e/${event.slug}` : `/event/${registration.event_id}`;
+
+                  return (
+                    <button
+                      key={registration.id}
+                      onClick={() => navigate(eventPath)}
+                      className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
+                      style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate" style={{ color: TEXT_PRIMARY }}>{event?.display_name || event?.name || "Event"}</p>
+                        <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                          {eventStart
+                            ? eventStart.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })
+                            : "Datum kommer"}
+                          {eventStart && event?.start_time ? ` ${eventStart.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                          {eventEnd && event?.end_time ? `–${eventEnd.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                        </p>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: GREEN_LIGHT, color: GREEN }}>
+                        Anmäld
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
 
-            {pastBookings.length > 0 && (
+            {pastBookingCount > 0 && (
               <div className="mt-2">
                 <button
                   onClick={() => setShowPast(!showPast)}
                   className="w-full flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:scale-[0.98] transition-transform"
                   style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
                 >
-                  {showPast ? "Dölj tidigare bokningar" : `Visa tidigare bokningar (${pastBookings.length})`}
+                  {showPast ? "Dölj tidigare bokningar" : `Visa tidigare bokningar (${pastBookingCount})`}
                   <ChevronDown className="w-3.5 h-3.5 transition-transform" style={{ transform: showPast ? "rotate(180deg)" : "none" }} />
                 </button>
                 <AnimatePresence>
@@ -1000,6 +1116,32 @@ const MyPage = () => {
                             </div>
                           </button>
                         ))}
+                        {pastEventRegistrations.map((registration) => {
+                          const event = registration.events;
+                          const eventStart = getEventDateTime(event);
+                          const eventPath = event?.slug ? `/e/${event.slug}` : `/event/${registration.event_id}`;
+
+                          return (
+                            <button
+                              key={registration.id}
+                              onClick={() => navigate(eventPath)}
+                              className="rounded-xl p-3 flex items-center justify-between text-left opacity-70 active:scale-[0.98] transition-transform"
+                              style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate" style={{ color: TEXT_PRIMARY }}>{event?.display_name || event?.name || "Event"}</p>
+                                <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                                  {eventStart
+                                    ? eventStart.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })
+                                    : "Datum saknas"}
+                                </p>
+                              </div>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: GREEN_LIGHT, color: GREEN }}>
+                                Anmäld
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </motion.div>
                   )}

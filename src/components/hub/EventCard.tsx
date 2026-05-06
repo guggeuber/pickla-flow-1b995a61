@@ -84,8 +84,8 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
     } catch {}
 
     // No saved card — go to Stripe checkout
-    navigate(`/event/${eventId}`);
-setLoading(false);
+    navigate(`/event/${eventId}`, { state: { from: "hub" } });
+    setLoading(false);
   };
 
   const handleConfirmPay = async () => {
@@ -101,7 +101,7 @@ setLoading(false);
       });
       setSuccess(true);
     } catch {
-      navigate("/openplay");
+      navigate(`/event/${eventId}`, { state: { from: "hub" } });
     }
     setLoading(false);
   };
