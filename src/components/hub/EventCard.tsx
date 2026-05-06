@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { apiPost } from "@/lib/api";
 import { DateTime } from "luxon";
 import { useNavigate } from "react-router-dom";
+import { apiGet } from "@/lib/api";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -72,7 +73,7 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
     setLoading(true);
     // Check for saved cards
     try {
-      const res = await apiPost("api-stripe", "payment-methods", {});
+      const res = await apiGet("api-stripe", "payment-methods");
       const cards = res?.paymentMethods ?? [];
       if (cards.length > 0) {
         setSavedCard(cards[0]);
@@ -83,17 +84,8 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
     } catch {}
 
     // No saved card — go to Stripe checkout
-    try {
-      const res = await apiPost("api-bookings", "create-checkout", {
-        type: "event",
-        event_id: eventId,
-        venue_id: venueId,
-        user_id: user.id,
-        success_path: "/hub",
-      });
-      if (res?.url) window.location.href = res.url;
-    } catch {}
-    setLoading(false);
+    navigate(`/event/${eventId}`);
+setLoading(false);
   };
 
   const handleConfirmPay = async () => {
@@ -132,22 +124,23 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
           marginBottom: 4,
         }}
       >
-        {/* Logo / header */}
-        {event.logo_url ? (
-          <img
-            src={event.logo_url}
-            alt={event.display_name || event.name}
-            style={{ width: "100%", height: 100, objectFit: "cover", display: "block" }}
-          />
-        ) : (
-          <div style={{
-            width: "100%", height: 60,
-            background: event.primary_color || "#2d3a8c",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <span style={{ fontSize: 32 }}>🏆</span>
-          </div>
-        )}
+       {event.logo_url ? (
+  <div style={{ padding: "16px 14px 0", display: "flex", justifyContent: "center" }}>
+    <img
+      src={event.logo_url}
+      alt={event.display_name || event.name}
+      style={{ height: 60, width: "auto", maxWidth: "60%", objectFit: "contain", borderRadius: 8 }}
+    />
+  </div>
+) : (
+  <div style={{
+    width: "100%", height: 60,
+    background: event.primary_color || "#2d3a8c",
+    display: "flex", alignItems: "center", justifyContent: "center",
+  }}>
+    <span style={{ fontSize: 32 }}>🏆</span>
+  </div>
+)}
 
         <div style={{ padding: "12px 14px 14px" }}>
           <p style={{ fontFamily: FONT_HEADING, fontSize: 16, fontWeight: 700, color: "#fff", marginBottom: 2 }}>
