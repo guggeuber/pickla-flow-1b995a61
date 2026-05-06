@@ -2,7 +2,7 @@ import { useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2 } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PlayerNav } from "@/components/PlayerNav";
@@ -720,6 +720,14 @@ function DayPassSection() {
                   {buildLink(justCreatedGift.token)}
                 </p>
               </div>
+              <button
+                onClick={() => setJustCreatedGift(null)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 active:scale-95 transition-transform"
+                style={{ background: CARD_BG, border: `1px solid ${GREEN_BORDER}` }}
+                aria-label="Stäng gåvolänk"
+              >
+                <X className="w-3.5 h-3.5" style={{ color: TEXT_MUTED }} />
+              </button>
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3">
               <button
