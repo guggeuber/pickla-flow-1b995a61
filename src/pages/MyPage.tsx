@@ -921,10 +921,19 @@ const MyPage = () => {
 
           {/* Active bookings */}
           <motion.div variants={item}>
-            <div className="flex items-center gap-2 mb-2">
-              <Calendar className="w-4 h-4" style={{ color: BLUE }} />
-              <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
-              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookings.length}</span>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4" style={{ color: BLUE }} />
+                <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookings.length}</span>
+              </div>
+              <button
+                onClick={() => navigate("/book")}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold active:scale-95 transition-transform"
+                style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
+              >
+                <Plus className="w-3 h-3" /> Boka
+              </button>
             </div>
             {activeBookings.length === 0 ? (
               <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
