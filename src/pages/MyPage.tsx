@@ -249,23 +249,115 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
           </motion.button>
         )}
       </div>
-      {profile && !editing && (
-        <div className="flex gap-4 mt-4 pt-3" style={{ borderTop: `1px solid ${CARD_BORDER}` }}>
-          <div className="text-center flex-1">
-            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_matches || 0}</p>
-            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Matcher</p>
-          </div>
-          <div className="text-center flex-1">
-            <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY }}>{profile.total_wins || 0}</p>
-            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Vinster</p>
-          </div>
-          <div className="text-center flex-1">
-            <p className="text-lg font-bold" style={{ color: BLUE }}>{profile.pickla_rating || 1000}</p>
-            <p className="text-[10px] uppercase tracking-wide" style={{ color: TEXT_MUTED }}>Rating</p>
+    </motion.div>
+  );
+}
+
+function BookingDetailsSheet({
+  booking,
+  open,
+  onOpenChange,
+}: {
+  booking: any | null;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [cancelling, setCancelling] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
+  if (!booking) return null;
+
+  const courtName = booking.venue_courts?.name || "Bana";
+  const start = new Date(booking.start_time);
+  const end = new Date(booking.end_time);
+  const dateLabel = start.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
+  const timeLabel = `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    const { error } = await supabase
+      .from("bookings")
+      .update({ status: "cancelled" })
+      .eq("id", booking.id);
+    setCancelling(false);
+    if (error) {
+      toast.error("Kunde inte avboka");
+    } else {
+      toast.success("Bokningen är avbokad");
+      queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      onOpenChange(false);
+      setConfirmCancel(false);
+    }
+  };
+
+  return (
+    <Drawer open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setConfirmCancel(false); }}>
+      <DrawerContent style={{ background: CARD_BG }}>
+        <div className="px-5 pb-6 pt-2 max-w-md mx-auto w-full">
+          <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+            Bokning
+          </p>
+          <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{courtName}</p>
+          <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{dateLabel}</p>
+          <p className="text-sm" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{timeLabel}</p>
+          {booking.access_code && (
+            <div className="mt-3 rounded-xl px-3 py-2 inline-flex items-center gap-2" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
+              <span className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Kod</span>
+              <span className="text-base font-bold" style={{ fontFamily: FONT_MONO, color: BLUE }}>{booking.access_code}</span>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 mt-5">
+            <button
+              onClick={() => { onOpenChange(false); navigate(`/hub?room=${booking.id}`); }}
+              className="w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform"
+              style={{ background: BLUE, fontFamily: FONT_HEADING }}
+            >
+              Gå till chatt
+            </button>
+            <button
+              onClick={() => { onOpenChange(false); navigate(`/b/${booking.access_code || booking.id}`); }}
+              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
+              style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+            >
+              Visa kvitto
+            </button>
+            {confirmCancel ? (
+              <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                <p className="text-xs text-center" style={{ color: TEXT_SECONDARY }}>Säker på att du vill avboka?</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setConfirmCancel(false)}
+                    className="flex-1 py-2.5 rounded-lg text-xs font-bold"
+                    style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+                  >
+                    Behåll
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    disabled={cancelling}
+                    className="flex-1 py-2.5 rounded-lg text-xs font-bold text-white disabled:opacity-50 flex items-center justify-center"
+                    style={{ background: "#EF4444", fontFamily: FONT_HEADING }}
+                  >
+                    {cancelling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Ja, avboka"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmCancel(true)}
+                className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
+                style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444", fontFamily: FONT_HEADING }}
+              >
+                Avboka
+              </button>
+            )}
           </div>
         </div>
-      )}
-    </motion.div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 
