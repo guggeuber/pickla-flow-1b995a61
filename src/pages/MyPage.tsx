@@ -1014,9 +1014,6 @@ const MyPage = () => {
           {/* Corporate memberships */}
           <CorporateSection />
 
-          {/* QR Code for check-in */}
-          <QrCodeCard userId={user.id} displayName={displayName} />
-
           {/* Wallet: saved cards */}
           <WalletSection />
 
