@@ -913,14 +913,19 @@ const MyPage = () => {
             </div>
             {activeBookings.length === 0 ? (
               <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
-                <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga aktiva bokningar</p>
+                <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga kommande bokningar</p>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                {activeBookings.slice(0, 5).map((b) => (
-                  <div key={b.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                {activeBookings.slice(0, 5).map((b: any) => (
+                  <button
+                    key={b.id}
+                    onClick={() => setSelectedBooking(b)}
+                    className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
+                    style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                  >
                     <div>
-                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{(b as any).venue_courts?.name || "Bana"}</p>
+                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{b.venue_courts?.name || "Bana"}</p>
                       <p className="text-xs" style={{ color: TEXT_MUTED }}>
                         {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
                         {" "}
@@ -930,11 +935,57 @@ const MyPage = () => {
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? GREEN_LIGHT : BLUE_LIGHT, color: b.status === "confirmed" ? GREEN : BLUE }}>
                       {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
+
+            {pastBookings.length > 0 && (
+              <div className="mt-2">
+                <button
+                  onClick={() => setShowPast(!showPast)}
+                  className="w-full flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:scale-[0.98] transition-transform"
+                  style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
+                >
+                  {showPast ? "Dölj tidigare bokningar" : `Visa tidigare bokningar (${pastBookings.length})`}
+                  <ChevronDown className="w-3.5 h-3.5 transition-transform" style={{ transform: showPast ? "rotate(180deg)" : "none" }} />
+                </button>
+                <AnimatePresence>
+                  {showPast && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="flex flex-col gap-2 pt-1">
+                        {pastBookings.map((b: any) => (
+                          <button
+                            key={b.id}
+                            onClick={() => setSelectedBooking(b)}
+                            className="rounded-xl p-3 flex items-center justify-between text-left opacity-70 active:scale-[0.98] transition-transform"
+                            style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                          >
+                            <div>
+                              <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{b.venue_courts?.name || "Bana"}</p>
+                              <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                                {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
+                                {" "}
+                                {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
           </motion.div>
+
+          {/* Day passes — directly under bookings */}
+          <DayPassSection />
 
           {/* Corporate memberships */}
           <CorporateSection />
@@ -945,13 +996,16 @@ const MyPage = () => {
           {/* Wallet: saved cards */}
           <WalletSection />
 
-          {/* Unified day pass section */}
-          <DayPassSection />
-
           {/* Settings: push notifications etc */}
           <SettingsSection />
         </motion.div>
       </main>
+
+      <BookingDetailsSheet
+        booking={selectedBooking}
+        open={!!selectedBooking}
+        onOpenChange={(o) => { if (!o) setSelectedBooking(null); }}
+      />
 
       <PlayerNav />
     </div>
