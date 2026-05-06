@@ -94,6 +94,8 @@ Deno.serve(async (req) => {
         .eq('user_id', entitlementUserId)
         .eq('venue_id', venue_id)
         .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (membership?.tier_id) {

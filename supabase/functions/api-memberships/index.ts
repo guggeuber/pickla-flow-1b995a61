@@ -162,6 +162,8 @@ Deno.serve(async (req) => {
       const { data: membership, error: qErr } = await client.from('memberships')
         .select('*, membership_tiers(id, name, color, discount_percent, monthly_price)')
         .eq('user_id', targetUserId).eq('venue_id', venueId).eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
         .maybeSingle();
       if (qErr) return errorResponse(qErr.message);
 

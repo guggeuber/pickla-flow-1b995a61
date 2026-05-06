@@ -166,6 +166,7 @@ function useActiveMembership() {
         .select("id, tier_id, status, starts_at, expires_at, membership_tiers(name, color, description, monthly_price, membership_tier_pricing(product_type, fixed_price, discount_percent, label), membership_entitlements(entitlement_type, value, period, sport_type))")
         .eq("user_id", user!.id)
         .eq("status", "active")
+        .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       return data;
