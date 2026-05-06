@@ -858,7 +858,6 @@ const MyPage = () => {
           <motion.div variants={item} className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
             {[
               { label: "+ Boka bana", to: "/book" },
-              { label: "Köp dagspass", to: "/membership" },
               { label: "Bli medlem", to: "/membership" },
             ].map((a) => (
               <button
