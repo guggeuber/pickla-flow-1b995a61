@@ -289,12 +289,12 @@ export default function BookingPage() {
       }
       if (result.type === "free") {
         toast.success("Bokad via ditt medlemskap!");
-        navigate(result.redirect || "/my");
+        navigate("/hub");
         return;
       }
       const firstRef = result.bookings?.[0]?.booking_ref;
       if (firstRef) {
-        navigate(`/b/${firstRef}`);
+        navigate("/hub");
       } else {
         setConfirmed(true);
         toast.success("Bokad!");

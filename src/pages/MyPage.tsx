@@ -4,7 +4,7 @@ declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
 import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
-import QrCodeCard from "@/components/my/QrCodeCard";
+import { QRCodeSVG } from "qrcode.react";
 import { PlayerNav } from "@/components/PlayerNav";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -191,14 +191,14 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
     >
       <div className="flex items-center gap-3">
         <div
-          className="w-12 h-12 rounded-full flex items-center justify-center"
+          className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
           style={{ background: BLUE_LIGHT }}
         >
           <span className="text-lg font-bold" style={{ color: BLUE }}>
             {displayName.charAt(0).toUpperCase()}
           </span>
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           {editing ? (
             <div className="flex flex-col gap-2">
               <input
@@ -220,15 +220,33 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
               </div>
             </div>
           ) : (
-            <div>
-              <p className="font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
-              <p className="text-xs" style={{ color: TEXT_MUTED }}>{user.email}</p>
+            <div className="min-w-0">
+              <p className="font-semibold truncate" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
+              <p className="text-xs truncate" style={{ color: TEXT_MUTED }}>{user.email}</p>
               {profile?.phone && (
                 <p className="text-xs mt-0.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{profile.phone}</p>
               )}
             </div>
           )}
         </div>
+
+        {/* Compact QR membership card */}
+        {!editing && (
+          <div
+            className="rounded-xl p-1.5 shrink-0 bg-white"
+            style={{ border: `1.5px solid ${CARD_BORDER}`, boxShadow: "0 1px 2px rgba(0,0,0,0.04)" }}
+            title="Min incheckning"
+          >
+            <QRCodeSVG
+              value={JSON.stringify({ type: "pickla_user", uid: user.id })}
+              size={52}
+              level="M"
+              bgColor="#ffffff"
+              fgColor="#1a1e2e"
+            />
+          </div>
+        )}
+
         {editing ? (
           <motion.button
             whileTap={{ scale: 0.9 }}
@@ -443,6 +461,14 @@ function DayPassSection() {
             {activePasses.length}
           </span>
         </div>
+        <button
+          onClick={handleBuy}
+          disabled={buying}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold active:scale-95 transition-transform disabled:opacity-40"
+          style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
+        >
+          {buying ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Plus className="w-3 h-3" /> Köp dagspass</>}
+        </button>
       </div>
 
       {/* Member allowance info */}
@@ -454,16 +480,6 @@ function DayPassSection() {
           </p>
         </div>
       )}
-
-      {/* Buy button */}
-      <button
-        onClick={handleBuy}
-        disabled={buying}
-        className="w-full py-3 rounded-xl text-white text-xs font-bold uppercase tracking-wider active:scale-[0.98] transition-transform flex items-center justify-center gap-2 mb-3 disabled:opacity-40"
-        style={{ background: BLUE, fontFamily: FONT_MONO }}
-      >
-        {buying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><ShoppingBag className="w-3.5 h-3.5" /> Köp dagspass</>}
-      </button>
 
       {/* Just created share link */}
       <AnimatePresence>
@@ -842,7 +858,6 @@ const MyPage = () => {
           <motion.div variants={item} className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
             {[
               { label: "+ Boka bana", to: "/book" },
-              { label: "Köp dagspass", to: "/membership" },
               { label: "Bli medlem", to: "/membership" },
             ].map((a) => (
               <button
@@ -906,10 +921,19 @@ const MyPage = () => {
 
           {/* Active bookings */}
           <motion.div variants={item}>
-            <div className="flex items-center gap-2 mb-2">
-              <Calendar className="w-4 h-4" style={{ color: BLUE }} />
-              <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
-              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookings.length}</span>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4" style={{ color: BLUE }} />
+                <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina bokningar</span>
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activeBookings.length}</span>
+              </div>
+              <button
+                onClick={() => navigate("/book")}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold active:scale-95 transition-transform"
+                style={{ background: BLUE, color: "#fff", fontFamily: FONT_MONO }}
+              >
+                <Plus className="w-3 h-3" /> Boka
+              </button>
             </div>
             {activeBookings.length === 0 ? (
               <div className="rounded-2xl p-4 text-center" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
@@ -989,9 +1013,6 @@ const MyPage = () => {
 
           {/* Corporate memberships */}
           <CorporateSection />
-
-          {/* QR Code for check-in */}
-          <QrCodeCard userId={user.id} displayName={displayName} />
 
           {/* Wallet: saved cards */}
           <WalletSection />
