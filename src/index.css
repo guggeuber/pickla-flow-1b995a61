@@ -86,22 +86,30 @@
     @apply border-border;
   }
   html {
-    overscroll-behavior: none;
+    min-height: 100%;
+    overflow-x: hidden;
+    overscroll-behavior-y: auto;
+    -webkit-text-size-adjust: 100%;
   }
   body {
     @apply bg-background text-foreground;
+    min-height: 100%;
+    overflow-x: hidden;
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    overscroll-behavior: none;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: touch;
     -webkit-tap-highlight-color: transparent;
+  }
+  #root {
+    min-height: 100%;
   }
   h1, h2, h3, h4, h5, h6 {
     font-family: 'Space Grotesk', system-ui, sans-serif;
   }
-  /* #2 — remove 300ms tap delay, no tap highlight on interactive elements */
+  /* Keep taps clean, but avoid forcing touch-action globally; iOS PWA scroll needs native pan handling. */
   button, a, [role="button"], input, textarea, select {
-    touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
   /* #2 — instant opacity feedback on all buttons (no hover states on mobile) */
