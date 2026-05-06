@@ -1671,194 +1671,113 @@ function HubList({
       <div style={{ padding: "env(safe-area-inset-top,18px) 16px 120px", overscrollBehavior: "contain" }}>
         <section
           style={{
-            background: "linear-gradient(145deg, #10162f 0%, #1c2447 58%, #22365f 100%)",
-            color: "#fff",
-            borderRadius: 28,
-            padding: "22px 18px 18px",
-            boxShadow: "0 18px 42px rgba(16,22,47,0.22)",
-            overflow: "hidden",
-            position: "relative",
+            background: HUB_CARD,
+            border: `1px solid ${HUB_BORDER}`,
+            borderRadius: 24,
+            padding: "16px 16px 14px",
+            boxShadow: "0 8px 26px rgba(17,24,39,0.06)",
           }}
         >
-          <div
-            style={{
-              position: "absolute",
-              right: -42,
-              top: -48,
-              width: 150,
-              height: 150,
-              borderRadius: "50%",
-              background: "rgba(134,239,172,0.18)",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              right: 16,
-              bottom: -58,
-              width: 180,
-              height: 180,
-              borderRadius: "50%",
-              background: "rgba(204,41,54,0.12)",
-            }}
-          />
-          <div style={{ position: "relative", zIndex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-              <div>
-                <p
-                  style={{
-                    fontFamily: FONT_HEADING,
-                    fontSize: 11,
-                    fontWeight: 800,
-                    letterSpacing: "0.1em",
-                    color: "rgba(255,255,255,0.58)",
-                    textTransform: "uppercase",
-                    margin: 0,
-                  }}
-                >
-                  Spela hos
-                </p>
-                <h1 style={{ fontFamily: FONT_HEADING, fontSize: 28, lineHeight: 1.03, margin: "4px 0 0", fontWeight: 800 }}>
-                  {venueName.replace("Pickla Arena ", "Pickla ")}
-                </h1>
-              </div>
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueName)}`, "_blank", "noopener,noreferrer")}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <p
                 style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 18,
-                  border: "1px solid rgba(255,255,255,0.16)",
-                  background: "rgba(255,255,255,0.11)",
-                  display: "grid",
-                  placeItems: "center",
-                  cursor: "pointer",
-                  flexShrink: 0,
+                  fontFamily: FONT_HEADING,
+                  fontSize: 10,
+                  fontWeight: 800,
+                  letterSpacing: "0.1em",
+                  color: HUB_MUTED,
+                  textTransform: "uppercase",
+                  margin: 0,
                 }}
-                aria-label="Öppna karta"
               >
-                <MapPin style={{ width: 20, height: 20, color: "#fff" }} />
-              </motion.button>
+                Spela hos
+              </p>
+              <h1 style={{ fontFamily: FONT_HEADING, fontSize: 24, lineHeight: 1.08, margin: "3px 0 0", fontWeight: 800, color: HUB_TEXT }}>
+                {venueName.replace("Pickla Arena ", "Pickla ")}
+              </h1>
             </div>
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueName)}`, "_blank", "noopener,noreferrer")}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 16,
+                border: `1px solid ${HUB_BORDER}`,
+                background: "#f8fafc",
+                display: "grid",
+                placeItems: "center",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+              aria-label="Öppna karta"
+            >
+              <MapPin style={{ width: 19, height: 19, color: HUB_NAVY }} />
+            </motion.button>
+          </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 22 }}>
-              <div style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 18, padding: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: HUB_GREEN, boxShadow: "0 0 0 4px rgba(34,197,94,0.18)" }} />
-                  <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: "#86efac" }}>
-                    Live
-                  </span>
-                </div>
-                <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.25, color: "rgba(255,255,255,0.78)", margin: "9px 0 0" }}>
-                  {courtSummary}
-                </p>
-              </div>
-              <div style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 18, padding: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <Clock3 style={{ width: 14, height: 14, color: "#fff" }} />
-                  <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: "#fff" }}>
-                    Drop-in
-                  </span>
-                </div>
-                <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.25, color: "rgba(255,255,255,0.78)", margin: "9px 0 0" }}>
-                  {nextSessionLabel}
-                </p>
-              </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <div style={{ minWidth: "max-content", display: "flex", alignItems: "center", gap: 7, background: "#f0fdf4", border: "1px solid rgba(34,197,94,0.18)", borderRadius: 999, padding: "8px 11px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: HUB_GREEN, boxShadow: "0 0 0 4px rgba(34,197,94,0.16)" }} />
+              <span style={{ fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 700, color: "#15803d" }}>
+                {courtSummary}
+              </span>
+            </div>
+            <div style={{ minWidth: "max-content", display: "flex", alignItems: "center", gap: 7, background: "#f8fafc", border: `1px solid ${HUB_BORDER}`, borderRadius: 999, padding: "8px 11px" }}>
+              <Clock3 style={{ width: 14, height: 14, color: HUB_SUB }} />
+              <span style={{ fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 700, color: HUB_SUB }}>
+                Drop-in {nextSessionLabel.toLowerCase()}
+              </span>
             </div>
           </div>
         </section>
 
-        <SectionLabel label="For you" />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <QuickActionCard
-            title="Boka pickleball"
-            subtitle="Hitta första bästa bana"
-            icon={<Zap style={{ width: 21, height: 21 }} />}
-            tone="dark"
-            onClick={() => navigate(`/book?v=${slug}`)}
-          />
-          <QuickActionCard
-            title="Köp dagspass"
-            subtitle={nextSession?.price_sek ? `${nextSession.price_sek} kr · Stripe` : "Open Play & drop-in"}
-            icon={<Ticket style={{ width: 21, height: 21 }} />}
-            tone="red"
-            onClick={() => navigate(`/openplay?v=${slug}`)}
-          />
-          <QuickActionCard
-            title="Boka dart"
-            subtitle="Välj bana och tid"
-            icon={<Sparkles style={{ width: 21, height: 21 }} />}
-            onClick={() => navigate(`/book?v=${slug}&sport=dart`)}
-          />
-          <QuickActionCard
-            title="Pickla idag"
-            subtitle={playerCount > 0 ? `${playerCount} spelar just nu` : "Chat, läge och spontanspel"}
-            icon={<MessageCircle style={{ width: 21, height: 21 }} />}
-            onClick={() => dailyRoom && onSelectRoom(dailyRoom)}
-            disabled={!dailyRoom}
-          />
-        </div>
-
-        {events.length > 0 && (
+        {dailyRoom ? (
           <>
-            <SectionLabel label="Pickla i veckan" />
-            <div
+            <SectionLabel label="Pickla idag" />
+            <motion.button
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onSelectRoom(dailyRoom)}
               style={{
+                width: "100%",
+                border: `1px solid ${HUB_BORDER}`,
+                borderRadius: 22,
+                background: HUB_CARD,
+                padding: 14,
                 display: "flex",
-                gap: 12,
-                overflowX: "auto",
-                padding: "2px 2px 10px",
-                margin: "0 -2px",
-                WebkitOverflowScrolling: "touch",
+                alignItems: "center",
+                gap: 13,
+                textAlign: "left",
+                boxShadow: "0 8px 24px rgba(17,24,39,0.06)",
+                cursor: "pointer",
               }}
             >
-              {events.map((ev) => {
-                const dateStr = ev.start_date
-                  ? DateTime.fromISO(ev.start_date).toFormat("d MMM", { locale: "sv" })
-                  : "Snart";
-                const roomId = resourceRoomMap[ev.id];
-                const preview = roomId ? previews[roomId] : undefined;
-                return (
-                  <motion.button
-                    key={ev.id}
-                    whileTap={{ scale: 0.97 }}
-                    onClick={() => openEventRoom(ev)}
-                    style={{
-                      minWidth: 238,
-                      textAlign: "left",
-                      border: `1px solid ${HUB_BORDER}`,
-                      borderRadius: 24,
-                      padding: 16,
-                      background: "linear-gradient(145deg, #ffffff 0%, #fff7f7 100%)",
-                      boxShadow: "0 12px 28px rgba(17,24,39,0.08)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                      <div style={{ width: 46, height: 46, borderRadius: 17, background: HUB_NAVY, display: "grid", placeItems: "center", color: "#fff" }}>
-                        <Trophy style={{ width: 21, height: 21 }} />
-                      </div>
-                      <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: HUB_RED }}>
-                        {dateStr}
-                      </span>
-                    </div>
-                    <h3 style={{ fontFamily: FONT_HEADING, fontSize: 20, lineHeight: 1.1, fontWeight: 800, color: HUB_TEXT, margin: "14px 0 5px" }}>
-                      {ev.display_name || ev.name}
-                    </h3>
-                    <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.35, color: HUB_SUB, margin: 0 }}>
-                      {preview?.lastMessage ? `${preview.senderName || "Någon"}: ${preview.lastMessage}` : "Öppen eventkanal och anmälan"}
-                    </p>
-                  </motion.button>
-                );
-              })}
-            </div>
+              <div style={{ width: 50, height: 50, borderRadius: 18, background: "#e9fbea", display: "grid", placeItems: "center", color: HUB_GREEN, flexShrink: 0 }}>
+                <MessageCircle style={{ width: 22, height: 22 }} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <p style={{ fontFamily: FONT_HEADING, fontSize: 18, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
+                    Pickla Idag
+                  </p>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: HUB_GREEN }} />
+                </div>
+                <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {previews[dailyRoom.id]?.lastMessage
+                    ? `${previews[dailyRoom.id]?.senderName || "Någon"}: ${previews[dailyRoom.id]?.lastMessage}`
+                    : "Öppen kanal · lediga banor & Open Play"}
+                </p>
+              </div>
+            </motion.button>
           </>
+        ) : (
+          <SkeletonCard />
         )}
 
         {user && bookings.length > 0 && (
           <>
-            <SectionLabel label="Mina aktiviteter" />
+            <SectionLabel label="Mina bokningar" />
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {bookings.map((b) => {
                 const dt = DateTime.fromISO(b.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
@@ -1907,43 +1826,93 @@ function HubList({
           </>
         )}
 
-        {dailyRoom ? (
+        <SectionLabel label="Snabbval" />
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            overflowX: "auto",
+            padding: "2px 2px 10px",
+            margin: "0 -2px",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
+          <QuickActionCard
+            title="Boka bana"
+            subtitle="Pickleball"
+            icon={<Zap style={{ width: 19, height: 19 }} />}
+            tone="dark"
+            onClick={() => navigate(`/book?v=${slug}`)}
+          />
+          <QuickActionCard
+            title="Dagspass"
+            subtitle={nextSession?.price_sek ? `${nextSession.price_sek} kr` : "Open Play"}
+            icon={<Ticket style={{ width: 19, height: 19 }} />}
+            tone="red"
+            onClick={() => navigate(`/openplay?v=${slug}`)}
+          />
+          <QuickActionCard
+            title="Dart"
+            subtitle="Boka bord"
+            icon={<Sparkles style={{ width: 19, height: 19 }} />}
+            onClick={() => navigate(`/book?v=${slug}&sport=dart`)}
+          />
+        </div>
+
+        {events.length > 0 && (
           <>
-            <SectionLabel label="Live på Pickla" />
-            <motion.button
-              whileTap={{ scale: 0.98 }}
-              onClick={() => onSelectRoom(dailyRoom)}
+            <SectionLabel label="Pickla i veckan" />
+            <div
               style={{
-                width: "100%",
-                border: `1px solid ${HUB_BORDER}`,
-                borderRadius: 24,
-                background: HUB_CARD,
-                padding: 16,
                 display: "flex",
-                alignItems: "center",
-                gap: 14,
-                textAlign: "left",
-                boxShadow: "0 10px 28px rgba(17,24,39,0.07)",
-                cursor: "pointer",
+                gap: 10,
+                overflowX: "auto",
+                padding: "2px 2px 10px",
+                margin: "0 -2px",
+                WebkitOverflowScrolling: "touch",
               }}
             >
-              <div style={{ width: 54, height: 54, borderRadius: 20, background: "#e9fbea", display: "grid", placeItems: "center", color: HUB_GREEN, flexShrink: 0 }}>
-                <MessageCircle style={{ width: 23, height: 23 }} />
-              </div>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <p style={{ fontFamily: FONT_HEADING, fontSize: 18, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
-                  Pickla Idag
-                </p>
-                <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
-                  {previews[dailyRoom.id]?.lastMessage
-                    ? `${previews[dailyRoom.id]?.senderName || "Någon"}: ${previews[dailyRoom.id]?.lastMessage}`
-                    : "Öppen kanal · lediga banor & Open Play"}
-                </p>
-              </div>
-            </motion.button>
+              {events.map((ev) => {
+                const dateStr = ev.start_date
+                  ? DateTime.fromISO(ev.start_date).toFormat("d MMM", { locale: "sv" })
+                  : "Snart";
+                const roomId = resourceRoomMap[ev.id];
+                const preview = roomId ? previews[roomId] : undefined;
+                return (
+                  <motion.button
+                    key={ev.id}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={() => openEventRoom(ev)}
+                    style={{
+                      minWidth: 210,
+                      textAlign: "left",
+                      border: `1px solid ${HUB_BORDER}`,
+                      borderRadius: 22,
+                      padding: 14,
+                      background: HUB_CARD,
+                      boxShadow: "0 8px 24px rgba(17,24,39,0.06)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ width: 40, height: 40, borderRadius: 15, background: "#f3f4f6", display: "grid", placeItems: "center", color: HUB_NAVY }}>
+                        <Trophy style={{ width: 19, height: 19 }} />
+                      </div>
+                      <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: HUB_RED }}>
+                        {dateStr}
+                      </span>
+                    </div>
+                    <h3 style={{ fontFamily: FONT_HEADING, fontSize: 18, lineHeight: 1.12, fontWeight: 800, color: HUB_TEXT, margin: "12px 0 5px" }}>
+                      {ev.display_name || ev.name}
+                    </h3>
+                    <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.35, color: HUB_SUB, margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {preview?.lastMessage ? `${preview.senderName || "Någon"}: ${preview.lastMessage}` : "Öppen eventkanal och anmälan"}
+                    </p>
+                  </motion.button>
+                );
+              })}
+            </div>
           </>
-        ) : (
-          <SkeletonCard />
         )}
 
         {!user && (
@@ -2018,20 +1987,21 @@ function QuickActionCard({
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       style={{
-        minHeight: 132,
+        minWidth: 132,
+        minHeight: 96,
         border: isDark || isRed ? "none" : `1px solid ${HUB_BORDER}`,
-        borderRadius: 24,
-        padding: 15,
+        borderRadius: 20,
+        padding: 13,
         textAlign: "left",
         background: isDark
           ? HUB_NAVY
           : isRed
-            ? "linear-gradient(145deg, #CC2936 0%, #ef4444 100%)"
+            ? HUB_RED
             : HUB_CARD,
         color: isDark || isRed ? "#fff" : HUB_TEXT,
         boxShadow: isDark || isRed
-          ? "0 14px 30px rgba(26,31,58,0.16)"
-          : "0 10px 26px rgba(17,24,39,0.07)",
+          ? "0 8px 22px rgba(26,31,58,0.12)"
+          : "0 8px 22px rgba(17,24,39,0.06)",
         cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.55 : 1,
         display: "flex",
@@ -2042,8 +2012,8 @@ function QuickActionCard({
       <div
         style={{
           width: 42,
-          height: 42,
-          borderRadius: 16,
+          height: 36,
+          borderRadius: 14,
           background: isDark || isRed ? "rgba(255,255,255,0.14)" : "#f3f4f6",
           color: isDark || isRed ? "#fff" : HUB_NAVY,
           display: "grid",
@@ -2053,13 +2023,13 @@ function QuickActionCard({
         {icon}
       </div>
       <div>
-        <p style={{ fontFamily: FONT_HEADING, fontSize: 17, fontWeight: 800, lineHeight: 1.05, margin: 0 }}>
+        <p style={{ fontFamily: FONT_HEADING, fontSize: 15, fontWeight: 800, lineHeight: 1.05, margin: 0 }}>
           {title}
         </p>
         <p
           style={{
             fontFamily: "Inter, sans-serif",
-            fontSize: 12,
+            fontSize: 11,
             lineHeight: 1.3,
             color: isDark || isRed ? "rgba(255,255,255,0.72)" : HUB_SUB,
             margin: "6px 0 0",
