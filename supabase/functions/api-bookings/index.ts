@@ -38,8 +38,24 @@ Deno.serve(async (req) => {
     // ── Entitlement check — apply discounts / check limits ───────────────────
     // user_id is set in metadata by the frontend from useAuth(); membership
     // benefits are applied here. Hard cap (Founder 4h/week) blocks checkout.
+    let baseAmountSek = amount_sek;
     let finalAmountSek = amount_sek;
     let entitlementUserId = meta.user_id || '';
+
+    if (product_type === 'day_pass' && venue_id && meta.open_play_session_id) {
+      const adminCheckout = getServiceClient();
+      const { data: openPlaySession } = await adminCheckout
+        .from('open_play_sessions')
+        .select('price_sek, venue_id')
+        .eq('id', meta.open_play_session_id)
+        .maybeSingle();
+
+      if (openPlaySession?.venue_id === venue_id && openPlaySession.price_sek != null) {
+        baseAmountSek = Number(openPlaySession.price_sek);
+        finalAmountSek = baseAmountSek;
+        meta.base_amount_sek = String(baseAmountSek);
+      }
+    }
 
     if (!entitlementUserId) {
       const authHeader = req.headers.get('authorization') || '';
@@ -96,9 +112,18 @@ Deno.serve(async (req) => {
           .select('product_type, fixed_price, discount_percent')
           .eq('tier_id', membership.tier_id)
           .eq('product_type', pricingProductType);
-        const tierPricing = entitlementSportType === 'pickleball' ? (tierPricingRows || [])[0] : null;
 
-        const applyTierPricing = (baseAmount: number) => {
+        const { data: tier } = await adminEnt
+          .from('membership_tiers')
+          .select('discount_percent')
+          .eq('id', membership.tier_id)
+          .maybeSingle();
+        const tierDefaultDiscount = Number(tier?.discount_percent || 0);
+
+        const applyPercentDiscount = (baseAmount: number, percent: number) =>
+          Math.max(0, Math.round(baseAmount * (1 - (percent / 100)) * 100) / 100);
+
+        const applyTierPricing = (tierPricing: any, baseAmount: number) => {
           if (!tierPricing) return baseAmount;
 
           if (tierPricing.fixed_price != null) {
@@ -106,25 +131,46 @@ Deno.serve(async (req) => {
               let courtIds: string[] = [];
               try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
               const durationHours = parseFloat(meta.duration_hours || '1') || 1;
-              return Math.round(Number(tierPricing.fixed_price) * Math.max(courtIds.length, 1) * durationHours);
+              return Number(tierPricing.fixed_price) * Math.max(courtIds.length, 1) * durationHours;
             }
 
-            return Math.round(Number(tierPricing.fixed_price));
+            return Number(tierPricing.fixed_price);
           }
 
           if (tierPricing.discount_percent) {
-            return Math.round(baseAmount * (1 - (Number(tierPricing.discount_percent) / 100)));
+            return applyPercentDiscount(baseAmount, Number(tierPricing.discount_percent));
           }
 
           return baseAmount;
         };
 
+        const bestTierPricingAmount = () => {
+          if (entitlementSportType !== 'pickleball') return null;
+
+          const amounts = (tierPricingRows || [])
+            .filter((row: any) => row.fixed_price != null || row.discount_percent != null)
+            .map((row: any) => applyTierPricing(row, baseAmountSek))
+            .filter((amount: number) => Number.isFinite(amount) && amount >= 0);
+
+          if (amounts.length === 0) return null;
+          return Math.min(...amounts);
+        };
+
+        const tierDiscountAmount = () => {
+          if (entitlementSportType !== 'pickleball' || tierDefaultDiscount <= 0) return null;
+          return applyPercentDiscount(baseAmountSek, tierDefaultDiscount);
+        };
+
         if (product_type === 'court_booking') {
           const courtDiscount = hasEnt('court_discount_pct');
-          if (tierPricing) {
-            finalAmountSek = applyTierPricing(finalAmountSek);
+          const tierPricingAmount = bestTierPricingAmount();
+          const fallbackTierAmount = tierDiscountAmount();
+          if (tierPricingAmount != null) {
+            finalAmountSek = tierPricingAmount;
           } else if (courtDiscount) {
-            finalAmountSek = Math.round(amount_sek * (1 - (courtDiscount.value / 100)));
+            finalAmountSek = applyPercentDiscount(baseAmountSek, Number(courtDiscount.value));
+          } else if (fallbackTierAmount != null) {
+            finalAmountSek = fallbackTierAmount;
           }
 
           // Founder: hard cap 4h/week — check usage
@@ -161,6 +207,8 @@ Deno.serve(async (req) => {
         if (product_type === 'day_pass') {
           const passDiscount = hasEnt('day_pass_discount_pct');
           const freePass = hasEnt('free_day_pass_monthly');
+          const tierPricingAmount = bestTierPricingAmount();
+          const fallbackTierAmount = tierDiscountAmount();
 
           if (freePass) {
             const now = DateTime.now().setZone('Europe/Stockholm');
@@ -183,10 +231,12 @@ Deno.serve(async (req) => {
               meta.entitlement_period_start = monthStart;
               meta.entitlement_period_end = monthEnd;
             }
-          } else if (tierPricing) {
-            finalAmountSek = applyTierPricing(finalAmountSek);
+          } else if (tierPricingAmount != null) {
+            finalAmountSek = tierPricingAmount;
           } else if (passDiscount) {
-            finalAmountSek = Math.round(amount_sek * (1 - (passDiscount.value / 100)));
+            finalAmountSek = applyPercentDiscount(baseAmountSek, Number(passDiscount.value));
+          } else if (fallbackTierAmount != null) {
+            finalAmountSek = fallbackTierAmount;
           }
         }
       }
@@ -272,6 +322,8 @@ Deno.serve(async (req) => {
       name:             String(meta.name             || '').slice(0, 200),
       phone:            String(meta.phone            || '').slice(0, 50),
       user_id:          String(meta.user_id          || ''),
+      base_amount_sek:  String(meta.base_amount_sek  || baseAmountSek || ''),
+      billed_amount_sek: String(billedAmountSek       || ''),
       // Membership-specific
       tier_id:          String(meta.tier_id          || ''),
       customer_name:    String(meta.customer_name    || '').slice(0, 200),
@@ -300,7 +352,7 @@ Deno.serve(async (req) => {
           price_data: {
             currency: 'sek',
             product_data: { name: productName },
-            unit_amount: Math.round(billedAmountSek) * 100,
+            unit_amount: Math.round(billedAmountSek * 100),
             recurring: { interval: 'month' },
           },
           quantity: 1,
@@ -319,7 +371,7 @@ Deno.serve(async (req) => {
           price_data: {
             currency: 'sek',
             product_data: { name: productName },
-            unit_amount: Math.round(billedAmountSek) * 100,
+            unit_amount: Math.round(billedAmountSek * 100),
           },
           quantity: 1,
         }],

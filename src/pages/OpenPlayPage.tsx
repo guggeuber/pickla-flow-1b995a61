@@ -23,6 +23,12 @@ const item = { hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0, transiti
 
 const DAY_NAMES = ["Söndag", "Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag"];
 
+const formatSek = (amount: number) =>
+  `${amount.toLocaleString("sv-SE", {
+    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })} kr`;
+
 function useOpenPlaySessions() {
   return useQuery({
     queryKey: ["open-play-sessions"],
@@ -75,7 +81,7 @@ const OpenPlayPage = () => {
     }
 
     if (dayPassPricing.discount_percent) {
-      return Math.round(basePrice * (1 - Number(dayPassPricing.discount_percent) / 100));
+      return Math.round(basePrice * (1 - Number(dayPassPricing.discount_percent) / 100) * 100) / 100;
     }
 
     return basePrice;
@@ -198,9 +204,9 @@ const OpenPlayPage = () => {
                   </div>
                   <span className="text-[15px] font-bold flex items-center gap-1" style={{ fontFamily: FONT_MONO, color: hasDiscount ? "#16a34a" : DARK_BLUE }}>
                     {hasDiscount && (
-                      <span className="text-[12px] line-through" style={{ color: TEXT_MUTED }}>{basePrice} kr</span>
+                      <span className="text-[12px] line-through" style={{ color: TEXT_MUTED }}>{formatSek(basePrice)}</span>
                     )}
-                    {memberPrice} kr
+                    {formatSek(memberPrice)}
                   </span>
                 </div>
                 {hasDiscount && (
@@ -217,7 +223,7 @@ const OpenPlayPage = () => {
                   {loadingSlot === `${slot.session.id}-${slot.date.toISODate()}` ? (
                     <><Loader2 className="w-4 h-4 animate-spin" /> Öppnar betalning…</>
                   ) : (
-                    `Köp dagspass · ${memberPrice} kr →`
+                    `Köp dagspass · ${formatSek(memberPrice)} →`
                   )}
                 </button>
               </motion.div>
