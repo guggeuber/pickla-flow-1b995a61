@@ -45,6 +45,21 @@ Deno.serve(async (req) => {
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
       const adminEnt = createClient(supabaseUrl, serviceKey);
+      let entitlementSportType: string | null = product_type === 'day_pass' ? 'pickleball' : null;
+
+      if (product_type === 'court_booking' && meta.court_ids) {
+        let courtIds: string[] = [];
+        try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
+
+        if (courtIds.length > 0) {
+          const { data: courtsForEntitlement } = await adminEnt
+            .from('venue_courts')
+            .select('sport_type')
+            .in('id', courtIds);
+          const sportTypes = [...new Set((courtsForEntitlement || []).map((c: any) => c.sport_type || 'pickleball'))];
+          entitlementSportType = sportTypes.length === 1 ? sportTypes[0] : null;
+        }
+      }
 
       // Fetch active membership + entitlements
       const { data: membership } = await adminEnt
@@ -58,10 +73,12 @@ Deno.serve(async (req) => {
       if (membership?.tier_id) {
         const { data: entitlements } = await adminEnt
           .from('membership_entitlements')
-          .select('entitlement_type, value, period')
+          .select('entitlement_type, value, period, sport_type')
           .eq('tier_id', membership.tier_id);
 
-        const ents = entitlements || [];
+        const ents = (entitlements || []).filter((e: any) =>
+          entitlementSportType && (e.sport_type || 'pickleball') === entitlementSportType
+        );
         const hasEnt = (type: string) => ents.find((e: any) => e.entitlement_type === type);
 
         if (product_type === 'court_booking') {

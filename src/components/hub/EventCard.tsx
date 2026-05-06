@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -12,6 +12,13 @@ import { apiGet } from "@/lib/api";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
 const HUB_NAVY = "#1a1f3a";
+
+type EventPlayer = {
+  id: string;
+  name: string | null;
+  auth_user_id: string | null;
+  avatar_url?: string | null;
+};
 
 interface EventCardProps {
   eventId: string;
@@ -40,20 +47,36 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
     },
   });
 
-  const { data: playerCount = 0 } = useQuery({
-    queryKey: ["hub-event-players", eventId],
+  const { data: players = [] } = useQuery<EventPlayer[]>({
+    queryKey: ["hub-event-player-list", eventId],
     staleTime: 30000,
     queryFn: async () => {
-      const { count } = await supabase
+      const { data: playerRows } = await supabase
         .from("players")
-        .select("id", { count: "exact", head: true })
-        .eq("event_id", eventId);
-      return count ?? 0;
+        .select("id, name, auth_user_id")
+        .eq("event_id", eventId)
+        .order("created_at", { ascending: true });
+
+      const authIds = (playerRows || []).map((p) => p.auth_user_id).filter(Boolean) as string[];
+      if (authIds.length === 0) return playerRows || [];
+
+      const { data: profiles } = await supabase
+        .from("player_profiles")
+        .select("auth_user_id, avatar_url")
+        .in("auth_user_id", authIds);
+
+      const avatarByUser = new Map((profiles || []).map((profile) => [profile.auth_user_id, profile.avatar_url]));
+      return (playerRows || []).map((player) => ({
+        ...player,
+        avatar_url: player.auth_user_id ? avatarByUser.get(player.auth_user_id) : null,
+      }));
     },
   });
 
   if (!event) return null;
 
+  const playerCount = players.length;
+  const isRegistered = success || (!!user && players.some((player) => player.auth_user_id === user.id));
   const isFree = !event.entry_fee || event.entry_fee === 0 || event.entry_fee_type === "free";
   const price = event.entry_fee ?? 0;
   const maxP = event.max_participants;
@@ -69,6 +92,7 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
   const handleCTA = async () => {
     if (!user) { navigate("/auth?redirect=/hub"); return; }
     if (dropIn) { navigate("/openplay"); return; }
+    if (isRegistered) return;
 
     setLoading(true);
     // Check for saved cards
@@ -106,7 +130,9 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
     setLoading(false);
   };
 
-  const ctaLabel = dropIn
+  const ctaLabel = isRegistered
+    ? "Du är anmäld ✓"
+    : dropIn
     ? `Drop-in · ${isFree ? "Gratis" : `${price} kr`}`
     : isFull
     ? "Fullbokad"
@@ -177,30 +203,63 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
             </div>
           )}
 
-          {/* CTA */}
-          {success ? (
-            <div style={{ background: "rgba(34,197,94,0.15)", borderRadius: 10, padding: "10px 0", textAlign: "center" }}>
-              <p style={{ fontFamily: FONT_HEADING, fontSize: 13, fontWeight: 700, color: "#22c55e" }}>Du är anmäld! 🎉</p>
+          <motion.button
+            whileTap={isRegistered ? undefined : { scale: 0.97 }}
+            onClick={handleCTA}
+            disabled={loading || isFull || isRegistered}
+            style={{
+              width: "100%",
+              background: isRegistered ? "rgba(34,197,94,0.15)" : isFull ? "rgba(255,255,255,0.1)" : HUB_RED,
+              color: isRegistered ? "#22c55e" : isFull ? "rgba(255,255,255,0.35)" : "#fff",
+              border: "none", borderRadius: 10, padding: "11px 0",
+              fontFamily: FONT_HEADING, fontSize: 13, fontWeight: 700,
+              cursor: isRegistered || isFull ? "default" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            }}
+          >
+            {loading
+              ? <Loader2 style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
+              : isRegistered
+              ? <><Check style={{ width: 14, height: 14 }} />{ctaLabel}</>
+              : ctaLabel}
+          </motion.button>
+
+          {players.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+              <div style={{ display: "flex", paddingLeft: 4 }}>
+                {players.slice(0, 5).map((player, idx) => (
+                  <div
+                    key={player.id}
+                    title={player.name || "Spelare"}
+                    style={{
+                      width: 24,
+                      height: 24,
+                      marginLeft: idx === 0 ? 0 : -7,
+                      borderRadius: "999px",
+                      border: `2px solid ${HUB_NAVY}`,
+                      overflow: "hidden",
+                      background: "rgba(255,255,255,0.16)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "#fff",
+                      fontFamily: FONT_HEADING,
+                      fontSize: 10,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {player.avatar_url ? (
+                      <img src={player.avatar_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      (player.name || "?").charAt(0).toUpperCase()
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", fontFamily: "Inter, sans-serif" }}>
+                {players.length} anmälda
+              </p>
             </div>
-          ) : (
-            <motion.button
-              whileTap={{ scale: 0.97 }}
-              onClick={handleCTA}
-              disabled={loading || isFull}
-              style={{
-                width: "100%",
-                background: isFull ? "rgba(255,255,255,0.1)" : HUB_RED,
-                color: isFull ? "rgba(255,255,255,0.35)" : "#fff",
-                border: "none", borderRadius: 10, padding: "11px 0",
-                fontFamily: FONT_HEADING, fontSize: 13, fontWeight: 700,
-                cursor: isFull ? "not-allowed" : "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              }}
-            >
-              {loading
-                ? <Loader2 style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
-                : ctaLabel}
-            </motion.button>
           )}
         </div>
       </motion.div>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown, Ticket } from "lucide-react";
@@ -52,6 +52,22 @@ function useActiveMembership() {
         .eq("user_id", user!.id)
         .eq("status", "active")
         .limit(1)
+        .maybeSingle();
+      return data;
+    },
+  });
+}
+
+function usePlayerProfile() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["player-profile", user?.id],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("player_profiles")
+        .select("display_name, phone")
+        .eq("auth_user_id", user!.id)
         .maybeSingle();
       return data;
     },
@@ -208,11 +224,19 @@ const MembershipPage = () => {
   const { user, signUp } = useAuth();
   const { data: tiers, isLoading } = useMembershipTiers();
   const { data: activeMembership } = useActiveMembership();
+  const { data: profile } = usePlayerProfile();
   const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: "", email: "", phone: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
 
   const hasMembership = !!activeMembership;
+  const profilePhone = profile?.phone || "";
+
+  useEffect(() => {
+    if (profilePhone && !formData.phone) {
+      setFormData((current) => ({ ...current, phone: profilePhone }));
+    }
+  }, [profilePhone, formData.phone]);
 
   const handleSignupAndRequest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -405,8 +429,8 @@ const MembershipPage = () => {
                           }}
                         >
                           {tier.monthly_price > 0
-                            ? `${Math.round(tier.monthly_price)} KR/MÅN – BLI MEDLEM`
-                            : "BLI MEDLEM – GRATIS"}
+                            ? `${Math.round(tier.monthly_price)} KR/MÅN – KÖP MEDLEMSKAP`
+                            : "KÖP MEDLEMSKAP – GRATIS"}
                         </button>
 
                         {tier.monthly_price > 0 && (
@@ -437,17 +461,26 @@ const MembershipPage = () => {
                               <p className="text-[13px] font-medium" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
                                 Du är inloggad som {user.email}
                               </p>
-                              <div className="relative">
-                                <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
-                                <input
-                                  type="tel"
-                                  placeholder="telefonnummer (valfritt)"
-                                  value={formData.phone}
-                                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                                  className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
-                                  style={{ fontFamily: FONT_MONO }}
-                                />
-                              </div>
+                              {profilePhone ? (
+                                <div className="flex items-center gap-2 rounded-2xl bg-neutral-50 border border-neutral-200 px-4 py-3.5">
+                                  <Phone className="w-4 h-4 shrink-0" style={{ color: "rgba(62,61,57,0.35)" }} />
+                                  <span className="text-[13px]" style={{ fontFamily: FONT_MONO, color: "rgba(62,61,57,0.65)" }}>
+                                    {profilePhone}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="relative">
+                                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
+                                  <input
+                                    type="tel"
+                                    placeholder="telefonnummer (valfritt)"
+                                    value={formData.phone}
+                                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                                    className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                                    style={{ fontFamily: FONT_MONO }}
+                                  />
+                                </div>
+                              )}
                             </>
                           ) : (
                             <>
@@ -514,7 +547,7 @@ const MembershipPage = () => {
                             {submitting ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : user ? (
-                              "ANSÖK OM MEDLEMSKAP"
+                              "KÖP MEDLEMSKAP"
                             ) : (
                               "SKAPA KONTO & BLI MEDLEM"
                             )}

@@ -223,6 +223,25 @@ Deno.serve(async (req) => {
       return jsonResponse(data);
     }
 
+    // POST /api-memberships/cancel — user cancels their own membership
+    if (req.method === 'POST' && path === 'cancel') {
+      const body = await req.json();
+      const { membershipId } = body;
+      if (!membershipId) return errorResponse('Missing membershipId');
+
+      const { data, error: uErr } = await admin.from('memberships')
+        .update({ status: 'cancelled' })
+        .eq('id', membershipId)
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .select('id, status')
+        .maybeSingle();
+
+      if (uErr) return errorResponse(uErr.message);
+      if (!data) return errorResponse('Membership not found', 404);
+      return jsonResponse(data);
+    }
+
     return errorResponse('Not found', 404);
   } catch (e) {
     return errorResponse((e as Error).message, 500);

@@ -163,7 +163,7 @@ function useActiveMembership() {
     queryFn: async () => {
       const { data } = await supabase
         .from("memberships")
-        .select("id, tier_id, status, starts_at, expires_at, membership_tiers(name, color, description)")
+        .select("id, tier_id, status, starts_at, expires_at, membership_tiers(name, color, description, monthly_price, membership_entitlements(entitlement_type, value, period, sport_type))")
         .eq("user_id", user!.id)
         .eq("status", "active")
         .limit(1)
@@ -235,6 +235,121 @@ function CorporateSection() {
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
 const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } };
+
+function formatMembershipBenefit(entitlement: any) {
+  const sportLabel = entitlement.sport_type && entitlement.sport_type !== "pickleball" ? ` (${entitlement.sport_type})` : "";
+
+  switch (entitlement.entitlement_type) {
+    case "court_hours_per_week":
+      return `${entitlement.value || 0}h banbokning per vecka${sportLabel}`;
+    case "open_play_unlimited":
+      return `Obegränsad open play${sportLabel}`;
+    case "free_day_pass_monthly":
+      return `${entitlement.value || 1} gratis dagspass per månad${sportLabel}`;
+    case "court_discount_pct":
+      return `${entitlement.value || 0}% rabatt på banbokning${sportLabel}`;
+    case "day_pass_discount_pct":
+      return `${entitlement.value || 0}% rabatt på dagspass${sportLabel}`;
+    default:
+      return entitlement.entitlement_type?.replaceAll("_", " ") || "Medlemsförmån";
+  }
+}
+
+function MembershipDetailsSheet({
+  membership,
+  open,
+  onOpenChange,
+}: {
+  membership: any | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [cancelling, setCancelling] = useState(false);
+
+  if (!membership) return null;
+
+  const tier = membership.membership_tiers;
+  const entitlements = tier?.membership_entitlements || [];
+  const startsAt = membership.starts_at ? new Date(membership.starts_at) : null;
+  const expiresAt = membership.expires_at ? new Date(membership.expires_at) : null;
+  const nextBillingDate = expiresAt || (startsAt ? new Date(startsAt.getFullYear(), startsAt.getMonth() + 1, startsAt.getDate()) : null);
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    try {
+      await apiPost("api-memberships", "cancel", { membershipId: membership.id });
+    } catch {
+      setCancelling(false);
+      toast.error("Kunde inte avsluta medlemskapet. Kontakta personalen så hjälper vi dig.");
+      return;
+    }
+    setCancelling(false);
+
+    toast.success("Medlemskapet är avslutat");
+    queryClient.invalidateQueries({ queryKey: ["my-membership"] });
+    onOpenChange(false);
+  };
+
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent style={{ background: CARD_BG }}>
+        <div className="px-5 pb-6 pt-2 max-w-md mx-auto w-full">
+          <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+            Medlemskap
+          </p>
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={{ background: `${tier?.color || GREEN}20` }}>
+              <Sparkles className="w-5 h-5" style={{ color: tier?.color || GREEN }} />
+            </div>
+            <div>
+              <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{tier?.name || "Medlem"}</p>
+              <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{tier?.description || "Aktivt medlemskap"}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mt-5">
+            <div className="rounded-xl p-3" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Pris</p>
+              <p className="text-sm font-bold mt-1" style={{ color: TEXT_PRIMARY }}>
+                {tier?.monthly_price ? `${Math.round(tier.monthly_price)} kr/mån` : "Ingår"}
+              </p>
+            </div>
+            <div className="rounded-xl p-3" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Nästa dragning</p>
+              <p className="text-sm font-bold mt-1" style={{ color: TEXT_PRIMARY }}>
+                {nextBillingDate ? nextBillingDate.toLocaleDateString("sv-SE", { day: "numeric", month: "short" }) : "Ej satt"}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <p className="text-sm font-semibold mb-2" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Förmåner</p>
+            <div className="flex flex-col gap-2">
+              {entitlements.length > 0 ? entitlements.map((entitlement: any, idx: number) => (
+                <div key={`${entitlement.entitlement_type}-${idx}`} className="flex items-start gap-2 rounded-xl px-3 py-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
+                  <Check className="w-4 h-4 shrink-0 mt-0.5" style={{ color: GREEN }} />
+                  <p className="text-sm" style={{ color: TEXT_PRIMARY }}>{formatMembershipBenefit(entitlement)}</p>
+                </div>
+              )) : (
+                <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga förmåner är konfigurerade ännu.</p>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="w-full mt-6 py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform disabled:opacity-50 flex items-center justify-center gap-2"
+            style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.18)", color: "#EF4444", fontFamily: FONT_HEADING }}
+          >
+            {cancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : "Avsluta medlemskap"}
+          </button>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
 
 function ProfileCard({ profile, user, displayName }: { profile: any; user: any; displayName: string }) {
   const [editing, setEditing] = useState(false);
@@ -868,6 +983,7 @@ const MyPage = () => {
   const queryClient = useQueryClient();
 
   const [selectedBooking, setSelectedBooking] = useState<any | null>(null);
+  const [showMembershipDetails, setShowMembershipDetails] = useState(false);
   const [showPast, setShowPast] = useState(false);
 
   // Show success toast when returning from Stripe card setup
@@ -963,9 +1079,10 @@ const MyPage = () => {
 
           {/* Membership */}
           {activeMembership ? (
-            <motion.div
+            <motion.button
               variants={item}
-              className="rounded-2xl p-5"
+              onClick={() => setShowMembershipDetails(true)}
+              className="rounded-2xl p-5 text-left active:scale-[0.98] transition-transform"
               style={{
                 background: membershipTier?.color
                   ? `${membershipTier.color}10`
@@ -985,8 +1102,9 @@ const MyPage = () => {
                     {membershipTier?.description || "Aktivt medlemskap"}
                   </p>
                 </div>
+                <ChevronRight className="w-4 h-4 ml-auto shrink-0" style={{ color: TEXT_MUTED }} />
               </div>
-            </motion.div>
+            </motion.button>
           ) : (
             <motion.button
               variants={item}
@@ -1168,6 +1286,12 @@ const MyPage = () => {
         booking={selectedBooking}
         open={!!selectedBooking}
         onOpenChange={(o) => { if (!o) setSelectedBooking(null); }}
+      />
+
+      <MembershipDetailsSheet
+        membership={activeMembership}
+        open={showMembershipDetails}
+        onOpenChange={setShowMembershipDetails}
       />
 
       <PlayerNav />
