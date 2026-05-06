@@ -547,7 +547,7 @@ function BookingDetailsSheet({
 
           <div className="flex flex-col gap-2 mt-5">
             <button
-              onClick={() => { onOpenChange(false); navigate(`/hub?booking=${encodeURIComponent(booking.booking_ref || booking.id)}`); }}
+              onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(booking.booking_ref || booking.id)}`); }}
               className="w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform"
               style={{ background: BLUE, fontFamily: FONT_HEADING }}
             >
@@ -1084,7 +1084,7 @@ const MyPage = () => {
   const pastBookingCount = pastBookings.length + pastEventRegistrations.length;
   const membershipTier = (activeMembership as any)?.membership_tiers;
   const openBookingChat = (booking: any) => {
-    navigate(`/hub?booking=${encodeURIComponent(booking.booking_ref || booking.id)}`);
+    navigate(`/booking-chat/${encodeURIComponent(booking.booking_ref || booking.id)}`);
   };
 
   return (

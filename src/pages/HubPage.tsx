@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Send,
@@ -2072,9 +2072,12 @@ function SkeletonCard() {
 // ── HubPage (root) ────────────────────────────────────────────────────────────
 const HubPage = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { bookingRef } = useParams<{ bookingRef?: string }>();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const joinRoomId = searchParams.get("join");
-  const bookingRoomRef = searchParams.get("booking") || searchParams.get("room");
+  const bookingRoomRef = bookingRef || searchParams.get("booking") || searchParams.get("room");
+  const isDirectBookingRoute = !!bookingRef;
   const { user } = useAuth();
 
   const { data: venue } = useVenue(slug);
@@ -2136,7 +2139,7 @@ const HubPage = () => {
         dailyRoom={dailyRoom}
         botData={botData}
         autoOpenBookingRef={bookingRoomRef}
-        directBookingMode={!!bookingRoomRef && !activeRoom}
+        directBookingMode={!!bookingRoomRef}
         bookings={bookings}
         events={events}
         onSelectRoom={async (room) => {
@@ -2170,7 +2173,7 @@ const HubPage = () => {
           <ChatRoom
             room={activeRoom}
             venueId={venueId}
-            onBack={closeRoom}
+            onBack={isDirectBookingRoute ? () => navigate(`/activity?v=${slug}`) : closeRoom}
           />
         </motion.div>
       )}
