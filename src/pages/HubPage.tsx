@@ -10,7 +10,6 @@ import {
   ImageIcon,
   X,
   Loader2,
-  CalendarDays,
   Clock3,
   MapPin,
   MessageCircle,
@@ -1591,6 +1590,7 @@ function HubList({
   playerCount,
   dailyRoom,
   botData,
+  autoOpenBookingRef,
   bookings,
   events,
   onSelectRoom,
@@ -1601,12 +1601,14 @@ function HubList({
   playerCount: number;
   dailyRoom: ChatRoom | null | undefined;
   botData?: { freeCount: number; totalCount: number; nextSession: any } | null;
+  autoOpenBookingRef?: string | null;
   bookings: any[];
   events: any[];
   onSelectRoom: (room: ChatRoom) => void;
 }) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const autoOpenedRef = useRef<string | null>(null);
   const nextSession = botData?.nextSession;
   const courtSummary = botData?.totalCount
     ? `${botData.freeCount} av ${botData.totalCount} banor lediga nu`
@@ -1651,6 +1653,14 @@ function HubList({
 
     if (data?.[0]) onSelectRoom(data[0] as ChatRoom);
   }, [venueId, onSelectRoom]);
+
+  useEffect(() => {
+    if (!autoOpenBookingRef || autoOpenedRef.current === autoOpenBookingRef) return;
+    const booking = bookings.find((b) => b.booking_ref === autoOpenBookingRef || b.id === autoOpenBookingRef);
+    if (!booking) return;
+    autoOpenedRef.current = autoOpenBookingRef;
+    openBookingRoom(booking);
+  }, [autoOpenBookingRef, bookings, openBookingRoom]);
 
   const openEventRoom = useCallback(async (event: any) => {
     const { data } = await supabase.rpc("upsert_resource_chat_room", {
@@ -1796,57 +1806,6 @@ function HubList({
           </>
         ) : (
           <SkeletonCard />
-        )}
-
-        {user && bookings.length > 0 && (
-          <>
-            <SectionLabel label="Mina bokningar" />
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {bookings.map((b) => {
-                const dt = DateTime.fromISO(b.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
-                const courtName = b.venue_courts?.name || "Bana";
-                const roomId = b.booking_ref ? resourceRoomMap[b.booking_ref] : undefined;
-                const preview = roomId ? previews[roomId] : undefined;
-                return (
-                  <motion.button
-                    key={b.id}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => openBookingRoom(b)}
-                    style={{
-                      width: "100%",
-                      textAlign: "left",
-                      border: `1px solid ${HUB_BORDER}`,
-                      borderRadius: 22,
-                      background: HUB_CARD,
-                      padding: 14,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 13,
-                      boxShadow: "0 8px 24px rgba(17,24,39,0.06)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div style={{ width: 50, height: 50, borderRadius: 18, background: "#f3f4f6", display: "grid", placeItems: "center", color: HUB_NAVY, flexShrink: 0 }}>
-                      <CalendarDays style={{ width: 22, height: 22 }} />
-                    </div>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <p style={{ fontFamily: FONT_HEADING, fontSize: 18, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
-                        {courtName} · {dt.toFormat("HH:mm")}
-                      </p>
-                      <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
-                        {dt.toFormat("EEE d/M", { locale: "sv" })} · Kod: {b.access_code || "—"}
-                      </p>
-                      {preview?.lastMessage && (
-                        <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_MUTED, margin: "5px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {preview.senderName || "Någon"}: {preview.lastMessage}
-                        </p>
-                      )}
-                    </div>
-                  </motion.button>
-                );
-              })}
-            </div>
-          </>
         )}
 
         <SectionLabel label="Snabbval" />
@@ -2084,6 +2043,7 @@ const HubPage = () => {
   const [searchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const joinRoomId = searchParams.get("join");
+  const bookingRoomRef = searchParams.get("booking") || searchParams.get("room");
   const { user } = useAuth();
 
   const { data: venue } = useVenue(slug);
@@ -2144,6 +2104,7 @@ const HubPage = () => {
         playerCount={playerCount}
         dailyRoom={dailyRoom}
         botData={botData}
+        autoOpenBookingRef={bookingRoomRef}
         bookings={bookings}
         events={events}
         onSelectRoom={async (room) => {

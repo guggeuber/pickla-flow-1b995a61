@@ -547,7 +547,7 @@ function BookingDetailsSheet({
 
           <div className="flex flex-col gap-2 mt-5">
             <button
-              onClick={() => { onOpenChange(false); navigate(`/hub?room=${booking.id}`); }}
+              onClick={() => { onOpenChange(false); navigate(`/hub?booking=${encodeURIComponent(booking.booking_ref || booking.id)}`); }}
               className="w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform"
               style={{ background: BLUE, fontFamily: FONT_HEADING }}
             >
@@ -1083,6 +1083,9 @@ const MyPage = () => {
   const activeBookingCount = activeBookings.length + activeEventRegistrations.length;
   const pastBookingCount = pastBookings.length + pastEventRegistrations.length;
   const membershipTier = (activeMembership as any)?.membership_tiers;
+  const openBookingChat = (booking: any) => {
+    navigate(`/hub?booking=${encodeURIComponent(booking.booking_ref || booking.id)}`);
+  };
 
   return (
     <div className="min-h-screen" style={{ background: PAGE_BG }}>
@@ -1202,21 +1205,45 @@ const MyPage = () => {
                 {activeBookings.slice(0, 5).map((b: any) => (
                   <button
                     key={b.id}
-                    onClick={() => setSelectedBooking(b)}
+                    onClick={() => openBookingChat(b)}
                     className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
                     style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                   >
-                    <div>
+                    <div className="min-w-0">
                       <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{b.venue_courts?.name || "Bana"}</p>
                       <p className="text-xs" style={{ color: TEXT_MUTED }}>
                         {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
                         {" "}
                         {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
                       </p>
+                      <p className="text-[11px] mt-1" style={{ color: TEXT_SECONDARY }}>
+                        Öppna bokningschatten →
+                      </p>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? GREEN_LIGHT : BLUE_LIGHT, color: b.status === "confirmed" ? GREEN : BLUE }}>
-                      {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
-                    </span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? GREEN_LIGHT : BLUE_LIGHT, color: b.status === "confirmed" ? GREEN : BLUE }}>
+                        {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
+                      </span>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedBooking(b);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedBooking(b);
+                          }
+                        }}
+                        className="px-2 py-1 rounded-full text-[10px] font-bold"
+                        style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
+                      >
+                        Info
+                      </span>
+                    </div>
                   </button>
                 ))}
                 {activeEventRegistrations.map((registration) => {
