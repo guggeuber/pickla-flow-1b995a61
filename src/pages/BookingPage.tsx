@@ -110,6 +110,7 @@ export default function BookingPage() {
   const [selectedDuration, setSelectedDuration] = useState(60);
   const [selectedCourts, setSelectedCourts] = useState<string[]>([]);
   const [sportFilter, setSportFilter] = useState<SportFilter>(requestedSport);
+  const [showCourtList, setShowCourtList] = useState(false);
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [editingContact, setEditingContact] = useState(false);
@@ -167,6 +168,7 @@ export default function BookingPage() {
   useEffect(() => {
     setSportFilter(requestedSport);
     setSelectedCourts([]);
+    setShowCourtList(false);
   }, [requestedSport]);
 
   const dates = useMemo(() => generateDates(), []);
@@ -350,6 +352,7 @@ export default function BookingPage() {
     if (sport === sportFilter) return;
     setSportFilter(sport);
     setSelectedCourts([]);
+    setShowCourtList(false);
 
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("v", slug);
@@ -364,6 +367,7 @@ export default function BookingPage() {
   const selectFirstAvailableCourt = () => {
     if (firstAvailableCourt) {
       setSelectedCourts([firstAvailableCourt.id]);
+      setShowCourtList(false);
     }
   };
 
@@ -390,6 +394,8 @@ export default function BookingPage() {
   }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, courtPricing, durationHours]);
 
   const hasMemberCourtPrice = totalPrice < baseTotalPrice;
+  const selectedCourtNames = selectedCourtObjects.map((court) => court.name).join(", ");
+  const hasSelectedTrip = selectedCourts.length > 0 && !!selectedTime && !!selectedEndTime;
 
   const bookMutation = useMutation({
     mutationFn: async () => {
@@ -557,7 +563,7 @@ export default function BookingPage() {
           </button>
         </div>
       ) : (
-        <form onSubmit={handleBook} className="px-4 py-4 space-y-4">
+        <form onSubmit={handleBook} className="px-4 py-4 pb-36 space-y-4">
           {/* Sport picker */}
           <div>
             <h2
@@ -727,14 +733,15 @@ export default function BookingPage() {
               <div className="grid grid-cols-3 gap-1.5">
                 {[60, 90, 120].map((duration) => {
                   const selected = selectedDuration === duration;
-                  return (
-                    <button
-                      key={duration}
-                      type="button"
-                      onClick={() => {
-                        setSelectedDuration(duration);
-                        setSelectedCourts([]);
-                      }}
+	                  return (
+	                    <button
+	                      key={duration}
+	                      type="button"
+	                      onClick={() => {
+	                        setSelectedDuration(duration);
+	                        setSelectedCourts([]);
+	                        setShowCourtList(false);
+	                      }}
                       className={`py-2.5 rounded-xl text-[12px] font-bold transition-colors ${
                         selected
                           ? "bg-neutral-900 text-white"
@@ -752,48 +759,41 @@ export default function BookingPage() {
 
           {/* Court selection */}
           {selectedTime && !isClosed && (
-            <div>
-              <div className="flex items-center justify-between gap-3 mb-2">
-                <h2
-                  className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest"
-                  style={{ fontFamily: FONT_MONO }}
-                >
-                  {sportSectionLabel}
-                </h2>
-              </div>
+            <div className="space-y-2">
+              <h2
+                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest"
+                style={{ fontFamily: FONT_MONO }}
+              >
+                välj alternativ
+              </h2>
+
               {firstAvailableCourt && selectedEndTime && (
                 <button
                   type="button"
                   onClick={selectFirstAvailableCourt}
-                  className={`w-full mb-2 rounded-2xl p-3 text-left border transition-all active:scale-[0.99] ${
+                  className={`w-full rounded-3xl p-4 text-left border transition-all active:scale-[0.99] ${
                     selectedCourts.length === 1 && selectedCourts[0] === firstAvailableCourt.id
                       ? "bg-neutral-900 text-white border-neutral-900"
-                      : "bg-neutral-50 text-neutral-900 border-neutral-100"
+                      : "bg-white text-neutral-900 border-neutral-200 shadow-[0_10px_30px_rgba(15,23,42,0.06)]"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
                       <p
-                        className="text-[10px] uppercase tracking-widest text-current opacity-45"
-                        style={{ fontFamily: FONT_MONO }}
-                      >
-                        snabbval
-                      </p>
-                      <p
-                        className="text-[15px] font-bold leading-tight mt-1"
+                        className="text-[16px] font-bold leading-tight"
                         style={{ fontFamily: FONT_GROTESK }}
                       >
-                        Första lediga {sportCourtLabel}
+                        Första bästa {sportCourtLabel}
                       </p>
                       <p
-                        className="text-[11px] text-current opacity-55 mt-1 truncate"
+                        className="text-[12px] text-current opacity-55 mt-1 truncate"
                         style={{ fontFamily: FONT_MONO }}
                       >
-                        {firstAvailableCourt.name} · {selectedTime}–{selectedEndTime} · {selectedDuration} min
+                        {firstAvailableCourt.name} · {selectedTime}-{selectedEndTime} · {selectedDuration} min
                       </p>
                     </div>
                     <span
-                      className="text-[14px] font-bold whitespace-nowrap"
+                      className="text-[16px] font-bold whitespace-nowrap"
                       style={{ fontFamily: FONT_GROTESK }}
                     >
                       {Math.round(getMemberCourtPrice(firstAvailableCourt) * durationHours)} kr
@@ -801,77 +801,97 @@ export default function BookingPage() {
                   </div>
                 </button>
               )}
-              {sportCourts.length === 0 ? (
-                <p
-                  className="text-[13px] text-neutral-400 text-center py-4"
-                  style={{ fontFamily: FONT_MONO }}
-                >
-                  inga {sportCourtLabel} upplagda
-                </p>
-              ) : (
-                <div className={sportFilter === "dart" ? "grid grid-cols-3 gap-1.5" : "grid grid-cols-2 gap-1.5"}>
-                  {sportCourts.map((court) => {
-                    const available = courtAvailability[court.id] !== false;
-                    const selected = selectedCourts.includes(court.id);
-                    const basePrice = getCourtPrice(court);
-                    const memberPrice = getMemberCourtPrice(court);
-                    const hasDiscount = memberPrice < basePrice;
-                    return (
-                      <button
-                        key={court.id}
-                        type="button"
-                        disabled={!available}
-                        onClick={() => available && toggleCourt(court.id)}
-                        className={`relative min-h-[62px] px-3 py-2.5 rounded-xl text-left transition-all ${
-                          !available
-                            ? "opacity-45 bg-neutral-50 cursor-not-allowed"
-                            : selected
-                            ? "bg-neutral-900 text-white shadow-sm"
-                            : "bg-neutral-50 text-neutral-700 active:scale-[0.98]"
-                        }`}
-                      >
-                        <p
-                          className={sportFilter === "dart" ? "text-[11px] font-bold leading-tight" : "text-[12px] font-bold leading-tight"}
-                          style={{ fontFamily: FONT_GROTESK }}
-                        >
-                          {court.name}
-                        </p>
-                        <div
-                          className={`text-[10px] mt-1 flex items-center gap-1 ${
-                            selected ? "text-white/60" : "text-neutral-400"
+
+              <button
+                type="button"
+                onClick={() => setShowCourtList((value) => !value)}
+                className={`w-full rounded-3xl p-4 text-left border transition-all active:scale-[0.99] ${
+                  showCourtList || selectedCourts.length > 1
+                    ? "bg-neutral-900 text-white border-neutral-900"
+                    : "bg-white text-neutral-900 border-neutral-200"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p
+                      className="text-[16px] font-bold leading-tight"
+                      style={{ fontFamily: FONT_GROTESK }}
+                    >
+                      Välj {sportCourtLabel} själv
+                    </p>
+                    <p
+                      className="text-[12px] text-current opacity-55 mt-1 truncate"
+                      style={{ fontFamily: FONT_MONO }}
+                    >
+                      {selectedCourtObjects.length > 0 ? selectedCourtNames : `${availableSportCourts.length} lediga`}
+                    </p>
+                  </div>
+                  <span className="text-[20px] leading-none">›</span>
+                </div>
+              </button>
+
+              {showCourtList && (
+                sportCourts.length === 0 ? (
+                  <p
+                    className="text-[13px] text-neutral-400 text-center py-4"
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    inga {sportCourtLabel} upplagda
+                  </p>
+                ) : (
+                  <div className={sportFilter === "dart" ? "grid grid-cols-3 gap-1.5" : "grid grid-cols-2 gap-1.5"}>
+                    {sportCourts.map((court) => {
+                      const available = courtAvailability[court.id] !== false;
+                      const selected = selectedCourts.includes(court.id);
+                      const basePrice = getCourtPrice(court);
+                      const memberPrice = getMemberCourtPrice(court);
+                      const hasDiscount = memberPrice < basePrice;
+                      return (
+                        <button
+                          key={court.id}
+                          type="button"
+                          disabled={!available}
+                          onClick={() => available && toggleCourt(court.id)}
+                          className={`relative min-h-[58px] px-3 py-2.5 rounded-xl text-left transition-all ${
+                            !available
+                              ? "opacity-40 bg-neutral-50 cursor-not-allowed"
+                              : selected
+                              ? "bg-neutral-900 text-white shadow-sm"
+                              : "bg-neutral-50 text-neutral-700 active:scale-[0.98]"
                           }`}
-                          style={{ fontFamily: FONT_MONO }}
                         >
-                          {hasDiscount && (
-                            <span className="line-through opacity-60">{basePrice} kr/h</span>
-                          )}
-                          <span className={hasDiscount ? (selected ? "text-emerald-200" : "text-emerald-600") : undefined}>
-                            {memberPrice} kr/h
-                          </span>
-                        </div>
-                        {!available && (
-                          <span
-                            className="text-[8px] text-neutral-400 mt-0.5 block"
+                          <p
+                            className="text-[11px] font-bold leading-tight"
+                            style={{ fontFamily: FONT_GROTESK }}
+                          >
+                            {court.name}
+                          </p>
+                          <div
+                            className={`text-[10px] mt-1 flex items-center gap-1 ${
+                              selected ? "text-white/60" : "text-neutral-400"
+                            }`}
                             style={{ fontFamily: FONT_MONO }}
                           >
-                            bokad
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {selectedCourts.length > 0 && (
-                <p
-                  className="text-[11px] text-neutral-400 mt-2 text-right"
-                  style={{ fontFamily: FONT_MONO }}
-                >
-                  {selectedCourts.length}{" "}
-                  {selectedCourts.length === 1 ? sportCourtLabel : sportCourtPluralLabel} ·{" "}
-                  {hasMemberCourtPrice && <span className="line-through opacity-60">{baseTotalPrice} kr</span>}{" "}
-                  <span className={hasMemberCourtPrice ? "text-emerald-600" : undefined}>{totalPrice} kr</span>
-                </p>
+                            {hasDiscount && (
+                              <span className="line-through opacity-60">{basePrice} kr/h</span>
+                            )}
+                            <span className={hasDiscount ? (selected ? "text-emerald-200" : "text-emerald-600") : undefined}>
+                              {memberPrice} kr/h
+                            </span>
+                          </div>
+                          {!available && (
+                            <span
+                              className="text-[8px] text-neutral-400 mt-0.5 block"
+                              style={{ fontFamily: FONT_MONO }}
+                            >
+                              bokad
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )
               )}
             </div>
           )}
@@ -885,42 +905,6 @@ export default function BookingPage() {
                 style={{ fontFamily: FONT_MONO }}
               >
                 hämtar dina uppgifter...
-              </div>
-            </div>
-          )}
-
-          {showContactSummary && (
-            <div>
-              <div className="h-px bg-neutral-100 mb-3" />
-              <div className="rounded-2xl bg-neutral-50 border border-neutral-100 px-3 py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p
-                    className="text-[10px] uppercase tracking-widest text-neutral-400"
-                    style={{ fontFamily: FONT_MONO }}
-                  >
-                    bokas som
-                  </p>
-                  <p
-                    className="text-[13px] font-bold text-neutral-900 truncate mt-0.5"
-                    style={{ fontFamily: FONT_GROTESK }}
-                  >
-                    {name}
-                  </p>
-                  <p
-                    className="text-[11px] text-neutral-400 truncate"
-                    style={{ fontFamily: FONT_MONO }}
-                  >
-                    {phone}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setEditingContact(true)}
-                  className="shrink-0 rounded-full bg-white border border-neutral-200 px-3 py-1.5 text-[10px] font-bold text-neutral-500"
-                  style={{ fontFamily: FONT_MONO }}
-                >
-                  ändra
-                </button>
               </div>
             </div>
           )}
@@ -1023,37 +1007,48 @@ export default function BookingPage() {
           )}
 
           {/* Summary + Book button */}
-          {selectedCourts.length > 0 && name.trim() && phone.trim() && (
-            <div>
-              <div className="h-px bg-neutral-100 mb-3" />
-              <div className="flex items-center justify-between text-[12px] mb-3" style={{ fontFamily: FONT_MONO }}>
-                <span className="text-neutral-400">
-                  {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{selectedEndTime} · {selectedCourtObjects.map((court) => court.name).join(", ")}
-                </span>
-                <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                  {useCorporate ? "0 kr" : `${totalPrice} kr`}
-                </span>
-              </div>
-              {!useCorporate && hasMemberCourtPrice && (
-                <p className="text-[11px] text-emerald-600 -mt-2 mb-3 text-right" style={{ fontFamily: FONT_MONO }}>
-                  medlemspris · ord. {baseTotalPrice} kr
-                </p>
-              )}
+	          {selectedCourts.length > 0 && name.trim() && phone.trim() && (
+	            <div className="fixed left-0 right-0 bottom-[64px] z-30 px-4 pb-[env(safe-area-inset-bottom,0px)]">
+	              <div className="mx-auto max-w-md rounded-[28px] bg-white/95 p-3 shadow-[0_-12px_40px_rgba(15,23,42,0.12)] backdrop-blur">
+	                <div className="flex items-center justify-between text-[12px] mb-3" style={{ fontFamily: FONT_MONO }}>
+	                  <span className="text-neutral-400">
+	                    {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{selectedEndTime} · {selectedCourtNames}
+	                  </span>
+	                  <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
+	                    {useCorporate ? "0 kr" : `${totalPrice} kr`}
+	                  </span>
+	                </div>
+	                {!useCorporate && hasMemberCourtPrice && (
+	                  <p className="text-[11px] text-emerald-600 -mt-2 mb-3 text-right" style={{ fontFamily: FONT_MONO }}>
+	                    medlemspris · ord. {baseTotalPrice} kr
+	                  </p>
+	                )}
+	                {showContactSummary && (
+	                  <button
+	                    type="button"
+	                    onClick={() => setEditingContact(true)}
+	                    className="w-full text-left text-[10px] text-neutral-400 mb-2"
+	                    style={{ fontFamily: FONT_MONO }}
+	                  >
+	                    bokas som {name} · ändra
+	                  </button>
+	                )}
 
-              <button
-                type="submit"
-                disabled={bookMutation.isPending}
-                className="w-full py-3 rounded-xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                {bookMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-                ) : (
-                  "boka"
-                )}
-              </button>
-            </div>
-          )}
+	                <button
+	                  type="submit"
+	                  disabled={bookMutation.isPending}
+	                  className="w-full py-3 rounded-xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40"
+	                  style={{ fontFamily: FONT_MONO }}
+	                >
+	                  {bookMutation.isPending ? (
+	                    <Loader2 className="w-4 h-4 animate-spin mx-auto" />
+	                  ) : (
+	                    "fortsätt"
+	                  )}
+	                </button>
+	              </div>
+	            </div>
+	          )}
         </form>
       )}
       <PlayerNav />
