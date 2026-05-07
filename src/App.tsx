@@ -84,6 +84,7 @@ const App = () => (
             <Route path="/b/:ref" element={<BookingConfirmation />} />
             <Route path="/booking/confirmed" element={<BookingConfirmed />} />
             <Route path="/booking-chat/:bookingRef" element={<HubPage />} />
+            <Route path="/chat/:roomId" element={<HubPage />} />
             <Route path="/pass/:token" element={<ClaimPassPage />} />
             <Route path="/corp/join" element={<CorporateJoinPage />} />
             <Route path="/corp/register" element={<CorporateRegisterPage />} />

@@ -1926,10 +1926,10 @@ function HubList({
           <div style={{ textAlign: "center" }}>
             <div style={{ width: 34, height: 34, borderRadius: "50%", border: `3px solid ${HUB_BORDER}`, borderTopColor: HUB_NAVY, margin: "0 auto 14px", animation: "spin 0.8s linear infinite" }} />
             <p style={{ fontFamily: FONT_HEADING, fontSize: 16, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
-              Öppnar bokningschatten
+              Öppnar chatten
             </p>
             <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_MUTED, margin: "5px 0 0" }}>
-              Aktivitet → chat, utan omväg.
+              Aktivitet → tråd, utan omväg.
             </p>
           </div>
         </div>
@@ -2301,11 +2301,13 @@ function SkeletonCard() {
 const HubPage = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { bookingRef } = useParams<{ bookingRef?: string }>();
+  const { bookingRef, roomId } = useParams<{ bookingRef?: string; roomId?: string }>();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const joinRoomId = searchParams.get("join");
+  const directRoomId = roomId || null;
   const bookingRoomRef = bookingRef || searchParams.get("booking") || searchParams.get("room");
-  const isDirectBookingRoute = !!bookingRef;
+  const isDirectChatRoute = !!bookingRef || !!directRoomId;
+  const directChatMode = !!bookingRoomRef || !!directRoomId;
   const { user } = useAuth();
 
   const { data: venue } = useVenue(slug);
@@ -2338,7 +2340,14 @@ const HubPage = () => {
     supabase.rpc("join_chat_room", { p_room_id: joinRoomId }).then(({ data }) => {
       if (data?.[0]) openRoom(data[0] as ChatRoom);
     });
-  }, [joinRoomId, user?.id]);
+  }, [joinRoomId, user?.id, activeRoom, openRoom]);
+
+  useEffect(() => {
+    if (!directRoomId || !user?.id || activeRoom) return;
+    supabase.rpc("join_chat_room", { p_room_id: directRoomId }).then(({ data }) => {
+      if (data?.[0]) openRoom(data[0] as ChatRoom);
+    });
+  }, [directRoomId, user?.id, activeRoom, openRoom]);
 
   // #8 — skeleton instead of spinner while venue loads
   if (!venueId) {
@@ -2367,7 +2376,7 @@ const HubPage = () => {
         dailyRoom={dailyRoom}
         botData={botData}
         autoOpenBookingRef={bookingRoomRef}
-        directBookingMode={!!bookingRoomRef}
+        directBookingMode={directChatMode}
         bookings={bookings}
         events={events}
         onSelectRoom={async (room) => {
@@ -2400,8 +2409,8 @@ const HubPage = () => {
         >
           <ChatRoom
             room={activeRoom}
-            venueId={venueId}
-            onBack={isDirectBookingRoute ? () => navigate(`/activity?v=${slug}`) : closeRoom}
+            venueId={activeRoom.venue_id || venueId}
+            onBack={isDirectChatRoute ? () => navigate(`/activity?v=${slug}`) : closeRoom}
           />
         </motion.div>
       )}

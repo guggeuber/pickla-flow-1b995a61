@@ -168,10 +168,7 @@ function getEventDateTime(event?: MyEventSummary | null, end = false) {
 }
 
 function getThreadPath(room: ActivityThreadRoom) {
-  if (room.room_type === "booking" && room.resource_id) {
-    return `/booking-chat/${encodeURIComponent(room.resource_id)}`;
-  }
-  return `/hub?join=${room.id}`;
+  return `/chat/${encodeURIComponent(room.id)}`;
 }
 
 function getThreadTypeLabel(room: ActivityThreadRoom) {
