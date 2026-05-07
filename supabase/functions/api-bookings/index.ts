@@ -264,9 +264,9 @@ Deno.serve(async (req) => {
 
         let courtIds: string[];
         try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
+        const accessCode = await generateAccessCode(adminFree, venue_id, meta.date);
 
         for (const courtId of courtIds) {
-          const accessCode = await generateAccessCode(adminFree, venue_id, meta.date);
           await adminFree.from('bookings').insert({
             venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
             start_time: startISO, end_time: endISO, total_price: 0,
@@ -647,6 +647,7 @@ Deno.serve(async (req) => {
 
     const bookings = [];
     let totalHoursBooked = 0;
+    const sharedAccessCode = await generateAccessCode(admin, venue.id, date);
     for (const courtId of courtIds) {
       const { data: court } = await admin.from('venue_courts')
         .select('hourly_rate, sport_type, court_type').eq('id', courtId).single();
@@ -666,7 +667,6 @@ Deno.serve(async (req) => {
       }
 
       const price = validCorporatePackageId ? 0 : Math.round(hourlyRate * durationHours);
-      const accessCode = await generateAccessCode(admin, venue.id, date);
 
       const { data: booking, error: bErr } = await admin.from('bookings').insert({
         venue_id: venue.id,
@@ -679,7 +679,7 @@ Deno.serve(async (req) => {
         status: 'confirmed',
         notes: `${safeName} | ${safePhone}`,
         corporate_package_id: validCorporatePackageId,
-        access_code: accessCode,
+        access_code: sharedAccessCode,
         access_code_expires_at: endISO,
       }).select().single();
 

@@ -18,6 +18,7 @@ export async function generateAccessCode(
       .eq('access_code', code)
       .gte('start_time', `${bookingDate}T00:00:00.000Z`)
       .lte('start_time', `${bookingDate}T23:59:59.999Z`)
+      .limit(1)
       .maybeSingle();
     if (!data) return code;
   }

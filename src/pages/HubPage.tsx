@@ -1252,6 +1252,11 @@ function BookingSmartPanel({
           <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
             {isLoading ? "Hämtar bokningen..." : [dateLabel, timeLabel].filter(Boolean).join(" · ") || room.subtitle}
           </p>
+          {booking && (
+            <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_MUTED, margin: "5px 0 0", lineHeight: 1.35 }}>
+              {courtNames}
+            </p>
+          )}
         </div>
         <span
           style={{
@@ -1901,7 +1906,6 @@ function HubList({
 
   const openBookingRoom = useCallback(async (booking: any) => {
     const courtName = getBookingCourtLabel(booking);
-    const accessCodes = getBookingAccessCodes(booking);
     const resourceId = getBookingChatResourceId(booking);
     const time = DateTime.fromISO(booking.start_time, { zone: "utc" })
       .setZone("Europe/Stockholm")
@@ -1909,8 +1913,8 @@ function HubList({
     const date = DateTime.fromISO(booking.start_time, { zone: "utc" })
       .setZone("Europe/Stockholm")
       .toFormat("d MMM");
-    const codeLabel = accessCodes.length > 1 ? `Koder: ${accessCodes.join(", ")}` : `Kod: ${accessCodes[0] || "—"}`;
-    const subtitle = `${date} · ${time} · ${codeLabel}`;
+    const courtNames = getBookingCourtNamesLabel(booking);
+    const subtitle = `${date} · ${time} · ${courtNames}`;
 
     const { data } = await supabase.rpc("upsert_resource_chat_room", {
       p_venue_id: venueId,

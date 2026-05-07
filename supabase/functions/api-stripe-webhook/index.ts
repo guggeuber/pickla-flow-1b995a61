@@ -110,6 +110,15 @@ async function handleCourtBooking(
   const totalSek = Math.round((session.amount_total || 0) / 100);
   const pricePerCourt = Math.round(totalSek / courtIds.length);
   const notes = [name, phone].filter(Boolean).join(' | ');
+  const { data: existingSessionBooking } = await serviceClient
+    .from('bookings')
+    .select('access_code')
+    .eq('stripe_session_id', session.id)
+    .not('access_code', 'is', null)
+    .limit(1)
+    .maybeSingle();
+  const sharedAccessCode = existingSessionBooking?.access_code ||
+    (await generateAccessCode(serviceClient, venue_id, date));
 
   for (const courtId of courtIds) {
     // Idempotency: skip if already created for this session + court
@@ -121,8 +130,6 @@ async function handleCourtBooking(
       .maybeSingle();
     if (existing) continue;
 
-    const accessCode = await generateAccessCode(serviceClient, venue_id, date);
-
     const { error } = await serviceClient.from('bookings').insert({
       venue_id,
       venue_court_id:         courtId,
@@ -133,7 +140,7 @@ async function handleCourtBooking(
       total_price:            pricePerCourt,
       status:                 'confirmed',
       notes:                  notes || null,
-      access_code:            accessCode,
+      access_code:            sharedAccessCode,
       access_code_expires_at: endISO,
       stripe_session_id:      session.id,
     });

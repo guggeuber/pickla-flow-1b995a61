@@ -25,16 +25,21 @@ Deno.serve(async (req) => {
       // Current time in Europe/Stockholm — used for all time comparisons
       const nowSthlm = DateTime.now().setZone('Europe/Stockholm');
       const todaySthlm = nowSthlm.toISODate(); // YYYY-MM-DD in Stockholm
+      const todayStartUtc = nowSthlm.startOf('day').toUTC().toISO()!;
+      const todayEndUtc = nowSthlm.endOf('day').toUTC().toISO()!;
 
-      const { data: booking, error: bErr } = await serviceClient
+      const { data: bookings, error: bErr } = await serviceClient
         .from('bookings')
         .select('id, user_id, venue_id, start_time, end_time, status, booking_ref, notes, venue_courts(name, court_number)')
         .eq('venue_id', venue_id)
         .eq('access_code', safeCode)
         .eq('status', 'confirmed')
-        .maybeSingle();
+        .gte('start_time', todayStartUtc)
+        .lte('start_time', todayEndUtc)
+        .order('start_time', { ascending: true });
 
-      if (bErr || !booking) return errorResponse('Ogiltig eller utgången kod', 404);
+      if (bErr || !bookings?.length) return errorResponse('Ogiltig eller utgången kod', 404);
+      const booking = bookings[0];
 
       // ── Time-window validation ──────────────────────────────────────────────
       const startSthlm = DateTime.fromISO(booking.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
@@ -58,17 +63,18 @@ Deno.serve(async (req) => {
       }
       // ──────────────────────────────────────────────────────────────────────
 
-      const { data: checkin, error: cErr } = await serviceClient
+      const checkinRows = bookings.map((b: any) => ({
+        venue_id,
+        user_id: b.user_id || null,
+        entry_type: 'booking_code',
+        entitlement_id: b.id,
+        session_date: todaySthlm,
+      }));
+
+      const { data: checkins, error: cErr } = await serviceClient
         .from('venue_checkins')
-        .insert({
-          venue_id,
-          user_id: booking.user_id || null,
-          entry_type: 'booking_code',
-          entitlement_id: booking.id,
-          session_date: todaySthlm,
-        })
-        .select()
-        .single();
+        .insert(checkinRows)
+        .select();
 
       if (cErr) return errorResponse(cErr.message);
 
@@ -76,13 +82,15 @@ Deno.serve(async (req) => {
       const customerName = ((booking as any).notes || '').split(' | ')[0].trim();
 
       return jsonResponse({
-        checkin,
+        checkin: checkins?.[0] || null,
+        checkins: checkins || [],
         booking: {
           id: booking.id,
           booking_ref: (booking as any).booking_ref,
           start_time: booking.start_time,
           end_time: booking.end_time,
           court: (booking as any).venue_courts,
+          courts: bookings.map((b: any) => b.venue_courts).filter(Boolean),
           customer_name: customerName || null,
         },
       }, 201);

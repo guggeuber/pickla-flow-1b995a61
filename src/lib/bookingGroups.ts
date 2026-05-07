@@ -87,9 +87,14 @@ export function getBookingCourtNamesLabel(booking: any): string {
 }
 
 export function getBookingAccessCodes(booking: any): string[] {
-  if (booking?.access_codes?.length) return booking.access_codes;
-  if (booking?.bookings?.length) return booking.bookings.map((b: any) => b.access_code).filter(Boolean);
-  return booking?.access_code ? [booking.access_code] : [];
+  const codes = booking?.access_codes?.length
+    ? booking.access_codes
+    : booking?.bookings?.length
+    ? booking.bookings.map((b: any) => b.access_code).filter(Boolean)
+    : booking?.access_code
+    ? [booking.access_code]
+    : [];
+  return codes.length ? [codes[0]] : [];
 }
 
 export function getBookingIds(booking: any): string[] {
