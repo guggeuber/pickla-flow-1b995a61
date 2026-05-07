@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, CheckCircle2, Clock, MapPin, Building2 } from "lucide-react";
+import { ArrowLeft, Loader2, CheckCircle2, MapPin, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
@@ -37,9 +37,16 @@ function generateTimeSlots(openTime?: string, closeTime?: string) {
   return slots;
 }
 
-function addHour(time: string): string {
-  const h = parseInt(time.slice(0, 2)) + 1;
-  return `${String(h).padStart(2, "0")}:00`;
+function timeToMinutes(time: string): number {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function addMinutesToTime(time: string, minutesToAdd: number): string {
+  const totalMinutes = timeToMinutes(time) + minutesToAdd;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 interface CourtData {
@@ -100,10 +107,12 @@ export default function BookingPage() {
     DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate()
   );
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [selectedDuration, setSelectedDuration] = useState(60);
   const [selectedCourts, setSelectedCourts] = useState<string[]>([]);
   const [sportFilter, setSportFilter] = useState<SportFilter>(requestedSport);
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
+  const [editingContact, setEditingContact] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [useCorporate, setUseCorporate] = useState(false);
@@ -141,6 +150,8 @@ export default function BookingPage() {
 
   const dateStr = format(selectedDate, "yyyy-MM-dd");
   const todayStr = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
+  const durationHours = selectedDuration / 60;
+  const selectedEndTime = selectedTime ? addMinutesToTime(selectedTime, selectedDuration) : null;
 
   // Guard: if selectedDate is somehow in the past, snap to today
   useEffect(() => {
@@ -249,13 +260,19 @@ export default function BookingPage() {
 
   // For today: filter out time slots whose start time has already passed
   const filteredTimeSlots = useMemo(() => {
-    if (dateStr !== todayStr) return timeSlots;
+    const closeTime = openingHours?.close_time ? openingHours.close_time.slice(0, 5) : null;
+    const durationFits = (slot: string) =>
+      !closeTime || timeToMinutes(slot) + selectedDuration <= timeToMinutes(closeTime);
+
+    const slotsWithinHours = timeSlots.filter(durationFits);
+    if (dateStr !== todayStr) return slotsWithinHours;
+
     const now = DateTime.now().setZone("Europe/Stockholm");
-    return timeSlots.filter((slot) => {
+    return slotsWithinHours.filter((slot) => {
       const slotStart = DateTime.fromISO(`${dateStr}T${slot}:00`, { zone: "Europe/Stockholm" });
       return slotStart > now;
     });
-  }, [timeSlots, dateStr, todayStr]);
+  }, [timeSlots, dateStr, todayStr, selectedDuration, openingHours?.close_time]);
 
   // When date changes: auto-select first available slot
   useEffect(() => {
@@ -279,7 +296,7 @@ export default function BookingPage() {
   const courtAvailability = useMemo(() => {
     if (!selectedTime) return {};
     const startISO = DateTime.fromISO(`${dateStr}T${selectedTime}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
-    const endISO = DateTime.fromISO(`${dateStr}T${addHour(selectedTime)}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
+    const endISO = DateTime.fromISO(`${dateStr}T${addMinutesToTime(selectedTime, selectedDuration)}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
     const startMs = new Date(startISO).getTime();
     const endMs = new Date(endISO).getTime();
 
@@ -294,7 +311,7 @@ export default function BookingPage() {
       avail[c.id] = !isBooked;
     });
     return avail;
-  }, [courts, existingBookings, selectedTime, dateStr]);
+  }, [courts, existingBookings, selectedTime, selectedDuration, dateStr]);
 
   const sportCourts = useMemo(
     () => courts.filter((court) => (court.sport_type || "pickleball") === sportFilter),
@@ -323,6 +340,11 @@ export default function BookingPage() {
   const sportCourtPluralLabel = sportFilter === "dart" ? "dartbord" : "banor";
   const sportTitle = sportFilter === "dart" ? "boka dart" : "boka pickleball";
   const sportSectionLabel = sportFilter === "dart" ? "välj dartbord" : "välj bana";
+  const firstAvailableCourt = availableSportCourts[0] || null;
+  const hasContactDetails = Boolean(name.trim() && phone.trim());
+  const showProfileLoading = selectedCourts.length > 0 && !!user && !profileLoaded;
+  const showContactFields = selectedCourts.length > 0 && !showProfileLoading && (!user || !hasContactDetails || editingContact);
+  const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && hasContactDetails && !editingContact;
 
   const switchSport = (sport: SportFilter) => {
     if (sport === sportFilter) return;
@@ -340,9 +362,8 @@ export default function BookingPage() {
   };
 
   const selectFirstAvailableCourt = () => {
-    const firstAvailable = availableSportCourts[0];
-    if (firstAvailable) {
-      setSelectedCourts([firstAvailable.id]);
+    if (firstAvailableCourt) {
+      setSelectedCourts([firstAvailableCourt.id]);
     }
   };
 
@@ -357,16 +378,16 @@ export default function BookingPage() {
   const baseTotalPrice = useMemo(() => {
     return selectedCourts.reduce((sum, id) => {
       const court = courts.find((c) => c.id === id);
-      return sum + (court ? getCourtPrice(court) : 0);
+      return sum + (court ? Math.round(getCourtPrice(court) * durationHours) : 0);
     }, 0);
-  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate]);
+  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, durationHours]);
 
   const totalPrice = useMemo(() => {
     return selectedCourts.reduce((sum, id) => {
       const court = courts.find((c) => c.id === id);
-      return sum + (court ? getMemberCourtPrice(court) : 0);
+      return sum + (court ? Math.round(getMemberCourtPrice(court) * durationHours) : 0);
     }, 0);
-  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, courtPricing]);
+  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, courtPricing, durationHours]);
 
   const hasMemberCourtPrice = totalPrice < baseTotalPrice;
 
@@ -389,7 +410,7 @@ export default function BookingPage() {
             courtIds: selectedCourts,
             date: dateStr,
             startTime: selectedTime,
-            endTime: addHour(selectedTime!),
+            endTime: selectedEndTime,
             name: name.trim(),
             phone: phone.trim(),
             corporatePackageId: useCorporate ? selectedPackageId : undefined,
@@ -416,8 +437,8 @@ export default function BookingPage() {
           court_ids:      JSON.stringify(selectedCourts),
           date:           dateStr,
           start_time:     selectedTime!,
-          end_time:       addHour(selectedTime!),
-          duration_hours: "1",
+          end_time:       selectedEndTime!,
+          duration_hours: String(durationHours),
           name:           name.trim(),
           phone:          phone.trim(),
           user_id:        user?.id || "",
@@ -452,7 +473,7 @@ export default function BookingPage() {
 
   const handleBook = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim() || !selectedTime || !selectedCourts.length) return;
+    if (!name.trim() || !phone.trim() || !selectedTime || !selectedEndTime || !selectedCourts.length) return;
     bookMutation.mutate();
   };
 
@@ -517,15 +538,17 @@ export default function BookingPage() {
             style={{ fontFamily: FONT_MONO }}
           >
             {selectedCourts.length} {selectedCourts.length === 1 ? sportCourtLabel : sportCourtPluralLabel} ·{" "}
-            {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}
+            {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{selectedEndTime}
           </p>
           <button
             onClick={() => {
               setConfirmed(false);
               setSelectedCourts([]);
               setSelectedTime(null);
-              setName("");
-              setPhone("");
+              if (!user) {
+                setName("");
+                setPhone("");
+              }
             }}
             className="mt-4 text-[12px] text-neutral-500 underline underline-offset-4"
             style={{ fontFamily: FONT_MONO }}
@@ -692,6 +715,41 @@ export default function BookingPage() {
             </div>
           )}
 
+          {/* Duration picker */}
+          {!isClosed && filteredTimeSlots.length > 0 && (
+            <div>
+              <h2
+                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
+                style={{ fontFamily: FONT_MONO }}
+              >
+                längd
+              </h2>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[60, 90, 120].map((duration) => {
+                  const selected = selectedDuration === duration;
+                  return (
+                    <button
+                      key={duration}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDuration(duration);
+                        setSelectedCourts([]);
+                      }}
+                      className={`py-2.5 rounded-xl text-[12px] font-bold transition-colors ${
+                        selected
+                          ? "bg-neutral-900 text-white"
+                          : "bg-neutral-50 text-neutral-500"
+                      }`}
+                      style={{ fontFamily: FONT_MONO }}
+                    >
+                      {duration} min
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Court selection */}
           {selectedTime && !isClosed && (
             <div>
@@ -702,17 +760,47 @@ export default function BookingPage() {
                 >
                   {sportSectionLabel}
                 </h2>
-                {availableSportCourts.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={selectFirstAvailableCourt}
-                    className="text-[10px] text-neutral-500 bg-neutral-50 rounded-full px-3 py-1.5 active:scale-[0.98] transition-transform"
-                    style={{ fontFamily: FONT_MONO }}
-                  >
-                    första lediga
-                  </button>
-                )}
               </div>
+              {firstAvailableCourt && selectedEndTime && (
+                <button
+                  type="button"
+                  onClick={selectFirstAvailableCourt}
+                  className={`w-full mb-2 rounded-2xl p-3 text-left border transition-all active:scale-[0.99] ${
+                    selectedCourts.length === 1 && selectedCourts[0] === firstAvailableCourt.id
+                      ? "bg-neutral-900 text-white border-neutral-900"
+                      : "bg-neutral-50 text-neutral-900 border-neutral-100"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p
+                        className="text-[10px] uppercase tracking-widest text-current opacity-45"
+                        style={{ fontFamily: FONT_MONO }}
+                      >
+                        snabbval
+                      </p>
+                      <p
+                        className="text-[15px] font-bold leading-tight mt-1"
+                        style={{ fontFamily: FONT_GROTESK }}
+                      >
+                        Första lediga {sportCourtLabel}
+                      </p>
+                      <p
+                        className="text-[11px] text-current opacity-55 mt-1 truncate"
+                        style={{ fontFamily: FONT_MONO }}
+                      >
+                        {firstAvailableCourt.name} · {selectedTime}–{selectedEndTime} · {selectedDuration} min
+                      </p>
+                    </div>
+                    <span
+                      className="text-[14px] font-bold whitespace-nowrap"
+                      style={{ fontFamily: FONT_GROTESK }}
+                    >
+                      {Math.round(getMemberCourtPrice(firstAvailableCourt) * durationHours)} kr
+                    </span>
+                  </div>
+                </button>
+              )}
               {sportCourts.length === 0 ? (
                 <p
                   className="text-[13px] text-neutral-400 text-center py-4"
@@ -789,14 +877,62 @@ export default function BookingPage() {
           )}
 
           {/* Contact info */}
-          {selectedCourts.length > 0 && (
+          {showProfileLoading && (
+            <div>
+              <div className="h-px bg-neutral-100 mb-3" />
+              <div
+                className="rounded-2xl bg-neutral-50 border border-neutral-100 px-3 py-3 text-[11px] text-neutral-400"
+                style={{ fontFamily: FONT_MONO }}
+              >
+                hämtar dina uppgifter...
+              </div>
+            </div>
+          )}
+
+          {showContactSummary && (
+            <div>
+              <div className="h-px bg-neutral-100 mb-3" />
+              <div className="rounded-2xl bg-neutral-50 border border-neutral-100 px-3 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p
+                    className="text-[10px] uppercase tracking-widest text-neutral-400"
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    bokas som
+                  </p>
+                  <p
+                    className="text-[13px] font-bold text-neutral-900 truncate mt-0.5"
+                    style={{ fontFamily: FONT_GROTESK }}
+                  >
+                    {name}
+                  </p>
+                  <p
+                    className="text-[11px] text-neutral-400 truncate"
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    {phone}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingContact(true)}
+                  className="shrink-0 rounded-full bg-white border border-neutral-200 px-3 py-1.5 text-[10px] font-bold text-neutral-500"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  ändra
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showContactFields && (
             <div>
               <div className="h-px bg-neutral-100 mb-4" />
               <h2
                 className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
                 style={{ fontFamily: FONT_MONO }}
               >
-                dina uppgifter
+                {user ? "komplettera profil" : "dina uppgifter"}
               </h2>
               <div className="flex gap-2">
                 <input
@@ -819,6 +955,14 @@ export default function BookingPage() {
                   style={{ fontFamily: FONT_MONO }}
                 />
               </div>
+              {user && (
+                <p
+                  className="text-[10px] text-neutral-400 mt-2"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  vi använder detta på bokningen och kvittot
+                </p>
+              )}
             </div>
           )}
 
@@ -884,7 +1028,7 @@ export default function BookingPage() {
               <div className="h-px bg-neutral-100 mb-3" />
               <div className="flex items-center justify-between text-[12px] mb-3" style={{ fontFamily: FONT_MONO }}>
                 <span className="text-neutral-400">
-                  {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{addHour(selectedTime!)} · {selectedCourtObjects.map((court) => court.name).join(", ")}
+                  {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{selectedEndTime} · {selectedCourtObjects.map((court) => court.name).join(", ")}
                 </span>
                 <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
                   {useCorporate ? "0 kr" : `${totalPrice} kr`}
