@@ -1,15 +1,29 @@
 /// <reference lib="webworker" />
-import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
-import { registerRoute } from 'workbox-routing';
+import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
+import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { NetworkFirst } from 'workbox-strategies';
 
 declare const self: ServiceWorkerGlobalScope;
+
+type PushPayload = {
+  aps?: {
+    alert?: {
+      title?: string;
+      body?: string;
+    };
+  };
+  title?: string;
+  body?: string;
+  url?: string;
+};
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
+
+registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')));
 
 registerRoute(
   ({ url }: { url: URL }) =>
@@ -20,7 +34,7 @@ registerRoute(
 self.addEventListener('push', (event: PushEvent) => {
   if (!event.data) return;
 
-  let data: Record<string, any> = {};
+  let data: PushPayload = {};
   try { data = event.data.json(); } catch { data = {}; }
 
   // Support both APNs format {"aps":{"alert":{...}}} and flat {"title":...,"body":...}

@@ -342,13 +342,6 @@ export default function BookingPage() {
   const sportTitle = sportFilter === "dart" ? "boka dart" : "boka pickleball";
   const heroTitle = sportFilter === "dart" ? "när vill du kasta?" : "när vill du spela?";
   const firstAvailableCourt = availableSportCourts[0] || null;
-  const bookingName = name.trim() || user?.email?.split("@")[0] || "";
-  const bookingPhone = phone.trim();
-  const needsPhoneForDirectBooking = !user || useCorporate || baseTotalPrice === 0;
-  const hasContactDetails = Boolean(bookingName && (!needsPhoneForDirectBooking || bookingPhone));
-  const showProfileLoading = selectedCourts.length > 0 && !!user && !profileLoaded;
-  const showContactFields = selectedCourts.length > 0 && !showProfileLoading && (!user || !hasContactDetails || editingContact);
-  const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && Boolean(bookingName) && !editingContact;
 
   const switchSport = (sport: SportFilter) => {
     if (sport === sportFilter) return;
@@ -397,6 +390,13 @@ export default function BookingPage() {
 
   const hasMemberCourtPrice = totalPrice < baseTotalPrice;
   const selectedCourtNames = selectedCourtObjects.map((court) => court.name).join(", ");
+  const bookingName = name.trim() || user?.email?.split("@")[0] || "";
+  const bookingPhone = phone.trim();
+  const needsPhoneForDirectBooking = !user || useCorporate || baseTotalPrice === 0;
+  const hasContactDetails = Boolean(bookingName && (!needsPhoneForDirectBooking || bookingPhone));
+  const showProfileLoading = selectedCourts.length > 0 && !!user && !profileLoaded;
+  const showContactFields = selectedCourts.length > 0 && !showProfileLoading && (!user || !hasContactDetails || editingContact);
+  const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && Boolean(bookingName) && !editingContact;
 
   const bookMutation = useMutation({
     mutationFn: async () => {
@@ -489,25 +489,25 @@ export default function BookingPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#2438ff] flex items-center justify-center">
-        <Loader2 className="w-5 h-5 animate-spin text-white/70" />
+      <div className="min-h-screen bg-[#f7f4ee] flex items-center justify-center">
+        <Loader2 className="w-5 h-5 animate-spin text-neutral-500" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#2438ff] pb-16 text-[#0f0f0f]">
+    <div className="min-h-screen bg-[#f7f4ee] pb-16 text-[#111]">
       {confirmed ? (
-        <div className="flex flex-col items-center gap-4 py-16 px-5 text-white">
-          <CheckCircle2 className="w-12 h-12 text-white" />
+        <div className="flex flex-col items-center gap-4 py-16 px-5 text-neutral-950">
+          <CheckCircle2 className="w-12 h-12 text-emerald-500" />
           <p
-            className="text-white font-bold text-lg"
+            className="text-neutral-950 font-bold text-lg"
             style={{ fontFamily: FONT_GROTESK }}
           >
             bokad!
           </p>
           <p
-            className="text-[12px] text-white/60 text-center"
+            className="text-[12px] text-neutral-500 text-center"
             style={{ fontFamily: FONT_MONO }}
           >
             {selectedCourts.length} {selectedCourts.length === 1 ? sportCourtLabel : sportCourtPluralLabel} ·{" "}
@@ -523,30 +523,30 @@ export default function BookingPage() {
                 setPhone("");
               }
             }}
-            className="mt-4 text-[12px] text-white/70 underline underline-offset-4"
+            className="mt-4 text-[12px] text-neutral-500 underline underline-offset-4"
             style={{ fontFamily: FONT_MONO }}
           >
             boka igen
           </button>
         </div>
       ) : (
-        <form onSubmit={handleBook} className="px-4 pt-[calc(env(safe-area-inset-top,0px)+26px)] py-4 pb-40 space-y-5">
+        <form onSubmit={handleBook} className="mx-auto max-w-md px-4 pt-[calc(env(safe-area-inset-top,0px)+34px)] py-4 pb-40 space-y-5">
           <div>
             <p
-              className="text-[11px] font-bold uppercase tracking-[0.38em] text-white/65"
+              className="text-[11px] font-bold uppercase tracking-[0.38em] text-neutral-400"
               style={{ fontFamily: FONT_MONO }}
             >
               boka bana
             </p>
             <h1
-              className="mt-6 text-[58px] sm:text-[72px] font-black italic leading-[0.9] tracking-[-0.08em] text-[#fffaf0]"
+              className="mt-5 text-[48px] sm:text-[60px] font-black italic leading-[0.92] tracking-[-0.08em] text-neutral-950"
               style={{ fontFamily: FONT_GROTESK }}
             >
               {heroTitle}
             </h1>
             {venueName && (
               <p
-                className="mt-4 text-[12px] text-white/55"
+                className="mt-4 text-[12px] text-neutral-400"
                 style={{ fontFamily: FONT_MONO }}
               >
                 {venueName}
@@ -556,7 +556,7 @@ export default function BookingPage() {
           {/* Sport picker */}
           <div>
 	            <h2
-	              className="text-[10px] font-bold text-white/55 uppercase tracking-widest mb-2"
+	              className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
               style={{ fontFamily: FONT_MONO }}
             >
               aktivitet
@@ -574,8 +574,8 @@ export default function BookingPage() {
                     onClick={() => switchSport(option.value)}
 	                    className={`rounded-2xl px-3 py-3 text-left border transition-all ${
 	                      active
-	                        ? "bg-[#fffaf0] text-[#111] border-[#fffaf0] shadow-sm"
-	                        : "bg-white/0 text-white/70 border-white/20 active:scale-[0.98]"
+	                        ? "bg-neutral-950 text-[#fffaf0] border-neutral-950 shadow-sm"
+	                        : "bg-white text-neutral-500 border-neutral-200 active:scale-[0.98]"
 	                    }`}
                   >
                     <span
@@ -585,7 +585,7 @@ export default function BookingPage() {
                       {option.label}
                     </span>
                     <span
-	                      className={`block text-[10px] mt-0.5 ${active ? "text-black/45" : "text-white/45"}`}
+	                      className={`block text-[10px] mt-0.5 ${active ? "text-white/55" : "text-neutral-400"}`}
                       style={{ fontFamily: FONT_MONO }}
                     >
                       {option.meta}
@@ -599,7 +599,7 @@ export default function BookingPage() {
           {/* Date picker */}
           <div>
 	            <h2
-	              className="text-[10px] font-bold text-white/55 uppercase tracking-widest mb-2"
+	              className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
               style={{ fontFamily: FONT_MONO }}
             >
               datum
@@ -623,13 +623,13 @@ export default function BookingPage() {
                     }}
 	                    className={`flex-shrink-0 w-[58px] py-2 rounded-2xl border flex flex-col items-center gap-0 transition-all ${
 	                      isSelected
-	                        ? "bg-[#111] text-[#fffaf0] border-[#111]"
-	                        : "bg-transparent text-white/70 border-white/20"
+	                        ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
+	                        : "bg-white text-neutral-500 border-neutral-200"
 	                    }`}
                   >
                     <span
                       className={`text-[8px] font-bold uppercase leading-tight ${
-	                        isSelected ? "text-white/60" : "text-white/45"
+	                        isSelected ? "text-white/60" : "text-neutral-400"
                       }`}
                       style={{ fontFamily: FONT_MONO }}
                     >
@@ -645,7 +645,7 @@ export default function BookingPage() {
                     </span>
                     <span
                       className={`text-[7px] font-medium leading-tight ${
-	                        isSelected ? "text-white/50" : "text-white/30"
+	                        isSelected ? "text-white/50" : "text-neutral-300"
                       }`}
                       style={{ fontFamily: FONT_MONO }}
                     >
@@ -661,7 +661,7 @@ export default function BookingPage() {
           {isClosed && (
 	            <div className="text-center py-6">
 	              <p
-	                className="text-[13px] text-white/55"
+	                className="text-[13px] text-neutral-400"
                 style={{ fontFamily: FONT_MONO }}
               >
                 stängt denna dag
@@ -673,14 +673,14 @@ export default function BookingPage() {
           {!isClosed && (
             <div>
 	              <h2
-	                className="text-[10px] font-bold text-white/55 uppercase tracking-widest mb-2"
+	                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
                 style={{ fontFamily: FONT_MONO }}
               >
                 tid
               </h2>
               {filteredTimeSlots.length === 0 ? (
                 <p
-	                  className="text-[13px] text-white/55 text-center py-4"
+	                  className="text-[13px] text-neutral-400 text-center py-4"
                   style={{ fontFamily: FONT_MONO }}
                 >
                   inga fler tider idag
@@ -697,8 +697,8 @@ export default function BookingPage() {
                       }}
 	                      className={`py-2 rounded-xl text-[12px] font-bold border transition-colors ${
 	                        selectedTime === time
-	                          ? "bg-[#fffaf0] text-[#111] border-[#fffaf0]"
-	                          : "bg-transparent text-white/70 border-white/20"
+	                          ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
+	                          : "bg-white text-neutral-500 border-neutral-200"
 	                      }`}
                       style={{ fontFamily: FONT_MONO }}
                     >
@@ -714,7 +714,7 @@ export default function BookingPage() {
           {!isClosed && filteredTimeSlots.length > 0 && (
             <div>
 	              <h2
-	                className="text-[10px] font-bold text-white/55 uppercase tracking-widest mb-2"
+	                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
                 style={{ fontFamily: FONT_MONO }}
               >
                 längd
@@ -733,8 +733,8 @@ export default function BookingPage() {
 	                      }}
 	                      className={`py-2.5 rounded-xl text-[12px] font-bold border transition-colors ${
 	                        selected
-	                          ? "bg-[#111] text-[#fffaf0] border-[#111]"
-	                          : "bg-transparent text-white/70 border-white/20"
+	                          ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
+	                          : "bg-white text-neutral-500 border-neutral-200"
 	                      }`}
                       style={{ fontFamily: FONT_MONO }}
                     >
@@ -750,7 +750,7 @@ export default function BookingPage() {
           {selectedTime && !isClosed && (
             <div className="space-y-2">
               <h2
-                className="text-[10px] font-bold text-white/55 uppercase tracking-widest"
+                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest"
                 style={{ fontFamily: FONT_MONO }}
               >
                 välj alternativ
@@ -762,8 +762,8 @@ export default function BookingPage() {
                   onClick={selectFirstAvailableCourt}
                   className={`w-full rounded-3xl p-4 text-left border transition-all active:scale-[0.99] ${
                     selectedCourts.length === 1 && selectedCourts[0] === firstAvailableCourt.id
-                      ? "bg-[#111] text-[#fffaf0] border-[#111]"
-                      : "bg-[#fffaf0] text-[#111] border-[#fffaf0] shadow-[0_10px_30px_rgba(15,23,42,0.10)]"
+                      ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
+                      : "bg-white text-[#111] border-neutral-200 shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-4">
@@ -796,8 +796,8 @@ export default function BookingPage() {
                 onClick={() => setShowCourtList((value) => !value)}
                 className={`w-full rounded-3xl p-4 text-left border transition-all active:scale-[0.99] ${
                   showCourtList || selectedCourts.length > 1
-                    ? "bg-[#111] text-[#fffaf0] border-[#111]"
-                    : "bg-[#fffaf0]/95 text-[#111] border-[#fffaf0]"
+                    ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
+                    : "bg-white text-[#111] border-neutral-200"
                 }`}
               >
                 <div className="flex items-center justify-between gap-4">
@@ -822,7 +822,7 @@ export default function BookingPage() {
               {showCourtList && (
                 sportCourts.length === 0 ? (
                   <p
-	                    className="text-[13px] text-white/55 text-center py-4"
+	                    className="text-[13px] text-neutral-400 text-center py-4"
                     style={{ fontFamily: FONT_MONO }}
                   >
                     inga {sportCourtLabel} upplagda
@@ -843,10 +843,10 @@ export default function BookingPage() {
                           onClick={() => available && toggleCourt(court.id)}
 	                          className={`relative min-h-[58px] px-3 py-2.5 rounded-xl border text-left transition-all ${
 	                            !available
-	                              ? "opacity-35 bg-transparent border-white/10 cursor-not-allowed"
+	                              ? "opacity-35 bg-white border-neutral-200 cursor-not-allowed"
 	                              : selected
-	                              ? "bg-[#111] text-[#fffaf0] border-[#111] shadow-sm"
-	                              : "bg-white/10 text-white/80 border-white/10 active:scale-[0.98]"
+	                              ? "bg-neutral-950 text-[#fffaf0] border-neutral-950 shadow-sm"
+	                              : "bg-white text-neutral-700 border-neutral-200 active:scale-[0.98]"
 	                          }`}
                         >
                           <p
@@ -857,7 +857,7 @@ export default function BookingPage() {
                           </p>
                           <div
                             className={`text-[10px] mt-1 flex items-center gap-1 ${
-	                              selected ? "text-white/60" : "text-white/45"
+	                              selected ? "text-white/60" : "text-neutral-400"
                             }`}
                             style={{ fontFamily: FONT_MONO }}
                           >
@@ -870,7 +870,7 @@ export default function BookingPage() {
                           </div>
                           {!available && (
                             <span
-	                              className="text-[8px] text-white/45 mt-0.5 block"
+	                              className="text-[8px] text-neutral-400 mt-0.5 block"
                               style={{ fontFamily: FONT_MONO }}
                             >
                               bokad
@@ -888,9 +888,9 @@ export default function BookingPage() {
           {/* Contact info */}
           {showProfileLoading && (
             <div>
-	              <div className="h-px bg-white/15 mb-3" />
+	              <div className="h-px bg-neutral-200 mb-3" />
 	              <div
-	                className="rounded-2xl bg-white/10 border border-white/10 px-3 py-3 text-[11px] text-white/55"
+	                className="rounded-2xl bg-white border border-neutral-200 px-3 py-3 text-[11px] text-neutral-400"
                 style={{ fontFamily: FONT_MONO }}
               >
                 hämtar dina uppgifter...
@@ -900,37 +900,37 @@ export default function BookingPage() {
 
           {showContactFields && (
             <div>
-	              <div className="h-px bg-white/15 mb-4" />
+	              <div className="h-px bg-neutral-200 mb-4" />
 	              <h2
-	                className="text-[10px] font-bold text-white/55 uppercase tracking-widest mb-2"
+	                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
                 style={{ fontFamily: FONT_MONO }}
               >
                 {user ? "komplettera profil" : "dina uppgifter"}
               </h2>
               <div className="flex gap-2">
                 <input
-                  placeholder="ditt namn"
+	                  placeholder="ditt namn"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
                   maxLength={100}
-	                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-[#fffaf0] border border-[#fffaf0] text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
+	                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
                   style={{ fontFamily: FONT_MONO }}
                 />
                 <input
                   type="tel"
-                  placeholder="telefon"
+	                  placeholder="telefon"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   required
                   maxLength={20}
-	                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-[#fffaf0] border border-[#fffaf0] text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
+	                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
                   style={{ fontFamily: FONT_MONO }}
                 />
               </div>
               {user && (
                 <p
-	                  className="text-[10px] text-white/45 mt-2"
+	                  className="text-[10px] text-neutral-400 mt-2"
                   style={{ fontFamily: FONT_MONO }}
                 >
                   vi använder detta på bokningen och kvittot
@@ -942,9 +942,9 @@ export default function BookingPage() {
           {/* Corporate payment option */}
           {selectedCourts.length > 0 && activePackages.length > 0 && (
             <div>
-              <div className="h-px bg-white/15 mb-6" />
+              <div className="h-px bg-neutral-200 mb-6" />
               <h2
-                className="text-[11px] font-bold text-white/55 uppercase tracking-widest mb-3"
+                className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-3"
                 style={{ fontFamily: FONT_MONO }}
               >
                 betalning
@@ -955,8 +955,8 @@ export default function BookingPage() {
                   onClick={() => { setUseCorporate(false); setSelectedPackageId(null); }}
                   className={`w-full py-3 px-4 rounded-2xl text-left text-[13px] font-medium transition-all ${
 	                    !useCorporate
-	                      ? "bg-[#111] text-[#fffaf0]"
-	                      : "bg-[#fffaf0] text-[#111]"
+	                      ? "bg-neutral-950 text-[#fffaf0]"
+	                      : "bg-white text-[#111] border border-neutral-200"
                   }`}
                   style={{ fontFamily: FONT_MONO }}
                 >
@@ -972,8 +972,8 @@ export default function BookingPage() {
                       onClick={() => { setUseCorporate(true); setSelectedPackageId(pkg.id); }}
                       className={`w-full py-3 px-4 rounded-2xl text-left flex items-center gap-3 transition-all ${
 	                        isSelected
-	                          ? "bg-[#111] text-[#fffaf0]"
-	                          : "bg-[#fffaf0] text-[#111]"
+	                          ? "bg-neutral-950 text-[#fffaf0]"
+	                          : "bg-white text-[#111] border border-neutral-200"
                       }`}
                     >
 	                      <Building2 className={`w-4 h-4 flex-shrink-0 ${isSelected ? "text-white/60" : "text-black/35"}`} />
