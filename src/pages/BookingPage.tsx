@@ -18,6 +18,8 @@ const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
+type SportFilter = "pickleball" | "dart";
+
 function generateDates(count = 14) {
   const dates: Date[] = [];
   const today = DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate();
@@ -49,17 +51,57 @@ interface CourtData {
   hourly_rate: number | null;
 }
 
+interface ExistingBooking {
+  court_id: string;
+  start: string;
+  end: string;
+}
+
+interface PricingRule {
+  type: string;
+  days_of_week?: number[] | null;
+  sport_type?: string | null;
+  court_type?: string | null;
+  time_from?: string | null;
+  time_to?: string | null;
+  price: number;
+}
+
+interface TierPricing {
+  product_type: string;
+  fixed_price?: number | string | null;
+  discount_percent?: number | string | null;
+}
+
+interface CorporatePackage {
+  id: string;
+  status: string;
+  total_hours: number;
+  used_hours: number;
+  corporate_account_id: string;
+  company_name?: string;
+}
+
+interface CorporateMembership {
+  corporate_accounts?: {
+    id: string;
+    company_name?: string | null;
+  } | null;
+}
+
 export default function BookingPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const navigate = useNavigate();
   const { user } = useAuth();
+  const requestedSport: SportFilter = searchParams.get("sport") === "dart" ? "dart" : "pickleball";
 
   const [selectedDate, setSelectedDate] = useState(() =>
     DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate()
   );
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [selectedCourts, setSelectedCourts] = useState<string[]>([]);
+  const [sportFilter, setSportFilter] = useState<SportFilter>(requestedSport);
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [confirmed, setConfirmed] = useState(false);
@@ -71,20 +113,28 @@ export default function BookingPage() {
   useEffect(() => {
     if (!user || profileLoaded) return;
     const prefillFromProfile = async () => {
-      const { data } = await supabase
-        .from("player_profiles")
-        .select("display_name, phone")
-        .eq("auth_user_id", user.id)
-        .maybeSingle();
-      if (data) {
-        if (data.display_name && !name) setName(data.display_name);
-        if (data.phone && !phone) setPhone(data.phone);
-      } else {
-        // Fallback to user metadata
-        const meta = user.user_metadata;
-        if (meta?.display_name && !name) setName(meta.display_name);
+      try {
+        const { data } = await supabase
+          .from("player_profiles")
+          .select("display_name, phone")
+          .eq("auth_user_id", user.id)
+          .maybeSingle();
+
+        const meta = user.user_metadata || {};
+        const fallbackName =
+          data?.display_name ||
+          meta.display_name ||
+          meta.full_name ||
+          meta.name ||
+          user.email?.split("@")[0] ||
+          "";
+        const fallbackPhone = data?.phone || meta.phone || user.phone || "";
+
+        if (fallbackName) setName((current) => current || fallbackName);
+        if (fallbackPhone) setPhone((current) => current || fallbackPhone);
+      } finally {
+        setProfileLoaded(true);
       }
-      setProfileLoaded(true);
     };
     prefillFromProfile();
   }, [user, profileLoaded]);
@@ -103,6 +153,11 @@ export default function BookingPage() {
     }
   }, []);
 
+  useEffect(() => {
+    setSportFilter(requestedSport);
+    setSelectedCourts([]);
+  }, [requestedSport]);
+
   const dates = useMemo(() => generateDates(), []);
 
   // Fetch corporate packages for logged-in user
@@ -114,9 +169,12 @@ export default function BookingPage() {
   });
 
   const activePackages = useMemo(() => {
-    if (!corpData?.packages?.length) return [];
-    return corpData.packages.filter((p: any) => p.status === 'active' && p.total_hours - p.used_hours > 0).map((p: any) => {
-      const membership = corpData.memberships?.find((m: any) => m.corporate_accounts?.id === p.corporate_account_id);
+    const packages = (corpData?.packages || []) as CorporatePackage[];
+    const memberships = (corpData?.memberships || []) as CorporateMembership[];
+    if (!packages.length) return [];
+
+    return packages.filter((p) => p.status === 'active' && p.total_hours - p.used_hours > 0).map((p) => {
+      const membership = memberships.find((m) => m.corporate_accounts?.id === p.corporate_account_id);
       return { ...p, company_name: membership?.corporate_accounts?.company_name || 'Företag' };
     });
   }, [corpData]);
@@ -133,11 +191,11 @@ export default function BookingPage() {
     },
   });
 
-  const courts: CourtData[] = data?.courts || [];
+  const courts = useMemo<CourtData[]>(() => data?.courts || [], [data?.courts]);
   const openingHours = data?.openingHours;
-  const existingBookings = data?.bookings || [];
+  const existingBookings = useMemo<ExistingBooking[]>(() => data?.bookings || [], [data?.bookings]);
   const venueName = data?.venue?.name || "";
-  const pricingRules: any[] = data?.pricingRules || [];
+  const pricingRules = useMemo<PricingRule[]>(() => data?.pricingRules || [], [data?.pricingRules]);
 
   const { data: membership } = useQuery({
     queryKey: ["booking-membership", user?.id, data?.venue?.id],
@@ -150,7 +208,7 @@ export default function BookingPage() {
   const getCourtPrice = (court: CourtData): number => {
     if (!selectedTime) return court.hourly_rate || 0;
     const dayOfWeek = selectedDate.getDay();
-    const matchingRule = pricingRules.find((r: any) => {
+    const matchingRule = pricingRules.find((r) => {
       if (r.type !== "hourly") return false;
       const daysMatch = !r.days_of_week || r.days_of_week.length === 0 || r.days_of_week.includes(dayOfWeek);
       const sportMatches = !r.sport_type || r.sport_type === (court.sport_type || "pickleball");
@@ -162,7 +220,7 @@ export default function BookingPage() {
     return matchingRule ? matchingRule.price : (court.hourly_rate || 0);
   };
 
-  const courtPricing = (membership?.tier_pricing || []).find((p: any) => p.product_type === "court_hourly");
+  const courtPricing = ((membership?.tier_pricing || []) as TierPricing[]).find((p) => p.product_type === "court_hourly");
 
   const getMemberCourtPrice = (court: CourtData): number => {
     const basePrice = getCourtPrice(court);
@@ -228,7 +286,7 @@ export default function BookingPage() {
     const avail: Record<string, boolean> = {};
     courts.forEach((c) => {
       const isBooked = existingBookings.some(
-        (b: any) =>
+        (b) =>
           b.court_id === c.id &&
           new Date(b.start).getTime() < endMs &&
           new Date(b.end).getTime() > startMs
@@ -237,6 +295,56 @@ export default function BookingPage() {
     });
     return avail;
   }, [courts, existingBookings, selectedTime, dateStr]);
+
+  const sportCourts = useMemo(
+    () => courts.filter((court) => (court.sport_type || "pickleball") === sportFilter),
+    [courts, sportFilter]
+  );
+
+  const availableSportCourts = useMemo(
+    () => sportCourts.filter((court) => courtAvailability[court.id] !== false),
+    [sportCourts, courtAvailability]
+  );
+
+  const selectedCourtObjects = useMemo(
+    () => selectedCourts.map((id) => courts.find((court) => court.id === id)).filter(Boolean) as CourtData[],
+    [selectedCourts, courts]
+  );
+
+  const sportCounts = useMemo(
+    () => ({
+      pickleball: courts.filter((court) => (court.sport_type || "pickleball") === "pickleball").length,
+      dart: courts.filter((court) => court.sport_type === "dart").length,
+    }),
+    [courts]
+  );
+
+  const sportCourtLabel = sportFilter === "dart" ? "dartbord" : "bana";
+  const sportCourtPluralLabel = sportFilter === "dart" ? "dartbord" : "banor";
+  const sportTitle = sportFilter === "dart" ? "boka dart" : "boka pickleball";
+  const sportSectionLabel = sportFilter === "dart" ? "välj dartbord" : "välj bana";
+
+  const switchSport = (sport: SportFilter) => {
+    if (sport === sportFilter) return;
+    setSportFilter(sport);
+    setSelectedCourts([]);
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("v", slug);
+    if (sport === "dart") {
+      nextParams.set("sport", "dart");
+    } else {
+      nextParams.delete("sport");
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const selectFirstAvailableCourt = () => {
+    const firstAvailable = availableSportCourts[0];
+    if (firstAvailable) {
+      setSelectedCourts([firstAvailable.id]);
+    }
+  };
 
   const toggleCourt = (courtId: string) => {
     setSelectedCourts((prev) =>
@@ -380,7 +488,7 @@ export default function BookingPage() {
           className="text-[22px] font-bold text-neutral-900 tracking-tight leading-tight"
           style={{ fontFamily: FONT_GROTESK }}
         >
-          boka bana
+          {sportTitle}
         </h1>
         {venueName && (
           <span
@@ -408,7 +516,7 @@ export default function BookingPage() {
             className="text-[12px] text-neutral-400 text-center"
             style={{ fontFamily: FONT_MONO }}
           >
-            {selectedCourts.length} {selectedCourts.length === 1 ? "bana" : "banor"} ·{" "}
+            {selectedCourts.length} {selectedCourts.length === 1 ? sportCourtLabel : sportCourtPluralLabel} ·{" "}
             {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}
           </p>
           <button
@@ -427,6 +535,49 @@ export default function BookingPage() {
         </div>
       ) : (
         <form onSubmit={handleBook} className="px-4 py-4 space-y-4">
+          {/* Sport picker */}
+          <div>
+            <h2
+              className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
+              style={{ fontFamily: FONT_MONO }}
+            >
+              aktivitet
+            </h2>
+            <div className="grid grid-cols-2 gap-1.5">
+              {([
+                { value: "pickleball", label: "Pickleball", meta: `${sportCounts.pickleball} banor` },
+                { value: "dart", label: "Dart", meta: `${sportCounts.dart} bord` },
+              ] as const).map((option) => {
+                const active = sportFilter === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => switchSport(option.value)}
+                    className={`rounded-2xl px-3 py-3 text-left transition-all ${
+                      active
+                        ? "bg-neutral-900 text-white shadow-sm"
+                        : "bg-neutral-50 text-neutral-500 active:scale-[0.98]"
+                    }`}
+                  >
+                    <span
+                      className="block text-[13px] font-bold leading-tight"
+                      style={{ fontFamily: FONT_GROTESK }}
+                    >
+                      {option.label}
+                    </span>
+                    <span
+                      className={`block text-[10px] mt-0.5 ${active ? "text-white/55" : "text-neutral-400"}`}
+                      style={{ fontFamily: FONT_MONO }}
+                    >
+                      {option.meta}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Date picker */}
           <div>
             <h2
@@ -544,71 +695,92 @@ export default function BookingPage() {
           {/* Court selection */}
           {selectedTime && !isClosed && (
             <div>
-              <h2
-                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                välj bana{courts.length > 1 ? "or" : ""}
-              </h2>
-              <div className="grid grid-cols-2 gap-1.5">
-                {courts.map((court) => {
-                  const available = courtAvailability[court.id] !== false;
-                  const selected = selectedCourts.includes(court.id);
-                  const basePrice = getCourtPrice(court);
-                  const memberPrice = getMemberCourtPrice(court);
-                  const hasDiscount = memberPrice < basePrice;
-                  return (
-                    <button
-                      key={court.id}
-                      type="button"
-                      disabled={!available}
-                      onClick={() => available && toggleCourt(court.id)}
-                      className={`relative py-3 px-3 rounded-xl text-left transition-all ${
-                        !available
-                          ? "opacity-30 bg-neutral-50 cursor-not-allowed"
-                          : selected
-                          ? "bg-neutral-900 text-white"
-                          : "bg-neutral-50 text-neutral-700 active:scale-[0.98]"
-                      }`}
-                    >
-                      <p
-                        className="text-[12px] font-bold"
-                        style={{ fontFamily: FONT_GROTESK }}
-                      >
-                        {court.name}
-                      </p>
-                      <div
-                        className={`text-[10px] mt-0.5 flex items-center gap-1 ${
-                          selected ? "text-white/60" : "text-neutral-400"
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <h2
+                  className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  {sportSectionLabel}
+                </h2>
+                {availableSportCourts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={selectFirstAvailableCourt}
+                    className="text-[10px] text-neutral-500 bg-neutral-50 rounded-full px-3 py-1.5 active:scale-[0.98] transition-transform"
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    första lediga
+                  </button>
+                )}
+              </div>
+              {sportCourts.length === 0 ? (
+                <p
+                  className="text-[13px] text-neutral-400 text-center py-4"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  inga {sportCourtLabel} upplagda
+                </p>
+              ) : (
+                <div className={sportFilter === "dart" ? "grid grid-cols-3 gap-1.5" : "grid grid-cols-2 gap-1.5"}>
+                  {sportCourts.map((court) => {
+                    const available = courtAvailability[court.id] !== false;
+                    const selected = selectedCourts.includes(court.id);
+                    const basePrice = getCourtPrice(court);
+                    const memberPrice = getMemberCourtPrice(court);
+                    const hasDiscount = memberPrice < basePrice;
+                    return (
+                      <button
+                        key={court.id}
+                        type="button"
+                        disabled={!available}
+                        onClick={() => available && toggleCourt(court.id)}
+                        className={`relative min-h-[62px] px-3 py-2.5 rounded-xl text-left transition-all ${
+                          !available
+                            ? "opacity-45 bg-neutral-50 cursor-not-allowed"
+                            : selected
+                            ? "bg-neutral-900 text-white shadow-sm"
+                            : "bg-neutral-50 text-neutral-700 active:scale-[0.98]"
                         }`}
-                        style={{ fontFamily: FONT_MONO }}
                       >
-                        {hasDiscount && (
-                          <span className="line-through opacity-60">{basePrice} kr/h</span>
-                        )}
-                        <span className={hasDiscount ? (selected ? "text-emerald-200" : "text-emerald-600") : undefined}>
-                          {memberPrice} kr/h
-                        </span>
-                      </div>
-                      {!available && (
-                        <span
-                          className="text-[8px] text-neutral-400 mt-0.5 block"
+                        <p
+                          className={sportFilter === "dart" ? "text-[11px] font-bold leading-tight" : "text-[12px] font-bold leading-tight"}
+                          style={{ fontFamily: FONT_GROTESK }}
+                        >
+                          {court.name}
+                        </p>
+                        <div
+                          className={`text-[10px] mt-1 flex items-center gap-1 ${
+                            selected ? "text-white/60" : "text-neutral-400"
+                          }`}
                           style={{ fontFamily: FONT_MONO }}
                         >
-                          bokad
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+                          {hasDiscount && (
+                            <span className="line-through opacity-60">{basePrice} kr/h</span>
+                          )}
+                          <span className={hasDiscount ? (selected ? "text-emerald-200" : "text-emerald-600") : undefined}>
+                            {memberPrice} kr/h
+                          </span>
+                        </div>
+                        {!available && (
+                          <span
+                            className="text-[8px] text-neutral-400 mt-0.5 block"
+                            style={{ fontFamily: FONT_MONO }}
+                          >
+                            bokad
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {selectedCourts.length > 0 && (
                 <p
                   className="text-[11px] text-neutral-400 mt-2 text-right"
                   style={{ fontFamily: FONT_MONO }}
                 >
                   {selectedCourts.length}{" "}
-                  {selectedCourts.length === 1 ? "bana" : "banor"} ·{" "}
+                  {selectedCourts.length === 1 ? sportCourtLabel : sportCourtPluralLabel} ·{" "}
                   {hasMemberCourtPrice && <span className="line-through opacity-60">{baseTotalPrice} kr</span>}{" "}
                   <span className={hasMemberCourtPrice ? "text-emerald-600" : undefined}>{totalPrice} kr</span>
                 </p>
@@ -673,7 +845,7 @@ export default function BookingPage() {
                 >
                   betala i kassan · {hasMemberCourtPrice ? `${totalPrice} kr` : `${baseTotalPrice} kr`}
                 </button>
-                {activePackages.map((pkg: any) => {
+                {activePackages.map((pkg) => {
                   const remaining = pkg.total_hours - pkg.used_hours;
                   const isSelected = useCorporate && selectedPackageId === pkg.id;
                   return (
@@ -712,7 +884,7 @@ export default function BookingPage() {
               <div className="h-px bg-neutral-100 mb-3" />
               <div className="flex items-center justify-between text-[12px] mb-3" style={{ fontFamily: FONT_MONO }}>
                 <span className="text-neutral-400">
-                  {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{addHour(selectedTime!)} · {selectedCourts.map((id) => courts.find((c) => c.id === id)?.name).join(", ")}
+                  {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{addHour(selectedTime!)} · {selectedCourtObjects.map((court) => court.name).join(", ")}
                 </span>
                 <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
                   {useCorporate ? "0 kr" : `${totalPrice} kr`}
