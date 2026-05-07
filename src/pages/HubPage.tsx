@@ -105,6 +105,32 @@ function formatSwedishTime(timeStr: string): string {
   return timeStr.slice(0, 5);
 }
 
+function formatOpeningTime(timeStr?: string | null): string {
+  return timeStr ? timeStr.slice(0, 5) : "";
+}
+
+function getTodayOpeningHours(openingHours: any[] = []) {
+  const dow = DateTime.now().setZone("Europe/Stockholm").weekday % 7;
+  return openingHours.find((h: any) => h.day_of_week === dow);
+}
+
+function isVenueOpenNow(openingHours: any[] = []): boolean {
+  const today = getTodayOpeningHours(openingHours);
+  if (!today || today.is_closed) return false;
+  const now = DateTime.now().setZone("Europe/Stockholm").toFormat("HH:mm");
+  return now >= formatOpeningTime(today.open_time) && now < formatOpeningTime(today.close_time);
+}
+
+function getTodayHoursLabel(openingHours: any[] = []): string {
+  const today = getTodayOpeningHours(openingHours);
+  if (!today || today.is_closed) return "Stängt idag";
+  return `${formatOpeningTime(today.open_time)}–${formatOpeningTime(today.close_time)}`;
+}
+
+function getDayLabel(dayOfWeek: number): string {
+  return ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"][dayOfWeek] || "";
+}
+
 function groupTimestampLabel(iso: string): string {
   const dt = DateTime.fromISO(iso, { zone: "utc" }).setZone("Europe/Stockholm");
   const now = DateTime.now().setZone("Europe/Stockholm");
@@ -132,10 +158,26 @@ function useVenue(slug: string) {
     queryFn: async () => {
       const { data } = await supabase
         .from("venues")
-        .select("id, name, slug")
+        .select("id, name, slug, address, city")
         .eq("slug", slug)
         .single();
       return data;
+    },
+  });
+}
+
+function useVenueOpeningHours(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["hub-opening-hours", venueId],
+    enabled: !!venueId,
+    staleTime: 300000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("opening_hours")
+        .select("day_of_week, open_time, close_time, is_closed")
+        .eq("venue_id", venueId!)
+        .order("day_of_week", { ascending: true });
+      return data || [];
     },
   });
 }
@@ -1854,10 +1896,146 @@ function HubSkeleton() {
   );
 }
 
+function VenueInfoSheet({
+  open,
+  onClose,
+  venueName,
+  address,
+  city,
+  openingHours,
+}: {
+  open: boolean;
+  onClose: () => void;
+  venueName: string;
+  address?: string | null;
+  city?: string | null;
+  openingHours: any[];
+}) {
+  const openNow = isVenueOpenNow(openingHours);
+  const todayLabel = getTodayHoursLabel(openingHours);
+  const fullAddress = [address || "Svetsarvägen 22", city || "Solna"].filter(Boolean).join(", ");
+  const mapsUrl = fullAddress ? `https://maps.google.com/?q=${encodeURIComponent(fullAddress)}` : PICKLA_MAP_URL;
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 80,
+            background: "rgba(17,24,39,0.28)",
+            display: "flex",
+            alignItems: "flex-end",
+          }}
+        >
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", stiffness: 360, damping: 34 }}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              margin: "0 auto",
+              background: HUB_CARD,
+              borderTopLeftRadius: 30,
+              borderTopRightRadius: 30,
+              padding: "10px 18px calc(env(safe-area-inset-bottom,16px) + 18px)",
+              boxShadow: "0 -24px 70px rgba(17,24,39,0.22)",
+            }}
+          >
+            <div style={{ width: 42, height: 5, borderRadius: 99, background: HUB_BORDER, margin: "0 auto 14px" }} />
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <p style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HUB_MUTED, margin: 0 }}>
+                  Plats
+                </p>
+                <h2 style={{ fontFamily: FONT_HEADING, fontSize: 24, lineHeight: 1.05, color: HUB_TEXT, margin: "4px 0 0", fontWeight: 800 }}>
+                  {venueName.replace("Pickla Arena ", "Pickla ")}
+                </h2>
+              </div>
+              <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: 14, border: `1px solid ${HUB_BORDER}`, background: "#f8fafc", display: "grid", placeItems: "center" }} aria-label="Stäng">
+                <X style={{ width: 17, height: 17, color: HUB_SUB }} />
+              </button>
+            </div>
+
+            <button
+              onClick={() => window.open(mapsUrl, "_blank", "noopener,noreferrer")}
+              style={{
+                width: "100%",
+                height: 132,
+                marginTop: 16,
+                border: `1px solid ${HUB_BORDER}`,
+                borderRadius: 22,
+                background: "radial-gradient(circle at 22% 26%, rgba(34,197,94,0.22), transparent 26%), radial-gradient(circle at 78% 32%, rgba(37,99,235,0.14), transparent 28%), linear-gradient(135deg, #f8fafc 0%, #e5e7eb 100%)",
+                display: "grid",
+                placeItems: "center",
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ textAlign: "center" }}>
+                <div style={{ width: 46, height: 46, borderRadius: 18, background: HUB_CARD, display: "grid", placeItems: "center", margin: "0 auto 8px", boxShadow: "0 10px 28px rgba(17,24,39,0.12)" }}>
+                  <MapPin style={{ width: 22, height: 22, color: HUB_NAVY }} />
+                </div>
+                <p style={{ fontFamily: FONT_HEADING, fontSize: 13, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>Öppna karta</p>
+              </div>
+            </button>
+
+            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", borderRadius: 18, border: `1px solid ${HUB_BORDER}`, background: "#f8fafc", padding: 12 }}>
+                <MapPin style={{ width: 18, height: 18, color: HUB_MUTED, flexShrink: 0 }} />
+                <div>
+                  <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>{fullAddress}</p>
+                  <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_MUTED, margin: "2px 0 0" }}>Tryck på kartan för Google Maps</p>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", borderRadius: 18, border: `1px solid ${HUB_BORDER}`, background: openNow ? "#f0fdf4" : "#f8fafc", padding: 12 }}>
+                <Clock3 style={{ width: 18, height: 18, color: openNow ? "#15803d" : HUB_MUTED, flexShrink: 0 }} />
+                <div>
+                  <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 800, color: openNow ? "#15803d" : HUB_TEXT, margin: 0 }}>
+                    {openNow ? "Öppet nu" : "Stängt nu"} · {todayLabel}
+                  </p>
+                  <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_MUTED, margin: "2px 0 0" }}>Dagens öppettider</p>
+                </div>
+              </div>
+            </div>
+
+            {openingHours.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <p style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HUB_MUTED, margin: "0 0 8px" }}>
+                  Öppettider
+                </p>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {openingHours.map((hours: any) => (
+                    <div key={hours.day_of_week} style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB }}>
+                      <span>{getDayLabel(hours.day_of_week)}</span>
+                      <span style={{ color: HUB_TEXT, fontWeight: 700 }}>
+                        {hours.is_closed ? "Stängt" : `${formatOpeningTime(hours.open_time)}–${formatOpeningTime(hours.close_time)}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 // ── Hub List ─────────────────────────────────────────────────────────────────
 function HubList({
   slug,
   venueName,
+  venueAddress,
+  venueCity,
   venueId,
   playerCount,
   dailyRoom,
@@ -1870,6 +2048,8 @@ function HubList({
 }: {
   slug: string;
   venueName: string;
+  venueAddress?: string | null;
+  venueCity?: string | null;
   venueId: string;
   playerCount: number;
   dailyRoom: ChatRoom | null | undefined;
@@ -1882,8 +2062,12 @@ function HubList({
 }) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const autoOpenedRef = useRef<string | null>(null);
   const nextSession = botData?.nextSession;
+  const { data: openingHours = [] } = useVenueOpeningHours(venueId);
+  const openNow = isVenueOpenNow(openingHours);
+  const todayHoursLabel = getTodayHoursLabel(openingHours);
   const courtSummary = botData?.totalCount
     ? `${botData.freeCount} av ${botData.totalCount} banor lediga nu`
     : "Lediga banor uppdateras live";
@@ -2009,12 +2193,22 @@ function HubList({
       <div style={{ padding: "96px 16px 120px", overscrollBehavior: "contain" }}>
 
         <section
+          role="button"
+          tabIndex={0}
+          onClick={() => setVenueSheetOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setVenueSheetOpen(true);
+            }
+          }}
           style={{
             background: HUB_CARD,
             border: `1px solid ${HUB_BORDER}`,
             borderRadius: 26,
             padding: "16px 16px 15px",
             boxShadow: "0 14px 40px rgba(17,24,39,0.07)",
+            cursor: "pointer",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
@@ -2037,12 +2231,15 @@ function HubList({
               </h1>
               <p style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_SUB, margin: "7px 0 0" }}>
                 <MapPin style={{ width: 13, height: 13, color: HUB_MUTED }} />
-                Svetsarvägen 22, Solna
+                {[venueAddress || "Svetsarvägen 22", venueCity || "Solna"].filter(Boolean).join(", ")}
               </p>
             </div>
             <motion.button
               whileTap={{ scale: 0.96 }}
-              onClick={() => window.open(PICKLA_MAP_URL, "_blank", "noopener,noreferrer")}
+              onClick={(e) => {
+                e.stopPropagation();
+                setVenueSheetOpen(true);
+              }}
               style={{
                 width: 44,
                 height: 44,
@@ -2061,6 +2258,12 @@ function HubList({
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 14, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <div style={{ minWidth: "max-content", display: "flex", alignItems: "center", gap: 7, background: openNow ? "#f0fdf4" : "#f8fafc", border: openNow ? "1px solid rgba(34,197,94,0.18)" : `1px solid ${HUB_BORDER}`, borderRadius: 999, padding: "8px 11px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: openNow ? HUB_GREEN : HUB_MUTED, boxShadow: openNow ? "0 0 0 4px rgba(34,197,94,0.16)" : "none" }} />
+              <span style={{ fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 700, color: openNow ? "#15803d" : HUB_SUB }}>
+                {openNow ? "Öppet" : "Stängt"} · {todayHoursLabel}
+              </span>
+            </div>
             <div style={{ minWidth: "max-content", display: "flex", alignItems: "center", gap: 7, background: "#f0fdf4", border: "1px solid rgba(34,197,94,0.18)", borderRadius: 999, padding: "8px 11px" }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: HUB_GREEN, boxShadow: "0 0 0 4px rgba(34,197,94,0.16)" }} />
               <span style={{ fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 700, color: "#15803d" }}>
@@ -2231,6 +2434,15 @@ function HubList({
           </motion.button>
         )}
       </div>
+
+      <VenueInfoSheet
+        open={venueSheetOpen}
+        onClose={() => setVenueSheetOpen(false)}
+        venueName={venueName}
+        address={venueAddress}
+        city={venueCity}
+        openingHours={openingHours}
+      />
 
       <PlayerNav />
     </div>
@@ -2422,6 +2634,8 @@ const HubPage = () => {
       <HubList
         slug={slug}
         venueName={venue.name}
+        venueAddress={(venue as any).address}
+        venueCity={(venue as any).city}
         venueId={venueId}
         playerCount={playerCount}
         dailyRoom={dailyRoom}
