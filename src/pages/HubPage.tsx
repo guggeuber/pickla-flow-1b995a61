@@ -5,7 +5,6 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Send,
-  Share2,
   Check,
   ImageIcon,
   X,
@@ -27,6 +26,7 @@ import { BotMessage } from "@/components/hub/BotMessage";
 import { PlayerNav } from "@/components/PlayerNav";
 import { EventCard } from "@/components/hub/EventCard";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { toast } from "sonner";
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const HUB_BG = "#faf8f5";
@@ -252,6 +252,23 @@ function useBookingRooms(venueId: string | undefined, userId: string | undefined
         .order("start_time", { ascending: true })
         .limit(5);
       return (data || []) as any[];
+    },
+  });
+}
+
+function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
+  return useQuery({
+    queryKey: ["hub-booking-details", room.resource_id, userId],
+    enabled: room.room_type === "booking" && !!room.resource_id && !!userId,
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("id, booking_ref, user_id, status, start_time, end_time, access_code, venue_courts(name)")
+        .eq("booking_ref", room.resource_id!)
+        .maybeSingle();
+      if (error) return null;
+      return data as any | null;
     },
   });
 }
@@ -709,29 +726,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           )}
         </div>
 
-        {room.room_type === "booking" && (
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            onClick={shareRoom}
-            title="Bjud in"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 10,
-              border: `1px solid ${copied ? HUB_GREEN : HUB_BORDER}`,
-              background: copied ? "rgba(34,197,94,0.08)" : HUB_CARD,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-              transition: "all 0.2s",
-              cursor: "pointer",
-            }}
-          >
-            {copied
-              ? <Check style={{ width: 15, height: 15, color: HUB_GREEN }} />
-              : <Share2 style={{ width: 15, height: 15, color: HUB_TEXT }} />}
-          </motion.button>
+        {room.room_type === "booking" && copied && (
+          <Check style={{ width: 18, height: 18, color: HUB_GREEN, flexShrink: 0 }} />
         )}
       </div>
 
@@ -791,26 +787,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
 
         {/* Booking room: booking card */}
         {room.room_type === "booking" && (
-          <div
-            style={{
-              background: HUB_NAVY,
-              borderRadius: 14,
-              padding: "12px 14px",
-              marginBottom: 4,
-            }}
-          >
-            <p style={{ fontFamily: FONT_HEADING, fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 2, letterSpacing: "0.06em" }}>
-              DIN BOKNING
-            </p>
-            <p style={{ fontFamily: FONT_HEADING, fontSize: 15, fontWeight: 700, color: "#fff" }}>
-              {room.title}
-            </p>
-            {room.subtitle && (
-              <p style={{ fontSize: 12, fontFamily: "Inter, sans-serif", color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
-                {room.subtitle}
-              </p>
-            )}
-          </div>
+          <BookingSmartPanel room={room} venueId={venueId} userId={user?.id} onShare={shareRoom} />
         )}
 
         {/* Event room: action card */}
@@ -1117,6 +1094,223 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
         />
       )}
     </div>
+  );
+}
+
+function BookingSmartPanel({
+  room,
+  venueId,
+  userId,
+  onShare,
+}: {
+  room: ChatRoom;
+  venueId: string;
+  userId?: string;
+  onShare: () => void;
+}) {
+  const qc = useQueryClient();
+  const { data: booking, isLoading } = useBookingDetailsForRoom(room, userId);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [published, setPublished] = useState(false);
+
+  const isOwner = !!booking && booking.user_id === userId;
+  const courtName = booking?.venue_courts?.name || room.title.split(" · ")[0] || "Bana";
+  const start = booking?.start_time
+    ? DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm")
+    : null;
+  const end = booking?.end_time
+    ? DateTime.fromISO(booking.end_time, { zone: "utc" }).setZone("Europe/Stockholm")
+    : null;
+  const dateLabel = start ? start.toFormat("ccc d LLL", { locale: "sv" }) : "";
+  const timeLabel = start && end ? `${start.toFormat("HH:mm")}–${end.toFormat("HH:mm")}` : room.subtitle || "";
+  const status = booking?.status || "confirmed";
+  const isCancelled = status === "cancelled";
+  const statusLabel = isCancelled ? "Avbokad" : status === "pending" ? "Väntande" : "Bekräftad";
+  const statusColor = isCancelled ? HUB_RED : status === "pending" ? "#2563eb" : HUB_GREEN;
+
+  const handleCancel = async () => {
+    if (!booking?.id || !userId) return;
+    setCancelling(true);
+    const { error } = await supabase
+      .from("bookings")
+      .update({ status: "cancelled" })
+      .eq("id", booking.id)
+      .eq("user_id", userId);
+    setCancelling(false);
+    if (error) {
+      toast.error("Kunde inte avboka");
+      return;
+    }
+    toast.success("Bokningen är avbokad");
+    setConfirmCancel(false);
+    qc.invalidateQueries({ queryKey: ["hub-booking-details"] });
+    qc.invalidateQueries({ queryKey: ["hub-bookings"] });
+    qc.invalidateQueries({ queryKey: ["my-bookings"] });
+  };
+
+  const publishToDailyRoom = async () => {
+    if (!booking || !userId || publishing) return;
+    setPublishing(true);
+    const today = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
+    const { data: dailyRoom } = await supabase.rpc("upsert_daily_chat_room", {
+      p_venue_id: venueId,
+      p_session_date: today,
+      p_name: "Pickla Idag",
+    });
+    const daily = dailyRoom?.[0];
+    if (!daily?.id) {
+      setPublishing(false);
+      toast.error("Kunde inte göra bokningen publik");
+      return;
+    }
+    await supabase.from("chat_participants").upsert(
+      { room_id: daily.id, user_id: userId },
+      { onConflict: "room_id,user_id", ignoreDuplicates: true }
+    );
+    const inviteUrl = `${window.location.origin}/hub?join=${room.id}`;
+    const content = `Jag söker spelare till ${courtName} ${dateLabel} ${timeLabel}. Hoppa in här: ${inviteUrl}`;
+    const { error } = await supabase.from("chat_messages").insert({
+      room_id: daily.id,
+      user_id: userId,
+      message_type: "text",
+      content,
+      metadata: {
+        type: "booking_invite",
+        booking_room_id: room.id,
+        booking_ref: booking.booking_ref,
+      },
+    });
+    setPublishing(false);
+    if (error) {
+      toast.error("Kunde inte posta i Pickla Idag");
+      return;
+    }
+    setPublished(true);
+    qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+    toast.success("Publicerad i Pickla Idag");
+  };
+
+  return (
+    <div
+      style={{
+        background: HUB_CARD,
+        border: `1px solid ${HUB_BORDER}`,
+        borderRadius: 18,
+        padding: 14,
+        boxShadow: "0 8px 26px rgba(17,24,39,0.06)",
+        marginBottom: 6,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <p style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 800, color: HUB_MUTED, letterSpacing: "0.08em", textTransform: "uppercase", margin: 0 }}>
+            Bokningschat
+          </p>
+          <p style={{ fontFamily: FONT_HEADING, fontSize: 19, fontWeight: 800, color: HUB_TEXT, margin: "4px 0 0" }}>
+            {courtName}
+          </p>
+          <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
+            {isLoading ? "Hämtar bokningen..." : [dateLabel, timeLabel].filter(Boolean).join(" · ") || room.subtitle}
+          </p>
+        </div>
+        <span
+          style={{
+            flexShrink: 0,
+            borderRadius: 999,
+            padding: "5px 9px",
+            background: `${statusColor}14`,
+            color: statusColor,
+            fontFamily: FONT_HEADING,
+            fontSize: 11,
+            fontWeight: 800,
+          }}
+        >
+          {statusLabel}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        {isOwner && booking?.access_code && (
+          <div style={{ borderRadius: 14, background: "#eff6ff", border: "1px solid rgba(37,99,235,0.14)", padding: "8px 10px" }}>
+            <span style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 800, color: HUB_MUTED, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Kod
+            </span>
+            <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 16, fontWeight: 800, color: "#2563eb", marginLeft: 7 }}>
+              {booking.access_code}
+            </span>
+          </div>
+        )}
+        {!isOwner && (
+          <div style={{ borderRadius: 14, background: HUB_BG, border: `1px solid ${HUB_BORDER}`, padding: "8px 10px", color: HUB_MUTED, fontSize: 12 }}>
+            Bokningskod och actions visas för bokaren.
+          </div>
+        )}
+      </div>
+
+      {isOwner && !isCancelled && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", WebkitOverflowScrolling: "touch" as any }}>
+          <SmartActionButton
+            label={published ? "Publik ✓" : "Gör publik"}
+            onClick={publishToDailyRoom}
+            disabled={publishing || published}
+            tone={published ? "green" : "neutral"}
+          />
+          <SmartActionButton label="Bjud in" onClick={onShare} tone="dark" />
+          <SmartActionButton
+            label={confirmCancel ? "Säker?" : "Avboka"}
+            onClick={() => confirmCancel ? handleCancel() : setConfirmCancel(true)}
+            disabled={cancelling}
+            tone="danger"
+          />
+          {confirmCancel && (
+            <SmartActionButton label="Behåll" onClick={() => setConfirmCancel(false)} tone="neutral" />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SmartActionButton({
+  label,
+  onClick,
+  disabled,
+  tone = "neutral",
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  tone?: "neutral" | "dark" | "danger" | "green";
+}) {
+  const styles = {
+    neutral: { background: HUB_BG, color: HUB_TEXT, border: HUB_BORDER },
+    dark: { background: HUB_NAVY, color: "#fff", border: HUB_NAVY },
+    danger: { background: "rgba(239,68,68,0.08)", color: HUB_RED, border: "rgba(239,68,68,0.2)" },
+    green: { background: "rgba(34,197,94,0.1)", color: HUB_GREEN, border: "rgba(34,197,94,0.2)" },
+  }[tone];
+  return (
+    <motion.button
+      whileTap={{ scale: disabled ? 1 : 0.97 }}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      style={{
+        flexShrink: 0,
+        borderRadius: 999,
+        border: `1px solid ${styles.border}`,
+        background: styles.background,
+        color: styles.color,
+        padding: "9px 12px",
+        fontFamily: FONT_HEADING,
+        fontSize: 12,
+        fontWeight: 800,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.65 : 1,
+      }}
+    >
+      {label}
+    </motion.button>
   );
 }
 
