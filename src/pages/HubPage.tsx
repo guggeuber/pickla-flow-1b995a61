@@ -1629,6 +1629,40 @@ function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, o
 }
 
 // ── MessageBubble ─────────────────────────────────────────────────────────────
+function LinkifiedText({ text, isOwn }: { text: string; isOwn: boolean }) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return (
+    <>
+      {parts.map((part, index) => {
+        const isUrl = /^https?:\/\//.test(part);
+        if (!isUrl) return <span key={index}>{part}</span>;
+        const href = part.replace(/[),.!?]+$/, "");
+        const trailing = part.slice(href.length);
+        return (
+          <span key={index}>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                color: isOwn ? "#fff" : HUB_RED,
+                textDecoration: "underline",
+                textUnderlineOffset: 3,
+                fontWeight: 700,
+                wordBreak: "break-word",
+              }}
+            >
+              {href}
+            </a>
+            {trailing}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 function MessageBubble({ message, currentUserId, replyToMessage, reactions, showTimestamp, onLongPress, onReactionToggle }: {
   message: ChatMessage;
   currentUserId?: string;
@@ -1718,7 +1752,7 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
           </div>
         ) : (
           <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4 }}>
-            {message.content}
+            <LinkifiedText text={message.content ?? ""} isOwn={isOwn} />
           </p>
         )}
 
