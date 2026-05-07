@@ -2,7 +2,7 @@ import { useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PlayerNav } from "@/components/PlayerNav";
@@ -60,6 +60,21 @@ type MyEventRegistration = {
   events: MyEventSummary | null;
 };
 
+type ActivityThreadRoom = {
+  id: string;
+  room_type: "daily" | "booking" | "event" | "ritual";
+  title: string;
+  subtitle: string | null;
+  emoji: string | null;
+  resource_id: string | null;
+  updated_at: string | null;
+};
+
+type ActivityThread = {
+  room: ActivityThreadRoom;
+  joined_at: string | null;
+};
+
 function usePlayerProfile() {
   const { user } = useAuth();
   return useQuery({
@@ -95,6 +110,54 @@ function useMyBookings() {
   });
 }
 
+function useMyActivityThreads() {
+  const { user } = useAuth();
+  return useQuery<ActivityThread[]>({
+    queryKey: ["my-activity-threads", user?.id],
+    enabled: !!user,
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("chat_participants")
+        .select("joined_at, chat_rooms(id, room_type, title, subtitle, emoji, resource_id, updated_at)")
+        .eq("user_id", user!.id)
+        .order("joined_at", { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      return ((data || []) as any[])
+        .map((row) => ({ joined_at: row.joined_at, room: row.chat_rooms }))
+        .filter((row) => row.room && row.room.room_type !== "daily") as ActivityThread[];
+    },
+  });
+}
+
+function useActivityThreadPreviews(roomIds: string[]) {
+  const key = roomIds.slice().sort().join(",");
+  return useQuery({
+    queryKey: ["activity-thread-previews", key],
+    enabled: roomIds.length > 0,
+    staleTime: 15000,
+    refetchInterval: 30000,
+    queryFn: async () => {
+      const { data: messages } = await supabase
+        .from("chat_messages")
+        .select("room_id, content, created_at")
+        .in("room_id", roomIds)
+        .order("created_at", { ascending: false });
+      const previews: Record<string, { content: string; created_at: string }> = {};
+      for (const msg of messages || []) {
+        if (!previews[msg.room_id]) {
+          previews[msg.room_id] = {
+            content: msg.content || "Meddelande raderat",
+            created_at: msg.created_at,
+          };
+        }
+      }
+      return previews;
+    },
+  });
+}
+
 function getEventDateTime(event?: MyEventSummary | null, end = false) {
   const date = (end ? event?.end_date : event?.start_date) || event?.start_date || event?.end_date;
   const time = (end ? event?.end_time : event?.start_time) || event?.start_time || event?.end_time;
@@ -102,6 +165,20 @@ function getEventDateTime(event?: MyEventSummary | null, end = false) {
 
   const datePart = String(date).slice(0, 10);
   return new Date(time ? `${datePart}T${time}` : `${datePart}T${end ? "23:59:59" : "00:00:00"}`);
+}
+
+function getThreadPath(room: ActivityThreadRoom) {
+  if (room.room_type === "booking" && room.resource_id) {
+    return `/booking-chat/${encodeURIComponent(room.resource_id)}`;
+  }
+  return `/hub?join=${room.id}`;
+}
+
+function getThreadTypeLabel(room: ActivityThreadRoom) {
+  if (room.room_type === "booking") return "Bokningschat";
+  if (room.room_type === "event") return "Eventchat";
+  if (room.room_type === "ritual") return "Tråd";
+  return "Chat";
 }
 
 function useMyEventRegistrations(profile?: PlayerProfileContact | null) {
@@ -1044,6 +1121,9 @@ const MyPage = () => {
   const { data: bookings } = useMyBookings();
   const { data: eventRegistrations } = useMyEventRegistrations(profile);
   const { data: activeMembership } = useActiveMembership();
+  const { data: activityThreads = [] } = useMyActivityThreads();
+  const activityThreadIds = activityThreads.map((thread) => thread.room.id);
+  const { data: threadPreviews = {} } = useActivityThreadPreviews(activityThreadIds);
   const queryClient = useQueryClient();
 
   const [selectedBooking, setSelectedBooking] = useState<any | null>(null);
@@ -1275,6 +1355,44 @@ const MyPage = () => {
                     </button>
                   );
                 })}
+              </div>
+            )}
+
+            {activityThreads.length > 0 && (
+              <div className="mt-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <MessageCircle className="w-4 h-4" style={{ color: BLUE }} />
+                  <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Aktiva trådar</span>
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activityThreads.length}</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {activityThreads.slice(0, 6).map(({ room }) => {
+                    const preview = threadPreviews[room.id];
+                    return (
+                      <button
+                        key={room.id}
+                        onClick={() => navigate(getThreadPath(room))}
+                        className="rounded-xl p-3 flex items-center gap-3 text-left active:scale-[0.98] transition-transform"
+                        style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                      >
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: BLUE_LIGHT, color: BLUE }}>
+                          <span className="text-lg">{room.emoji || "💬"}</span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium truncate" style={{ color: TEXT_PRIMARY }}>{room.title}</p>
+                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold flex-shrink-0" style={{ background: PAGE_BG, color: TEXT_MUTED, fontFamily: FONT_HEADING }}>
+                              {getThreadTypeLabel(room)}
+                            </span>
+                          </div>
+                          <p className="text-xs truncate mt-0.5" style={{ color: TEXT_MUTED }}>
+                            {preview?.content || room.subtitle || "Ingen aktivitet än"}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
