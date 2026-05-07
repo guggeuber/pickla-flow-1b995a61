@@ -13,6 +13,14 @@ import { Navigate, useLocation, useNavigate, useSearchParams } from "react-route
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import {
+  getBookingAccessCodes,
+  getBookingChatResourceId,
+  getBookingCourtLabel,
+  getBookingCourtNamesLabel,
+  getBookingIds,
+  groupBookingRows,
+} from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
@@ -103,7 +111,7 @@ function useMyBookings() {
         .select("*, venue_courts(name)")
         .eq("user_id", user!.id)
         .order("start_time", { ascending: false })
-        .limit(10);
+        .limit(50);
       if (error) throw error;
       return data;
     },
@@ -579,18 +587,22 @@ function BookingDetailsSheet({
 
   if (!booking) return null;
 
-  const courtName = booking.venue_courts?.name || "Bana";
+  const courtName = getBookingCourtLabel(booking);
+  const courtNames = getBookingCourtNamesLabel(booking);
+  const accessCodes = getBookingAccessCodes(booking);
+  const bookingIds = getBookingIds(booking);
   const start = new Date(booking.start_time);
   const end = new Date(booking.end_time);
   const dateLabel = start.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
   const timeLabel = `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
 
   const handleCancel = async () => {
+    if (!bookingIds.length) return;
     setCancelling(true);
     const { error } = await supabase
       .from("bookings")
       .update({ status: "cancelled" })
-      .eq("id", booking.id);
+      .in("id", bookingIds);
     setCancelling(false);
     if (error) {
       toast.error("Kunde inte avboka");
@@ -610,25 +622,32 @@ function BookingDetailsSheet({
             Bokning
           </p>
           <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{courtName}</p>
+          {courtNames !== courtName && (
+            <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>{courtNames}</p>
+          )}
           <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{dateLabel}</p>
           <p className="text-sm" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{timeLabel}</p>
-          {booking.access_code && (
-            <div className="mt-3 rounded-xl px-3 py-2 inline-flex items-center gap-2" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
-              <span className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Kod</span>
-              <span className="text-base font-bold" style={{ fontFamily: FONT_MONO, color: BLUE }}>{booking.access_code}</span>
+          {accessCodes.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {accessCodes.map((code) => (
+                <div key={code} className="rounded-xl px-3 py-2 inline-flex items-center gap-2" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
+                  <span className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Kod</span>
+                  <span className="text-base font-bold" style={{ fontFamily: FONT_MONO, color: BLUE }}>{code}</span>
+                </div>
+              ))}
             </div>
           )}
 
           <div className="flex flex-col gap-2 mt-5">
             <button
-              onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(booking.booking_ref || booking.id)}`); }}
+              onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`); }}
               className="w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform"
               style={{ background: BLUE, fontFamily: FONT_HEADING }}
             >
               Gå till chatt
             </button>
             <button
-              onClick={() => { onOpenChange(false); navigate(`/b/${booking.access_code || booking.id}`); }}
+              onClick={() => { onOpenChange(false); navigate(`/b/${booking.primary_booking_ref || booking.booking_ref || booking.id}`); }}
               className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
               style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
             >
@@ -1147,8 +1166,8 @@ const MyPage = () => {
 
   const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
   const now = Date.now();
-  const activeBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now);
-  const pastBookings = (bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now);
+  const activeBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now));
+  const pastBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now));
   const activeEventRegistrations = (eventRegistrations || []).filter((registration) => {
     const eventEnd = getEventDateTime(registration.events, true);
     return eventEnd ? eventEnd.getTime() >= now : true;
@@ -1161,7 +1180,7 @@ const MyPage = () => {
   const pastBookingCount = pastBookings.length + pastEventRegistrations.length;
   const membershipTier = (activeMembership as any)?.membership_tiers;
   const openBookingChat = (booking: any) => {
-    navigate(`/booking-chat/${encodeURIComponent(booking.booking_ref || booking.id)}`);
+    navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`);
   };
 
   return (
@@ -1281,18 +1300,23 @@ const MyPage = () => {
               <div className="flex flex-col gap-2">
                 {activeBookings.slice(0, 5).map((b: any) => (
                   <button
-                    key={b.id}
+                    key={getBookingChatResourceId(b)}
                     onClick={() => openBookingChat(b)}
                     className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
                     style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                   >
                     <div className="min-w-0">
-                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{b.venue_courts?.name || "Bana"}</p>
+                      <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{getBookingCourtLabel(b)}</p>
                       <p className="text-xs" style={{ color: TEXT_MUTED }}>
                         {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
                         {" "}
                         {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
                       </p>
+                      {b.court_count > 1 && (
+                        <p className="text-[11px] mt-1 truncate" style={{ color: TEXT_MUTED }}>
+                          {getBookingCourtNamesLabel(b)}
+                        </p>
+                      )}
                       <p className="text-[11px] mt-1" style={{ color: TEXT_SECONDARY }}>
                         Öppna bokningschatten →
                       </p>

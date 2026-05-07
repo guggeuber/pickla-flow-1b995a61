@@ -18,6 +18,15 @@ import {
   Zap,
 } from "lucide-react";
 import { apiPost } from "@/lib/api";
+import {
+  getBookingAccessCodes,
+  getBookingChatResourceId,
+  getBookingCourtLabel,
+  getBookingCourtNamesLabel,
+  getBookingIds,
+  getStripeSessionFromResourceId,
+  groupBookingRows,
+} from "@/lib/bookingGroups";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { DateTime } from "luxon";
@@ -245,13 +254,13 @@ function useBookingRooms(venueId: string | undefined, userId: string | undefined
       const now = DateTime.now().setZone("Europe/Stockholm").toUTC().toISO()!;
       const { data } = await supabase
         .from("bookings")
-        .select("id, booking_ref, start_time, end_time, venue_courts(name), access_code")
+        .select("id, booking_ref, stripe_session_id, start_time, end_time, total_price, status, venue_courts(name), access_code")
         .eq("user_id", userId!)
         .neq("status", "cancelled")
         .gte("end_time", now)
         .order("start_time", { ascending: true })
-        .limit(5);
-      return (data || []) as any[];
+        .limit(30);
+      return groupBookingRows((data || []) as any[]).slice(0, 5);
     },
   });
 }
@@ -262,13 +271,38 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
     enabled: room.room_type === "booking" && !!room.resource_id && !!userId,
     staleTime: 30000,
     queryFn: async () => {
-      const { data, error } = await supabase
+      const stripeSessionId = getStripeSessionFromResourceId(room.resource_id);
+      const select = "id, booking_ref, stripe_session_id, user_id, status, start_time, end_time, total_price, access_code, venue_courts(name)";
+
+      if (stripeSessionId) {
+        const { data, error } = await supabase
+          .from("bookings")
+          .select(select)
+          .eq("stripe_session_id", stripeSessionId)
+          .neq("status", "cancelled")
+          .order("start_time", { ascending: true });
+        if (error) return null;
+        return groupBookingRows((data || []) as any[])[0] || null;
+      }
+
+      const { data: firstBooking, error } = await supabase
         .from("bookings")
-        .select("id, booking_ref, user_id, status, start_time, end_time, access_code, venue_courts(name)")
+        .select(select)
         .eq("booking_ref", room.resource_id!)
         .maybeSingle();
-      if (error) return null;
-      return data as any | null;
+      if (error || !firstBooking) return null;
+
+      if ((firstBooking as any).stripe_session_id) {
+        const { data } = await supabase
+          .from("bookings")
+          .select(select)
+          .eq("stripe_session_id", (firstBooking as any).stripe_session_id)
+          .neq("status", "cancelled")
+          .order("start_time", { ascending: true });
+        return groupBookingRows((data || [firstBooking]) as any[])[0] || null;
+      }
+
+      return groupBookingRows([firstBooking as any])[0] || null;
     },
   });
 }
@@ -1115,8 +1149,11 @@ function BookingSmartPanel({
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
 
-  const isOwner = !!booking && booking.user_id === userId;
-  const courtName = booking?.venue_courts?.name || room.title.split(" · ")[0] || "Bana";
+  const bookingIds = getBookingIds(booking);
+  const accessCodes = getBookingAccessCodes(booking);
+  const isOwner = !!booking && booking.bookings?.some((b: any) => b.user_id === userId);
+  const courtName = booking ? getBookingCourtLabel(booking) : room.title.split(" · ")[0] || "Bana";
+  const courtNames = booking ? getBookingCourtNamesLabel(booking) : courtName;
   const start = booking?.start_time
     ? DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm")
     : null;
@@ -1131,12 +1168,12 @@ function BookingSmartPanel({
   const statusColor = isCancelled ? HUB_RED : status === "pending" ? "#2563eb" : HUB_GREEN;
 
   const handleCancel = async () => {
-    if (!booking?.id || !userId) return;
+    if (!bookingIds.length || !userId) return;
     setCancelling(true);
     const { error } = await supabase
       .from("bookings")
       .update({ status: "cancelled" })
-      .eq("id", booking.id)
+      .in("id", bookingIds)
       .eq("user_id", userId);
     setCancelling(false);
     if (error) {
@@ -1170,7 +1207,7 @@ function BookingSmartPanel({
       { onConflict: "room_id,user_id", ignoreDuplicates: true }
     );
     const inviteUrl = `${window.location.origin}/hub?join=${room.id}`;
-    const content = `Jag söker spelare till ${courtName} ${dateLabel} ${timeLabel}. Hoppa in här: ${inviteUrl}`;
+    const content = `Jag söker spelare till ${courtNames} ${dateLabel} ${timeLabel}. Hoppa in här: ${inviteUrl}`;
     const { error } = await supabase.from("chat_messages").insert({
       room_id: daily.id,
       user_id: userId,
@@ -1179,7 +1216,8 @@ function BookingSmartPanel({
       metadata: {
         type: "booking_invite",
         booking_room_id: room.id,
-        booking_ref: booking.booking_ref,
+        booking_ref: booking.primary_booking_ref || booking.booking_ref,
+        booking_refs: booking.bookings?.map((b: any) => b.booking_ref).filter(Boolean) || [booking.booking_ref].filter(Boolean),
       },
     });
     setPublishing(false);
@@ -1232,16 +1270,16 @@ function BookingSmartPanel({
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-        {isOwner && booking?.access_code && (
-          <div style={{ borderRadius: 14, background: "#eff6ff", border: "1px solid rgba(37,99,235,0.14)", padding: "8px 10px" }}>
+        {isOwner && accessCodes.map((code) => (
+          <div key={code} style={{ borderRadius: 14, background: "#eff6ff", border: "1px solid rgba(37,99,235,0.14)", padding: "8px 10px" }}>
             <span style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 800, color: HUB_MUTED, letterSpacing: "0.08em", textTransform: "uppercase" }}>
               Kod
             </span>
             <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 16, fontWeight: 800, color: "#2563eb", marginLeft: 7 }}>
-              {booking.access_code}
+              {code}
             </span>
           </div>
-        )}
+        ))}
         {!isOwner && (
           <div style={{ borderRadius: 14, background: HUB_BG, border: `1px solid ${HUB_BORDER}`, padding: "8px 10px", color: HUB_MUTED, fontSize: 12 }}>
             Bokningskod och actions visas för bokaren.
@@ -1847,7 +1885,7 @@ function HubList({
     ? `${nextSession.daysOffset === 0 ? "Idag" : nextSession.daysOffset === 1 ? "Imorgon" : "Snart"} ${formatSwedishTime(nextSession.start_time)}`
     : "Nästa drop-in kommer snart";
 
-  const bookingResourceIds = bookings.map((b) => b.booking_ref).filter(Boolean);
+  const bookingResourceIds = bookings.map(getBookingChatResourceId).filter(Boolean);
   const eventResourceIds = events.map((e) => e.id).filter(Boolean);
   const { data: resourceRoomMap = {} } = useExistingResourceRooms(venueId, [
     ...bookingResourceIds,
@@ -1862,18 +1900,21 @@ function HubList({
   const { data: previews = {} } = useRoomPreviews(allRoomIds);
 
   const openBookingRoom = useCallback(async (booking: any) => {
-    const courtName = booking.venue_courts?.name || "Bana";
+    const courtName = getBookingCourtLabel(booking);
+    const accessCodes = getBookingAccessCodes(booking);
+    const resourceId = getBookingChatResourceId(booking);
     const time = DateTime.fromISO(booking.start_time, { zone: "utc" })
       .setZone("Europe/Stockholm")
       .toFormat("HH:mm");
     const date = DateTime.fromISO(booking.start_time, { zone: "utc" })
       .setZone("Europe/Stockholm")
       .toFormat("d MMM");
-    const subtitle = `${date} · ${time} · Kod: ${booking.access_code || "—"}`;
+    const codeLabel = accessCodes.length > 1 ? `Koder: ${accessCodes.join(", ")}` : `Kod: ${accessCodes[0] || "—"}`;
+    const subtitle = `${date} · ${time} · ${codeLabel}`;
 
     const { data } = await supabase.rpc("upsert_resource_chat_room", {
       p_venue_id: venueId,
-      p_resource_id: booking.booking_ref,
+      p_resource_id: resourceId,
       p_room_type: "booking",
       p_title: `${courtName} · ${time}`,
       p_subtitle: subtitle,
@@ -1886,7 +1927,12 @@ function HubList({
 
   useEffect(() => {
     if (!autoOpenBookingRef || autoOpenedRef.current === autoOpenBookingRef) return;
-    const booking = bookings.find((b) => b.booking_ref === autoOpenBookingRef || b.id === autoOpenBookingRef);
+    const booking = bookings.find((b) =>
+      getBookingChatResourceId(b) === autoOpenBookingRef ||
+      b.booking_ref === autoOpenBookingRef ||
+      b.id === autoOpenBookingRef ||
+      b.bookings?.some((row: any) => row.booking_ref === autoOpenBookingRef || row.id === autoOpenBookingRef)
+    );
     if (!booking) return;
     autoOpenedRef.current = autoOpenBookingRef;
     openBookingRoom(booking);
