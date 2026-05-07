@@ -101,3 +101,11 @@ export function getBookingIds(booking: any): string[] {
   if (booking?.bookings?.length) return booking.bookings.map((b: any) => b.id).filter(Boolean);
   return booking?.id && !String(booking.id).startsWith(BOOKING_GROUP_PREFIX) ? [booking.id] : [];
 }
+
+export function stripBookingCodesFromText(text?: string | null): string {
+  if (!text) return "";
+  return text
+    .replace(/\s*·\s*Koder?:\s*[\d,\s]+/gi, "")
+    .replace(/\s*Koder?:\s*[\d,\s]+/gi, "")
+    .trim();
+}

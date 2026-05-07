@@ -23,9 +23,9 @@ import {
   getBookingChatResourceId,
   getBookingCourtLabel,
   getBookingCourtNamesLabel,
-  getBookingIds,
   getStripeSessionFromResourceId,
   groupBookingRows,
+  stripBookingCodesFromText,
 } from "@/lib/bookingGroups";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -307,6 +307,24 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
   });
 }
 
+function useBookingPublishedState(roomId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["booking-published-state", roomId],
+    enabled: enabled && !!roomId,
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("chat_messages")
+        .select("id")
+        .contains("metadata", { booking_room_id: roomId })
+        .limit(1)
+        .maybeSingle();
+      if (error) return false;
+      return !!data;
+    },
+  });
+}
+
 function useEventRooms(venueId: string | undefined) {
   return useQuery({
     queryKey: ["hub-events", venueId],
@@ -543,6 +561,9 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const [gifLoading, setGifLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const headerSubtitle = room.room_type === "booking"
+    ? stripBookingCodesFromText(room.subtitle)
+    : room.subtitle;
 
   // #3 — push input above keyboard on iOS
   const [keyboardOffset, setKeyboardOffset] = useState(0);
@@ -753,9 +774,9 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           <p style={{ fontFamily: FONT_HEADING, fontSize: 15, fontWeight: 700, color: HUB_TEXT }}>
             {room.title}
           </p>
-          {room.subtitle && (
+          {headerSubtitle && (
             <p style={{ fontSize: 10, fontFamily: "Inter, sans-serif", color: HUB_MUTED }}>
-              {room.subtitle}
+              {headerSubtitle}
             </p>
           )}
         </div>
@@ -1144,14 +1165,14 @@ function BookingSmartPanel({
 }) {
   const qc = useQueryClient();
   const { data: booking, isLoading } = useBookingDetailsForRoom(room, userId);
-  const [confirmCancel, setConfirmCancel] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const [published, setPublished] = useState(false);
+  const [confirmPublish, setConfirmPublish] = useState(false);
+  const [publishedNow, setPublishedNow] = useState(false);
+  const { data: hasPublishedInvite = false } = useBookingPublishedState(room.id, room.room_type === "booking");
 
-  const bookingIds = getBookingIds(booking);
   const accessCodes = getBookingAccessCodes(booking);
   const isOwner = !!booking && booking.bookings?.some((b: any) => b.user_id === userId);
+  const isPublished = publishedNow || hasPublishedInvite;
   const courtName = booking ? getBookingCourtLabel(booking) : room.title.split(" · ")[0] || "Bana";
   const courtNames = booking ? getBookingCourtNamesLabel(booking) : courtName;
   const start = booking?.start_time
@@ -1167,28 +1188,12 @@ function BookingSmartPanel({
   const statusLabel = isCancelled ? "Avbokad" : status === "pending" ? "Väntande" : "Bekräftad";
   const statusColor = isCancelled ? HUB_RED : status === "pending" ? "#2563eb" : HUB_GREEN;
 
-  const handleCancel = async () => {
-    if (!bookingIds.length || !userId) return;
-    setCancelling(true);
-    const { error } = await supabase
-      .from("bookings")
-      .update({ status: "cancelled" })
-      .in("id", bookingIds)
-      .eq("user_id", userId);
-    setCancelling(false);
-    if (error) {
-      toast.error("Kunde inte avboka");
+  const publishToDailyRoom = async () => {
+    if (!booking || !userId || publishing || isPublished) return;
+    if (!confirmPublish) {
+      setConfirmPublish(true);
       return;
     }
-    toast.success("Bokningen är avbokad");
-    setConfirmCancel(false);
-    qc.invalidateQueries({ queryKey: ["hub-booking-details"] });
-    qc.invalidateQueries({ queryKey: ["hub-bookings"] });
-    qc.invalidateQueries({ queryKey: ["my-bookings"] });
-  };
-
-  const publishToDailyRoom = async () => {
-    if (!booking || !userId || publishing) return;
     setPublishing(true);
     const today = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
     const { data: dailyRoom } = await supabase.rpc("upsert_daily_chat_room", {
@@ -1225,8 +1230,10 @@ function BookingSmartPanel({
       toast.error("Kunde inte posta i Pickla Idag");
       return;
     }
-    setPublished(true);
+    setPublishedNow(true);
+    setConfirmPublish(false);
     qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+    qc.invalidateQueries({ queryKey: ["booking-published-state", room.id] });
     toast.success("Publicerad i Pickla Idag");
   };
 
@@ -1295,20 +1302,14 @@ function BookingSmartPanel({
       {isOwner && !isCancelled && (
         <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", WebkitOverflowScrolling: "touch" as any }}>
           <SmartActionButton
-            label={published ? "Publik ✓" : "Gör publik"}
+            label={isPublished ? "Publik ✓" : confirmPublish ? "Publicera?" : "Gör publik"}
             onClick={publishToDailyRoom}
-            disabled={publishing || published}
-            tone={published ? "green" : "neutral"}
+            disabled={publishing || isPublished}
+            tone={isPublished ? "green" : "neutral"}
           />
           <SmartActionButton label="Bjud in" onClick={onShare} tone="dark" />
-          <SmartActionButton
-            label={confirmCancel ? "Säker?" : "Avboka"}
-            onClick={() => confirmCancel ? handleCancel() : setConfirmCancel(true)}
-            disabled={cancelling}
-            tone="danger"
-          />
-          {confirmCancel && (
-            <SmartActionButton label="Behåll" onClick={() => setConfirmCancel(false)} tone="neutral" />
+          {confirmPublish && (
+            <SmartActionButton label="Avbryt" onClick={() => setConfirmPublish(false)} tone="neutral" />
           )}
         </div>
       )}

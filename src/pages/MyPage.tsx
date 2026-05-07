@@ -20,6 +20,7 @@ import {
   getBookingCourtNamesLabel,
   getBookingIds,
   groupBookingRows,
+  stripBookingCodesFromText,
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -184,6 +185,21 @@ function getThreadTypeLabel(room: ActivityThreadRoom) {
   if (room.room_type === "event") return "Eventchat";
   if (room.room_type === "ritual") return "Tråd";
   return "Chat";
+}
+
+function getOwnedBookingThreadKeys(bookings: any[]) {
+  const keys = new Set<string>();
+  for (const booking of bookings) {
+    const groupResourceId = getBookingChatResourceId(booking);
+    if (groupResourceId) keys.add(groupResourceId);
+    if (booking.booking_ref) keys.add(booking.booking_ref);
+    for (const row of booking.bookings || []) {
+      if (row.booking_ref) keys.add(row.booking_ref);
+      const rowResourceId = getBookingChatResourceId(row);
+      if (rowResourceId) keys.add(rowResourceId);
+    }
+  }
+  return keys;
 }
 
 function useMyEventRegistrations(profile?: PlayerProfileContact | null) {
@@ -1178,6 +1194,14 @@ const MyPage = () => {
   });
   const activeBookingCount = activeBookings.length + activeEventRegistrations.length;
   const pastBookingCount = pastBookings.length + pastEventRegistrations.length;
+  const ownedBookingThreadKeys = getOwnedBookingThreadKeys(activeBookings);
+  const visibleActivityThreads = activityThreads.filter(({ room }) =>
+    room.room_type !== "booking" || !room.resource_id || !ownedBookingThreadKeys.has(room.resource_id)
+  );
+  const visibleThreadRoomIds = visibleActivityThreads.map((thread) => thread.room.id);
+  const visibleThreadPreviews = Object.fromEntries(
+    Object.entries(threadPreviews).filter(([roomId]) => visibleThreadRoomIds.includes(roomId))
+  );
   const membershipTier = (activeMembership as any)?.membership_tiers;
   const openBookingChat = (booking: any) => {
     navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`);
@@ -1379,16 +1403,16 @@ const MyPage = () => {
               </div>
             )}
 
-            {activityThreads.length > 0 && (
+            {visibleActivityThreads.length > 0 && (
               <div className="mt-4">
                 <div className="flex items-center gap-2 mb-2">
                   <MessageCircle className="w-4 h-4" style={{ color: BLUE }} />
                   <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Aktiva trådar</span>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{activityThreads.length}</span>
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{visibleActivityThreads.length}</span>
                 </div>
                 <div className="flex flex-col gap-2">
-                  {activityThreads.slice(0, 6).map(({ room }) => {
-                    const preview = threadPreviews[room.id];
+                  {visibleActivityThreads.slice(0, 6).map(({ room }) => {
+                    const preview = visibleThreadPreviews[room.id];
                     return (
                       <button
                         key={room.id}
@@ -1407,7 +1431,7 @@ const MyPage = () => {
                             </span>
                           </div>
                           <p className="text-xs truncate mt-0.5" style={{ color: TEXT_MUTED }}>
-                            {preview?.content || room.subtitle || "Ingen aktivitet än"}
+                            {preview?.content || stripBookingCodesFromText(room.subtitle) || "Ingen aktivitet än"}
                           </p>
                         </div>
                       </button>
