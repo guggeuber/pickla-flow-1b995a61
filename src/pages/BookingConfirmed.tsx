@@ -40,8 +40,9 @@ export default function BookingConfirmed() {
   // Redirect as soon as the webhook has created the booking.
   useEffect(() => {
     const bookingRef = (data as any)?.booking_ref;
+    const venueSlug = (data as any)?.venue_slug;
     if (bookingRef) {
-      navigate(`/b/${bookingRef}`, { replace: true });
+      navigate(`/booking-chat/${bookingRef}${venueSlug ? `?v=${venueSlug}` : ""}`, { replace: true });
     }
   }, [data, navigate]);
 

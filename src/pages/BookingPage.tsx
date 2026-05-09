@@ -102,6 +102,10 @@ type BookingMutationResult =
   | { type: "free"; redirect?: string }
   | { type: "stripe"; url: string };
 
+function bookingChatPath(bookingRef: string, slug: string) {
+  return `/booking-chat/${bookingRef}?v=${encodeURIComponent(slug)}`;
+}
+
 export default function BookingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -481,7 +485,7 @@ export default function BookingPage() {
       }
       const firstRef = result.bookings?.[0]?.booking_ref;
       if (firstRef) {
-        navigate(`/b/${firstRef}`);
+        navigate(bookingChatPath(firstRef, slug));
       } else {
         setConfirmed(true);
         toast.success("Bokad!");

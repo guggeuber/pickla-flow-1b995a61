@@ -61,7 +61,8 @@ async function createFreeEntitlementBookingResponse({
 
     const bookingRef = bookings[0]?.booking_ref;
     if (!bookingRef) return errorResponse('Booking could not be created', 500);
-    return jsonResponse({ free: true, redirect: `/b/${bookingRef}` });
+    const slugParam = meta.slug ? `?v=${encodeURIComponent(meta.slug)}` : '';
+    return jsonResponse({ free: true, redirect: `/booking-chat/${bookingRef}${slugParam}` });
   }
 
   if (product_type === 'day_pass' && meta.entitlement_type === 'free_day_pass_monthly') {
@@ -433,14 +434,21 @@ Deno.serve(async (req) => {
     const serviceClient = getServiceClient();
     const { data: booking } = await serviceClient
       .from('bookings')
-      .select('booking_ref')
+      .select('booking_ref, venue_id')
       .eq('stripe_session_id', sessionId)
       .neq('status', 'cancelled')
       .limit(1)
       .maybeSingle();
 
     if (!booking) return jsonResponse({ pending: true }, 200, 0);
-    return jsonResponse({ pending: false, booking_ref: booking.booking_ref }, 200, 0);
+
+    const { data: venue } = await serviceClient
+      .from('venues')
+      .select('slug')
+      .eq('id', booking.venue_id)
+      .maybeSingle();
+
+    return jsonResponse({ pending: false, booking_ref: booking.booking_ref, venue_slug: venue?.slug || '' }, 200, 0);
   }
 
   // ── Public endpoint: venue by slug (no auth required) ──
