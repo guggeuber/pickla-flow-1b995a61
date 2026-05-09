@@ -23,6 +23,7 @@ import {
   getBookingChatResourceId,
   getBookingCourtLabel,
   getBookingCourtNamesLabel,
+  getDirectBookingGroupFromResourceId,
   getStripeSessionFromResourceId,
   groupBookingRows,
   stripBookingCodesFromText,
@@ -321,6 +322,20 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
           .from("bookings")
           .select(select)
           .eq("stripe_session_id", stripeSessionId)
+          .neq("status", "cancelled")
+          .order("start_time", { ascending: true });
+        if (error) return null;
+        return groupBookingRows((data || []) as any[])[0] || null;
+      }
+
+      const directGroup = getDirectBookingGroupFromResourceId(room.resource_id);
+      if (directGroup) {
+        const { data, error } = await supabase
+          .from("bookings")
+          .select(select)
+          .eq("user_id", userId!)
+          .eq("start_time", directGroup.startTime)
+          .eq("end_time", directGroup.endTime)
           .neq("status", "cancelled")
           .order("start_time", { ascending: true });
         if (error) return null;

@@ -1,7 +1,11 @@
 export const BOOKING_GROUP_PREFIX = "stripe:";
+export const DIRECT_BOOKING_GROUP_PREFIX = "direct:";
 
 export function getBookingChatResourceId(booking: any): string {
   if (booking?.stripe_session_id) return `${BOOKING_GROUP_PREFIX}${booking.stripe_session_id}`;
+  if (booking?.start_time && booking?.end_time) {
+    return `${DIRECT_BOOKING_GROUP_PREFIX}${encodeURIComponent(booking.start_time)}:${encodeURIComponent(booking.end_time)}`;
+  }
   return booking?.booking_ref || booking?.id || "";
 }
 
@@ -12,6 +16,20 @@ export function isStripeBookingResourceId(resourceId?: string | null): boolean {
 export function getStripeSessionFromResourceId(resourceId?: string | null): string | null {
   if (!isStripeBookingResourceId(resourceId)) return null;
   return resourceId!.slice(BOOKING_GROUP_PREFIX.length);
+}
+
+export function getDirectBookingGroupFromResourceId(resourceId?: string | null): {
+  startTime: string;
+  endTime: string;
+} | null {
+  if (!resourceId?.startsWith(DIRECT_BOOKING_GROUP_PREFIX)) return null;
+  const raw = resourceId.slice(DIRECT_BOOKING_GROUP_PREFIX.length);
+  const [startTime, endTime] = raw.split(":");
+  if (!startTime || !endTime) return null;
+  return {
+    startTime: decodeURIComponent(startTime),
+    endTime: decodeURIComponent(endTime),
+  };
 }
 
 export function groupBookingRows(rows: any[] = []): any[] {
