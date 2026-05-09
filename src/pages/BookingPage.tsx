@@ -95,6 +95,13 @@ interface CorporateMembership {
   } | null;
 }
 
+type BookingMode = "direct" | "stripe";
+
+type BookingMutationResult =
+  | { type: "direct"; bookings: Array<{ booking_ref?: string }> }
+  | { type: "free"; redirect?: string }
+  | { type: "stripe"; url: string };
+
 export default function BookingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -398,62 +405,69 @@ export default function BookingPage() {
   const showContactFields = selectedCourts.length > 0 && !showProfileLoading && (!user || !hasContactDetails || editingContact);
   const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && Boolean(bookingName) && !editingContact;
 
+  const bookingMode: BookingMode = useCorporate || baseTotalPrice === 0 ? "direct" : "stripe";
+
+  const createDirectBooking = async (): Promise<BookingMutationResult> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    if (currentSession?.access_token) {
+      headers["Authorization"] = `Bearer ${currentSession.access_token}`;
+    }
+
+    const res = await fetch(`${BASE_URL}/api-bookings/public-book`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        slug,
+        courtIds: selectedCourts,
+        date: dateStr,
+        startTime: selectedTime,
+        endTime: selectedEndTime,
+        name: bookingName,
+        phone: bookingPhone,
+        corporatePackageId: useCorporate ? selectedPackageId : undefined,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Bokningen misslyckades");
+    }
+
+    const result = await res.json();
+    return { type: "direct", bookings: result.bookings || [] };
+  };
+
+  const createStripeOrEntitlementBooking = async (): Promise<BookingMutationResult> => {
+    const venueId = data?.venue?.id;
+    if (!venueId) throw new Error("Venue saknas");
+
+    const result = await apiPost("api-bookings", "create-checkout", {
+      product_type: "court_booking",
+      amount_sek:   baseTotalPrice,
+      venue_id:     venueId,
+      metadata: {
+        slug,
+        court_ids:      JSON.stringify(selectedCourts),
+        date:           dateStr,
+        start_time:     selectedTime!,
+        end_time:       selectedEndTime!,
+        duration_hours: String(durationHours),
+        name:           bookingName,
+        phone:          bookingPhone,
+        user_id:        user?.id || "",
+      },
+    });
+
+    if (result.free) return { type: "free", redirect: result.redirect };
+    return { type: "stripe", url: result.url };
+  };
+
   const bookMutation = useMutation({
     mutationFn: async () => {
-      const isFree = useCorporate || baseTotalPrice === 0;
-
-      if (isFree) {
-        // Corporate / free booking — create immediately without Stripe
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        const { data: { session: currentSession } } = await supabase.auth.getSession();
-        if (currentSession?.access_token) {
-          headers["Authorization"] = `Bearer ${currentSession.access_token}`;
-        }
-        const res = await fetch(`${BASE_URL}/api-bookings/public-book`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            slug,
-            courtIds: selectedCourts,
-            date: dateStr,
-            startTime: selectedTime,
-            endTime: selectedEndTime,
-            name: bookingName,
-            phone: bookingPhone,
-            corporatePackageId: useCorporate ? selectedPackageId : undefined,
-          }),
-        });
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || "Bokningen misslyckades");
-        }
-        const result = await res.json();
-        return { type: "direct" as const, bookings: result.bookings };
-      }
-
-      // Paid booking — redirect to Stripe Checkout
-      const venueId = data?.venue?.id;
-      if (!venueId) throw new Error("Venue saknas");
-
-      const result = await apiPost("api-bookings", "create-checkout", {
-        product_type: "court_booking",
-        amount_sek:   baseTotalPrice,
-        venue_id:     venueId,
-        metadata: {
-          slug,
-          court_ids:      JSON.stringify(selectedCourts),
-          date:           dateStr,
-          start_time:     selectedTime!,
-          end_time:       selectedEndTime!,
-          duration_hours: String(durationHours),
-          name:           bookingName,
-          phone:          bookingPhone,
-          user_id:        user?.id || "",
-        },
-      });
-      // Free entitlement booking — no Stripe needed
-      if (result.free) return { type: "free" as const, redirect: result.redirect };
-      return { type: "stripe" as const, url: result.url };
+      return bookingMode === "direct"
+        ? createDirectBooking()
+        : createStripeOrEntitlementBooking();
     },
     onSuccess: (result) => {
       if (result.type === "stripe") {
@@ -462,12 +476,12 @@ export default function BookingPage() {
       }
       if (result.type === "free") {
         toast.success("Bokad via ditt medlemskap!");
-        navigate("/hub");
+        navigate(result.redirect || "/activity");
         return;
       }
       const firstRef = result.bookings?.[0]?.booking_ref;
       if (firstRef) {
-        navigate("/hub");
+        navigate(`/b/${firstRef}`);
       } else {
         setConfirmed(true);
         toast.success("Bokad!");

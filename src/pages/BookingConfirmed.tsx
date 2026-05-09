@@ -39,8 +39,9 @@ export default function BookingConfirmed() {
 
   // Redirect as soon as the webhook has created the booking.
   useEffect(() => {
-    if ((data as any)?.booking_ref) {
-      navigate("/activity", { replace: true });
+    const bookingRef = (data as any)?.booking_ref;
+    if (bookingRef) {
+      navigate(`/b/${bookingRef}`, { replace: true });
     }
   }, [data, navigate]);
 

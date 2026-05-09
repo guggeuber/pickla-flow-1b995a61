@@ -5,6 +5,86 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
+async function createFreeEntitlementBookingResponse({
+  product_type,
+  meta,
+  venue_id,
+  entitlementUserId,
+}: {
+  product_type: string;
+  meta: Record<string, any>;
+  venue_id: string;
+  entitlementUserId: string;
+}) {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const adminFree = createClient(supabaseUrl, serviceKey);
+
+  if (product_type === 'court_booking' && meta.court_ids && meta.date) {
+    const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+    const endISO   = DateTime.fromISO(`${meta.date}T${meta.end_time}:00`,   { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+
+    let courtIds: string[];
+    try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
+    const accessCode = await generateAccessCode(adminFree, venue_id, meta.date);
+    const bookings = [];
+
+    for (const courtId of courtIds) {
+      const { data: booking, error: bookingErr } = await adminFree.from('bookings').insert({
+        venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
+        start_time: startISO, end_time: endISO, total_price: 0,
+        status: 'confirmed', access_code: accessCode, access_code_expires_at: endISO,
+      }).select('booking_ref').single();
+      if (bookingErr) return errorResponse(bookingErr.message, 500);
+      if (booking) bookings.push(booking);
+    }
+
+    const now = DateTime.now().setZone('Europe/Stockholm');
+    const weekStart = now.startOf('week').toISODate()!;
+    const weekEnd   = now.endOf('week').toISODate()!;
+    const durationHours = parseFloat(meta.duration_hours || '0');
+    if (durationHours > 0) {
+      const { data: currentUsage } = await adminFree
+        .from('membership_usage')
+        .select('used_value')
+        .eq('user_id', entitlementUserId)
+        .eq('venue_id', venue_id)
+        .eq('entitlement_type', 'court_hours_per_week')
+        .eq('period_start', weekStart)
+        .maybeSingle();
+
+      await adminFree.from('membership_usage').upsert({
+        user_id: entitlementUserId, venue_id, entitlement_type: 'court_hours_per_week',
+        period_start: weekStart, period_end: weekEnd, used_value: (currentUsage?.used_value || 0) + durationHours,
+      }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
+    }
+
+    const bookingRef = bookings[0]?.booking_ref;
+    if (!bookingRef) return errorResponse('Booking could not be created', 500);
+    return jsonResponse({ free: true, redirect: `/b/${bookingRef}` });
+  }
+
+  if (product_type === 'day_pass' && meta.entitlement_type === 'free_day_pass_monthly') {
+    const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+    await adminFree.from('day_passes').insert({
+      venue_id, user_id: entitlementUserId, valid_date: today,
+      purchase_date: today, price: 0, status: 'active', is_free: true,
+    }).select('id').single();
+
+    await adminFree.from('membership_usage').upsert({
+      user_id: entitlementUserId, venue_id,
+      entitlement_type: 'free_day_pass_monthly',
+      period_start: meta.entitlement_period_start,
+      period_end: meta.entitlement_period_end,
+      used_value: 1,
+    }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
+
+    return jsonResponse({ free: true, redirect: '/my' });
+  }
+
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -253,61 +333,13 @@ Deno.serve(async (req) => {
 
     // Free entitlement bookings bypass Stripe entirely
     if (finalAmountSek === 0 && !isMembership) {
-      // Create booking/day-pass directly and return success
-      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-      const adminFree = createClient(supabaseUrl, serviceKey);
-
-      if (product_type === 'court_booking' && meta.court_ids && meta.date) {
-        const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
-        const endISO   = DateTime.fromISO(`${meta.date}T${meta.end_time}:00`,   { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
-
-        let courtIds: string[];
-        try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
-        const accessCode = await generateAccessCode(adminFree, venue_id, meta.date);
-
-        for (const courtId of courtIds) {
-          await adminFree.from('bookings').insert({
-            venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
-            start_time: startISO, end_time: endISO, total_price: 0,
-            status: 'confirmed', access_code: accessCode, access_code_expires_at: endISO,
-          });
-        }
-
-        // Track usage
-        const now = DateTime.now().setZone('Europe/Stockholm');
-        const weekStart = now.startOf('week').toISODate()!;
-        const weekEnd   = now.endOf('week').toISODate()!;
-        const durationHours = parseFloat(meta.duration_hours || '0');
-        if (durationHours > 0) {
-          await adminFree.from('membership_usage').upsert({
-            user_id: entitlementUserId, venue_id, entitlement_type: 'court_hours_per_week',
-            period_start: weekStart, period_end: weekEnd, used_value: durationHours,
-          }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
-        }
-
-        const bookingRef = courtIds[0]; // simplified ref for redirect
-        return jsonResponse({ free: true, redirect: `/b/${bookingRef}` });
-      }
-
-      if (product_type === 'day_pass' && meta.entitlement_type === 'free_day_pass_monthly') {
-        const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
-        const { data: newPass } = await adminFree.from('day_passes').insert({
-          venue_id, user_id: entitlementUserId, valid_date: today,
-          purchase_date: today, price: 0, status: 'active', is_free: true,
-        }).select('id').single();
-
-        // Track usage
-        await adminFree.from('membership_usage').upsert({
-          user_id: entitlementUserId, venue_id,
-          entitlement_type: 'free_day_pass_monthly',
-          period_start: meta.entitlement_period_start,
-          period_end: meta.entitlement_period_end,
-          used_value: 1,
-        }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
-
-        return jsonResponse({ free: true, redirect: '/my' });
-      }
+      const freeResponse = await createFreeEntitlementBookingResponse({
+        product_type,
+        meta,
+        venue_id,
+        entitlementUserId,
+      });
+      if (freeResponse) return freeResponse;
     }
 
     // Use finalAmountSek for Stripe session (may be discounted)
