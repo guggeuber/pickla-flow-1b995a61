@@ -23,6 +23,7 @@ async function createFreeEntitlementBookingResponse({
   if (product_type === 'court_booking' && meta.court_ids && meta.date) {
     const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
     const endISO   = DateTime.fromISO(`${meta.date}T${meta.end_time}:00`,   { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+    const notes = [meta.name, meta.phone].filter(Boolean).join(' | ') || null;
 
     let courtIds: string[];
     try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
@@ -33,7 +34,7 @@ async function createFreeEntitlementBookingResponse({
       const { data: booking, error: bookingErr } = await adminFree.from('bookings').insert({
         venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
         start_time: startISO, end_time: endISO, total_price: 0,
-        status: 'confirmed', access_code: accessCode, access_code_expires_at: endISO,
+        status: 'confirmed', notes, access_code: accessCode, access_code_expires_at: endISO,
       }).select('booking_ref').single();
       if (bookingErr) return errorResponse(bookingErr.message, 500);
       if (booking) bookings.push(booking);

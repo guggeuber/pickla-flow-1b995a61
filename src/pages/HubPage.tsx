@@ -297,7 +297,7 @@ function useBookingRooms(venueId: string | undefined, userId: string | undefined
       const now = DateTime.now().setZone("Europe/Stockholm").toUTC().toISO()!;
       const { data } = await supabase
         .from("bookings")
-        .select("id, booking_ref, stripe_session_id, start_time, end_time, total_price, status, venue_courts(name), access_code")
+        .select("id, booking_ref, stripe_session_id, start_time, end_time, total_price, status, notes, venue_courts(name), access_code")
         .eq("user_id", userId!)
         .neq("status", "cancelled")
         .gte("end_time", now)
@@ -315,7 +315,7 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
     staleTime: 30000,
     queryFn: async () => {
       const stripeSessionId = getStripeSessionFromResourceId(room.resource_id);
-      const select = "id, booking_ref, stripe_session_id, user_id, status, start_time, end_time, total_price, access_code, venue_courts(name)";
+      const select = "id, booking_ref, stripe_session_id, user_id, status, start_time, end_time, total_price, notes, access_code, venue_courts(name)";
 
       if (stripeSessionId) {
         const { data, error } = await supabase
@@ -330,14 +330,19 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
 
       const directGroup = getDirectBookingGroupFromResourceId(room.resource_id);
       if (directGroup) {
-        const { data, error } = await supabase
+        let query = supabase
           .from("bookings")
           .select(select)
           .eq("user_id", userId!)
           .eq("start_time", directGroup.startTime)
           .eq("end_time", directGroup.endTime)
-          .neq("status", "cancelled")
-          .order("start_time", { ascending: true });
+          .neq("status", "cancelled");
+        if (directGroup.groupToken) {
+          query = directGroup.groupToken.startsWith("code:")
+            ? query.eq("access_code", directGroup.groupToken.slice("code:".length))
+            : query.eq("notes", directGroup.groupToken);
+        }
+        const { data, error } = await query.order("start_time", { ascending: true });
         if (error) return null;
         return groupBookingRows((data || []) as any[])[0] || null;
       }

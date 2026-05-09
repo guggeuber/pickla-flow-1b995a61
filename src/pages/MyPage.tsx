@@ -19,6 +19,7 @@ import {
   getBookingCourtLabel,
   getBookingCourtNamesLabel,
   getBookingIds,
+  getLegacyDirectBookingTimeResourceId,
   groupBookingRows,
   stripBookingCodesFromText,
 } from "@/lib/bookingGroups";
@@ -192,11 +193,15 @@ function getOwnedBookingThreadKeys(bookings: any[]) {
   for (const booking of bookings) {
     const groupResourceId = getBookingChatResourceId(booking);
     if (groupResourceId) keys.add(groupResourceId);
+    const legacyDirectResourceId = getLegacyDirectBookingTimeResourceId(booking);
+    if (legacyDirectResourceId) keys.add(legacyDirectResourceId);
     if (booking.booking_ref) keys.add(booking.booking_ref);
     for (const row of booking.bookings || []) {
       if (row.booking_ref) keys.add(row.booking_ref);
       const rowResourceId = getBookingChatResourceId(row);
       if (rowResourceId) keys.add(rowResourceId);
+      const legacyRowResourceId = getLegacyDirectBookingTimeResourceId(row);
+      if (legacyRowResourceId) keys.add(legacyRowResourceId);
     }
   }
   return keys;
