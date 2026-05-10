@@ -103,7 +103,13 @@ Deno.serve(async (req) => {
     // POST /api-events/create
     if (req.method === 'POST' && path === 'create') {
       const body = await req.json();
-      const { name, eventType, format, venueId, startDate, endDate, numberOfCourts, pointsToWin, bestOf, winByTwo, matchDurationDefault, isPublic, scoringType, scoringFormat, competitionType, templateId, startTime, endTime, entryFee, entryFeeType, courtIds } = body;
+      const {
+        name, eventType, format, venueId, startDate, endDate, numberOfCourts, pointsToWin,
+        bestOf, winByTwo, matchDurationDefault, isPublic, scoringType, scoringFormat,
+        competitionType, templateId, startTime, endTime, entryFee, entryFeeType, courtIds,
+        planningStatus, visibility, customerName, customerEmail, customerPhone,
+        expectedParticipants, ownerName, partnerNotes, internalNotes,
+      } = body;
 
       if (!name || !eventType || !format) return errorResponse('Missing name, eventType, or format');
 
@@ -150,7 +156,16 @@ Deno.serve(async (req) => {
         best_of: bestOf || null,
         win_by_two: winByTwo || false,
         match_duration_default: matchDurationDefault || null,
-        is_public: isPublic !== false,
+        is_public: isPublic === true,
+        planning_status: planningStatus || (isPublic === true ? 'published' : 'booked'),
+        visibility: visibility || (isPublic === true ? 'public' : 'internal'),
+        customer_name: customerName || null,
+        customer_email: customerEmail || null,
+        customer_phone: customerPhone || null,
+        expected_participants: expectedParticipants != null ? Number(expectedParticipants) : null,
+        owner_name: ownerName || null,
+        partner_notes: partnerNotes || null,
+        internal_notes: internalNotes || null,
         scoring_type: scoringType || null,
         scoring_format: scoringFormat || null,
         competition_type: competitionType || null,
@@ -197,6 +212,10 @@ Deno.serve(async (req) => {
         // New fields
         startTime: 'start_time', endTime: 'end_time',
         entryFee: 'entry_fee', entryFeeType: 'entry_fee_type',
+        planningStatus: 'planning_status', visibility: 'visibility',
+        customerName: 'customer_name', customerEmail: 'customer_email',
+        customerPhone: 'customer_phone', expectedParticipants: 'expected_participants',
+        ownerName: 'owner_name', partnerNotes: 'partner_notes', internalNotes: 'internal_notes',
       };
 
       const dbUpdates: Record<string, any> = {};

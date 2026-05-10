@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, Clock } from "lucide-react";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, CalendarDays, Columns3, Presentation, Users, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -38,6 +38,15 @@ interface EventRow {
   whatsapp_url?: string | null;
   slug?: string | null;
   logo_url?: string | null;
+  planning_status?: string | null;
+  visibility?: string | null;
+  customer_name?: string | null;
+  customer_email?: string | null;
+  customer_phone?: string | null;
+  expected_participants?: number | null;
+  owner_name?: string | null;
+  partner_notes?: string | null;
+  internal_notes?: string | null;
   event_courts?: { id: string; name: string; court_number: number }[];
 }
 
@@ -58,6 +67,24 @@ const DEFAULT_CATEGORIES: CategoryOption[] = [
   { key: "training", label: "Träning" },
   { key: "social", label: "Social / Klubb" },
 ];
+
+const PIPELINE_STAGES = [
+  { key: "inquiry", label: "Förfrågan", tone: "bg-sky-500" },
+  { key: "tentative", label: "Preliminär", tone: "bg-amber-500" },
+  { key: "booked", label: "Bokad", tone: "bg-blue-500" },
+  { key: "ready", label: "Redo att publicera", tone: "bg-violet-500" },
+  { key: "published", label: "Publicerad", tone: "bg-emerald-500" },
+  { key: "done", label: "Genomförd", tone: "bg-muted-foreground" },
+  { key: "cancelled", label: "Avbokad", tone: "bg-red-500" },
+];
+
+const VISIBILITY_LABELS: Record<string, string> = {
+  internal: "Intern",
+  partners: "Partners",
+  public: "Publik",
+};
+
+type AdminEventView = "pipeline" | "calendar" | "meeting";
 
 function useVenueCategories(venueId?: string) {
   return useQuery<CategoryOption[]>({
@@ -155,6 +182,15 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
   const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>([]);
   const [entryFee, setEntryFee] = useState("");
   const [entryFeeType, setEntryFeeType] = useState("fixed");
+  const [planningStatus, setPlanningStatus] = useState("inquiry");
+  const [visibility, setVisibility] = useState("internal");
+  const [customerName, setCustomerName] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [expectedParticipants, setExpectedParticipants] = useState("");
+  const [ownerName, setOwnerName] = useState("");
+  const [partnerNotes, setPartnerNotes] = useState("");
+  const [internalNotes, setInternalNotes] = useState("");
   const [isPending, setIsPending] = useState(false);
 
   const activeTemplates = (templates || []).filter(t => t.is_active);
@@ -186,12 +222,21 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
         venueId,
         startDate: startDate || undefined,
         numberOfCourts: Number(numberOfCourts) || 1,
-        isPublic: true,
+        isPublic: visibility === "public" || planningStatus === "published",
         templateId: selectedTemplateId || undefined,
         startTime: startTime || undefined,
         endTime: endTime || undefined,
         entryFee: entryFee ? Number(entryFee) : undefined,
         entryFeeType,
+        planningStatus,
+        visibility,
+        customerName: customerName.trim() || undefined,
+        customerEmail: customerEmail.trim() || undefined,
+        customerPhone: customerPhone.trim() || undefined,
+        expectedParticipants: expectedParticipants ? Number(expectedParticipants) : undefined,
+        ownerName: ownerName.trim() || undefined,
+        partnerNotes: partnerNotes.trim() || undefined,
+        internalNotes: internalNotes.trim() || undefined,
         courtIds: selectedCourtIds.length > 0 ? selectedCourtIds : undefined,
       });
       toast.success("Event skapat!");
@@ -199,6 +244,9 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
       setName(""); setDisplayName(""); setStartDate(""); setStartTime(""); setEndTime("");
       setSelectedTemplateId(null); setNumberOfCourts("1"); setSelectedCourtIds([]);
       setEntryFee(""); setEntryFeeType("fixed");
+      setPlanningStatus("inquiry"); setVisibility("internal");
+      setCustomerName(""); setCustomerEmail(""); setCustomerPhone("");
+      setExpectedParticipants(""); setOwnerName(""); setPartnerNotes(""); setInternalNotes("");
       onCreated();
     } catch (e: any) {
       toast.error(e.message);
@@ -334,6 +382,51 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Pipeline</Label>
+              <Select value={planningStatus} onValueChange={setPlanningStatus}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PIPELINE_STAGES.map((stage) => (
+                    <SelectItem key={stage.key} value={stage.key}>{stage.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Synlighet</Label>
+              <Select value={visibility} onValueChange={setVisibility}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="internal">Intern</SelectItem>
+                  <SelectItem value="partners">Partners</SelectItem>
+                  <SelectItem value="public">Publik</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Kund / partner</Label>
+              <Input className="mt-1" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Bolag eller kontakt" />
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Deltagare</Label>
+              <Input className="mt-1" type="number" value={expectedParticipants} onChange={(e) => setExpectedParticipants(e.target.value)} placeholder="24" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <Input value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} placeholder="email" />
+            <Input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="telefon" />
+            <Input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="ansvarig" />
+          </div>
+
+          <Textarea value={partnerNotes} onChange={(e) => setPartnerNotes(e.target.value)} placeholder="Partner-/mötesnotering: kort text som går att visa externt" />
+          <Textarea value={internalNotes} onChange={(e) => setInternalNotes(e.target.value)} placeholder="Intern notering: offert, beslut, risker, todo" />
+
           {/* Entry fee */}
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -414,6 +507,15 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
   const [endTime, setEndTime] = useState(event.end_time || "");
   const [entryFee, setEntryFee] = useState(event.entry_fee != null ? String(event.entry_fee) : "");
   const [entryFeeType, setEntryFeeType] = useState(event.entry_fee_type || "fixed");
+  const [planningStatus, setPlanningStatus] = useState(event.planning_status || (event.is_public ? "published" : "booked"));
+  const [visibility, setVisibility] = useState(event.visibility || (event.is_public ? "public" : "internal"));
+  const [customerName, setCustomerName] = useState(event.customer_name || "");
+  const [customerEmail, setCustomerEmail] = useState(event.customer_email || "");
+  const [customerPhone, setCustomerPhone] = useState(event.customer_phone || "");
+  const [expectedParticipants, setExpectedParticipants] = useState(event.expected_participants != null ? String(event.expected_participants) : "");
+  const [ownerName, setOwnerName] = useState(event.owner_name || "");
+  const [partnerNotes, setPartnerNotes] = useState(event.partner_notes || "");
+  const [internalNotes, setInternalNotes] = useState(event.internal_notes || "");
   const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>(
     (event.event_courts || []).map(c => c.id)
   );
@@ -503,6 +605,15 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
         endTime: endTime || null,
         entryFee: entryFee ? Number(entryFee) : null,
         entryFeeType,
+        planningStatus,
+        visibility,
+        customerName: customerName.trim() || null,
+        customerEmail: customerEmail.trim() || null,
+        customerPhone: customerPhone.trim() || null,
+        expectedParticipants: expectedParticipants ? Number(expectedParticipants) : null,
+        ownerName: ownerName.trim() || null,
+        partnerNotes: partnerNotes.trim() || null,
+        internalNotes: internalNotes.trim() || null,
         courtIds: selectedCourtIds,
       });
       toast.success("Event uppdaterat!");
@@ -625,6 +736,44 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
           </Select>
         </div>
 
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Pipeline</Label>
+            <Select value={planningStatus} onValueChange={setPlanningStatus}>
+              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {PIPELINE_STAGES.map((stage) => (
+                  <SelectItem key={stage.key} value={stage.key}>{stage.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Synlighet</Label>
+            <Select value={visibility} onValueChange={setVisibility}>
+              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="internal">Intern</SelectItem>
+                <SelectItem value="partners">Partners</SelectItem>
+                <SelectItem value="public">Publik</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-secondary/40 p-3 space-y-3">
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Kund & ansvar</Label>
+          <div className="grid grid-cols-2 gap-3">
+            <Input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Kund / partner" />
+            <Input type="number" value={expectedParticipants} onChange={(e) => setExpectedParticipants(e.target.value)} placeholder="Antal deltagare" />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <Input value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} placeholder="email" />
+            <Input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="telefon" />
+            <Input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="ansvarig" />
+          </div>
+        </div>
+
         {/* Date fields */}
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -705,6 +854,26 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
         </div>
 
         <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Partner-/mötesnotering</Label>
+          <Textarea
+            className="mt-1 min-h-[80px]"
+            value={partnerNotes}
+            onChange={(e) => setPartnerNotes(e.target.value)}
+            placeholder="Kort, säljbar notering som kan visas i möten."
+          />
+        </div>
+
+        <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Intern notering</Label>
+          <Textarea
+            className="mt-1 min-h-[90px]"
+            value={internalNotes}
+            onChange={(e) => setInternalNotes(e.target.value)}
+            placeholder="Offert, kontakt, beslut, todo, intern risk."
+          />
+        </div>
+
+        <div>
           <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">WhatsApp-grupplänk</Label>
           <Input className="mt-1" value={whatsappUrl} onChange={(e) => setWhatsappUrl(e.target.value)} placeholder="https://chat.whatsapp.com/..." />
         </div>
@@ -780,6 +949,7 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
   const { data: categories } = useVenueCategories(venueId);
   const cats = categories || DEFAULT_CATEGORIES;
   const [selectedEvent, setSelectedEvent] = useState<EventRow | null>(null);
+  const [view, setView] = useState<AdminEventView>("pipeline");
   const qc = useQueryClient();
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
@@ -788,61 +958,178 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
     return <EventDetail event={selectedEvent} venueId={venueId} onBack={() => setSelectedEvent(null)} categories={cats} />;
   }
 
-  const statusColors: Record<string, string> = {
-    upcoming: "hsl(var(--badge-vip))",
-    active: "hsl(var(--court-free))",
-    in_progress: "hsl(var(--primary))",
-    completed: "hsl(var(--muted-foreground))",
+  const eventRows = events || [];
+  const livePipeline = eventRows.filter((evt) => (evt.planning_status || "booked") !== "done" && (evt.planning_status || "booked") !== "cancelled");
+  const upcomingMeetingEvents = eventRows
+    .filter((evt) => ["partners", "public"].includes(evt.visibility || (evt.is_public ? "public" : "internal")))
+    .filter((evt) => (evt.planning_status || "booked") !== "cancelled")
+    .sort((a, b) => String(a.start_date || "").localeCompare(String(b.start_date || "")))
+    .slice(0, 12);
+  const monthGroups = eventRows.reduce<Record<string, EventRow[]>>((acc, evt) => {
+    const key = evt.start_date ? format(new Date(evt.start_date), "MMM yyyy") : "Utan datum";
+    acc[key] = acc[key] || [];
+    acc[key].push(evt);
+    return acc;
+  }, {});
+
+  const renderEventMini = (evt: EventRow, compact = false) => {
+    const planning = evt.planning_status || (evt.is_public ? "published" : "booked");
+    const stage = PIPELINE_STAGES.find((s) => s.key === planning) || PIPELINE_STAGES[2];
+    return (
+      <button
+        key={evt.id}
+        onClick={() => setSelectedEvent(evt)}
+        className={`w-full rounded-2xl border border-border bg-card text-left transition-all hover:border-primary/30 ${compact ? "p-3" : "p-4"}`}
+      >
+        <div className="flex items-start gap-3">
+          {evt.logo_url ? (
+            <img src={evt.logo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
+          ) : (
+            <div className="w-10 h-10 rounded-xl flex-shrink-0 bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
+              {(evt.display_name || evt.name || "?")[0].toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <p className="text-sm font-bold text-foreground truncate">{evt.display_name || evt.name}</p>
+              {evt.show_on_sticker && <Tag className="w-3 h-3 text-primary flex-shrink-0" />}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${stage.tone}`} />
+              <span className="text-[10px] text-muted-foreground">{stage.label}</span>
+              <span className="text-[10px] text-muted-foreground">· {VISIBILITY_LABELS[evt.visibility || (evt.is_public ? "public" : "internal")]}</span>
+              {evt.start_date && <span className="text-[10px] text-muted-foreground">· {format(new Date(evt.start_date), "d MMM")}</span>}
+              {evt.start_time && <span className="text-[10px] text-muted-foreground">· {evt.start_time.slice(0, 5)}{evt.end_time ? `-${evt.end_time.slice(0, 5)}` : ""}</span>}
+            </div>
+            {!compact && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {evt.customer_name && <Badge variant="secondary" className="text-[10px]">{evt.customer_name}</Badge>}
+                {evt.expected_participants != null && <Badge variant="secondary" className="text-[10px]">{evt.expected_participants} pers</Badge>}
+                {evt.owner_name && <Badge variant="outline" className="text-[10px]">{evt.owner_name}</Badge>}
+              </div>
+            )}
+          </div>
+          <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 flex-shrink-0 mt-1" />
+        </div>
+      </button>
+    );
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
+      <div className="glass-card rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-widest text-muted-foreground">Eventplanering</p>
+            <h2 className="text-xl font-bold text-foreground">Pipeline & kalender</h2>
+          </div>
+          <Badge variant="secondary" className="gap-1">
+            <Users className="w-3 h-3" />
+            {livePipeline.length} aktiva
+          </Badge>
+        </div>
+        <div className="grid grid-cols-3 gap-1 rounded-xl bg-secondary p-1">
+          {[
+            { key: "pipeline", label: "Pipeline", icon: Columns3 },
+            { key: "calendar", label: "Kalender", icon: CalendarDays },
+            { key: "meeting", label: "Möte", icon: Presentation },
+          ].map((item) => {
+            const Icon = item.icon;
+            const active = view === item.key;
+            return (
+              <button
+                key={item.key}
+                onClick={() => setView(item.key as AdminEventView)}
+                className={`rounded-lg px-2 py-2 text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <CreateEventDialog venueId={venueId} onCreated={() => qc.invalidateQueries({ queryKey: ["admin-events", venueId] })} categories={cats} />
 
-      {events && events.length > 0 ? (
-        events.map((evt) => (
-          <button
-            key={evt.id}
-            onClick={() => setSelectedEvent(evt)}
-            className="w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all hover:border-primary/20"
-          >
-            {evt.logo_url ? (
-              <img src={evt.logo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
-            ) : (
-              <div className="w-10 h-10 rounded-xl flex-shrink-0 bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
-                {(evt.display_name || evt.name || "?")[0].toUpperCase()}
+      {view === "pipeline" && (
+        <div className="space-y-3">
+          {PIPELINE_STAGES.map((stage) => {
+            const stageEvents = eventRows.filter((evt) => (evt.planning_status || (evt.is_public ? "published" : "booked")) === stage.key);
+            if (stageEvents.length === 0 && !["inquiry", "tentative", "booked", "ready"].includes(stage.key)) return null;
+            return (
+              <div key={stage.key} className="glass-card rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${stage.tone}`} />
+                    <p className="text-sm font-bold text-foreground">{stage.label}</p>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{stageEvents.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {stageEvents.length > 0 ? stageEvents.map((evt) => renderEventMini(evt, true)) : (
+                    <p className="text-xs text-muted-foreground py-3 text-center">Tomt</p>
+                  )}
+                </div>
               </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-bold text-foreground truncate">{evt.display_name || evt.name}</p>
-                {evt.show_on_sticker && <Tag className="w-3 h-3 text-primary flex-shrink-0" />}
-              </div>
-              <div className="flex items-center gap-2 mt-1">
-                <span
-                  className="inline-block w-1.5 h-1.5 rounded-full"
-                  style={{ background: statusColors[evt.status || "upcoming"] || "gray" }}
-                />
-                <span className="text-[10px] text-muted-foreground capitalize">{evt.status || "upcoming"}</span>
-                {evt.start_date && (
-                  <span className="text-[10px] text-muted-foreground">
-                    · {format(new Date(evt.start_date), "d MMM yyyy")}
-                  </span>
-                )}
-                {evt.start_time && (
-                  <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-                    <Clock className="w-2.5 h-2.5" />
-                    {evt.start_time.slice(0, 5)}
-                    {evt.end_time ? `–${evt.end_time.slice(0, 5)}` : ''}
-                  </span>
-                )}
+            );
+          })}
+        </div>
+      )}
+
+      {view === "calendar" && (
+        <div className="space-y-3">
+          {Object.keys(monthGroups).length > 0 ? Object.entries(monthGroups).map(([month, rows]) => (
+            <div key={month} className="glass-card rounded-2xl p-3">
+              <p className="text-xs uppercase tracking-widest text-muted-foreground mb-2">{month}</p>
+              <div className="space-y-2">
+                {rows
+                  .sort((a, b) => String(a.start_date || "").localeCompare(String(b.start_date || "")))
+                  .map((evt) => renderEventMini(evt))}
               </div>
             </div>
-            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 flex-shrink-0" />
-          </button>
-        ))
-      ) : (
-        <p className="text-sm text-muted-foreground text-center py-8">Inga event ännu</p>
+          )) : (
+            <p className="text-sm text-muted-foreground text-center py-8">Inga event ännu</p>
+          )}
+        </div>
+      )}
+
+      {view === "meeting" && (
+        <div className="space-y-3">
+          <div className="rounded-2xl p-4 bg-white text-neutral-950 border border-border">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">Partneröversikt</p>
+                <h3 className="text-2xl font-black tracking-tight">Kommande aktiveringar</h3>
+              </div>
+              <Eye className="w-5 h-5 text-neutral-400" />
+            </div>
+            <p className="text-xs text-neutral-500 mt-2">Visar endast event markerade för partners eller publik vy. Interna anteckningar döljs.</p>
+          </div>
+          {upcomingMeetingEvents.length > 0 ? upcomingMeetingEvents.map((evt) => (
+            <button
+              key={evt.id}
+              onClick={() => setSelectedEvent(evt)}
+              className="w-full rounded-2xl bg-white text-neutral-950 border border-neutral-200 p-4 text-left"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-widest text-neutral-400">
+                    {evt.start_date ? format(new Date(evt.start_date), "d MMM yyyy") : "Datum sätts"} {evt.start_time ? `· ${evt.start_time.slice(0, 5)}` : ""}
+                  </p>
+                  <h4 className="text-lg font-black mt-1">{evt.display_name || evt.name}</h4>
+                  <p className="text-sm text-neutral-500 mt-1">
+                    {[evt.customer_name, evt.expected_participants ? `${evt.expected_participants} deltagare` : null, evt.event_courts?.length ? `${evt.event_courts.length} banor` : null].filter(Boolean).join(" · ") || "Planerad aktivitet"}
+                  </p>
+                  {evt.partner_notes && <p className="text-sm text-neutral-700 mt-3 leading-relaxed">{evt.partner_notes}</p>}
+                </div>
+                <Badge variant={evt.is_public ? "default" : "secondary"}>{evt.is_public ? "Publik" : "Partner"}</Badge>
+              </div>
+            </button>
+          )) : (
+            <p className="text-sm text-muted-foreground text-center py-8">Inga partner/publika event att visa ännu</p>
+          )}
+        </div>
       )}
     </div>
   );
