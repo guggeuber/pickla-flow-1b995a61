@@ -17,6 +17,7 @@ import PlayPage from "./pages/PlayPage";
 import EventsListPage from "./pages/EventsListPage";
 import OpenPlayPage from "./pages/OpenPlayPage";
 import EventPage from "./pages/EventPage";
+import EventPlanPublic from "./pages/EventPlanPublic";
 import BookingPage from "./pages/BookingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
 import BookingConfirmed from "./pages/BookingConfirmed";
@@ -77,6 +78,7 @@ const App = () => (
             <Route path="/openplay" element={<OpenPlayPage />} />
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="/event/:id" element={<EventPage />} />
+            <Route path="/event-plan/:venueId" element={<EventPlanPublic />} />
             <Route path="/e/:slug" element={<EventPage />} />
             <Route path="/book" element={<BookingPage />} />
             <Route path="/membership" element={<MembershipPage />} />

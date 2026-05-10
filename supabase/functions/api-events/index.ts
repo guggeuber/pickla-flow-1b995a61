@@ -1,5 +1,5 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
-import { getAuthenticatedClient } from '../_shared/auth.ts';
+import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -10,8 +10,65 @@ Deno.serve(async (req) => {
   const path = url.pathname.split('/').pop() || '';
 
   try {
+    // Public, token-gated partner/event plan view. No auth required.
+    if (req.method === 'GET' && path === 'public-plan') {
+      const venueId = url.searchParams.get('venueId');
+      const token = url.searchParams.get('token');
+      if (!venueId || !token) return errorResponse('Missing venueId or token', 400);
+
+      const serviceClient = getServiceClient();
+      const { data: venue, error: venueErr } = await serviceClient
+        .from('venues')
+        .select('id, name, slug, city, event_plan_share_token')
+        .eq('id', venueId)
+        .maybeSingle();
+
+      if (venueErr || !venue || venue.event_plan_share_token !== token) {
+        return errorResponse('Invalid link', 404);
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error: qErr } = await serviceClient
+        .from('events')
+        .select('id, name, display_name, start_date, start_time, end_time, is_public, planning_status, visibility, customer_name, expected_participants, partner_notes, resources, staffing, number_of_courts')
+        .eq('venue_id', venueId)
+        .in('visibility', ['partners', 'public'])
+        .neq('planning_status', 'cancelled')
+        .neq('planning_status', 'done')
+        .or(`start_date.is.null,start_date.gte.${today}`)
+        .order('start_date', { ascending: true });
+
+      if (qErr) return errorResponse(qErr.message);
+      return jsonResponse({ venue, events: data || [] }, 200, 60);
+    }
+
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+    // POST /api-events/meeting-link — create/get a share token for partner meeting view
+    if (req.method === 'POST' && path === 'meeting-link') {
+      const body = await req.json();
+      const { venueId } = body;
+      if (!venueId) return errorResponse('Missing venueId');
+
+      const { data: venue, error: venueErr } = await client
+        .from('venues')
+        .select('id, event_plan_share_token')
+        .eq('id', venueId)
+        .single();
+      if (venueErr || !venue) return errorResponse('Venue not found', 404);
+
+      const token = venue.event_plan_share_token || crypto.randomUUID().replaceAll('-', '');
+      if (!venue.event_plan_share_token) {
+        const { error: updateErr } = await client
+          .from('venues')
+          .update({ event_plan_share_token: token })
+          .eq('id', venueId);
+        if (updateErr) return errorResponse(updateErr.message);
+      }
+
+      return jsonResponse({ token });
+    }
 
     // GET /api-events/list?venueId=X&status=active,upcoming
     if (req.method === 'GET' && path === 'list') {

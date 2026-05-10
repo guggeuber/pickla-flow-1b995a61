@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, CalendarDays, Columns3, Presentation, Users, Eye, LayoutGrid, UserRoundCheck } from "lucide-react";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, CalendarDays, Columns3, Presentation, Users, LayoutGrid, UserRoundCheck, Share2 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -1058,6 +1058,7 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
   const [selectedEvent, setSelectedEvent] = useState<EventRow | null>(null);
   const [view, setView] = useState<AdminEventView>("pipeline");
   const [timeFilter, setTimeFilter] = useState<EventTimeFilter>("upcoming");
+  const [creatingShareLink, setCreatingShareLink] = useState(false);
   const qc = useQueryClient();
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
@@ -1085,6 +1086,20 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
     acc[key].push(evt);
     return acc;
   }, {});
+
+  const copyMeetingLink = async () => {
+    setCreatingShareLink(true);
+    try {
+      const result = await apiPost("api-events", "meeting-link", { venueId });
+      const url = `${window.location.origin}/event-plan/${venueId}?token=${encodeURIComponent(result.token)}`;
+      await navigator.clipboard.writeText(url);
+      toast.success("Möteslänk kopierad");
+    } catch (e: any) {
+      toast.error(e.message || "Kunde inte skapa möteslänk");
+    } finally {
+      setCreatingShareLink(false);
+    }
+  };
 
   const renderEventMini = (evt: EventRow, compact = false) => {
     const planning = evt.planning_status || (evt.is_public ? "published" : "booked");
@@ -1263,7 +1278,14 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
                 <p className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">Partneröversikt</p>
                 <h3 className="text-2xl font-black tracking-tight">Kommande aktiveringar</h3>
               </div>
-              <Eye className="w-5 h-5 text-neutral-400" />
+              <button
+                onClick={copyMeetingLink}
+                disabled={creatingShareLink}
+                className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-bold text-neutral-700 disabled:opacity-50"
+              >
+                {creatingShareLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
+                Dela
+              </button>
             </div>
             <p className="text-xs text-neutral-500 mt-2">Visar endast event markerade för partners eller publik vy. Interna anteckningar döljs.</p>
             <div className="grid grid-cols-3 gap-2 mt-4">
