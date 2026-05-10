@@ -108,7 +108,7 @@ Deno.serve(async (req) => {
         bestOf, winByTwo, matchDurationDefault, isPublic, scoringType, scoringFormat,
         competitionType, templateId, startTime, endTime, entryFee, entryFeeType, courtIds,
         planningStatus, visibility, customerName, customerEmail, customerPhone,
-        expectedParticipants, ownerName, partnerNotes, internalNotes,
+        expectedParticipants, ownerName, partnerNotes, internalNotes, resources, staffing,
       } = body;
 
       if (!name || !eventType || !format) return errorResponse('Missing name, eventType, or format');
@@ -166,6 +166,8 @@ Deno.serve(async (req) => {
         owner_name: ownerName || null,
         partner_notes: partnerNotes || null,
         internal_notes: internalNotes || null,
+        resources: Array.isArray(resources) ? resources : [],
+        staffing: staffing || null,
         scoring_type: scoringType || null,
         scoring_format: scoringFormat || null,
         competition_type: competitionType || null,
@@ -216,6 +218,7 @@ Deno.serve(async (req) => {
         customerName: 'customer_name', customerEmail: 'customer_email',
         customerPhone: 'customer_phone', expectedParticipants: 'expected_participants',
         ownerName: 'owner_name', partnerNotes: 'partner_notes', internalNotes: 'internal_notes',
+        resources: 'resources', staffing: 'staffing',
       };
 
       const dbUpdates: Record<string, any> = {};

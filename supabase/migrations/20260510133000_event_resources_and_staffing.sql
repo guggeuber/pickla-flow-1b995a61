@@ -1,0 +1,3 @@
+ALTER TABLE public.events
+  ADD COLUMN IF NOT EXISTS resources TEXT[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS staffing TEXT;

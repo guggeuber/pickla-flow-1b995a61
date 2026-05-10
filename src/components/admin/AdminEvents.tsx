@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, CalendarDays, Columns3, Presentation, Users, Eye } from "lucide-react";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, CalendarDays, Columns3, Presentation, Users, Eye, LayoutGrid, UserRoundCheck } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -47,6 +47,8 @@ interface EventRow {
   owner_name?: string | null;
   partner_notes?: string | null;
   internal_notes?: string | null;
+  resources?: string[] | null;
+  staffing?: string | null;
   event_courts?: { id: string; name: string; court_number: number }[];
 }
 
@@ -85,6 +87,32 @@ const VISIBILITY_LABELS: Record<string, string> = {
 };
 
 type AdminEventView = "pipeline" | "calendar" | "meeting";
+
+const RESOURCE_PRESETS = [
+  "Hela hallen",
+  "Hela darten",
+  "Lounge",
+  "Restaurang",
+  "Scen",
+  "Bar",
+  "Reception",
+  "AV/ljud",
+  "Projektor",
+  "Catering",
+];
+
+function parseResources(value: string) {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function formatEventDate(evt: EventRow) {
+  return evt.start_date ? format(new Date(evt.start_date), "d MMM yyyy") : "Datum sätts";
+}
+
+function formatEventTime(evt: EventRow) {
+  if (!evt.start_time) return "Tid sätts";
+  return `${evt.start_time.slice(0, 5)}${evt.end_time ? `-${evt.end_time.slice(0, 5)}` : ""}`;
+}
 
 function useVenueCategories(venueId?: string) {
   return useQuery<CategoryOption[]>({
@@ -191,6 +219,8 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
   const [ownerName, setOwnerName] = useState("");
   const [partnerNotes, setPartnerNotes] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
+  const [resourcesText, setResourcesText] = useState("");
+  const [staffing, setStaffing] = useState("");
   const [isPending, setIsPending] = useState(false);
 
   const activeTemplates = (templates || []).filter(t => t.is_active);
@@ -237,6 +267,8 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
         ownerName: ownerName.trim() || undefined,
         partnerNotes: partnerNotes.trim() || undefined,
         internalNotes: internalNotes.trim() || undefined,
+        resources: parseResources(resourcesText),
+        staffing: staffing.trim() || undefined,
         courtIds: selectedCourtIds.length > 0 ? selectedCourtIds : undefined,
       });
       toast.success("Event skapat!");
@@ -247,6 +279,7 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
       setPlanningStatus("inquiry"); setVisibility("internal");
       setCustomerName(""); setCustomerEmail(""); setCustomerPhone("");
       setExpectedParticipants(""); setOwnerName(""); setPartnerNotes(""); setInternalNotes("");
+      setResourcesText(""); setStaffing("");
       onCreated();
     } catch (e: any) {
       toast.error(e.message);
@@ -427,6 +460,31 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
           <Textarea value={partnerNotes} onChange={(e) => setPartnerNotes(e.target.value)} placeholder="Partner-/mötesnotering: kort text som går att visa externt" />
           <Textarea value={internalNotes} onChange={(e) => setInternalNotes(e.target.value)} placeholder="Intern notering: offert, beslut, risker, todo" />
 
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Eventresurser</Label>
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {RESOURCE_PRESETS.map((resource) => {
+                const selected = parseResources(resourcesText).includes(resource);
+                return (
+                  <button
+                    key={resource}
+                    type="button"
+                    onClick={() => {
+                      const current = parseResources(resourcesText);
+                      setResourcesText(selected ? current.filter((r) => r !== resource).join(", ") : [...current, resource].join(", "));
+                    }}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-semibold border ${selected ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
+                  >
+                    {resource}
+                  </button>
+                );
+              })}
+            </div>
+            <Input className="mt-2" value={resourcesText} onChange={(e) => setResourcesText(e.target.value)} placeholder="Egen resurs, separera med komma" />
+          </div>
+
+          <Textarea value={staffing} onChange={(e) => setStaffing(e.target.value)} placeholder="Personal: t.ex. 1 eventlead, 2 bar, 1 reception" />
+
           {/* Entry fee */}
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -516,6 +574,8 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
   const [ownerName, setOwnerName] = useState(event.owner_name || "");
   const [partnerNotes, setPartnerNotes] = useState(event.partner_notes || "");
   const [internalNotes, setInternalNotes] = useState(event.internal_notes || "");
+  const [resourcesText, setResourcesText] = useState((event.resources || []).join(", "));
+  const [staffing, setStaffing] = useState(event.staffing || "");
   const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>(
     (event.event_courts || []).map(c => c.id)
   );
@@ -614,6 +674,8 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
         ownerName: ownerName.trim() || null,
         partnerNotes: partnerNotes.trim() || null,
         internalNotes: internalNotes.trim() || null,
+        resources: parseResources(resourcesText),
+        staffing: staffing.trim() || null,
         courtIds: selectedCourtIds,
       });
       toast.success("Event uppdaterat!");
@@ -863,6 +925,39 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
           />
         </div>
 
+        <div className="rounded-2xl border border-border bg-secondary/40 p-3 space-y-3">
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Eventresurser</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {RESOURCE_PRESETS.map((resource) => {
+              const selected = parseResources(resourcesText).includes(resource);
+              return (
+                <button
+                  key={resource}
+                  type="button"
+                  onClick={() => {
+                    const current = parseResources(resourcesText);
+                    setResourcesText(selected ? current.filter((r) => r !== resource).join(", ") : [...current, resource].join(", "));
+                  }}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-semibold border ${selected ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/30"}`}
+                >
+                  {resource}
+                </button>
+              );
+            })}
+          </div>
+          <Input value={resourcesText} onChange={(e) => setResourcesText(e.target.value)} placeholder="Hela darten, lounge, scen..." />
+        </div>
+
+        <div>
+          <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Personal</Label>
+          <Textarea
+            className="mt-1 min-h-[80px]"
+            value={staffing}
+            onChange={(e) => setStaffing(e.target.value)}
+            placeholder="T.ex. eventlead, bar, reception, instruktör."
+          />
+        </div>
+
         <div>
           <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Intern notering</Label>
           <Textarea
@@ -975,21 +1070,23 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
   const renderEventMini = (evt: EventRow, compact = false) => {
     const planning = evt.planning_status || (evt.is_public ? "published" : "booked");
     const stage = PIPELINE_STAGES.find((s) => s.key === planning) || PIPELINE_STAGES[2];
+    const resources = evt.resources || [];
     return (
       <button
         key={evt.id}
         onClick={() => setSelectedEvent(evt)}
-        className={`w-full rounded-2xl border border-border bg-card text-left transition-all hover:border-primary/30 ${compact ? "p-3" : "p-4"}`}
+        className={`w-full rounded-2xl border border-border bg-card text-left transition-all hover:border-primary/30 ${compact ? "p-3" : "p-0 overflow-hidden"}`}
       >
-        <div className="flex items-start gap-3">
+        <div className={compact ? "flex items-start gap-3" : "grid grid-cols-[6px_minmax(0,1.7fr)_92px_96px_minmax(0,1fr)_32px] items-stretch"}>
+          {!compact && <div className={`w-1.5 ${stage.tone}`} />}
           {evt.logo_url ? (
-            <img src={evt.logo_url} alt="" className="w-10 h-10 rounded-xl object-cover flex-shrink-0" />
+            <img src={evt.logo_url} alt="" className={`${compact ? "w-10 h-10 rounded-xl" : "hidden"} object-cover flex-shrink-0`} />
           ) : (
-            <div className="w-10 h-10 rounded-xl flex-shrink-0 bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
+            <div className={`${compact ? "w-10 h-10 rounded-xl" : "hidden"} flex-shrink-0 bg-muted items-center justify-center text-xs font-bold text-muted-foreground`}>
               {(evt.display_name || evt.name || "?")[0].toUpperCase()}
             </div>
           )}
-          <div className="min-w-0 flex-1">
+          <div className={compact ? "min-w-0 flex-1" : "min-w-0 p-3"}>
             <div className="flex items-center gap-2 min-w-0">
               <p className="text-sm font-bold text-foreground truncate">{evt.display_name || evt.name}</p>
               {evt.show_on_sticker && <Tag className="w-3 h-3 text-primary flex-shrink-0" />}
@@ -1006,10 +1103,29 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
                 {evt.customer_name && <Badge variant="secondary" className="text-[10px]">{evt.customer_name}</Badge>}
                 {evt.expected_participants != null && <Badge variant="secondary" className="text-[10px]">{evt.expected_participants} pers</Badge>}
                 {evt.owner_name && <Badge variant="outline" className="text-[10px]">{evt.owner_name}</Badge>}
+                {resources.slice(0, 3).map((resource) => <Badge key={resource} variant="outline" className="text-[10px]">{resource}</Badge>)}
               </div>
             )}
           </div>
-          <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 flex-shrink-0 mt-1" />
+          {!compact && (
+            <>
+              <div className="border-l border-border p-3 flex flex-col justify-center">
+                <span className="text-[10px] text-muted-foreground">Datum</span>
+                <span className="text-xs font-bold text-foreground">{evt.start_date ? format(new Date(evt.start_date), "d MMM") : "TBD"}</span>
+              </div>
+              <div className="border-l border-border p-3 flex flex-col justify-center">
+                <span className="text-[10px] text-muted-foreground">Tid</span>
+                <span className="text-xs font-bold text-foreground">{formatEventTime(evt)}</span>
+              </div>
+              <div className="border-l border-border p-3 min-w-0 flex flex-col justify-center">
+                <span className="text-[10px] text-muted-foreground">Resurs</span>
+                <span className="text-xs font-bold text-foreground truncate">{resources[0] || `${evt.event_courts?.length || evt.number_of_courts || 0} banor`}</span>
+              </div>
+            </>
+          )}
+          <div className={compact ? "" : "border-l border-border flex items-center justify-center"}>
+            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 flex-shrink-0" />
+          </div>
         </div>
       </button>
     );
@@ -1080,9 +1196,20 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
       {view === "calendar" && (
         <div className="space-y-3">
           {Object.keys(monthGroups).length > 0 ? Object.entries(monthGroups).map(([month, rows]) => (
-            <div key={month} className="glass-card rounded-2xl p-3">
-              <p className="text-xs uppercase tracking-widest text-muted-foreground mb-2">{month}</p>
-              <div className="space-y-2">
+            <div key={month} className="rounded-2xl border border-border bg-card overflow-hidden">
+              <div className="px-4 py-3 bg-secondary/70 border-b border-border flex items-center justify-between">
+                <p className="text-xs uppercase tracking-widest text-muted-foreground">{month}</p>
+                <Badge variant="secondary">{rows.length} aktiviteter</Badge>
+              </div>
+              <div className="hidden sm:grid grid-cols-[6px_minmax(0,1.7fr)_92px_96px_minmax(0,1fr)_32px] px-0 py-2 text-[10px] uppercase tracking-widest text-muted-foreground border-b border-border">
+                <span />
+                <span className="px-3">Event</span>
+                <span className="px-3 border-l border-border">Datum</span>
+                <span className="px-3 border-l border-border">Tid</span>
+                <span className="px-3 border-l border-border">Resurs</span>
+                <span />
+              </div>
+              <div className="divide-y divide-border">
                 {rows
                   .sort((a, b) => String(a.start_date || "").localeCompare(String(b.start_date || "")))
                   .map((evt) => renderEventMini(evt))}
@@ -1096,7 +1223,7 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
 
       {view === "meeting" && (
         <div className="space-y-3">
-          <div className="rounded-2xl p-4 bg-white text-neutral-950 border border-border">
+          <div className="rounded-2xl p-5 bg-white text-neutral-950 border border-neutral-200 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">Partneröversikt</p>
@@ -1105,25 +1232,58 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
               <Eye className="w-5 h-5 text-neutral-400" />
             </div>
             <p className="text-xs text-neutral-500 mt-2">Visar endast event markerade för partners eller publik vy. Interna anteckningar döljs.</p>
+            <div className="grid grid-cols-3 gap-2 mt-4">
+              <div className="rounded-xl bg-neutral-50 border border-neutral-200 p-3">
+                <p className="text-[10px] text-neutral-400 uppercase tracking-widest">Aktiveringar</p>
+                <p className="text-xl font-black">{upcomingMeetingEvents.length}</p>
+              </div>
+              <div className="rounded-xl bg-neutral-50 border border-neutral-200 p-3">
+                <p className="text-[10px] text-neutral-400 uppercase tracking-widest">Publika</p>
+                <p className="text-xl font-black">{upcomingMeetingEvents.filter((e) => e.is_public).length}</p>
+              </div>
+              <div className="rounded-xl bg-neutral-50 border border-neutral-200 p-3">
+                <p className="text-[10px] text-neutral-400 uppercase tracking-widest">Partners</p>
+                <p className="text-xl font-black">{upcomingMeetingEvents.filter((e) => e.visibility === "partners").length}</p>
+              </div>
+            </div>
           </div>
           {upcomingMeetingEvents.length > 0 ? upcomingMeetingEvents.map((evt) => (
             <button
               key={evt.id}
               onClick={() => setSelectedEvent(evt)}
-              className="w-full rounded-2xl bg-white text-neutral-950 border border-neutral-200 p-4 text-left"
+              className="w-full rounded-2xl bg-white text-neutral-950 border border-neutral-200 p-0 text-left overflow-hidden shadow-sm"
             >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] uppercase tracking-widest text-neutral-400">
-                    {evt.start_date ? format(new Date(evt.start_date), "d MMM yyyy") : "Datum sätts"} {evt.start_time ? `· ${evt.start_time.slice(0, 5)}` : ""}
-                  </p>
-                  <h4 className="text-lg font-black mt-1">{evt.display_name || evt.name}</h4>
-                  <p className="text-sm text-neutral-500 mt-1">
-                    {[evt.customer_name, evt.expected_participants ? `${evt.expected_participants} deltagare` : null, evt.event_courts?.length ? `${evt.event_courts.length} banor` : null].filter(Boolean).join(" · ") || "Planerad aktivitet"}
-                  </p>
+              <div className="grid grid-cols-[7px_1fr]">
+                <div className={`${(PIPELINE_STAGES.find((s) => s.key === (evt.planning_status || "booked")) || PIPELINE_STAGES[2]).tone}`} />
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-widest text-neutral-400">
+                        {formatEventDate(evt)} · {formatEventTime(evt)}
+                      </p>
+                      <h4 className="text-lg font-black mt-1">{evt.display_name || evt.name}</h4>
+                      <p className="text-sm text-neutral-500 mt-1">
+                        {[evt.customer_name, evt.expected_participants ? `${evt.expected_participants} deltagare` : null, evt.event_courts?.length ? `${evt.event_courts.length} banor` : null].filter(Boolean).join(" · ") || "Planerad aktivitet"}
+                      </p>
+                    </div>
+                    <Badge variant={evt.is_public ? "default" : "secondary"}>{evt.is_public ? "Publik" : "Partner"}</Badge>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mt-3">
+                    {(evt.resources || []).slice(0, 5).map((resource) => (
+                      <span key={resource} className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-1 text-[11px] font-semibold text-neutral-600">
+                        <LayoutGrid className="w-3 h-3" />
+                        {resource}
+                      </span>
+                    ))}
+                    {evt.staffing && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-1 text-[11px] font-semibold text-neutral-600">
+                        <UserRoundCheck className="w-3 h-3" />
+                        Personal satt
+                      </span>
+                    )}
+                  </div>
                   {evt.partner_notes && <p className="text-sm text-neutral-700 mt-3 leading-relaxed">{evt.partner_notes}</p>}
                 </div>
-                <Badge variant={evt.is_public ? "default" : "secondary"}>{evt.is_public ? "Publik" : "Partner"}</Badge>
               </div>
             </button>
           )) : (
