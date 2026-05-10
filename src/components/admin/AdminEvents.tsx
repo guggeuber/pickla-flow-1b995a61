@@ -87,6 +87,7 @@ const VISIBILITY_LABELS: Record<string, string> = {
 };
 
 type AdminEventView = "pipeline" | "calendar" | "meeting";
+type EventTimeFilter = "upcoming" | "all" | "archive";
 
 const RESOURCE_PRESETS = [
   "Hela hallen",
@@ -112,6 +113,17 @@ function formatEventDate(evt: EventRow) {
 function formatEventTime(evt: EventRow) {
   if (!evt.start_time) return "Tid sätts";
   return `${evt.start_time.slice(0, 5)}${evt.end_time ? `-${evt.end_time.slice(0, 5)}` : ""}`;
+}
+
+function isArchivedEvent(evt: EventRow) {
+  const planning = evt.planning_status || (evt.is_public ? "published" : "booked");
+  if (planning === "done" || planning === "cancelled") return true;
+  if (!evt.start_date) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const eventDay = new Date(evt.start_date);
+  eventDay.setHours(0, 0, 0, 0);
+  return eventDay < today;
 }
 
 function useVenueCategories(venueId?: string) {
@@ -1045,6 +1057,7 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
   const cats = categories || DEFAULT_CATEGORIES;
   const [selectedEvent, setSelectedEvent] = useState<EventRow | null>(null);
   const [view, setView] = useState<AdminEventView>("pipeline");
+  const [timeFilter, setTimeFilter] = useState<EventTimeFilter>("upcoming");
   const qc = useQueryClient();
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
@@ -1053,11 +1066,17 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
     return <EventDetail event={selectedEvent} venueId={venueId} onBack={() => setSelectedEvent(null)} categories={cats} />;
   }
 
-  const eventRows = events || [];
-  const livePipeline = eventRows.filter((evt) => (evt.planning_status || "booked") !== "done" && (evt.planning_status || "booked") !== "cancelled");
+  const allEventRows = events || [];
+  const eventRows = allEventRows.filter((evt) => {
+    const archived = isArchivedEvent(evt);
+    if (timeFilter === "upcoming") return !archived;
+    if (timeFilter === "archive") return archived;
+    return true;
+  });
+  const livePipeline = allEventRows.filter((evt) => !isArchivedEvent(evt));
   const upcomingMeetingEvents = eventRows
     .filter((evt) => ["partners", "public"].includes(evt.visibility || (evt.is_public ? "public" : "internal")))
-    .filter((evt) => (evt.planning_status || "booked") !== "cancelled")
+    .filter((evt) => !isArchivedEvent(evt))
     .sort((a, b) => String(a.start_date || "").localeCompare(String(b.start_date || "")))
     .slice(0, 12);
   const monthGroups = eventRows.reduce<Record<string, EventRow[]>>((acc, evt) => {
@@ -1163,6 +1182,21 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
               </button>
             );
           })}
+        </div>
+        <div className="grid grid-cols-3 gap-1 rounded-xl bg-secondary/70 p-1">
+          {[
+            { key: "upcoming", label: "Framåt" },
+            { key: "all", label: "Alla" },
+            { key: "archive", label: "Arkiv" },
+          ].map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setTimeFilter(item.key as EventTimeFilter)}
+              className={`rounded-lg px-2 py-1.5 text-[11px] font-bold transition-colors ${timeFilter === item.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       </div>
 
