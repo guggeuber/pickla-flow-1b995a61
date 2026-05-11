@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { X, Camera, UserCheck, Loader2, AlertCircle, Crown, Ticket, Calendar, Check } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
 import { apiPost } from "@/lib/api";
@@ -241,50 +241,39 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
         onClick={onClose}
       />
       <motion.div
-        initial={{ y: "100%" }}
-        animate={{ y: 0 }}
-        exit={{ y: "100%" }}
-        transition={{ type: "spring", damping: 25, stiffness: 300 }}
-        className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto rounded-t-3xl overflow-hidden"
-        style={{ background: "hsl(var(--background))", borderTop: "1px solid hsl(var(--border))" }}
-        onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[60] flex items-end justify-center p-0 pointer-events-none sm:items-center sm:p-4"
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 pb-2">
-          <div className="flex items-center gap-2">
-            <Camera className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-display font-bold">
-              {phase === "scanning" ? "Skanna QR" : phase === "found" ? "Hittad!" : "Klar!"}
-            </h2>
+        <motion.div
+          initial={{ y: 80, scale: 0.98 }}
+          animate={{ y: 0, scale: 1 }}
+          exit={{ y: 80, scale: 0.98 }}
+          transition={{ type: "spring", damping: 25, stiffness: 300 }}
+          className="pointer-events-auto flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl"
+          style={{ background: "hsl(var(--background))", borderTop: "1px solid hsl(var(--border))" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex shrink-0 items-center justify-between p-4 pb-2">
+            <div className="flex items-center gap-2">
+              <Camera className="w-5 h-5 text-primary" />
+              <h2 className="text-lg font-display font-bold">
+                {phase === "scanning" ? "Skanna eller slå kod" : phase === "found" ? "Kund hittad" : "Klar!"}
+              </h2>
+            </div>
+            <motion.button whileTap={{ scale: 0.9 }} onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "hsl(var(--surface-3))" }}>
+              <X className="w-4 h-4" />
+            </motion.button>
           </div>
-          <motion.button whileTap={{ scale: 0.9 }} onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "hsl(var(--surface-3))" }}>
-            <X className="w-4 h-4" />
-          </motion.button>
-        </div>
 
-        {/* Content */}
-        <div className="px-4 pb-8">
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+24px)]">
           {phase === "scanning" && (
             <div className="space-y-3">
-              <div
-                id="qr-reader-element"
-                className="rounded-2xl overflow-hidden bg-black"
-                style={{ minHeight: 280 }}
-              />
-              {loading && (
-                <div className="flex items-center justify-center gap-2 py-3">
-                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                  <span className="text-sm text-muted-foreground">Söker...</span>
-                </div>
-              )}
-              {error && (
-                <div className="flex items-center gap-2 bg-destructive/10 text-destructive rounded-xl p-3">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <p className="text-xs">{error}</p>
-                </div>
-              )}
               <form onSubmit={handleCodeCheckin} className="glass-card rounded-2xl p-3 space-y-2">
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Eller ange bokningskod</p>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Bokningskod</p>
                 <div className="flex gap-2">
                   <input
                     value={code}
@@ -303,6 +292,23 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
                   </button>
                 </div>
               </form>
+              <div
+                id="qr-reader-element"
+                className="rounded-2xl overflow-hidden bg-black"
+                style={{ minHeight: 220 }}
+              />
+              {loading && (
+                <div className="flex items-center justify-center gap-2 py-3">
+                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                  <span className="text-sm text-muted-foreground">Söker...</span>
+                </div>
+              )}
+              {error && (
+                <div className="flex items-center gap-2 bg-destructive/10 text-destructive rounded-xl p-3">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <p className="text-xs">{error}</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -310,11 +316,12 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
               {/* User card */}
               <div className="glass-card rounded-2xl p-4 flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-primary/15 flex items-center justify-center text-primary font-display font-bold text-lg">
+                <div className="w-14 h-14 rounded-2xl bg-primary/15 flex items-center justify-center text-primary font-display font-bold text-xl">
                   {(scanResult.display_name || "?").charAt(0).toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-base font-display font-bold truncate">{scanResult.display_name}</p>
+                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Kund</p>
+                  <p className="text-lg font-display font-bold truncate">{scanResult.display_name}</p>
                   {scanResult.phone && <p className="text-xs text-muted-foreground">{scanResult.phone}</p>}
                 </div>
                 {scanResult.already_checked_in && (
@@ -384,7 +391,8 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
               </motion.button>
             </motion.div>
           )}
-        </div>
+          </div>
+        </motion.div>
       </motion.div>
     </>
   );

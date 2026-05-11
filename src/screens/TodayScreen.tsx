@@ -1,9 +1,12 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine } from "lucide-react";
+import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine, UserCheck } from "lucide-react";
 import QrScanner from "@/components/desk/QrScanner";
 import { BookingsSection } from "@/components/desk/BookingsSection";
 import { useState, useEffect, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { DateTime } from "luxon";
 import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
+import { apiGet } from "@/lib/api";
 
 // Define types for court status and display
 type CourtStatus = "free" | "active" | "soon" | "vip";
@@ -15,6 +18,14 @@ interface CourtDisplay {
   players?: string;
   endsAt?: number;
   startsAt?: string;
+}
+
+interface TodayCheckin {
+  id: string;
+  player_name: string | null;
+  entry_type: string;
+  checked_in_at: string;
+  entitlement_id: string | null;
 }
 
 const statusConfig: Record<CourtStatus, { class: string; label: string; dot: string }> = {
@@ -30,6 +41,15 @@ const courtActions = [
   { label: "Add Drinks", icon: Plus, color: "bg-sell/15 text-sell" },
   { label: "Move Court", icon: ArrowRight, color: "bg-badge-vip/15 text-badge-vip" },
 ];
+
+const checkinLabels: Record<string, string> = {
+  booking_code: "Bokning",
+  booking: "Bokning",
+  membership: "Medlem",
+  day_pass: "Dagspass",
+  manual: "Manuell",
+  open_play: "Open Play",
+};
 
 function useRealtimeClock() {
   const [now, setNow] = useState(new Date());
@@ -55,6 +75,7 @@ function getVenueStatus(occupancy: number) {
 
 const TodayScreen = () => {
   const now = useRealtimeClock();
+  const queryClient = useQueryClient();
   const [selectedCourt, setSelectedCourt] = useState<CourtDisplay | null>(null);
   const [showScanner, setShowScanner] = useState(false);
 
@@ -63,6 +84,12 @@ const TodayScreen = () => {
   const { data: courts } = useVenueCourts(venueId);
   const { data: bookings } = useTodayBookings(venueId);
   const { data: revenue } = useTodayRevenue(venueId);
+  const { data: checkins = [] } = useQuery<TodayCheckin[]>({
+    queryKey: ["desk-checkins-today", venueId],
+    queryFn: () => apiGet("api-checkins", "today", { venueId: venueId! }),
+    enabled: !!venueId,
+    refetchInterval: 15000,
+  });
 
   // Map courts + bookings to display state
   const courtDisplays: CourtDisplay[] = useMemo(() => {
@@ -116,6 +143,7 @@ const TodayScreen = () => {
   const totalCourts = courtDisplays.length;
   const occupancy = totalCourts > 0 ? Math.round((activeCourts / totalCourts) * 100) : 0;
   const venueStatus = getVenueStatus(occupancy);
+  const recentCheckins = useMemo(() => checkins.slice(0, 6), [checkins]);
 
   const upcomingBookings = useMemo(() => {
     if (!bookings) return [];
@@ -212,6 +240,57 @@ const TodayScreen = () => {
         ))}
       </div>
 
+      {/* Checked in now */}
+      <div className="glass-card rounded-2xl p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Incheckade nu</h2>
+            <p className="text-[11px] text-muted-foreground">{checkins.length} aktiva idag</p>
+          </div>
+          {venueId && (
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              onClick={() => setShowScanner(true)}
+              className="rounded-xl bg-court-free/15 px-3 py-2 text-xs font-bold text-court-free flex items-center gap-1.5"
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              Checka in
+            </motion.button>
+          )}
+        </div>
+        {recentCheckins.length > 0 ? (
+          <div className="space-y-1.5">
+            {recentCheckins.map((checkin) => {
+              const label = checkinLabels[checkin.entry_type] || checkin.entry_type;
+              const name = checkin.player_name || (checkin.entry_type === "booking_code" ? "Bokningskod" : "Gäst");
+              const checkedInAt = DateTime.fromISO(checkin.checked_in_at, { zone: "utc" })
+                .setZone("Europe/Stockholm")
+                .toFormat("HH:mm");
+              return (
+                <div key={checkin.id} className="flex items-center gap-3 rounded-xl px-2 py-2" style={{ background: "hsl(var(--surface-1))" }}>
+                  <div className="w-8 h-8 rounded-lg bg-court-free/15 flex items-center justify-center">
+                    <Check className="w-4 h-4 text-court-free" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold truncate">{name}</p>
+                    <p className="text-[10px] text-muted-foreground">{label} · {checkedInAt}</p>
+                  </div>
+                  <span className="status-chip bg-court-free/15 text-court-free text-[9px] font-bold">Inne</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowScanner(true)}
+            className="w-full rounded-xl border border-dashed border-border py-4 text-xs font-semibold text-muted-foreground"
+          >
+            Inga incheckade än
+          </button>
+        )}
+      </div>
+
       {/* Court Grid */}
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -299,7 +378,13 @@ const TodayScreen = () => {
       {/* QR Scanner */}
       <AnimatePresence>
         {showScanner && venueId && (
-          <QrScanner venueId={venueId} onClose={() => setShowScanner(false)} />
+          <QrScanner
+            venueId={venueId}
+            onClose={() => setShowScanner(false)}
+            onCheckedIn={() => {
+              queryClient.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
+            }}
+          />
         )}
       </AnimatePresence>
 

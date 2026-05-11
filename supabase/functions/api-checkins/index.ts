@@ -74,9 +74,13 @@ Deno.serve(async (req) => {
         .is('checked_out_at', null);
       const existingIds = new Set((existingRows || []).map((row: any) => row.entitlement_id));
 
+      // Extract customer name from "Name | Phone" notes format
+      const customerName = ((booking as any).notes || '').split(' | ')[0].trim();
+
       const checkinRows = bookings.filter((b: any) => !existingIds.has(b.id)).map((b: any) => ({
         venue_id,
         user_id: b.user_id || null,
+        player_name: customerName || null,
         entry_type: 'booking_code',
         entitlement_id: b.id,
         session_date: todaySthlm,
@@ -109,9 +113,6 @@ Deno.serve(async (req) => {
       }
 
       const allCheckins = [...(existingRows || []), ...insertedRows];
-
-      // Extract customer name from "Name | Phone" notes format
-      const customerName = ((booking as any).notes || '').split(' | ')[0].trim();
 
       return jsonResponse({
         checkin: allCheckins[0] || null,
