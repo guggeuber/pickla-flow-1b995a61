@@ -201,6 +201,25 @@ Deno.serve(async (req) => {
 
     if (product_type === 'day_pass' && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
       const adminCheckout = getServiceClient();
+      if (!meta.product_key) meta.product_key = 'day_access';
+      const { data: product } = await adminCheckout
+        .from('access_products')
+        .select('product_key, name, product_kind, session_type, base_price_sek, grants')
+        .eq('venue_id', venue_id)
+        .eq('product_key', meta.product_key)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (product?.base_price_sek != null) {
+        baseAmountSek = Number(product.base_price_sek);
+        finalAmountSek = baseAmountSek;
+        meta.base_amount_sek = String(baseAmountSek);
+        meta.product_key = product.product_key;
+        meta.product_kind = product.product_kind;
+        meta.session_type = meta.session_type || product.session_type || 'open_play';
+        meta.includes_day_access = product.product_kind === 'day_access' || product.product_kind === 'session_with_day_access' ? 'true' : '';
+      }
+
       const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
       const { data: activitySession } = await adminCheckout
         .from('activity_sessions')
@@ -209,13 +228,15 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (activitySession?.venue_id === venue_id && activitySession.price_sek != null) {
-        baseAmountSek = Number(activitySession.price_sek);
-        finalAmountSek = baseAmountSek;
-        meta.base_amount_sek = String(baseAmountSek);
+        if (!product) {
+          baseAmountSek = Number(activitySession.price_sek);
+          finalAmountSek = baseAmountSek;
+          meta.base_amount_sek = String(baseAmountSek);
+        }
         meta.activity_session_id = activitySessionId;
         meta.session_name = meta.session_name || activitySession.name;
         meta.session_type = activitySession.session_type || 'open_play';
-        meta.includes_day_access = activitySession.access_policy?.includes_day_access ? 'true' : '';
+        meta.includes_day_access = meta.includes_day_access || (activitySession.access_policy?.includes_day_access ? 'true' : '');
       } else if (meta.open_play_session_id) {
         const { data: openPlaySession } = await adminCheckout
           .from('open_play_sessions')
@@ -282,7 +303,11 @@ Deno.serve(async (req) => {
           entitlementSportType && (e.sport_type || 'pickleball') === entitlementSportType
         );
         const hasEnt = (type: string) => ents.find((e: any) => e.entitlement_type === type);
-        const pricingProductType = product_type === 'court_booking' ? 'court_hourly' : product_type;
+        const pricingProductType = product_type === 'court_booking'
+          ? 'court_hourly'
+          : product_type === 'day_pass'
+          ? (meta.product_key || 'day_access')
+          : product_type;
         const { data: tierPricingRows } = await adminEnt
           .from('membership_tier_pricing')
           .select('product_type, fixed_price, discount_percent')
@@ -459,6 +484,8 @@ Deno.serve(async (req) => {
       user_id:          String(meta.user_id          || ''),
       base_amount_sek:  String(meta.base_amount_sek  || baseAmountSek || ''),
       billed_amount_sek: String(billedAmountSek       || ''),
+      product_key:      String(meta.product_key       || ''),
+      product_kind:     String(meta.product_kind      || ''),
       // Membership-specific
       tier_id:          String(meta.tier_id          || ''),
       customer_name:    String(meta.customer_name    || '').slice(0, 200),

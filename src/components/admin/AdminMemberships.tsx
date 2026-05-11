@@ -27,9 +27,14 @@ interface TierPricing {
   label: string | null;
 }
 
-const PRODUCT_TYPES = [
+const FALLBACK_PRODUCT_TYPES = [
   { key: "court_hourly", label: "Bana per timme" },
-  { key: "day_pass", label: "Dagspass" },
+  { key: "day_access", label: "Day Pass / dagsmedlemskap" },
+  { key: "open_play_slot", label: "Open Play Slot" },
+  { key: "group_training", label: "Gruppträning" },
+  { key: "group_training_day_access", label: "Gruppträning + Day Pass" },
+  { key: "day_access_voucher", label: "Day Pass Voucher" },
+  { key: "day_pass", label: "Dagspass (legacy)" },
   { key: "event_fee", label: "Event-avgift" },
   { key: "guest_pass", label: "Gästpass" },
 ];
@@ -39,6 +44,10 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
   const { data: pricing, isLoading } = useQuery<TierPricing[]>({
     queryKey: ["tier-pricing", tier.id],
     queryFn: () => apiGet("api-memberships", "tier-pricing", { tierId: tier.id }),
+  });
+  const { data: products } = useQuery<any[]>({
+    queryKey: ["admin-access-products", venueId],
+    queryFn: () => apiGet("api-admin", "products", { venueId }),
   });
 
   const [newProduct, setNewProduct] = useState("");
@@ -75,13 +84,18 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
       fixed_price: newMode === "fixed" ? val : null,
       discount_percent: newMode === "percent" ? val : null,
       vat_rate: parseFloat(newVat) || 6,
-      label: PRODUCT_TYPES.find(p => p.key === newProduct)?.label || newProduct,
+      label: productTypes.find(p => p.key === newProduct)?.label || newProduct,
     });
   };
 
   // Products already configured
+  const productTypes = [
+    { key: "court_hourly", label: "Bana per timme" },
+    ...((products || []).map((product: any) => ({ key: product.product_key, label: product.name }))),
+    ...FALLBACK_PRODUCT_TYPES.filter((fallback) => !(products || []).some((product: any) => product.product_key === fallback.key) && fallback.key !== "court_hourly"),
+  ];
   const usedProducts = (pricing || []).map(p => p.product_type);
-  const availableProducts = PRODUCT_TYPES.filter(p => !usedProducts.includes(p.key));
+  const availableProducts = productTypes.filter(p => !usedProducts.includes(p.key));
 
   return (
     <div className="mt-3 space-y-2 border-t border-border pt-3">

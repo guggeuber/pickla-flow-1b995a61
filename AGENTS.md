@@ -352,6 +352,17 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - Open Play page now reads `activity_sessions` instead of legacy `open_play_sessions`.
 - Seeded initial activity sessions for Pickla Arena Stockholm: Open Play FM 10-12, Eftermiddag 14-16, Kväll 17-20, and Onsdag Gruppträning 18-19.
 
+### Access products and membership pricing
+- Migration `20260511160000_access_products.sql` introduces `access_products`, the product catalog above Access OS:
+  - `day_access` = Day Pass/dagsmedlemskap.
+  - `open_play_slot` = specific Open Play slot ticket.
+  - `group_training` = training session ticket.
+  - `group_training_day_access` = session plus same-day Open Play access.
+  - `day_access_voucher` = undated gift/credit.
+- Admin has a `Produkter` section for product catalog management.
+- Membership tier pricing now uses product keys from `access_products`, so tiers can set fixed price or percent discount per product.
+- `api-bookings/create-checkout` resolves day-pass/open-play pricing through `access_products.product_key` before falling back to session price.
+
 ## Next Up
 - Design-uppdatering av hela appen
 - Membership visas på /my (webhook skapar korrekt, men query i MyPage kan behöva verifieras)

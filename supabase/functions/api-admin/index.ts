@@ -359,6 +359,51 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
+    // ── ACCESS PRODUCTS ──
+    if (req.method === 'GET' && path === 'products') {
+      const { data, error: e } = await admin.from('access_products')
+        .select('*').eq('venue_id', venueId).order('sort_order').order('name');
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 200, 15);
+    }
+
+    if (req.method === 'POST' && path === 'products') {
+      const { venueId: _v, product_key, name, description, product_kind, session_type, base_price_sek, vat_rate, grants, sort_order, is_active } = await req.json();
+      if (!product_key || !name) return errorResponse('Missing product_key or name');
+      const { data, error: e } = await admin.from('access_products').upsert({
+        venue_id: venueId,
+        product_key,
+        name,
+        description: description || null,
+        product_kind: product_kind || 'day_access',
+        session_type: session_type || null,
+        base_price_sek: base_price_sek ?? 0,
+        vat_rate: vat_rate ?? 6,
+        grants: grants || {},
+        sort_order: sort_order ?? 0,
+        is_active: is_active ?? true,
+      }, { onConflict: 'venue_id,product_key' }).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 201);
+    }
+
+    if (req.method === 'PATCH' && path === 'products') {
+      const { productId, ...updates } = await req.json();
+      if (!productId) return errorResponse('Missing productId');
+      const { data, error: e } = await admin.from('access_products')
+        .update(updates).eq('id', productId).eq('venue_id', venueId).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data);
+    }
+
+    if (req.method === 'DELETE' && path === 'products') {
+      const productId = url.searchParams.get('productId');
+      if (!productId) return errorResponse('Missing productId');
+      const { error: e } = await admin.from('access_products').delete().eq('id', productId).eq('venue_id', venueId);
+      if (e) return errorResponse(e.message);
+      return jsonResponse({ ok: true });
+    }
+
     // ── VENUE LINKS ──
     if (req.method === 'GET' && path === 'links') {
       const { data, error: e } = await admin.from('venue_links')

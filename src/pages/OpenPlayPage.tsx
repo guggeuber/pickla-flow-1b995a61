@@ -112,6 +112,7 @@ const OpenPlayPage = () => {
         amount_sek: slot.session.price_sek,
         venue_id: venueId,
         metadata: {
+          product_key: "day_access",
           session_name: slot.session.name,
           session_type: slot.session.session_type || "open_play",
           date: slot.date.toISODate(),
