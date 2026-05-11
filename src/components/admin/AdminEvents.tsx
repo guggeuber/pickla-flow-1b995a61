@@ -1059,6 +1059,7 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
   const [view, setView] = useState<AdminEventView>("pipeline");
   const [timeFilter, setTimeFilter] = useState<EventTimeFilter>("upcoming");
   const [creatingShareLink, setCreatingShareLink] = useState(false);
+  const [meetingShareUrl, setMeetingShareUrl] = useState("");
   const qc = useQueryClient();
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
@@ -1092,12 +1093,28 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
     try {
       const result = await apiPost("api-events", "meeting-link", { venueId });
       const url = `${window.location.origin}/event-plan/${venueId}?token=${encodeURIComponent(result.token)}`;
-      await navigator.clipboard.writeText(url);
-      toast.success("Möteslänk kopierad");
+      setMeetingShareUrl(url);
+
+      try {
+        await navigator.clipboard?.writeText(url);
+        toast.success("Möteslänk skapad och kopierad");
+      } catch {
+        toast.success("Möteslänk skapad. Länken visas nedan.");
+      }
     } catch (e: any) {
       toast.error(e.message || "Kunde inte skapa möteslänk");
     } finally {
       setCreatingShareLink(false);
+    }
+  };
+
+  const copyVisibleMeetingLink = async () => {
+    if (!meetingShareUrl) return;
+    try {
+      await navigator.clipboard?.writeText(meetingShareUrl);
+      toast.success("Länken kopierad");
+    } catch {
+      toast.error("Kunde inte kopiera automatiskt. Markera länken manuellt.");
     }
   };
 
@@ -1288,6 +1305,38 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
               </button>
             </div>
             <p className="text-xs text-neutral-500 mt-2">Visar endast event markerade för partners eller publik vy. Interna anteckningar döljs.</p>
+            {meetingShareUrl && (
+              <div className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50 p-3">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-neutral-400 font-bold">Delbar möteslänk</p>
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    readOnly
+                    value={meetingShareUrl}
+                    onFocus={(event) => event.currentTarget.select()}
+                    className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 outline-none focus:border-neutral-400"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={copyVisibleMeetingLink}
+                      className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-bold text-neutral-700 sm:flex-none"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Kopiera
+                    </button>
+                    <a
+                      href={meetingShareUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-neutral-900 px-3 py-2 text-xs font-bold text-white sm:flex-none"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Öppna
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-2 mt-4">
               <div className="rounded-xl bg-neutral-50 border border-neutral-200 p-3">
                 <p className="text-[10px] text-neutral-400 uppercase tracking-widest">Aktiveringar</p>
