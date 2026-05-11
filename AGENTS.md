@@ -83,6 +83,8 @@ All timestamps are stored as UTC in the database. Always use **Luxon** (`DateTim
 
 Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 
+For Edge Functions that need “the venue day”, use `stockholmDateRangeUtc(date)` from `supabase/functions/_shared/bookings.ts` instead of building `${date}T00:00:00.000Z`. The input `date` is a Stockholm calendar date; the returned range is UTC for querying `timestamptz` columns.
+
 ## Key Features Built
 
 ### Booking System
@@ -90,6 +92,7 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 - `stripe_session_id` on `bookings` and `day_passes` for idempotent webhook processing.
 - Stripe Checkout flow: `POST api-bookings/create-checkout` → Stripe-hosted page → `api-stripe-webhook` creates booking → `BookingConfirmed.tsx` polls `GET api-bookings/by-session` → redirect to `/b/:ref`.
 - Free/corporate bookings bypass Stripe and use `public-book` directly.
+- Court booking conflict checks must happen before Stripe checkout is created and again defensively in the Stripe webhook. A paid booking must never silently double-book a court.
 - After booking confirmation, users should land in the booking chat (`/hub?room=<room_id>` style flow via HubPage helpers), not a dead-end confirmation page.
 - Multi-court bookings keep one booking row per court for availability/occupancy, but are treated as one customer booking:
   - Stripe multi-court sessions use unique `(stripe_session_id, venue_court_id)` instead of one row per session.
@@ -107,6 +110,7 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 - `POST api-checkins/code` — kiosk endpoint, no auth, validates `access_code` against active bookings.
 - Time-window validation (Luxon, Stockholm tz): same day, ≤30 min before start, not after end.
 - `session_date` stored as Stockholm date, not UTC.
+- Check-ins are idempotent: retrying the same booking code or desk scan should return/reuse the active check-in rows rather than creating duplicate live counts.
 
 ### Open Play
 - `open_play_sessions` table: recurring slots with `day_of_week[]`, `court_ids[]`, `price_sek`.
@@ -318,6 +322,17 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - Event planning migrations were applied manually in Supabase SQL editor.
 - `api-events` was deployed after adding meeting-link/public-plan endpoints.
 - Latest share-link UI fix is frontend-only; Vercel deploys from `main`.
+
+## Session 2026-05-11
+
+### Booking-to-desk architecture hardening
+- Introduced `stockholmDateRangeUtc(date)` and routed booking/day queries through Stockholm calendar days instead of UTC-midnight string ranges.
+- Updated desk hooks to use Stockholm “today” for bookings and revenue.
+- Added pre-Stripe conflict checking for court bookings in `api-bookings/create-checkout`.
+- Added defensive conflict checking in `api-stripe-webhook` before inserting court booking rows.
+- Made booking-code check-in idempotent: repeated code entry reuses existing active `venue_checkins`.
+- Made desk check-in idempotent for entitlement/user scans.
+- Added migration `20260511120000_idempotent_venue_checkins.sql` to dedupe existing active duplicates and add partial unique indexes for active check-ins.
 
 ## Next Up
 - Design-uppdatering av hela appen

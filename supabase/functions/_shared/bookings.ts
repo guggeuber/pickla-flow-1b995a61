@@ -1,12 +1,30 @@
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
+
+export const VENUE_TIMEZONE = 'Europe/Stockholm';
+
+export function stockholmDate(): string {
+  return DateTime.now().setZone(VENUE_TIMEZONE).toISODate()!;
+}
+
+export function stockholmDateRangeUtc(date: string): { start: string; end: string } {
+  const day = DateTime.fromISO(date, { zone: VENUE_TIMEZONE });
+  if (!day.isValid) throw new Error('Invalid Stockholm date');
+  return {
+    start: day.startOf('day').toUTC().toISO()!,
+    end: day.endOf('day').toUTC().toISO()!,
+  };
+}
+
 /**
  * Generates a unique 4-digit access code for a booking (no repeated digits, no NNNN patterns).
- * Retries up to 50 times to find a code that isn't already used for the venue on the given UTC date.
+ * Retries up to 50 times to find a code that isn't already used for the venue on the given Stockholm date.
  */
 export async function generateAccessCode(
   supabase: any,
   venueId: string,
   bookingDate: string, // YYYY-MM-DD in Stockholm local time (used for uniqueness window)
 ): Promise<string> {
+  const { start, end } = stockholmDateRangeUtc(bookingDate);
   const excluded = new Set(['0000','1111','2222','3333','4444','5555','6666','7777','8888','9999']);
   for (let attempt = 0; attempt < 50; attempt++) {
     const code = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
@@ -16,8 +34,8 @@ export async function generateAccessCode(
       .select('id')
       .eq('venue_id', venueId)
       .eq('access_code', code)
-      .gte('start_time', `${bookingDate}T00:00:00.000Z`)
-      .lte('start_time', `${bookingDate}T23:59:59.999Z`)
+      .gte('start_time', start)
+      .lte('start_time', end)
       .limit(1)
       .maybeSingle();
     if (!data) return code;

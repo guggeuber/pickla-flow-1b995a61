@@ -1,6 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
-import { generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
+import { generateAccessCode, getOrCreatePublicBookingUserId, stockholmDateRangeUtc } from '../_shared/bookings.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
@@ -31,6 +31,15 @@ async function createFreeEntitlementBookingResponse({
     const bookings = [];
 
     for (const courtId of courtIds) {
+      const { data: conflicts } = await adminFree.from('bookings')
+        .select('id')
+        .eq('venue_court_id', courtId)
+        .neq('status', 'cancelled')
+        .lt('start_time', endISO)
+        .gt('end_time', startISO)
+        .limit(1);
+      if (conflicts?.length) return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
+
       const { data: booking, error: bookingErr } = await adminFree.from('bookings').insert({
         venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
         start_time: startISO, end_time: endISO, total_price: 0,
@@ -116,6 +125,40 @@ Deno.serve(async (req) => {
 
     const meta = metadata || {};
     const isMembership = product_type === 'membership';
+
+    if (product_type === 'court_booking') {
+      let courtIds: string[] = [];
+      try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { return errorResponse('Invalid court_ids', 400); }
+      if (!courtIds.length || !meta.date || !meta.start_time || !meta.end_time) {
+        return errorResponse('Missing booking metadata', 400);
+      }
+
+      const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+      const endISO = DateTime.fromISO(`${meta.date}T${meta.end_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+      const adminCheckout = getServiceClient();
+
+      const { data: venueCourts } = await adminCheckout
+        .from('venue_courts')
+        .select('id')
+        .eq('venue_id', venue_id)
+        .in('id', courtIds);
+      if ((venueCourts || []).length !== courtIds.length) {
+        return errorResponse('One or more courts do not belong to this venue', 400);
+      }
+
+      const { data: conflicts } = await adminCheckout
+        .from('bookings')
+        .select('id')
+        .eq('venue_id', venue_id)
+        .in('venue_court_id', courtIds)
+        .neq('status', 'cancelled')
+        .lt('start_time', endISO)
+        .gt('end_time', startISO)
+        .limit(1);
+      if (conflicts?.length) {
+        return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
+      }
+    }
 
     // ── Entitlement check — apply discounts / check limits ───────────────────
     // user_id is set in metadata by the frontend from useAuth(); membership
@@ -567,8 +610,7 @@ Deno.serve(async (req) => {
       .eq('venue_id', venue.id).eq('day_of_week', dayOfWeek).maybeSingle();
 
     // Get existing bookings for the date
-    const start = `${date}T00:00:00.000Z`;
-    const end = `${date}T23:59:59.999Z`;
+    const { start, end } = stockholmDateRangeUtc(date);
     const { data: bookings } = await admin.from('bookings')
       .select('venue_court_id, start_time, end_time')
       .eq('venue_id', venue.id)
@@ -759,8 +801,7 @@ Deno.serve(async (req) => {
         .order('start_time');
 
       if (date) {
-        const start = `${date}T00:00:00.000Z`;
-        const end = `${date}T23:59:59.999Z`;
+        const { start, end } = stockholmDateRangeUtc(date);
         query = query.gte('start_time', start).lte('start_time', end);
       }
 
@@ -776,8 +817,7 @@ Deno.serve(async (req) => {
       const date = url.searchParams.get('date');
       if (!venueId || !date) return errorResponse('Missing venueId or date');
 
-      const start = `${date}T00:00:00.000Z`;
-      const end = `${date}T23:59:59.999Z`;
+      const { start, end } = stockholmDateRangeUtc(date);
 
       const [bookingsRes, passesRes] = await Promise.all([
         client.from('bookings').select('total_price').eq('venue_id', venueId)
@@ -853,7 +893,7 @@ Deno.serve(async (req) => {
         return errorResponse('Court is already booked for this time slot', 409);
       }
 
-      const bookingDate = startTime.slice(0, 10);
+      const bookingDate = DateTime.fromISO(startTime, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate()!;
       const accessCode = await generateAccessCode(getServiceClient(), venueId, bookingDate);
 
       const { data, error: insertErr } = await client.from('bookings').insert({

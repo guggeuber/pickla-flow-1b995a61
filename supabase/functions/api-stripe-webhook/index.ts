@@ -130,6 +130,20 @@ async function handleCourtBooking(
       .maybeSingle();
     if (existing) continue;
 
+    const { data: conflicts } = await serviceClient
+      .from('bookings')
+      .select('id, stripe_session_id')
+      .eq('venue_id', venue_id)
+      .eq('venue_court_id', courtId)
+      .neq('status', 'cancelled')
+      .lt('start_time', endISO)
+      .gt('end_time', startISO)
+      .limit(1);
+    const conflictingBooking = (conflicts || []).find((b: any) => b.stripe_session_id !== session.id);
+    if (conflictingBooking) {
+      throw new Error(`Court ${courtId} is already booked for this time`);
+    }
+
     const { error } = await serviceClient.from('bookings').insert({
       venue_id,
       venue_court_id:         courtId,

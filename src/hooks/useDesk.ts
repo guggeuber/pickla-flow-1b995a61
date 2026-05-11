@@ -1,6 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { apiGet } from "@/lib/api";
+import { DateTime } from "luxon";
+
+function todayStockholm() {
+  return DateTime.now().setZone("Europe/Stockholm").toISODate()!;
+}
 
 export function useVenueForStaff() {
   const { user } = useAuth();
@@ -36,7 +41,7 @@ export function useTodayBookings(venueId: string | undefined) {
     enabled: !!venueId,
     refetchInterval: 30000,
     queryFn: () => {
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayStockholm();
       return apiGet("api-bookings", "venue", { venueId: venueId!, date: today });
     },
   });
@@ -48,7 +53,7 @@ export function useTodayRevenue(venueId: string | undefined) {
     enabled: !!venueId,
     refetchInterval: 60000,
     queryFn: () => {
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayStockholm();
       return apiGet("api-bookings", "revenue", { venueId: venueId!, date: today });
     },
   });

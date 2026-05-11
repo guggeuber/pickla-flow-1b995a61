@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { sv } from "date-fns/locale";
+import { DateTime } from "luxon";
 
 const dayNames = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"];
@@ -138,7 +139,7 @@ const BookScreen = () => {
     enabled: !!venueId,
     queryFn: () => apiGet("api-bookings", "venue", {
       venueId: venueId!,
-      date: selectedDate.toISOString().split("T")[0],
+      date: DateTime.fromJSDate(selectedDate).setZone("Europe/Stockholm").toISODate()!,
     }),
   });
 

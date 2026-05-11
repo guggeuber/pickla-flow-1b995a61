@@ -63,7 +63,18 @@ Deno.serve(async (req) => {
       }
       // ──────────────────────────────────────────────────────────────────────
 
-      const checkinRows = bookings.map((b: any) => ({
+      const bookingIds = bookings.map((b: any) => b.id).filter(Boolean);
+      const { data: existingRows } = await serviceClient
+        .from('venue_checkins')
+        .select('*')
+        .eq('venue_id', venue_id)
+        .eq('session_date', todaySthlm)
+        .eq('entry_type', 'booking_code')
+        .in('entitlement_id', bookingIds)
+        .is('checked_out_at', null);
+      const existingIds = new Set((existingRows || []).map((row: any) => row.entitlement_id));
+
+      const checkinRows = bookings.filter((b: any) => !existingIds.has(b.id)).map((b: any) => ({
         venue_id,
         user_id: b.user_id || null,
         entry_type: 'booking_code',
@@ -71,19 +82,41 @@ Deno.serve(async (req) => {
         session_date: todaySthlm,
       }));
 
-      const { data: checkins, error: cErr } = await serviceClient
-        .from('venue_checkins')
-        .insert(checkinRows)
-        .select();
+      let insertedRows: any[] = [];
+      if (checkinRows.length > 0) {
+        const { data: checkins, error: cErr } = await serviceClient
+          .from('venue_checkins')
+          .insert(checkinRows)
+          .select();
 
-      if (cErr) return errorResponse(cErr.message);
+        if (cErr) {
+          if (cErr.code === '23505') {
+            const { data: retryRows } = await serviceClient
+              .from('venue_checkins')
+              .select('*')
+              .eq('venue_id', venue_id)
+              .eq('session_date', todaySthlm)
+              .eq('entry_type', 'booking_code')
+              .in('entitlement_id', bookingIds)
+              .is('checked_out_at', null);
+            insertedRows = retryRows || [];
+          } else {
+            return errorResponse(cErr.message);
+          }
+        } else {
+          insertedRows = checkins || [];
+        }
+      }
+
+      const allCheckins = [...(existingRows || []), ...insertedRows];
 
       // Extract customer name from "Name | Phone" notes format
       const customerName = ((booking as any).notes || '').split(' | ')[0].trim();
 
       return jsonResponse({
-        checkin: checkins?.[0] || null,
-        checkins: checkins || [],
+        checkin: allCheckins[0] || null,
+        checkins: allCheckins,
+        already_checked_in: checkinRows.length === 0,
         booking: {
           id: booking.id,
           booking_ref: (booking as any).booking_ref,
@@ -116,7 +149,7 @@ Deno.serve(async (req) => {
 
       if (!profile) return errorResponse('User not found', 404);
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
       const entitlements: any[] = [];
 
       // Check membership
@@ -225,7 +258,7 @@ Deno.serve(async (req) => {
         return jsonResponse({ results: [] });
       }
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
       const results = [];
 
       for (const profile of profiles) {
@@ -325,6 +358,31 @@ Deno.serve(async (req) => {
       const { venue_id, target_user_id, entry_type, entitlement_id, player_name, player_phone } = body;
       if (!venue_id || !entry_type) return errorResponse('Missing required fields');
 
+      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+      if (entitlement_id || target_user_id || player_phone || player_name) {
+        let existingQuery = client
+          .from('venue_checkins')
+          .select('*')
+          .eq('venue_id', venue_id)
+          .eq('entry_type', entry_type)
+          .eq('session_date', today)
+          .is('checked_out_at', null)
+          .limit(1);
+
+        if (entitlement_id) {
+          existingQuery = existingQuery.eq('entitlement_id', entitlement_id);
+        } else if (target_user_id) {
+          existingQuery = existingQuery.eq('user_id', target_user_id);
+        } else if (player_phone) {
+          existingQuery = existingQuery.eq('player_phone', player_phone);
+        } else if (player_name) {
+          existingQuery = existingQuery.eq('player_name', player_name);
+        }
+
+        const { data: existingCheckin } = await existingQuery.maybeSingle();
+        if (existingCheckin) return jsonResponse(existingCheckin);
+      }
+
       const { data, error: insertErr } = await client
         .from('venue_checkins')
         .insert({
@@ -335,12 +393,29 @@ Deno.serve(async (req) => {
           entry_type,
           entitlement_id: entitlement_id || null,
           checked_in_by: userId,
-          session_date: new Date().toISOString().slice(0, 10),
+          session_date: today,
         })
         .select()
         .single();
 
-      if (insertErr) return errorResponse(insertErr.message);
+      if (insertErr) {
+        if (insertErr.code === '23505' && (entitlement_id || target_user_id)) {
+          let retryQuery = client
+            .from('venue_checkins')
+            .select('*')
+            .eq('venue_id', venue_id)
+            .eq('entry_type', entry_type)
+            .eq('session_date', today)
+            .is('checked_out_at', null)
+            .limit(1);
+          retryQuery = entitlement_id
+            ? retryQuery.eq('entitlement_id', entitlement_id)
+            : retryQuery.eq('user_id', target_user_id);
+          const { data: retry } = await retryQuery.maybeSingle();
+          if (retry) return jsonResponse(retry);
+        }
+        return errorResponse(insertErr.message);
+      }
       return jsonResponse(data);
     }
 
@@ -352,7 +427,7 @@ Deno.serve(async (req) => {
       const venueId = url.searchParams.get('venueId');
       if (!venueId) return errorResponse('Missing venueId');
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
       const { data, error: qErr } = await client
         .from('venue_checkins')
         .select('*')
