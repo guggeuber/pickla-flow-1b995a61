@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file is the canonical agent guide for this repository. `CLAUDE.md` intentionally points here so Codex, Claude, and other coding agents share one source of truth.
 
 ## Project Overview
 
@@ -90,6 +90,11 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 - `stripe_session_id` on `bookings` and `day_passes` for idempotent webhook processing.
 - Stripe Checkout flow: `POST api-bookings/create-checkout` → Stripe-hosted page → `api-stripe-webhook` creates booking → `BookingConfirmed.tsx` polls `GET api-bookings/by-session` → redirect to `/b/:ref`.
 - Free/corporate bookings bypass Stripe and use `public-book` directly.
+- After booking confirmation, users should land in the booking chat (`/hub?room=<room_id>` style flow via HubPage helpers), not a dead-end confirmation page.
+- Multi-court bookings keep one booking row per court for availability/occupancy, but are treated as one customer booking:
+  - Stripe multi-court sessions use unique `(stripe_session_id, venue_court_id)` instead of one row per session.
+  - Rows from the same Stripe session share one `access_code`.
+  - Booking chat rooms use grouped resource keys (`stripe_session:<id>` or direct booking group keys) so booking several dart boards at the same time opens one chat, not one chat per board.
 
 ### Operations Screen (`/display/venue?v=slug`)
 - No-auth kiosk page showing all courts grouped by sport type in realtime.
@@ -165,6 +170,24 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 - 19 dart tables seeded in `venue_courts` with `sport_type = 'dart'`.
 - Seed also covers: venue row, 8 pickleball courts, opening hours, `open_play_sessions`, and `membership_tiers`.
 
+### Admin Event Planning
+- Admin events live in `src/components/admin/AdminEvents.tsx` and use `api-events`.
+- The admin event module is now an operations planning tool, not only public events:
+  - `Pipeline` view: stages `inquiry`, `tentative`, `booked`, `ready`, `published`, `done`, `cancelled`.
+  - `Kalender` view: grouped by month with default upcoming filter.
+  - `Möte` view: clean partner/employee-facing overview for upcoming activations.
+- Event time filters are `Framåt`, `Alla`, and `Arkiv`. `Framåt` is default so old events like previous open plays do not dominate meeting views.
+- Event planning metadata is stored on `events`: `planning_status`, `visibility`, `customer_name`, `customer_email`, `customer_phone`, `expected_participants`, `owner_name`, `partner_notes`, `internal_notes`, `resources`, `staffing`.
+- `resources` are lightweight text tags for now (for example `Hela darten`, `Hela hallen`, `Lounge`, `Restaurang`, `Scen`, `Bar`). They are deliberately not real bookable resources yet; courts remain the only first-class inventory resource.
+- `staffing` is free text for now. There is no separate staff scheduling table yet.
+- Public/partner meeting share:
+  - Admin `Möte` tab has a `Dela` action.
+  - `POST api-events/meeting-link` creates or reuses `venues.event_plan_share_token`.
+  - Public route `/event-plan/:venueId?token=...` renders `EventPlanPublic.tsx`.
+  - Public plan endpoint `GET api-events/public-plan?venueId&token` is no-auth, validates the venue token with service role, and only returns future/non-archived events where `visibility` is `partners` or `public`.
+  - Internal notes are never returned in the public plan.
+  - The admin UI always shows the generated link after sharing; mobile Safari can reject async clipboard writes, so copying is best-effort only.
+
 ## Infrastructure
 
 - **Supabase project**: `pickla-base` — project ref `cqnjpudmsreubgviqptg`
@@ -176,7 +199,7 @@ Never use `new Date().toLocaleTimeString()` or append `Z` to user-entered times.
 
 **Division of labour:**
 - **Lovable**: design, visual changes, UI components
-- **Codex**: logic, Edge Functions, database migrations
+- **Coding agents (Codex/Claude/etc.)**: logic, Edge Functions, database migrations, and focused UI fixes when needed
 
 **Deploy process:**
 - Frontend: `git push` → Vercel deploys automatically (no Lovable step needed)
@@ -269,10 +292,38 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - `20260418120000` — `join_chat_room` RPC + `chat_rooms` SELECT policy fix (participant access)
 - `20260418130000` — `chat_reactions` table, RLS policies, realtime publication, reply + soft-delete columns on `chat_messages`
 
+## Session 2026-05-07 to 2026-05-11
+
+### Booking flow and booking chats
+- Booking confirmation was clarified so the user is routed onward into the booking chat.
+- Multi-court Stripe bookings were fixed at DB/function level:
+  - `20260507120000_allow_multi_court_stripe_bookings.sql` changes Stripe idempotency from one booking per session to one booking per `(stripe_session_id, venue_court_id)`.
+  - `20260507140000_shared_access_code_booking_groups.sql` makes multi-court rows share one `access_code` and updates `upsert_resource_chat_room` so existing booking rooms refresh title/subtitle.
+- `api-bookings` creates one shared access code for a multi-court checkout session.
+- Hub booking chat lookup supports both Stripe session grouped rooms and direct booking grouped rooms, so several courts at the same time should surface as one chat bubble.
+
+### Event planning/admin hub
+- Added admin event planning pipeline, calendar, and meeting views.
+- Added event planning columns via:
+  - `20260510120000_event_planning_pipeline.sql`
+  - `20260510133000_event_resources_and_staffing.sql`
+  - `20260510143000_event_plan_share_token.sql`
+- Added partner/public plan sharing:
+  - `api-events/meeting-link`
+  - `api-events/public-plan`
+  - `/event-plan/:venueId?token=...`
+- The share link UI now displays the generated link after `Dela` and provides explicit `Kopiera` and `Öppna` controls because iOS/Safari may block clipboard calls after async API work.
+
+### Deploy notes from this session
+- Event planning migrations were applied manually in Supabase SQL editor.
+- `api-events` was deployed after adding meeting-link/public-plan endpoints.
+- Latest share-link UI fix is frontend-only; Vercel deploys from `main`.
+
 ## Next Up
 - Design-uppdatering av hela appen
 - Membership visas på /my (webhook skapar korrekt, men query i MyPage kan behöva verifieras)
 - `access_code` on `day_passes` (shown to customer after purchase)
 - SMS to customer on day pass purchase
 - `/display/dart/:court_id` — dart kiosk webapp
-- Group purchase — multiple codes in one checkout
+- Real resource/staff planning model for events (separate resources like hall/lounge/stage/bar and staff assignments instead of lightweight text tags)
+- Verify grouped multi-court booking UX end-to-end in production with Stripe webhook + Hub chat list
