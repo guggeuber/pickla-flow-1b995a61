@@ -404,6 +404,105 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
+    // ── ACTIVITY PROGRAM / SCHEDULE ──
+    if (req.method === 'GET' && path === 'activity-series') {
+      const { data, error: e } = await admin.from('activity_series')
+        .select('*').eq('venue_id', venueId).order('created_at', { ascending: false });
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 200, 15);
+    }
+
+    if (req.method === 'POST' && path === 'activity-series') {
+      const { venueId: _v, ...body } = await req.json();
+      if (!body.name) return errorResponse('Missing name');
+      const { data, error: e } = await admin.from('activity_series').insert({
+        venue_id: venueId,
+        name: body.name,
+        description: body.description || null,
+        series_type: body.series_type || 'program',
+        sport_type: body.sport_type || 'pickleball',
+        status: body.status || 'active',
+        product_key: body.product_key || null,
+        start_date: body.start_date || null,
+        end_date: body.end_date || null,
+        total_sessions: body.total_sessions ?? null,
+        metadata: body.metadata || {},
+      }).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 201);
+    }
+
+    if (req.method === 'PATCH' && path === 'activity-series') {
+      const { seriesId, ...updates } = await req.json();
+      if (!seriesId) return errorResponse('Missing seriesId');
+      const { data, error: e } = await admin.from('activity_series')
+        .update(updates).eq('id', seriesId).eq('venue_id', venueId).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data);
+    }
+
+    if (req.method === 'DELETE' && path === 'activity-series') {
+      const seriesId = url.searchParams.get('seriesId');
+      if (!seriesId) return errorResponse('Missing seriesId');
+      const { error: e } = await admin.from('activity_series').delete().eq('id', seriesId).eq('venue_id', venueId);
+      if (e) return errorResponse(e.message);
+      return jsonResponse({ ok: true });
+    }
+
+    if (req.method === 'GET' && path === 'activity-sessions') {
+      const { data, error: e } = await admin.from('activity_sessions')
+        .select('*, activity_series(id, name, series_type)')
+        .eq('venue_id', venueId)
+        .order('start_time', { ascending: true });
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 200, 15);
+    }
+
+    if (req.method === 'POST' && path === 'activity-sessions') {
+      const { venueId: _v, ...body } = await req.json();
+      if (!body.name || !body.start_time || !body.end_time) return errorResponse('Missing name/start_time/end_time');
+      const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days : null;
+      const { data, error: e } = await admin.from('activity_sessions').insert({
+        venue_id: venueId,
+        series_id: body.series_id || null,
+        product_key: body.product_key || null,
+        name: body.name,
+        session_type: body.session_type || 'open_play',
+        sport_type: body.sport_type || 'pickleball',
+        recurrence_days: recurrenceDays,
+        session_date: body.session_date || null,
+        start_time: body.start_time,
+        end_time: body.end_time,
+        price_sek: body.price_sek ?? 0,
+        capacity: body.capacity ?? null,
+        court_ids: Array.isArray(body.court_ids) ? body.court_ids : [],
+        access_policy: body.access_policy || {},
+        is_active: body.is_active ?? true,
+        publish_status: body.publish_status || 'published',
+        sort_order: body.sort_order ?? 0,
+        metadata: body.metadata || {},
+      }).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 201);
+    }
+
+    if (req.method === 'PATCH' && path === 'activity-sessions') {
+      const { sessionId, ...updates } = await req.json();
+      if (!sessionId) return errorResponse('Missing sessionId');
+      const { data, error: e } = await admin.from('activity_sessions')
+        .update(updates).eq('id', sessionId).eq('venue_id', venueId).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data);
+    }
+
+    if (req.method === 'DELETE' && path === 'activity-sessions') {
+      const sessionId = url.searchParams.get('sessionId');
+      if (!sessionId) return errorResponse('Missing sessionId');
+      const { error: e } = await admin.from('activity_sessions').delete().eq('id', sessionId).eq('venue_id', venueId);
+      if (e) return errorResponse(e.message);
+      return jsonResponse({ ok: true });
+    }
+
     // ── VENUE LINKS ──
     if (req.method === 'GET' && path === 'links') {
       const { data, error: e } = await admin.from('venue_links')

@@ -363,6 +363,13 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - Membership tier pricing now uses product keys from `access_products`, so tiers can set fixed price or percent discount per product.
 - `api-bookings/create-checkout` resolves day-pass/open-play pricing through `access_products.product_key` before falling back to session price.
 
+### Activity program / schedule
+- Migration `20260511170000_activity_series.sql` introduces `activity_series` and adds program fields to `activity_sessions`.
+- Use `activity_series` for recurring programs or finite courses: Fredagsklubben, Pickla Open weekly, 10-week courses, recurring group training.
+- Use `activity_sessions` for the actual schedule rows: weekday recurrence/date, time, capacity, price, product key, and access policy.
+- Admin has a `Schema` section for creating programs and recurring schedule sessions.
+- Ordinary recurring activities should live in Schema/Activity Sessions, not as heavy `events`. Use `events` for larger campaigns/productions/partner-facing planning that may contain or reference sessions.
+
 ## Next Up
 - Design-uppdatering av hela appen
 - Membership visas på /my (webhook skapar korrekt, men query i MyPage kan behöva verifieras)
