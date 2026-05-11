@@ -2164,6 +2164,53 @@ function HubList({
   }, [venueId, onSelectRoom]);
 
   if (directBookingMode) {
+    if (!user) {
+      return (
+        <div style={{ minHeight: "100dvh", background: HUB_BG }}>
+          <header
+            className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
+            style={{
+              background: "linear-gradient(to bottom, rgba(250,248,245,0.95) 0%, rgba(250,248,245,0.7) 50%, transparent 100%)",
+            }}
+          >
+            <div className="pt-2">
+              <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
+            </div>
+            <div className="w-9 h-9 mb-1" />
+          </header>
+          <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", padding: "96px 24px 120px" }}>
+            <div style={{ textAlign: "center", maxWidth: 340 }}>
+              <MessageCircle style={{ width: 38, height: 38, color: HUB_NAVY, margin: "0 auto 14px" }} />
+              <p style={{ fontFamily: FONT_HEADING, fontSize: 20, fontWeight: 900, color: HUB_TEXT, margin: 0 }}>
+                Logga in för bokningschatten
+              </p>
+              <p style={{ fontFamily: "Inter, sans-serif", fontSize: 14, lineHeight: 1.45, color: HUB_MUTED, margin: "8px 0 18px" }}>
+                Din bokning är skapad. Chatten är personlig och kräver inloggning.
+              </p>
+              <div style={{ display: "grid", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/auth?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`)}
+                  style={{ border: 0, borderRadius: 16, background: HUB_NAVY, color: "white", padding: "13px 16px", fontFamily: FONT_HEADING, fontWeight: 900 }}
+                >
+                  Logga in
+                </button>
+                {bookingRoomRef && !String(bookingRoomRef).includes(":") && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/b/${bookingRoomRef}`)}
+                    style={{ border: `1px solid ${HUB_BORDER}`, borderRadius: 16, background: HUB_CARD, color: HUB_TEXT, padding: "13px 16px", fontFamily: FONT_HEADING, fontWeight: 900 }}
+                  >
+                    Visa bokningsbekräftelse
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div style={{ minHeight: "100dvh", background: HUB_BG }}>
         <header

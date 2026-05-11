@@ -485,7 +485,7 @@ export default function BookingPage() {
       }
       const firstRef = result.bookings?.[0]?.booking_ref;
       if (firstRef) {
-        navigate(bookingChatPath(firstRef, slug));
+        navigate(user ? bookingChatPath(firstRef, slug) : `/b/${firstRef}`);
       } else {
         setConfirmed(true);
         toast.success("Bokad!");

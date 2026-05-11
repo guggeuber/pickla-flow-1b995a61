@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { LogOut, Settings } from "lucide-react";
+import { AlertCircle, Loader2, LogOut, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import BottomNav, { type Tab } from "@/components/BottomNav";
 import { useAuth } from "@/hooks/useAuth";
+import { useVenueForStaff } from "@/hooks/useDesk";
 import TodayScreen from "@/screens/TodayScreen";
 import CustomersScreen from "@/screens/CustomersScreen";
 import BookScreen from "@/screens/BookScreen";
@@ -20,10 +21,51 @@ const screens: Record<Tab, React.FC> = {
 
 const Index = () => {
   const { signOut } = useAuth();
+  const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Tab>("today");
 
   const Screen = screens[activeTab];
+
+  if (venueLoading) {
+    return (
+      <div className="min-h-screen bg-background max-w-md mx-auto flex items-center justify-center">
+        <Loader2 className="w-5 h-5 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!staffVenue) {
+    return (
+      <div className="min-h-screen bg-background max-w-md mx-auto flex items-center justify-center px-6">
+        <div className="text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-destructive/15 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-7 h-7 text-destructive" />
+          </div>
+          <div>
+            <h1 className="text-xl font-display font-bold">Ingen desk-åtkomst</h1>
+            <p className="text-sm text-muted-foreground mt-2">
+              Ditt konto är inte kopplat till någon venue som personal.
+            </p>
+          </div>
+          <div className="grid gap-2">
+            <button
+              onClick={() => navigate("/")}
+              className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"
+            >
+              Till startsidan
+            </button>
+            <button
+              onClick={signOut}
+              className="rounded-xl border border-border px-4 py-3 text-sm font-bold text-muted-foreground"
+            >
+              Logga ut
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background max-w-md mx-auto relative">

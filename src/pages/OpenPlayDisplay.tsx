@@ -14,6 +14,7 @@ interface SuccessInfo {
   name: string;
   court: string;
   time: string;
+  alreadyCheckedIn: boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -232,9 +233,11 @@ export default function OpenPlayDisplay() {
           access_code: code,
         });
 
+        const courts = (result.booking?.courts || []).filter(Boolean);
         const court = result.booking?.court;
-        const courtName =
-          court?.name ?? `Bana ${court?.court_number ?? ""}`;
+        const courtName = courts.length > 1
+          ? courts.map((c: any) => c.name ?? `Bana ${c.court_number ?? ""}`).filter(Boolean).join(", ")
+          : court?.name ?? `Bana ${court?.court_number ?? ""}`;
         const startT = result.booking?.start_time ? fmtTime(result.booking.start_time) : "";
         const endT   = result.booking?.end_time   ? fmtTime(result.booking.end_time)   : "";
         const name   = result.booking?.customer_name || "";
@@ -243,6 +246,7 @@ export default function OpenPlayDisplay() {
           name,
           court: courtName,
           time: startT && endT ? `${startT}–${endT}` : "",
+          alreadyCheckedIn: Boolean(result.already_checked_in),
         });
         setPhase("success");
 
@@ -365,7 +369,11 @@ export default function OpenPlayDisplay() {
               <CheckCircle2 className="w-20 h-20 text-emerald-400" />
               <div>
                 <p className="text-4xl font-bold font-display text-white leading-tight">
-                  {successInfo.name ? `Välkommen, ${successInfo.name}!` : "Välkommen!"}
+                  {successInfo.alreadyCheckedIn
+                    ? "Redan incheckad"
+                    : successInfo.name
+                    ? `Välkommen, ${successInfo.name}!`
+                    : "Välkommen!"}
                 </p>
                 <p className="text-5xl font-black font-display text-emerald-400 mt-2 leading-tight">
                   {successInfo.court}
