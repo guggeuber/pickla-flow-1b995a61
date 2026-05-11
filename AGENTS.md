@@ -334,6 +334,14 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - Made desk check-in idempotent for entitlement/user scans.
 - Added migration `20260511120000_idempotent_venue_checkins.sql` to dedupe existing active duplicates and add partial unique indexes for active check-ins.
 
+### Access resolver / check-in OS
+- `api-checkins` now has a shared access resolver used by QR scan, customer search, and desk check-in.
+- Resolver order: active booking in check-in window first, active membership second, today's active day pass third.
+- Memberships are reusable access rights; every scan/check-in still creates or reuses a `venue_checkins` presence row for live occupancy/data.
+- Day passes are valid only for `valid_date = today` in Europe/Stockholm; old active rows cannot be used on later dates because resolver never selects them.
+- Desk/customer manual check-in with a known user auto-upgrades to the best valid entitlement when available, so staff check-ins still record the true access source.
+- Repeated scans return `already_checked_in` with the active check-in row instead of creating duplicate presence.
+
 ## Next Up
 - Design-uppdatering av hela appen
 - Membership visas på /my (webhook skapar korrekt, men query i MyPage kan behöva verifieras)

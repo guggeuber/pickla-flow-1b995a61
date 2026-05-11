@@ -38,9 +38,9 @@ const entitlementIcon = (type: string) => {
 };
 
 const entitlementPriority: Record<string, number> = {
-  membership: 1,
-  day_pass: 2,
-  booking: 3,
+  booking: 1,
+  membership: 2,
+  day_pass: 3,
 };
 
 const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {

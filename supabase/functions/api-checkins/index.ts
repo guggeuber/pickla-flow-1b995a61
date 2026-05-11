@@ -2,6 +2,167 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
+const STOCKHOLM_ZONE = 'Europe/Stockholm';
+
+const entitlementPriority: Record<string, number> = {
+  booking: 1,
+  membership: 2,
+  day_pass: 3,
+};
+
+function stockholmNow() {
+  const nowSthlm = DateTime.now().setZone(STOCKHOLM_ZONE);
+  return {
+    nowSthlm,
+    today: nowSthlm.toISODate()!,
+    nowIso: nowSthlm.toUTC().toISO()!,
+    bookingWindowEndIso: nowSthlm.plus({ minutes: 30 }).toUTC().toISO()!,
+  };
+}
+
+function nameFromBookingNotes(notes?: string | null) {
+  return (notes || '').split(' | ')[0].trim();
+}
+
+async function getProfile(serviceClient: any, userId: string) {
+  const { data } = await serviceClient
+    .from('player_profiles')
+    .select('id, auth_user_id, display_name, phone, avatar_url')
+    .eq('auth_user_id', userId)
+    .maybeSingle();
+  return data;
+}
+
+async function resolveUserAccess(serviceClient: any, venueId: string, targetUserId: string) {
+  const { today, nowIso, bookingWindowEndIso } = stockholmNow();
+  const profile = await getProfile(serviceClient, targetUserId);
+  const entitlements: any[] = [];
+
+  const { data: existingCheckin } = await serviceClient
+    .from('venue_checkins')
+    .select('*')
+    .eq('user_id', targetUserId)
+    .eq('venue_id', venueId)
+    .eq('session_date', today)
+    .is('checked_out_at', null)
+    .order('checked_in_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: booking } = await serviceClient
+    .from('bookings')
+    .select('id, start_time, end_time, booking_ref, access_code, notes, venue_courts(name)')
+    .eq('user_id', targetUserId)
+    .eq('venue_id', venueId)
+    .eq('status', 'confirmed')
+    .lte('start_time', bookingWindowEndIso)
+    .gte('end_time', nowIso)
+    .order('start_time', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (booking) {
+    entitlements.push({
+      type: 'booking',
+      id: booking.id,
+      label: `Bokning: ${(booking as any).venue_courts?.name || 'Bana'}`,
+      resource: (booking as any).venue_courts?.name || null,
+      starts_at: booking.start_time,
+      ends_at: booking.end_time,
+      priority: entitlementPriority.booking,
+    });
+  }
+
+  const { data: membership } = await serviceClient
+    .from('memberships')
+    .select('id, tier_id, status, starts_at, expires_at, membership_tiers(name, color)')
+    .eq('user_id', targetUserId)
+    .eq('venue_id', venueId)
+    .eq('status', 'active')
+    .lte('starts_at', today)
+    .or(`expires_at.is.null,expires_at.gte.${today}`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (membership) {
+    entitlements.push({
+      type: 'membership',
+      id: membership.id,
+      label: (membership as any).membership_tiers?.name || 'Medlem',
+      color: (membership as any).membership_tiers?.color || '#4CAF50',
+      priority: entitlementPriority.membership,
+    });
+  }
+
+  const { data: dayPass } = await serviceClient
+    .from('day_passes')
+    .select('id, price, status, valid_date')
+    .eq('user_id', targetUserId)
+    .eq('venue_id', venueId)
+    .eq('valid_date', today)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (dayPass) {
+    entitlements.push({
+      type: 'day_pass',
+      id: dayPass.id,
+      label: `Dagspass (${dayPass.price || 0} kr)`,
+      valid_date: dayPass.valid_date,
+      priority: entitlementPriority.day_pass,
+    });
+  }
+
+  entitlements.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+
+  return {
+    profile,
+    entitlements,
+    best: entitlements[0] || null,
+    existingCheckin,
+    already_checked_in: !!existingCheckin,
+    allowed: !!existingCheckin || entitlements.length > 0,
+    today,
+  };
+}
+
+async function findActiveCheckin(serviceClient: any, params: {
+  venueId: string;
+  today: string;
+  entryType: string;
+  entitlementId?: string | null;
+  targetUserId?: string | null;
+  playerPhone?: string | null;
+  playerName?: string | null;
+}) {
+  let existingQuery = serviceClient
+    .from('venue_checkins')
+    .select('*')
+    .eq('venue_id', params.venueId)
+    .eq('entry_type', params.entryType)
+    .eq('session_date', params.today)
+    .is('checked_out_at', null)
+    .limit(1);
+
+  if (params.entitlementId) {
+    existingQuery = existingQuery.eq('entitlement_id', params.entitlementId);
+  } else if (params.targetUserId) {
+    existingQuery = existingQuery.eq('user_id', params.targetUserId);
+  } else if (params.playerPhone) {
+    existingQuery = existingQuery.eq('player_phone', params.playerPhone);
+  } else if (params.playerName) {
+    existingQuery = existingQuery.eq('player_name', params.playerName);
+  } else {
+    return null;
+  }
+
+  const { data } = await existingQuery.maybeSingle();
+  return data || null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -75,7 +236,7 @@ Deno.serve(async (req) => {
       const existingIds = new Set((existingRows || []).map((row: any) => row.entitlement_id));
 
       // Extract customer name from "Name | Phone" notes format
-      const customerName = ((booking as any).notes || '').split(' | ')[0].trim();
+      const customerName = nameFromBookingNotes((booking as any).notes);
 
       const checkinRows = bookings.filter((b: any) => !existingIds.has(b.id)).map((b: any) => ({
         venue_id,
@@ -140,91 +301,10 @@ Deno.serve(async (req) => {
       if (!venue_id || !targetUserId) return errorResponse('Missing venue_id or user_id');
 
       const serviceClient = getServiceClient();
-
-      // Get profile
-      const { data: profile } = await serviceClient
-        .from('player_profiles')
-        .select('id, auth_user_id, display_name, phone, avatar_url')
-        .eq('auth_user_id', targetUserId)
-        .maybeSingle();
+      const access = await resolveUserAccess(serviceClient, venue_id, targetUserId);
+      const profile = access.profile;
 
       if (!profile) return errorResponse('User not found', 404);
-
-      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
-      const entitlements: any[] = [];
-
-      // Check membership
-      const { data: membership } = await serviceClient
-        .from('memberships')
-        .select('id, tier_id, status, membership_tiers(name, color)')
-        .eq('user_id', targetUserId)
-        .eq('venue_id', venue_id)
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle();
-
-      if (membership) {
-        entitlements.push({
-          type: 'membership',
-          id: membership.id,
-          label: (membership as any).membership_tiers?.name || 'Medlem',
-          color: (membership as any).membership_tiers?.color || '#4CAF50',
-        });
-      }
-
-      // Check day pass
-      const { data: dayPass } = await serviceClient
-        .from('day_passes')
-        .select('id, price, status')
-        .eq('user_id', targetUserId)
-        .eq('venue_id', venue_id)
-        .eq('valid_date', today)
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle();
-
-      if (dayPass) {
-        entitlements.push({
-          type: 'day_pass',
-          id: dayPass.id,
-          label: `Dagspass (${dayPass.price || 0} kr)`,
-        });
-      }
-
-      // Check booking: same window as booking code check-in, 30 min before start until end.
-      const nowSthlm = DateTime.now().setZone('Europe/Stockholm');
-      const windowEndIso = nowSthlm.plus({ minutes: 30 }).toUTC().toISO()!;
-      const nowIso = nowSthlm.toUTC().toISO()!;
-      const { data: booking } = await serviceClient
-        .from('bookings')
-        .select('id, start_time, end_time, venue_courts(name)')
-        .eq('user_id', targetUserId)
-        .eq('venue_id', venue_id)
-        .eq('status', 'confirmed')
-        .lte('start_time', windowEndIso)
-        .gte('end_time', nowIso)
-        .order('start_time', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (booking) {
-        entitlements.push({
-          type: 'booking',
-          id: booking.id,
-          label: `Bokning: ${(booking as any).venue_courts?.name || 'Bana'}`,
-        });
-      }
-
-      // Already checked in?
-      const { data: existingCheckin } = await serviceClient
-        .from('venue_checkins')
-        .select('id')
-        .eq('user_id', targetUserId)
-        .eq('venue_id', venue_id)
-        .eq('session_date', today)
-        .is('checked_out_at', null)
-        .limit(1)
-        .maybeSingle();
 
       return jsonResponse({
         profile_id: profile.id,
@@ -232,8 +312,11 @@ Deno.serve(async (req) => {
         display_name: profile.display_name,
         phone: profile.phone,
         avatar_url: profile.avatar_url,
-        entitlements,
-        already_checked_in: !!existingCheckin,
+        entitlements: access.entitlements,
+        best_entitlement: access.best,
+        allowed: access.allowed,
+        already_checked_in: access.already_checked_in,
+        active_checkin: access.existingCheckin,
       });
     }
 
@@ -262,82 +345,11 @@ Deno.serve(async (req) => {
         return jsonResponse({ results: [] });
       }
 
-      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
       const results = [];
 
       for (const profile of profiles) {
         const uid = profile.auth_user_id;
-        const entitlements: any[] = [];
-
-        // Check active membership
-        const { data: membership } = await serviceClient
-          .from('memberships')
-          .select('id, tier_id, status, membership_tiers(name, color)')
-          .eq('user_id', uid)
-          .eq('venue_id', venue_id)
-          .eq('status', 'active')
-          .limit(1)
-          .maybeSingle();
-
-        if (membership) {
-          entitlements.push({
-            type: 'membership',
-            id: membership.id,
-            label: (membership as any).membership_tiers?.name || 'Medlem',
-            color: (membership as any).membership_tiers?.color || '#4CAF50',
-          });
-        }
-
-        // Check today's day pass
-        const { data: dayPass } = await serviceClient
-          .from('day_passes')
-          .select('id, price, status')
-          .eq('user_id', uid)
-          .eq('venue_id', venue_id)
-          .eq('valid_date', today)
-          .eq('status', 'active')
-          .limit(1)
-          .maybeSingle();
-
-        if (dayPass) {
-          entitlements.push({
-            type: 'day_pass',
-            id: dayPass.id,
-            label: `Dagspass (${dayPass.price || 0} kr)`,
-          });
-        }
-
-        // Check today's booking
-        const nowIso = new Date().toISOString();
-        const { data: booking } = await serviceClient
-          .from('bookings')
-          .select('id, start_time, end_time, venue_courts(name)')
-          .eq('user_id', uid)
-          .eq('venue_id', venue_id)
-          .eq('status', 'confirmed')
-          .lte('start_time', nowIso)
-          .gte('end_time', nowIso)
-          .limit(1)
-          .maybeSingle();
-
-        if (booking) {
-          entitlements.push({
-            type: 'booking',
-            id: booking.id,
-            label: `Bokning: ${(booking as any).venue_courts?.name || 'Bana'}`,
-          });
-        }
-
-        // Check if already checked in today
-        const { data: existingCheckin } = await serviceClient
-          .from('venue_checkins')
-          .select('id')
-          .eq('user_id', uid)
-          .eq('venue_id', venue_id)
-          .eq('session_date', today)
-          .is('checked_out_at', null)
-          .limit(1)
-          .maybeSingle();
+        const access = await resolveUserAccess(serviceClient, venue_id, uid);
 
         results.push({
           profile_id: profile.id,
@@ -345,8 +357,11 @@ Deno.serve(async (req) => {
           display_name: profile.display_name,
           phone: profile.phone,
           avatar_url: profile.avatar_url,
-          entitlements,
-          already_checked_in: !!existingCheckin,
+          entitlements: access.entitlements,
+          best_entitlement: access.best,
+          allowed: access.allowed,
+          already_checked_in: access.already_checked_in,
+          active_checkin: access.existingCheckin,
         });
       }
 
@@ -359,32 +374,49 @@ Deno.serve(async (req) => {
       if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
       const body = await req.json();
-      const { venue_id, target_user_id, entry_type, entitlement_id, player_name, player_phone } = body;
+      const { venue_id, target_user_id, player_name, player_phone } = body;
+      let { entry_type, entitlement_id } = body;
       if (!venue_id || !entry_type) return errorResponse('Missing required fields');
 
-      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
-      if (entitlement_id || target_user_id || player_phone || player_name) {
-        let existingQuery = client
-          .from('venue_checkins')
-          .select('*')
-          .eq('venue_id', venue_id)
-          .eq('entry_type', entry_type)
-          .eq('session_date', today)
-          .is('checked_out_at', null)
-          .limit(1);
+      const serviceClient = getServiceClient();
+      const { today } = stockholmNow();
 
-        if (entitlement_id) {
-          existingQuery = existingQuery.eq('entitlement_id', entitlement_id);
-        } else if (target_user_id) {
-          existingQuery = existingQuery.eq('user_id', target_user_id);
-        } else if (player_phone) {
-          existingQuery = existingQuery.eq('player_phone', player_phone);
-        } else if (player_name) {
-          existingQuery = existingQuery.eq('player_name', player_name);
+      if (target_user_id) {
+        const access = await resolveUserAccess(serviceClient, venue_id, target_user_id);
+
+        if (access.already_checked_in && access.existingCheckin) {
+          return jsonResponse({
+            ...access.existingCheckin,
+            already_checked_in: true,
+            access,
+          });
         }
 
-        const { data: existingCheckin } = await existingQuery.maybeSingle();
-        if (existingCheckin) return jsonResponse(existingCheckin);
+        const requestedEntitlement = access.entitlements.find(
+          (ent) => ent.type === entry_type && ent.id === entitlement_id
+        );
+
+        if ((!entitlement_id || entry_type === 'manual' || entry_type === 'auto') && access.best) {
+          entry_type = access.best.type;
+          entitlement_id = access.best.id;
+        } else if (entitlement_id && !requestedEntitlement) {
+          return errorResponse('Ingen giltig access hittades för den här incheckningen', 403);
+        } else if (!access.allowed && entry_type !== 'manual') {
+          return errorResponse('Ingen giltig access hittades', 403);
+        }
+      }
+
+      if (entitlement_id || target_user_id || player_phone || player_name) {
+        const existingCheckin = await findActiveCheckin(serviceClient, {
+          venueId: venue_id,
+          today,
+          entryType: entry_type,
+          entitlementId: entitlement_id,
+          targetUserId: target_user_id,
+          playerPhone: player_phone,
+          playerName: player_name,
+        });
+        if (existingCheckin) return jsonResponse({ ...existingCheckin, already_checked_in: true });
       }
 
       const { data, error: insertErr } = await client
@@ -404,23 +436,18 @@ Deno.serve(async (req) => {
 
       if (insertErr) {
         if (insertErr.code === '23505' && (entitlement_id || target_user_id)) {
-          let retryQuery = client
-            .from('venue_checkins')
-            .select('*')
-            .eq('venue_id', venue_id)
-            .eq('entry_type', entry_type)
-            .eq('session_date', today)
-            .is('checked_out_at', null)
-            .limit(1);
-          retryQuery = entitlement_id
-            ? retryQuery.eq('entitlement_id', entitlement_id)
-            : retryQuery.eq('user_id', target_user_id);
-          const { data: retry } = await retryQuery.maybeSingle();
-          if (retry) return jsonResponse(retry);
+          const retry = await findActiveCheckin(serviceClient, {
+            venueId: venue_id,
+            today,
+            entryType: entry_type,
+            entitlementId: entitlement_id,
+            targetUserId: target_user_id,
+          });
+          if (retry) return jsonResponse({ ...retry, already_checked_in: true });
         }
         return errorResponse(insertErr.message);
       }
-      return jsonResponse(data);
+      return jsonResponse({ ...data, already_checked_in: false });
     }
 
     // GET /api-checkins/today — get today's venue checkins
