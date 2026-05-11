@@ -46,6 +46,9 @@ const entitlementPriority: Record<string, number> = {
 const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
   const [phase, setPhase] = useState<"scanning" | "found" | "done">("scanning");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [code, setCode] = useState("");
+  const [doneTitle, setDoneTitle] = useState("Incheckad");
+  const [doneSubtitle, setDoneSubtitle] = useState("Klar");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -162,6 +165,8 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
         entitlement_id: entitlementId,
         player_name: scanResult.display_name,
       });
+      setDoneTitle(scanResult.display_name);
+      setDoneSubtitle("Incheckad");
       setPhase("done");
       toast.success(`${scanResult.display_name} incheckad! ✅`);
       onCheckedIn?.();
@@ -176,6 +181,8 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
 
     if (scanResult.already_checked_in) {
       toast.info(`${scanResult.display_name} är redan incheckad`);
+      setDoneTitle(scanResult.display_name);
+      setDoneSubtitle("Redan incheckad");
       setPhase("done");
       return;
     }
@@ -190,6 +197,37 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
       await handleCheckin(best.type, best.id);
     } else {
       await handleCheckin("manual", null);
+    }
+  };
+
+  const handleCodeCheckin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const safeCode = code.replace(/\D/g, "").slice(0, 4);
+    if (safeCode.length !== 4 || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await apiPost("api-checkins", "code", {
+        venue_id: venueId,
+        access_code: safeCode,
+      });
+      const courts = (result.booking?.courts || []).filter(Boolean);
+      const courtLabel = courts.length > 1
+        ? `${courts.length} banor`
+        : result.booking?.court?.name || "Bokning";
+      const courtNames = courts.length > 1
+        ? courts.map((c: any) => c.name).filter(Boolean).join(", ")
+        : "";
+      setDoneTitle(result.already_checked_in ? "Redan incheckad" : courtLabel);
+      setDoneSubtitle(courtNames || "Bokningskod godkänd");
+      setPhase("done");
+      setCode("");
+      toast.success(result.already_checked_in ? "Redan incheckad" : "Incheckad");
+      onCheckedIn?.();
+    } catch (err: any) {
+      setError(err.message || "Koden kunde inte checkas in");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -245,6 +283,26 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
                   <p className="text-xs">{error}</p>
                 </div>
               )}
+              <form onSubmit={handleCodeCheckin} className="glass-card rounded-2xl p-3 space-y-2">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Eller ange bokningskod</p>
+                <div className="flex gap-2">
+                  <input
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    placeholder="4 siffror"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className="min-w-0 flex-1 rounded-xl bg-background border border-border px-3 py-3 text-sm font-mono tracking-[0.35em] outline-none focus:border-primary"
+                  />
+                  <button
+                    type="submit"
+                    disabled={loading || code.length !== 4}
+                    className="rounded-xl bg-primary px-4 py-3 text-xs font-bold text-primary-foreground disabled:opacity-50"
+                  >
+                    Checka in
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 
@@ -308,14 +366,16 @@ const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
               <div className="w-16 h-16 rounded-full bg-court-free/15 flex items-center justify-center">
                 <Check className="w-8 h-8 text-court-free" />
               </div>
-              <p className="text-lg font-display font-bold">{scanResult?.display_name}</p>
-              <p className="text-sm text-muted-foreground">Incheckad ✅</p>
+              <p className="text-lg font-display font-bold text-center">{doneTitle}</p>
+              <p className="text-sm text-muted-foreground text-center">{doneSubtitle}</p>
               <motion.button
                 whileTap={{ scale: 0.96 }}
                 onClick={() => {
                   processedRef.current = false;
                   setScanResult(null);
                   setError(null);
+                  setDoneTitle("Incheckad");
+                  setDoneSubtitle("Klar");
                   setPhase("scanning");
                 }}
                 className="mt-4 bg-primary text-primary-foreground rounded-xl px-6 py-3 text-sm font-semibold"

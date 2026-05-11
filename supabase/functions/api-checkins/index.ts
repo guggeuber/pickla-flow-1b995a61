@@ -190,16 +190,19 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Check booking
-      const nowIso = new Date().toISOString();
+      // Check booking: same window as booking code check-in, 30 min before start until end.
+      const nowSthlm = DateTime.now().setZone('Europe/Stockholm');
+      const windowEndIso = nowSthlm.plus({ minutes: 30 }).toUTC().toISO()!;
+      const nowIso = nowSthlm.toUTC().toISO()!;
       const { data: booking } = await serviceClient
         .from('bookings')
         .select('id, start_time, end_time, venue_courts(name)')
         .eq('user_id', targetUserId)
         .eq('venue_id', venue_id)
         .eq('status', 'confirmed')
-        .lte('start_time', nowIso)
+        .lte('start_time', windowEndIso)
         .gte('end_time', nowIso)
+        .order('start_time', { ascending: true })
         .limit(1)
         .maybeSingle();
 
