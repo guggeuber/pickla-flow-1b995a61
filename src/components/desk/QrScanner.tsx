@@ -31,6 +31,9 @@ interface QrScannerProps {
 const entitlementIcon = (type: string) => {
   switch (type) {
     case "membership": return Crown;
+    case "membership_access": return Crown;
+    case "day_access": return Ticket;
+    case "session_ticket": return Calendar;
     case "day_pass": return Ticket;
     case "booking": return Calendar;
     default: return Check;
@@ -39,8 +42,11 @@ const entitlementIcon = (type: string) => {
 
 const entitlementPriority: Record<string, number> = {
   booking: 1,
-  membership: 2,
-  day_pass: 3,
+  session_ticket: 2,
+  membership: 3,
+  membership_access: 3,
+  day_access: 4,
+  day_pass: 5,
 };
 
 const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {

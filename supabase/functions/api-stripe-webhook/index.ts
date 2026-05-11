@@ -206,7 +206,7 @@ async function handleDayPass(
   meta: Record<string, string>,
   serviceClient: any,
 ): Promise<void> {
-  const { venue_id, date, user_id } = meta;
+  const { venue_id, date, user_id, activity_session_id, open_play_session_id, session_type, includes_day_access } = meta;
 
   if (!date) throw new Error('Missing date in day_pass metadata');
 
@@ -221,16 +221,59 @@ async function handleDayPass(
   const resolvedUserId = await resolveUserId(session, user_id, serviceClient);
   const priceSek = Math.round((session.amount_total || 0) / 100);
 
-  const { error } = await serviceClient.from('day_passes').insert({
+  const { data: dayPass, error } = await serviceClient.from('day_passes').insert({
     venue_id,
     user_id:           resolvedUserId,
     valid_date:        date,
     price:             priceSek,
     status:            'active',
     stripe_session_id: session.id,
-  });
+  }).select('id').single();
 
   if (error) throw new Error(`Failed to insert day_pass: ${error.message}`);
+
+  const activitySessionId = activity_session_id || open_play_session_id || null;
+  const kind = session_type || 'open_play';
+  const includesDayAccess = includes_day_access === 'true' || kind === 'open_play';
+
+  if (activitySessionId) {
+    await serviceClient.from('session_registrations').upsert({
+      venue_id,
+      activity_session_id: activitySessionId,
+      session_date: date,
+      user_id: resolvedUserId,
+      status: 'confirmed',
+      price_paid_sek: priceSek,
+      stripe_session_id: session.id,
+      source_type: 'day_pass',
+      source_id: dayPass.id,
+      metadata: {
+        session_type: kind,
+        session_name: meta.session_name || null,
+      },
+    }, { onConflict: 'activity_session_id,session_date,user_id' });
+  }
+
+  if (dayPass?.id) {
+    await serviceClient.from('access_entitlements').upsert({
+      venue_id,
+      user_id: resolvedUserId,
+      entitlement_type: includesDayAccess ? 'day_access' : 'session_ticket',
+      status: 'active',
+      source_type: 'day_pass',
+      source_id: dayPass.id,
+      activity_session_id: activitySessionId,
+      session_date: activitySessionId ? date : null,
+      valid_date: includesDayAccess ? date : null,
+      includes_session_types: includesDayAccess ? ['open_play'] : [kind],
+      metadata: {
+        legacy_day_pass_id: dayPass.id,
+        session_name: meta.session_name || null,
+        session_type: kind,
+        stripe_session_id: session.id,
+      },
+    }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
+  }
 }
 
 // ── Membership ────────────────────────────────────────────────────────────────

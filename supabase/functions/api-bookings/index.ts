@@ -77,10 +77,42 @@ async function createFreeEntitlementBookingResponse({
 
   if (product_type === 'day_pass' && meta.entitlement_type === 'free_day_pass_monthly') {
     const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
-    await adminFree.from('day_passes').insert({
-      venue_id, user_id: entitlementUserId, valid_date: today,
+    const validDate = meta.date || today;
+    const { data: dayPass } = await adminFree.from('day_passes').insert({
+      venue_id, user_id: entitlementUserId, valid_date: validDate,
       purchase_date: today, price: 0, status: 'active', is_free: true,
     }).select('id').single();
+
+    if (dayPass?.id) {
+      await adminFree.from('access_entitlements').upsert({
+        venue_id,
+        user_id: entitlementUserId,
+        entitlement_type: 'day_access',
+        status: 'active',
+        source_type: 'day_pass',
+        source_id: dayPass.id,
+        valid_date: validDate,
+        includes_session_types: ['open_play'],
+        metadata: {
+          legacy_day_pass_id: dayPass.id,
+          source: 'membership_free_pass',
+        },
+      }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
+
+      const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+      if (activitySessionId) {
+        await adminFree.from('session_registrations').upsert({
+          venue_id,
+          activity_session_id: activitySessionId,
+          session_date: validDate,
+          user_id: entitlementUserId,
+          status: 'confirmed',
+          price_paid_sek: 0,
+          source_type: 'day_pass',
+          source_id: dayPass.id,
+        }, { onConflict: 'activity_session_id,session_date,user_id' });
+      }
+    }
 
     await adminFree.from('membership_usage').upsert({
       user_id: entitlementUserId, venue_id,
@@ -167,18 +199,35 @@ Deno.serve(async (req) => {
     let finalAmountSek = amount_sek;
     let entitlementUserId = meta.user_id || '';
 
-    if (product_type === 'day_pass' && venue_id && meta.open_play_session_id) {
+    if (product_type === 'day_pass' && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
       const adminCheckout = getServiceClient();
-      const { data: openPlaySession } = await adminCheckout
-        .from('open_play_sessions')
-        .select('price_sek, venue_id')
-        .eq('id', meta.open_play_session_id)
+      const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+      const { data: activitySession } = await adminCheckout
+        .from('activity_sessions')
+        .select('price_sek, venue_id, name, session_type, access_policy')
+        .eq('id', activitySessionId)
         .maybeSingle();
 
-      if (openPlaySession?.venue_id === venue_id && openPlaySession.price_sek != null) {
-        baseAmountSek = Number(openPlaySession.price_sek);
+      if (activitySession?.venue_id === venue_id && activitySession.price_sek != null) {
+        baseAmountSek = Number(activitySession.price_sek);
         finalAmountSek = baseAmountSek;
         meta.base_amount_sek = String(baseAmountSek);
+        meta.activity_session_id = activitySessionId;
+        meta.session_name = meta.session_name || activitySession.name;
+        meta.session_type = activitySession.session_type || 'open_play';
+        meta.includes_day_access = activitySession.access_policy?.includes_day_access ? 'true' : '';
+      } else if (meta.open_play_session_id) {
+        const { data: openPlaySession } = await adminCheckout
+          .from('open_play_sessions')
+          .select('price_sek, venue_id')
+          .eq('id', meta.open_play_session_id)
+          .maybeSingle();
+
+        if (openPlaySession?.venue_id === venue_id && openPlaySession.price_sek != null) {
+          baseAmountSek = Number(openPlaySession.price_sek);
+          finalAmountSek = baseAmountSek;
+          meta.base_amount_sek = String(baseAmountSek);
+        }
       }
     }
 
@@ -417,7 +466,10 @@ Deno.serve(async (req) => {
       customer_phone:   String(meta.customer_phone   || '').slice(0, 50),
       // Day-pass-specific
       open_play_session_id: String(meta.open_play_session_id || ''),
+      activity_session_id: String(meta.activity_session_id || ''),
       session_name:     String(meta.session_name     || ''),
+      session_type:     String(meta.session_type     || 'open_play'),
+      includes_day_access: String(meta.includes_day_access || ''),
     };
 
     const cancelPath = meta.slug ? `/book?v=${meta.slug}` : isMembership ? '/membership' : '/book';

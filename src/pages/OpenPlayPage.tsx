@@ -42,13 +42,28 @@ function useOpenPlaySessions() {
       if (!venue) return { sessions: [], venueId: null };
 
       const { data, error } = await supabase
-        .from("open_play_sessions")
+        .from("activity_sessions")
         .select("*")
         .eq("venue_id", venue.id)
+        .eq("session_type", "open_play")
         .eq("is_active", true)
         .order("start_time", { ascending: true });
 
-      if (error) throw error;
+      if (error) {
+        const { data: legacyData, error: legacyError } = await supabase
+          .from("open_play_sessions")
+          .select("*")
+          .eq("venue_id", venue.id)
+          .eq("is_active", true)
+          .order("start_time", { ascending: true });
+
+        if (legacyError) throw legacyError;
+        return {
+          sessions: (legacyData || []).map((session: any) => ({ ...session, legacy_open_play: true })),
+          venueId: venue.id,
+        };
+      }
+
       return { sessions: data || [], venueId: venue.id };
     },
   });
@@ -98,8 +113,11 @@ const OpenPlayPage = () => {
         venue_id: venueId,
         metadata: {
           session_name: slot.session.name,
+          session_type: slot.session.session_type || "open_play",
           date: slot.date.toISODate(),
-          open_play_session_id: slot.session.id,
+          ...(slot.session.legacy_open_play
+            ? { open_play_session_id: slot.session.id }
+            : { activity_session_id: slot.session.id }),
           user_id: user?.id || "",
         },
       });
@@ -125,7 +143,8 @@ const OpenPlayPage = () => {
       const jsDow = date.weekday % 7; // Convert Luxon weekday to JS weekday (0=Sun)
       
       for (const s of sessions) {
-        if (s.day_of_week.includes(jsDow)) {
+        const recurrenceDays = s.recurrence_days || s.day_of_week || [];
+        if (recurrenceDays.includes(jsDow)) {
           // Skip if session already ended today
           if (offset === 0) {
             const endParts = s.end_time.split(":");

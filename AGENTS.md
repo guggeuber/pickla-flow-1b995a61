@@ -342,6 +342,16 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - Desk/customer manual check-in with a known user auto-upgrades to the best valid entitlement when available, so staff check-ins still record the true access source.
 - Repeated scans return `already_checked_in` with the active check-in row instead of creating duplicate presence.
 
+### Access OS structural model
+- Migration `20260511150000_access_os.sql` introduces the new canonical access model:
+  - `activity_sessions`: dated or recurring activities such as Open Play FM, Open Play Kväll, group training, Pickla Open.
+  - `session_registrations`: a user signed up for one concrete occurrence of an activity session.
+  - `access_entitlements`: what a user is allowed to do (`day_access`, `session_ticket`, `membership_access`, `booking_access`).
+  - `access_vouchers`: undated gift/credit objects that can later be claimed/redeemed into real access.
+- Legacy `day_passes` still exists during transition, but new purchases also create `access_entitlements`, and activity purchases create `session_registrations`.
+- Open Play page now reads `activity_sessions` instead of legacy `open_play_sessions`.
+- Seeded initial activity sessions for Pickla Arena Stockholm: Open Play FM 10-12, Eftermiddag 14-16, Kväll 17-20, and Onsdag Gruppträning 18-19.
+
 ## Next Up
 - Design-uppdatering av hela appen
 - Membership visas på /my (webhook skapar korrekt, men query i MyPage kan behöva verifieras)

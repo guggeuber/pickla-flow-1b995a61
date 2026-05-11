@@ -6,8 +6,11 @@ const STOCKHOLM_ZONE = 'Europe/Stockholm';
 
 const entitlementPriority: Record<string, number> = {
   booking: 1,
-  membership: 2,
-  day_pass: 3,
+  session_ticket: 2,
+  membership: 3,
+  membership_access: 3,
+  day_access: 4,
+  day_pass: 5,
 };
 
 function stockholmNow() {
@@ -92,6 +95,38 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
       label: (membership as any).membership_tiers?.name || 'Medlem',
       color: (membership as any).membership_tiers?.color || '#4CAF50',
       priority: entitlementPriority.membership,
+    });
+  }
+
+  const { data: accessRows } = await serviceClient
+    .from('access_entitlements')
+    .select('id, entitlement_type, source_type, source_id, valid_date, valid_from, valid_until, activity_session_id, session_date, includes_session_types, metadata')
+    .eq('user_id', targetUserId)
+    .eq('venue_id', venueId)
+    .eq('status', 'active')
+    .or(`valid_date.eq.${today},valid_date.is.null`);
+
+  for (const access of accessRows || []) {
+    const validFrom = access.valid_from ? DateTime.fromISO(access.valid_from, { zone: 'utc' }).toMillis() : null;
+    const validUntil = access.valid_until ? DateTime.fromISO(access.valid_until, { zone: 'utc' }).toMillis() : null;
+    const nowMs = DateTime.now().toMillis();
+    if (validFrom && nowMs < validFrom) continue;
+    if (validUntil && nowMs > validUntil) continue;
+    if (access.valid_date && access.valid_date !== today) continue;
+
+    entitlements.push({
+      type: access.entitlement_type,
+      id: access.id,
+      source_type: access.source_type,
+      source_id: access.source_id,
+      label: access.entitlement_type === 'day_access'
+        ? 'Dagstillgång'
+        : access.metadata?.session_name || 'Aktivitetsbiljett',
+      valid_date: access.valid_date,
+      activity_session_id: access.activity_session_id,
+      session_date: access.session_date,
+      includes_session_types: access.includes_session_types || [],
+      priority: entitlementPriority[access.entitlement_type] || 50,
     });
   }
 
