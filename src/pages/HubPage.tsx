@@ -292,7 +292,7 @@ function useBookingRooms(venueId: string | undefined, userId: string | undefined
   return useQuery({
     queryKey: ["hub-bookings", venueId, userId],
     enabled: !!venueId && !!userId,
-    staleTime: 60000,
+    staleTime: 0,
     queryFn: async () => {
       const now = DateTime.now().setZone("Europe/Stockholm").toUTC().toISO()!;
       const { data } = await supabase

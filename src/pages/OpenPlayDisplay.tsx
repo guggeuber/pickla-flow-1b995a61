@@ -13,6 +13,7 @@ type Phase = "idle" | "loading" | "success" | "error";
 interface SuccessInfo {
   name: string;
   court: string;
+  courtDetails: string;
   time: string;
   alreadyCheckedIn: boolean;
 }
@@ -233,11 +234,14 @@ export default function OpenPlayDisplay() {
           access_code: code,
         });
 
-        const courts = (result.booking?.courts || []).filter(Boolean);
+        const courts = (result.booking?.courts || [])
+          .filter(Boolean)
+          .sort((a: any, b: any) => Number(a.court_number || 0) - Number(b.court_number || 0));
         const court = result.booking?.court;
-        const courtName = courts.length > 1
+        const courtDetails = courts.length > 1
           ? courts.map((c: any) => c.name ?? `Bana ${c.court_number ?? ""}`).filter(Boolean).join(", ")
           : court?.name ?? `Bana ${court?.court_number ?? ""}`;
+        const courtName = courts.length > 1 ? `${courts.length} banor` : courtDetails;
         const startT = result.booking?.start_time ? fmtTime(result.booking.start_time) : "";
         const endT   = result.booking?.end_time   ? fmtTime(result.booking.end_time)   : "";
         const name   = result.booking?.customer_name || "";
@@ -245,6 +249,7 @@ export default function OpenPlayDisplay() {
         setSuccessInfo({
           name,
           court: courtName,
+          courtDetails,
           time: startT && endT ? `${startT}–${endT}` : "",
           alreadyCheckedIn: Boolean(result.already_checked_in),
         });
@@ -378,8 +383,13 @@ export default function OpenPlayDisplay() {
                 <p className="text-5xl font-black font-display text-emerald-400 mt-2 leading-tight">
                   {successInfo.court}
                 </p>
+                {successInfo.courtDetails && successInfo.courtDetails !== successInfo.court && (
+                  <p className="text-xl font-mono text-slate-400 mt-2">
+                    {successInfo.courtDetails}
+                  </p>
+                )}
                 {successInfo.time && (
-                  <p className="text-2xl font-mono text-slate-400 mt-2">
+                  <p className="text-2xl font-mono text-slate-400 mt-3">
                     {successInfo.time}
                   </p>
                 )}

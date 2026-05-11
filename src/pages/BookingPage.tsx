@@ -10,6 +10,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
 import { PlayerNav } from "@/components/PlayerNav";
+import { getBookingChatResourceId } from "@/lib/bookingGroups";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -98,7 +99,7 @@ interface CorporateMembership {
 type BookingMode = "direct" | "stripe";
 
 type BookingMutationResult =
-  | { type: "direct"; bookings: Array<{ booking_ref?: string }> }
+  | { type: "direct"; bookings: Array<any> }
   | { type: "free"; redirect?: string }
   | { type: "stripe"; url: string };
 
@@ -483,9 +484,11 @@ export default function BookingPage() {
         navigate(result.redirect || "/activity");
         return;
       }
-      const firstRef = result.bookings?.[0]?.booking_ref;
+      const firstBooking = result.bookings?.[0];
+      const firstRef = firstBooking?.booking_ref;
       if (firstRef) {
-        navigate(user ? bookingChatPath(firstRef, slug) : `/b/${firstRef}`);
+        const chatKey = getBookingChatResourceId(firstBooking) || firstRef;
+        navigate(user ? bookingChatPath(encodeURIComponent(chatKey), slug) : `/b/${firstRef}`);
       } else {
         setConfirmed(true);
         toast.success("Bokad!");
