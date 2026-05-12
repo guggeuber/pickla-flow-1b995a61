@@ -13,6 +13,7 @@ export default function BookingConfirmed() {
   const [searchParams] = useSearchParams();
   const session  = searchParams.get("session") ?? "";
   const type     = searchParams.get("type") ?? "";
+  const next     = searchParams.get("next") ?? "/activity";
   const navigate = useNavigate();
   const [timedOut, setTimedOut] = useState(false);
 
@@ -21,9 +22,9 @@ export default function BookingConfirmed() {
   // Day pass: show success immediately, redirect to activities after 3 s
   useEffect(() => {
     if (!isDayPass) return;
-    const id = setTimeout(() => navigate("/activity", { replace: true }), 3000);
+    const id = setTimeout(() => navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/activity", { replace: true }), 1800);
     return () => clearTimeout(id);
-  }, [isDayPass, navigate]);
+  }, [isDayPass, navigate, next]);
 
   // Poll until the webhook has created the booking (typically < 2 s)
   const { data } = useQuery({

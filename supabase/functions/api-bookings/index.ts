@@ -5,6 +5,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
+function safeLocalPath(path?: string | null) {
+  if (!path || typeof path !== 'string') return '';
+  if (!path.startsWith('/') || path.startsWith('//')) return '';
+  return path.slice(0, 450);
+}
+
 async function createFreeEntitlementBookingResponse({
   product_type,
   meta,
@@ -122,7 +128,7 @@ async function createFreeEntitlementBookingResponse({
       used_value: 1,
     }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
 
-    return jsonResponse({ free: true, redirect: '/my' });
+    return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
   return null;
@@ -500,10 +506,11 @@ Deno.serve(async (req) => {
     };
 
     const cancelPath = meta.slug ? `/book?v=${meta.slug}` : isMembership ? '/membership' : '/book';
+    const requestedSuccessPath = safeLocalPath(meta.success_path);
     const successPath = isMembership
       ? '/membership/confirmed'
       : product_type === 'day_pass'
-      ? '/booking/confirmed?type=day_pass'
+      ? (requestedSuccessPath || '/booking/confirmed?type=day_pass')
       : '/booking/confirmed';
 
     let stripeSession: Stripe.Checkout.Session;

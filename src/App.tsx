@@ -16,6 +16,7 @@ import CommunityPage from "./pages/CommunityPage";
 import PlayPage from "./pages/PlayPage";
 import EventsListPage from "./pages/EventsListPage";
 import OpenPlayPage from "./pages/OpenPlayPage";
+import ProgramSessionPage from "./pages/ProgramSessionPage";
 import EventPage from "./pages/EventPage";
 import EventPlanPublic from "./pages/EventPlanPublic";
 import BookingPage from "./pages/BookingPage";
@@ -76,6 +77,7 @@ const App = () => (
             <Route path="/play" element={<PlayPage />} />
             <Route path="/events" element={<EventsListPage />} />
             <Route path="/openplay" element={<OpenPlayPage />} />
+            <Route path="/program/:sessionId" element={<ProgramSessionPage />} />
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="/event/:id" element={<EventPage />} />
             <Route path="/event-plan/:venueId" element={<EventPlanPublic />} />

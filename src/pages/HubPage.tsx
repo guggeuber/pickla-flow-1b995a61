@@ -2500,11 +2500,11 @@ function HubList({
                 const preview = roomId ? previews[roomId] : undefined;
                 const timeLabel = ev.start_time ? `${String(ev.start_time).slice(0, 5)}-${String(ev.end_time || "").slice(0, 5)}` : null;
                 const isProgramSession = !!ev.occurrence_date || !!ev.activity_series;
+                const programUrl = `/program/${ev.id}?date=${encodeURIComponent(ev.occurrence_date || "")}&v=${encodeURIComponent(slug)}`;
                 return (
-                  <motion.button
+                  <motion.div
                     key={ev.id}
                     whileTap={{ scale: 0.97 }}
-                    onClick={() => openEventRoom(ev)}
                     style={{
                       minWidth: 210,
                       textAlign: "left",
@@ -2513,7 +2513,6 @@ function HubList({
                       padding: 14,
                       background: HUB_CARD,
                       boxShadow: "0 8px 24px rgba(17,24,39,0.06)",
-                      cursor: "pointer",
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -2532,7 +2531,44 @@ function HubList({
                         ? `${preview.senderName || "Någon"}: ${preview.lastMessage}`
                         : [timeLabel, ev.price_sek ? `${ev.price_sek} kr` : null, isProgramSession ? "Schema & anmälan" : "Öppen eventkanal"].filter(Boolean).join(" · ")}
                     </p>
-                  </motion.button>
+                    <div style={{ display: "flex", gap: 8, marginTop: 13 }}>
+                      <button
+                        type="button"
+                        onClick={() => isProgramSession ? navigate(programUrl) : openEventRoom(ev)}
+                        style={{
+                          flex: 1,
+                          border: 0,
+                          borderRadius: 13,
+                          background: HUB_NAVY,
+                          color: "#fff",
+                          padding: "10px 12px",
+                          fontFamily: FONT_HEADING,
+                          fontSize: 12,
+                          fontWeight: 900,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {isProgramSession ? "Anmäl" : "Öppna"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openEventRoom(ev)}
+                        style={{
+                          border: `1px solid ${HUB_BORDER}`,
+                          borderRadius: 13,
+                          background: "#f8fafc",
+                          color: HUB_TEXT,
+                          padding: "10px 12px",
+                          fontFamily: FONT_HEADING,
+                          fontSize: 12,
+                          fontWeight: 900,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Chatta
+                      </button>
+                    </div>
+                  </motion.div>
                 );
               })}
             </div>
