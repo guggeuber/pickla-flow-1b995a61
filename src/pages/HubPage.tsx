@@ -406,6 +406,56 @@ function useEventRooms(venueId: string | undefined) {
   });
 }
 
+function useWeeklyProgram(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["hub-weekly-program", venueId],
+    enabled: !!venueId,
+    staleTime: 300000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("activity_sessions")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, price_sek, product_key, activity_series(id, name, series_type)")
+        .eq("venue_id", venueId!)
+        .eq("is_active", true)
+        .eq("publish_status", "published")
+        .order("start_time", { ascending: true });
+
+      if (error) return [];
+
+      const now = DateTime.now().setZone("Europe/Stockholm");
+      const items: any[] = [];
+
+      for (const session of data || []) {
+        if (session.session_date) {
+          const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
+          if (date.startOf("day") >= now.startOf("day") && date.startOf("day") <= now.plus({ days: 7 }).startOf("day")) {
+            items.push({ ...session, occurrence_date: date.toISODate(), daysOffset: Math.floor(date.startOf("day").diff(now.startOf("day"), "days").days) });
+          }
+          continue;
+        }
+
+        const recurrenceDays = session.recurrence_days || [];
+        for (let offset = 0; offset < 7; offset++) {
+          const date = now.plus({ days: offset });
+          const jsDow = date.weekday % 7;
+          if (!recurrenceDays.includes(jsDow)) continue;
+          if (offset === 0 && session.end_time && now.toFormat("HH:mm") >= String(session.end_time).slice(0, 5)) continue;
+          items.push({ ...session, occurrence_date: date.toISODate(), daysOffset: offset });
+          break;
+        }
+      }
+
+      return items
+        .sort((a, b) => {
+          const aTime = `${a.occurrence_date}T${String(a.start_time).slice(0, 5)}`;
+          const bTime = `${b.occurrence_date}T${String(b.start_time).slice(0, 5)}`;
+          return aTime.localeCompare(bTime);
+        })
+        .slice(0, 8);
+    },
+  });
+}
+
 function useRoomMessages(roomId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -2148,15 +2198,21 @@ function HubList({
   }, [autoOpenBookingRef, bookings, openBookingRoom]);
 
   const openEventRoom = useCallback(async (event: any) => {
+    const isProgramSession = !!event.occurrence_date || !!event.recurrence_days || !!event.activity_series;
     const { data } = await supabase.rpc("upsert_resource_chat_room", {
       p_venue_id: venueId,
       p_resource_id: event.id,
       p_room_type: "event",
       p_title: event.display_name || event.name,
-      p_subtitle: event.start_date
-        ? DateTime.fromISO(event.start_date).toFormat("d MMM")
-        : null,
-      p_emoji: "🏆",
+      p_subtitle: isProgramSession
+        ? [
+            event.occurrence_date ? DateTime.fromISO(event.occurrence_date).toFormat("d MMM", { locale: "sv" }) : null,
+            event.start_time ? `${String(event.start_time).slice(0, 5)}-${String(event.end_time || "").slice(0, 5)}` : null,
+          ].filter(Boolean).join(" · ")
+        : event.start_date
+          ? DateTime.fromISO(event.start_date).toFormat("d MMM")
+          : null,
+      p_emoji: isProgramSession ? "📅" : "🏆",
       p_is_public: true,
     });
 
@@ -2435,11 +2491,15 @@ function HubList({
               }}
             >
               {events.map((ev) => {
-                const dateStr = ev.start_date
-                  ? DateTime.fromISO(ev.start_date).toFormat("d MMM", { locale: "sv" })
+                const dateStr = ev.occurrence_date
+                  ? (ev.daysOffset === 0 ? "Idag" : ev.daysOffset === 1 ? "Imorgon" : DateTime.fromISO(ev.occurrence_date).toFormat("d MMM", { locale: "sv" }))
+                  : ev.start_date
+                    ? DateTime.fromISO(ev.start_date).toFormat("d MMM", { locale: "sv" })
                   : "Snart";
                 const roomId = resourceRoomMap[ev.id];
                 const preview = roomId ? previews[roomId] : undefined;
+                const timeLabel = ev.start_time ? `${String(ev.start_time).slice(0, 5)}-${String(ev.end_time || "").slice(0, 5)}` : null;
+                const isProgramSession = !!ev.occurrence_date || !!ev.activity_series;
                 return (
                   <motion.button
                     key={ev.id}
@@ -2458,7 +2518,7 @@ function HubList({
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                       <div style={{ width: 40, height: 40, borderRadius: 15, background: "#f3f4f6", display: "grid", placeItems: "center", color: HUB_NAVY }}>
-                        <Trophy style={{ width: 19, height: 19 }} />
+                        {isProgramSession ? <Clock3 style={{ width: 19, height: 19 }} /> : <Trophy style={{ width: 19, height: 19 }} />}
                       </div>
                       <span style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: HUB_RED }}>
                         {dateStr}
@@ -2468,7 +2528,9 @@ function HubList({
                       {ev.display_name || ev.name}
                     </h3>
                     <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, lineHeight: 1.35, color: HUB_SUB, margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {preview?.lastMessage ? `${preview.senderName || "Någon"}: ${preview.lastMessage}` : "Öppen eventkanal och anmälan"}
+                      {preview?.lastMessage
+                        ? `${preview.senderName || "Någon"}: ${preview.lastMessage}`
+                        : [timeLabel, ev.price_sek ? `${ev.price_sek} kr` : null, isProgramSession ? "Schema & anmälan" : "Öppen eventkanal"].filter(Boolean).join(" · ")}
                     </p>
                   </motion.button>
                 );
@@ -2648,6 +2710,7 @@ const HubPage = () => {
   const { data: botData } = useDailyBotData(venueId);
   const { data: bookings = [] } = useBookingRooms(venueId, user?.id);
   const { data: events = [] } = useEventRooms(venueId);
+  const { data: weeklyProgram = [] } = useWeeklyProgram(venueId);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [roomOpen, setRoomOpen] = useState(false);
@@ -2710,7 +2773,7 @@ const HubPage = () => {
         autoOpenBookingRef={bookingRoomRef}
         directBookingMode={directChatMode}
         bookings={bookings}
-        events={events}
+        events={weeklyProgram.length > 0 ? weeklyProgram : events}
         onSelectRoom={async (room) => {
           await supabase.rpc("join_chat_room", { p_room_id: room.id });
           openRoom(room);
