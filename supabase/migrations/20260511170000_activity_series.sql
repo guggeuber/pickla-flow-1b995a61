@@ -48,9 +48,6 @@ CREATE INDEX IF NOT EXISTS idx_activity_sessions_product_key
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_series_seed_key
   ON public.activity_series (venue_id, (metadata->>'seed_key'))
   WHERE metadata ? 'seed_key';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_sessions_seed_key
-  ON public.activity_sessions (venue_id, (metadata->>'seed_key'))
-  WHERE metadata ? 'seed_key';
 
 DO $$
 DECLARE
@@ -130,47 +127,57 @@ BEGIN
   WHERE venue_id = v_venue_id
     AND name IN ('Open Play FM', 'Open Play Eftermiddag', 'Open Play Kväll');
 
-  INSERT INTO public.activity_sessions
-    (venue_id, series_id, product_key, name, session_type, recurrence_days, start_time, end_time, price_sek, capacity, court_ids, access_policy, metadata, sort_order)
-  VALUES
-    (
-      v_venue_id,
-      v_friday_series,
-      'day_access',
-      'Fredagsklubben',
-      'open_play',
-      ARRAY[5],
-      '17:00',
-      '20:00',
-      195,
-      32,
-      COALESCE(v_court_ids, '{}'),
-      '{"allows_day_access": true, "member_benefit_key": "open_play_unlimited"}'::jsonb,
-      '{"seed_key": "fredagsklubben_session"}'::jsonb,
-      50
-    )
-  ON CONFLICT DO NOTHING;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.activity_sessions
+    WHERE venue_id = v_venue_id
+      AND metadata->>'seed_key' = 'fredagsklubben_session'
+  ) THEN
+    INSERT INTO public.activity_sessions
+      (venue_id, series_id, product_key, name, session_type, recurrence_days, start_time, end_time, price_sek, capacity, court_ids, access_policy, metadata, sort_order)
+    VALUES
+      (
+        v_venue_id,
+        v_friday_series,
+        'day_access',
+        'Fredagsklubben',
+        'open_play',
+        ARRAY[5],
+        '17:00',
+        '20:00',
+        195,
+        32,
+        COALESCE(v_court_ids, '{}'),
+        '{"allows_day_access": true, "member_benefit_key": "open_play_unlimited"}'::jsonb,
+        '{"seed_key": "fredagsklubben_session"}'::jsonb,
+        50
+      );
+  END IF;
 
-  INSERT INTO public.activity_sessions
-    (venue_id, series_id, product_key, name, session_type, recurrence_days, start_time, end_time, price_sek, capacity, court_ids, access_policy, metadata, sort_order)
-  VALUES
-    (
-      v_venue_id,
-      v_pickla_open_series,
-      'open_play_slot',
-      'Pickla Open',
-      'pickla_open',
-      ARRAY[6],
-      '12:00',
-      '15:00',
-      195,
-      32,
-      COALESCE(v_court_ids, '{}'),
-      '{"allows_day_access": false, "member_benefit_key": "pickla_open_discount"}'::jsonb,
-      '{"seed_key": "pickla_open_session"}'::jsonb,
-      60
-    )
-  ON CONFLICT DO NOTHING;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.activity_sessions
+    WHERE venue_id = v_venue_id
+      AND metadata->>'seed_key' = 'pickla_open_session'
+  ) THEN
+    INSERT INTO public.activity_sessions
+      (venue_id, series_id, product_key, name, session_type, recurrence_days, start_time, end_time, price_sek, capacity, court_ids, access_policy, metadata, sort_order)
+    VALUES
+      (
+        v_venue_id,
+        v_pickla_open_series,
+        'open_play_slot',
+        'Pickla Open',
+        'pickla_open',
+        ARRAY[6],
+        '12:00',
+        '15:00',
+        195,
+        32,
+        COALESCE(v_court_ids, '{}'),
+        '{"allows_day_access": false, "member_benefit_key": "pickla_open_discount"}'::jsonb,
+        '{"seed_key": "pickla_open_session"}'::jsonb,
+        60
+      );
+  END IF;
 
   UPDATE public.activity_sessions
     SET series_id = v_training_series,
