@@ -268,7 +268,12 @@ export default function TodayPage() {
 
   return (
     <div className="min-h-[100dvh] pb-28" style={{ background: PAGE_BG, color: TEXT }}>
-      <header className="sticky top-0 z-20 px-5 pb-4 pt-[calc(env(safe-area-inset-top,0px)+18px)] backdrop-blur-xl" style={{ background: "rgba(246,215,220,0.88)" }}>
+      <header
+        className="fixed left-0 right-0 top-0 z-20 px-5 pb-4 pt-[calc(env(safe-area-inset-top,0px)+18px)] backdrop-blur-xl"
+        style={{
+          background: "linear-gradient(180deg, rgba(246,215,220,0.98) 0%, rgba(246,215,220,0.9) 72%, rgba(246,215,220,0) 100%)",
+        }}
+      >
         <div className="mx-auto flex max-w-md items-end justify-between gap-3">
           <div>
             <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
@@ -280,7 +285,7 @@ export default function TodayPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-md px-5">
+      <main className="mx-auto max-w-md px-5 pt-[calc(env(safe-area-inset-top,0px)+92px)]">
         <div className="mb-6 pt-4">
           <h1 className="text-[32px] font-black leading-none" style={{ fontFamily: FONT_HEADING }}>Nu</h1>
           <p className="mt-2 text-sm" style={{ color: MUTED }}>Vad som händer nu och framåt.</p>

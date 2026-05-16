@@ -6,7 +6,6 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
-import LinkHub from "./pages/LinkHub";
 import EventOps from "./pages/EventOps";
 import AdminPage from "./pages/AdminPage";
 import HubPage from "./pages/HubPage";
@@ -68,7 +67,7 @@ const App = () => (
             <Route path="/auth" element={<Auth />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/auth/reset" element={<AuthReset />} />
-            <Route path="/" element={<LinkHub />} />
+            <Route path="/" element={<TodayPage />} />
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/hub" element={<HubPage />} />
             <Route path="/hub/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
