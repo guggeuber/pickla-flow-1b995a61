@@ -13,8 +13,8 @@ export function PlayerNav() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  const isHub = pathname.startsWith("/hub");
-  const isActivity = pathname.startsWith("/activity");
+  const isToday = pathname.startsWith("/today") || pathname.startsWith("/activity");
+  const isBook = pathname.startsWith("/book");
   const isMy = pathname.startsWith("/my");
 
   return (
@@ -33,10 +33,10 @@ export function PlayerNav() {
         background: `linear-gradient(to top, ${BG} 0%, ${BG} 65%, transparent 100%)`,
       }}
     >
-      {/* Spela → /hub */}
+      {/* Nu → /today */}
       <motion.button
         whileTap={{ scale: 0.9 }}
-        onClick={() => navigate("/hub")}
+        onClick={() => navigate("/today")}
         style={{
           display: "flex",
           alignItems: "center",
@@ -47,8 +47,8 @@ export function PlayerNav() {
           fontFamily: FONT,
           fontSize: 13,
           fontWeight: 700,
-          color: isHub ? RED : MUTED,
-          textDecoration: isHub ? "underline" : "none",
+          color: isToday ? RED : MUTED,
+          textDecoration: isToday ? "underline" : "none",
           textDecorationColor: RED,
           textUnderlineOffset: 3,
           padding: 0,
@@ -60,19 +60,19 @@ export function PlayerNav() {
             width: 7,
             height: 7,
             borderRadius: "50%",
-            background: isHub ? GREEN : MUTED,
-            boxShadow: isHub ? `0 0 0 2px rgba(34,197,94,0.25)` : "none",
+            background: isToday ? GREEN : MUTED,
+            boxShadow: isToday ? `0 0 0 2px rgba(34,197,94,0.25)` : "none",
             flexShrink: 0,
             display: "inline-block",
           }}
         />
-        Spela
+        Nu
       </motion.button>
 
-      {/* Aktivitet → /activity */}
+      {/* Boka → /book */}
       <motion.button
         whileTap={{ scale: 0.9 }}
-        onClick={() => navigate("/activity")}
+        onClick={() => navigate("/book")}
         style={{
           background: "none",
           border: "none",
@@ -80,14 +80,14 @@ export function PlayerNav() {
           fontFamily: FONT,
           fontSize: 13,
           fontWeight: 700,
-          color: isActivity ? NAVY : MUTED,
-          textDecoration: isActivity ? "underline" : "none",
+          color: isBook ? NAVY : MUTED,
+          textDecoration: isBook ? "underline" : "none",
           textDecorationColor: NAVY,
           textUnderlineOffset: 3,
           padding: 0,
         }}
       >
-        Aktivitet
+        Boka
       </motion.button>
 
       {/* Konto → /my */}
@@ -108,7 +108,7 @@ export function PlayerNav() {
           padding: 0,
         }}
       >
-        Konto
+        Jag
       </motion.button>
     </nav>
   );

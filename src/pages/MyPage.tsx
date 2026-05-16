@@ -1312,7 +1312,6 @@ const MyPage = () => {
           )}
 
           {/* Active bookings */}
-          {isActivityPage && (
           <motion.div variants={item}>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
@@ -1515,10 +1514,9 @@ const MyPage = () => {
               </div>
             )}
           </motion.div>
-          )}
 
           {/* Day passes — directly under bookings */}
-          {isActivityPage && <DayPassSection />}
+          <DayPassSection />
 
           {/* Corporate memberships */}
           {!isActivityPage && <CorporateSection />}
