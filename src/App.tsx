@@ -25,6 +25,7 @@ import BookingConfirmation from "./pages/BookingConfirmation";
 import BookingConfirmed from "./pages/BookingConfirmed";
 import MembershipPage from "./pages/MembershipPage";
 import MembershipConfirmed from "./pages/MembershipConfirmed";
+import WellnessCertificatePage from "./pages/WellnessCertificatePage";
 import ClaimPassPage from "./pages/ClaimPassPage";
 import CorporateJoinPage from "./pages/CorporateJoinPage";
 import CorporateDashboard from "./pages/CorporateDashboard";
@@ -88,6 +89,7 @@ const App = () => (
             <Route path="/book/group" element={<GroupBookingPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/membership/confirmed" element={<MembershipConfirmed />} />
+            <Route path="/wellness" element={<WellnessCertificatePage />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
             <Route path="/booking/confirmed" element={<BookingConfirmed />} />
             <Route path="/booking-chat/:bookingRef" element={<HubPage />} />

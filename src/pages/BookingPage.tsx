@@ -168,6 +168,7 @@ export default function BookingPage() {
   const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>("EFTERMIDDAG");
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
+  const [email, setEmail] = useState(searchParams.get("email") || "");
   const [editingContact, setEditingContact] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
@@ -194,9 +195,11 @@ export default function BookingPage() {
           user.email?.split("@")[0] ||
           "";
         const fallbackPhone = data?.phone || meta.phone || user.phone || "";
+        const fallbackEmail = user.email || "";
 
         if (fallbackName) setName((current) => current || fallbackName);
         if (fallbackPhone) setPhone((current) => current || fallbackPhone);
+        if (fallbackEmail) setEmail((current) => current || fallbackEmail);
       } finally {
         setProfileLoaded(true);
       }
@@ -487,8 +490,14 @@ export default function BookingPage() {
   const hasMemberCourtPrice = totalPrice < baseTotalPrice;
   const bookingName = name.trim() || user?.email?.split("@")[0] || "";
   const bookingPhone = phone.trim();
+  const bookingEmail = email.trim() || user?.email || "";
   const needsPhoneForDirectBooking = !user || useCorporate || baseTotalPrice === 0;
-  const hasContactDetails = Boolean(bookingName && (!needsPhoneForDirectBooking || bookingPhone));
+  const needsEmailForBooking = !user || baseTotalPrice === 0;
+  const hasContactDetails = Boolean(
+    bookingName &&
+    (!needsPhoneForDirectBooking || bookingPhone) &&
+    (!needsEmailForBooking || bookingEmail)
+  );
   const showProfileLoading = selectedCourts.length > 0 && !!user && !profileLoaded;
   const showContactFields = selectedCourts.length > 0 && !showProfileLoading && (!user || !hasContactDetails || editingContact);
   const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && Boolean(bookingName) && !editingContact;
@@ -529,6 +538,7 @@ export default function BookingPage() {
         endTime: selectedEndTime,
         name: bookingName,
         phone: bookingPhone,
+        email: bookingEmail,
         corporatePackageId: useCorporate ? selectedPackageId : undefined,
       }),
     });
@@ -559,6 +569,7 @@ export default function BookingPage() {
         duration_hours: String(durationHours),
         name:           bookingName,
         phone:          bookingPhone,
+        customer_email: bookingEmail,
         user_id:        user?.id || "",
       },
     });
@@ -639,6 +650,7 @@ export default function BookingPage() {
               if (!user) {
                 setName("");
                 setPhone("");
+                setEmail("");
               }
             }}
             className="mt-4 text-[12px] text-neutral-500 underline underline-offset-4"
@@ -920,14 +932,14 @@ export default function BookingPage() {
               >
                 {user ? "komplettera profil" : "dina uppgifter"}
               </h2>
-              <div className="flex gap-2">
+              <div className="grid gap-2">
                 <input
 	                  placeholder="ditt namn"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
                   maxLength={100}
-	                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
+	                  className="min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
                   style={{ fontFamily: FONT_MONO }}
                 />
                 <input
@@ -937,7 +949,17 @@ export default function BookingPage() {
                   onChange={(e) => setPhone(e.target.value)}
                   required
                   maxLength={20}
-	                  className="flex-1 min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
+	                  className="min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
+                  style={{ fontFamily: FONT_MONO }}
+                />
+                <input
+                  type="email"
+                  placeholder="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required={needsEmailForBooking}
+                  maxLength={200}
+                  className="min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
                   style={{ fontFamily: FONT_MONO }}
                 />
               </div>

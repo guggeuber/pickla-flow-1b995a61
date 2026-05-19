@@ -523,6 +523,7 @@ Deno.serve(async (req) => {
       stripeSession = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'subscription',
+        customer_email: stripeMetadata.customer_email || undefined,
         line_items: [{
           price_data: {
             currency: 'sek',
@@ -542,6 +543,7 @@ Deno.serve(async (req) => {
       stripeSession = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
+        customer_email: stripeMetadata.customer_email || undefined,
         line_items: [{
           price_data: {
             currency: 'sek',
@@ -646,7 +648,7 @@ Deno.serve(async (req) => {
 
     // Get all bookings with same notes (grouped booking) or single
     const { data: booking } = await admin.from('bookings')
-      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, user_id, access_code, stripe_session_id, created_at, venue_courts(name, court_number)')
+      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, user_id, access_code, stripe_session_id, created_at, venue_courts(name, court_number, sport_type)')
       .eq('booking_ref', ref).single();
 
     if (!booking) return errorResponse('Booking not found', 404);
@@ -657,7 +659,7 @@ Deno.serve(async (req) => {
 
     // Find sibling bookings. Stripe groups by session; free/direct bookings fall back to the shared time+notes group.
     let siblingQuery = admin.from('bookings')
-      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, venue_courts(name, court_number)')
+      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, venue_courts(name, court_number, sport_type)')
       .eq('venue_id', booking.venue_id)
       .neq('status', 'cancelled');
 
@@ -672,7 +674,12 @@ Deno.serve(async (req) => {
 
     const { data: siblings } = await siblingQuery;
     const groupedBookings = siblings?.length ? siblings : [booking];
-    const totalPrice = groupedBookings.reduce((s: number, b: any) => s + (b.total_price || 0), 0);
+    const looksLikeFreeDartDirectBooking = !booking.stripe_session_id &&
+      groupedBookings.length > 0 &&
+      groupedBookings.every((b: any) => b.venue_courts?.sport_type === 'dart');
+    const totalPrice = looksLikeFreeDartDirectBooking
+      ? 0
+      : groupedBookings.reduce((s: number, b: any) => s + (b.total_price || 0), 0);
     const bookingRefs = groupedBookings.map((b: any) => b.booking_ref).filter(Boolean);
 
     let receipt: any = null;
@@ -700,7 +707,7 @@ Deno.serve(async (req) => {
       booking_refs: receipt?.booking_refs || bookingRefs,
       stripe_session_id: receipt?.stripe_session_id || booking.stripe_session_id || null,
       customer_name: receipt?.customer_name || (booking.notes || '').split(' | ')[0] || null,
-      customer_email: receipt?.customer_email || null,
+      customer_email: receipt?.customer_email || (booking.notes || '').split(' | ')[2] || null,
       customer_phone: receipt?.customer_phone || (booking.notes || '').split(' | ')[1] || null,
       total_inc_vat: receipt?.total_inc_vat ?? totalPrice,
       total_ex_vat: receipt?.total_ex_vat ?? Math.max(totalPrice - fallbackVatAmount, 0),
@@ -822,17 +829,18 @@ Deno.serve(async (req) => {
 
   if (req.method === 'POST' && path === 'public-book') {
     const body = await req.json();
-    const { slug, courtIds, date, startTime, endTime, name, phone, corporatePackageId } = body;
+    const { slug, courtIds, date, startTime, endTime, name, phone, email, corporatePackageId } = body;
 
     const safeName = typeof name === 'string' ? name.trim() : '';
     const safePhone = typeof phone === 'string'
       ? phone.replace(/[^\d+()\-\s]/g, '').trim()
       : '';
+    const safeEmail = typeof email === 'string' ? email.trim().toLowerCase().slice(0, 200) : '';
 
-    if (!slug || !courtIds?.length || !date || !startTime || !endTime || !safeName || !safePhone) {
+    if (!slug || !courtIds?.length || !date || !startTime || !endTime || !safeName || !safePhone || !safeEmail) {
       return errorResponse('Fyll i alla fält');
     }
-    if (safeName.length > 100 || safePhone.length < 6 || safePhone.length > 20) {
+    if (safeName.length > 100 || safePhone.length < 6 || safePhone.length > 20 || !safeEmail.includes('@')) {
       return errorResponse('Ogiltiga uppgifter', 400);
     }
 
@@ -868,6 +876,21 @@ Deno.serve(async (req) => {
       const { data: { user: authUser } } = await admin.auth.getUser(token);
       if (authUser?.id) {
         bookingUserId = authUser.id;
+      }
+    }
+
+    if (!bookingUserId && safeEmail) {
+      const { data: existing } = await admin.auth.admin.getUserByEmail(safeEmail);
+      if (existing?.user?.id) {
+        bookingUserId = existing.user.id;
+      } else {
+        const { data: created, error: createErr } = await admin.auth.admin.createUser({
+          email: safeEmail,
+          email_confirm: true,
+          user_metadata: { display_name: safeName, phone: safePhone },
+        });
+        if (created?.user?.id) bookingUserId = created.user.id;
+        if (createErr) console.error('Failed to create booking user from public-book:', createErr.message);
       }
     }
 
@@ -920,7 +943,9 @@ Deno.serve(async (req) => {
         .select('hourly_rate, sport_type, court_type').eq('id', courtId).single();
 
       // Find matching pricing rule: day + time window
-      let hourlyRate = court?.hourly_rate || 350;
+      let hourlyRate = court?.hourly_rate != null
+        ? Number(court.hourly_rate)
+        : (court?.sport_type === 'dart' ? 0 : 350);
       if (pricingRules && pricingRules.length > 0) {
         const matchingRule = pricingRules.find((r: any) => {
           const daysMatch = !r.days_of_week || r.days_of_week.length === 0 || r.days_of_week.includes(bookingDayOfWeek);
@@ -944,7 +969,7 @@ Deno.serve(async (req) => {
         end_time: endISO,
         total_price: price,
         status: 'confirmed',
-        notes: `${safeName} | ${safePhone}`,
+        notes: `${safeName} | ${safePhone} | ${safeEmail}`,
         corporate_package_id: validCorporatePackageId,
         access_code: sharedAccessCode,
         access_code_expires_at: endISO,
@@ -972,6 +997,83 @@ Deno.serve(async (req) => {
   try {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+    // GET /api-bookings/wellness?year=YYYY — printable friskvårdsintyg
+    if (req.method === 'GET' && path === 'wellness') {
+      const requestedYear = Number(url.searchParams.get('year') || DateTime.now().setZone('Europe/Stockholm').year);
+      const year = Number.isFinite(requestedYear)
+        ? Math.min(Math.max(Math.floor(requestedYear), 2020), 2100)
+        : DateTime.now().setZone('Europe/Stockholm').year;
+      const start = DateTime.fromObject({ year, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+      const end = DateTime.fromObject({ year: year + 1, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+
+      const [bookingRes, passRes, profileRes] = await Promise.all([
+        client.from('bookings')
+          .select('id, booking_ref, start_time, end_time, total_price, venue_id, venue_courts(name, sport_type), venues(name, address, city)')
+          .eq('user_id', userId)
+          .in('status', ['confirmed', 'completed'])
+          .gte('start_time', start)
+          .lt('start_time', end)
+          .gt('total_price', 0)
+          .order('start_time', { ascending: true }),
+        client.from('day_passes')
+          .select('id, valid_date, price, venue_id, venues(name, address, city)')
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .gte('valid_date', `${year}-01-01`)
+          .lte('valid_date', `${year}-12-31`)
+          .gt('price', 0)
+          .order('valid_date', { ascending: true }),
+        client.from('player_profiles')
+          .select('display_name, phone')
+          .eq('auth_user_id', userId)
+          .maybeSingle(),
+      ]);
+
+      if (bookingRes.error) return errorResponse(bookingRes.error.message);
+      if (passRes.error) return errorResponse(passRes.error.message);
+
+      const bookingItems = (bookingRes.data || []).map((b: any) => ({
+        id: b.id,
+        type: 'Banbokning',
+        date: DateTime.fromISO(b.start_time, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate(),
+        label: [b.venue_courts?.name || 'Bana', b.venues?.name].filter(Boolean).join(' · '),
+        reference: b.booking_ref,
+        amount: Number(b.total_price || 0),
+        venue: b.venues || null,
+      }));
+
+      const passItems = (passRes.data || []).map((p: any) => ({
+        id: p.id,
+        type: 'Dagspass',
+        date: p.valid_date,
+        label: p.venues?.name || 'Pickla',
+        reference: p.id,
+        amount: Number(p.price || 0),
+        venue: p.venues || null,
+      }));
+
+      const items = [...bookingItems, ...passItems].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      const total = items.reduce((sum, item) => sum + item.amount, 0);
+      const vatRate = 6;
+      const vatAmount = Math.round(total * vatRate / (100 + vatRate));
+
+      return jsonResponse({
+        year,
+        issued_at: DateTime.now().toUTC().toISO(),
+        user_id: userId,
+        customer: {
+          name: profileRes.data?.display_name || null,
+          phone: profileRes.data?.phone || null,
+        },
+        items,
+        total_inc_vat: total,
+        total_ex_vat: Math.max(total - vatAmount, 0),
+        vat_amount: vatAmount,
+        vat_rate: vatRate,
+        currency: 'SEK',
+      }, 200, 0);
+    }
 
     // GET /api-bookings/venue?venueId=X&date=YYYY-MM-DD
     if (req.method === 'GET' && path === 'venue') {

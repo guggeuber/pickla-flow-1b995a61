@@ -151,7 +151,7 @@ async function handleCourtBooking(
   meta: Record<string, string>,
   serviceClient: any,
 ): Promise<void> {
-  const { venue_id, court_ids, date, start_time, end_time, name, phone, user_id } = meta;
+  const { venue_id, court_ids, date, start_time, end_time, name, phone, user_id, customer_email } = meta;
 
   let courtIds: string[];
   try {
@@ -168,8 +168,8 @@ async function handleCourtBooking(
   const startISO = DateTime.fromISO(`${date}T${start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
   const endISO   = DateTime.fromISO(`${date}T${end_time}:00`,   { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
 
-  // Resolve user — use authenticated user or fall back to shared guest user
-  const bookingUserId = user_id || await getOrCreatePublicBookingUserId(serviceClient);
+  // Resolve user — use authenticated user, Checkout email, metadata email, or fall back to shared guest user.
+  const bookingUserId = await resolveUserId(session, user_id, serviceClient, customer_email);
 
   // Distribute total evenly across courts (Stripe amount is in ören)
   const totalSek = Math.round((session.amount_total || 0) / 100);
@@ -260,12 +260,13 @@ async function resolveUserId(
   session: Stripe.Checkout.Session,
   metaUserId: string,
   serviceClient: any,
+  metaEmail = '',
 ): Promise<string> {
   // 1. Explicit user_id from metadata — most reliable path
   if (metaUserId) return metaUserId;
 
   // 2 & 3. Use Stripe's verified customer email
-  const email = session.customer_details?.email;
+  const email = session.customer_details?.email || metaEmail;
   if (email) {
     // Try to find existing user
     const { data: existing } = await serviceClient.auth.admin.getUserByEmail(email);

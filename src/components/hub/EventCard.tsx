@@ -40,7 +40,7 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
     queryFn: async () => {
       const { data } = await supabase
         .from("events")
-        .select("id, name, display_name, description, logo_url, primary_color, start_date, start_time, entry_fee, entry_fee_type, is_drop_in, max_participants")
+        .select("id, name, display_name, description, logo_url, primary_color, start_date, start_time, entry_fee, entry_fee_type, is_drop_in, max_participants, is_public, planning_status, visibility, customer_name, customer_email, customer_phone, expected_participants, partner_notes, resources")
         .eq("id", eventId)
         .single();
       return data;
@@ -75,6 +75,40 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
 
   if (!event) return null;
 
+  const isInternalLead = event.is_public === false || event.visibility === "internal" || event.planning_status === "inquiry";
+  if (isInternalLead) {
+    const resources = Array.isArray(event.resources) ? event.resources.filter(Boolean).join(", ") : "";
+    return (
+      <motion.div
+        style={{
+          background: "#fff",
+          border: "1px solid rgba(17,24,39,0.08)",
+          borderRadius: 14,
+          padding: 14,
+          marginBottom: 4,
+          boxShadow: "0 8px 24px rgba(17,24,39,0.06)",
+        }}
+      >
+        <p style={{ fontFamily: FONT_HEADING, fontSize: 13, fontWeight: 800, color: "#111827", marginBottom: 4 }}>
+          Gruppförfrågan
+        </p>
+        <p style={{ fontFamily: FONT_HEADING, fontSize: 16, fontWeight: 800, color: "#111827", marginBottom: 6 }}>
+          {event.display_name || event.name}
+        </p>
+        <div style={{ display: "grid", gap: 4, fontSize: 12, color: "#6b7280", fontFamily: "Inter, sans-serif" }}>
+          {event.customer_name && <span>Kund: {event.customer_name}</span>}
+          {event.expected_participants && <span>{event.expected_participants} deltagare</span>}
+          {resources && <span>{resources}</span>}
+        </div>
+        {event.partner_notes && (
+          <p style={{ marginTop: 10, whiteSpace: "pre-line", fontSize: 12, color: "#4b5563", lineHeight: 1.45, fontFamily: "Inter, sans-serif" }}>
+            {String(event.partner_notes).slice(0, 420)}
+          </p>
+        )}
+      </motion.div>
+    );
+  }
+
   const playerCount = players.length;
   const isRegistered = success || (!!user && players.some((player) => player.auth_user_id === user.id));
   const isFree = !event.entry_fee || event.entry_fee === 0 || event.entry_fee_type === "free";
@@ -105,7 +139,9 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
         setLoading(false);
         return;
       }
-    } catch {}
+    } catch {
+      // Fall back to the normal event checkout page if wallet lookup fails.
+    }
 
     // No saved card — go to Stripe checkout
     navigate(`/event/${eventId}`, { state: { from: "hub" } });

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle } from "lucide-react";
+import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PlayerNav } from "@/components/PlayerNav";
@@ -1549,6 +1549,27 @@ const MyPage = () => {
 
           {/* Day passes — directly under bookings */}
           <DayPassSection />
+
+          {!isActivityPage && (
+            <motion.button
+              variants={item}
+              onClick={() => navigate("/wellness")}
+              className="rounded-2xl p-4 flex items-center gap-3 text-left active:scale-[0.98] transition-transform"
+              style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+            >
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: GREEN_LIGHT }}>
+                <FileText className="w-5 h-5" style={{ color: GREEN }} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                  Friskvårdsintyg
+                </p>
+                <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
+                  Samla årets kvitton och skriv ut →
+                </p>
+              </div>
+            </motion.button>
+          )}
 
           {/* Corporate memberships */}
           {!isActivityPage && <CorporateSection />}
