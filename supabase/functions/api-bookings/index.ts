@@ -593,12 +593,21 @@ Deno.serve(async (req) => {
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(supabaseUrl, serviceKey);
 
-    const { data: venue, error: vErr } = await admin.from('venues')
-      .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status')
+    let venueResult = await admin.from('venues')
+      .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status, group_booking_title, group_booking_intro, group_booking_notes, group_booking_image_url')
       .eq('slug', slug)
       .eq('is_public', true)
       .single();
 
+    if (venueResult.error?.message?.includes('group_booking_')) {
+      venueResult = await admin.from('venues')
+        .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status')
+        .eq('slug', slug)
+        .eq('is_public', true)
+        .single();
+    }
+
+    const { data: venue, error: vErr } = venueResult;
     if (vErr || !venue) return errorResponse('Venue not found', 404);
 
     // Get opening hours

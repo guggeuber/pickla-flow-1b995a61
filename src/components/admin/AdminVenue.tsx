@@ -63,8 +63,8 @@ function EventCategoriesSection({ venueId }: { venueId: string }) {
       const url = urlData.publicUrl + `?t=${Date.now()}`;
       updateLocal(catKey, "logoUrl", url);
       toast.success("Logga uppladdad!");
-    } catch (err: any) {
-      toast.error(err.message);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Uppladdning misslyckades");
     } finally {
       setUploading(null);
     }
@@ -83,8 +83,8 @@ function EventCategoriesSection({ venueId }: { venueId: string }) {
       });
       toast.success("Sparat!");
       qc.invalidateQueries({ queryKey: ["event-categories", venueId] });
-    } catch (err: any) {
-      toast.error(err.message);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Kunde inte spara");
     } finally {
       setSaving(null);
     }
@@ -176,6 +176,8 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
   const { updateVenue } = useAdminMutation(venueId);
   const [form, setForm] = useState<Record<string, string>>({});
   const [initialized, setInitialized] = useState(false);
+  const [uploadingGroupImage, setUploadingGroupImage] = useState(false);
+  const groupImageRef = useRef<HTMLInputElement>(null);
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
@@ -189,9 +191,31 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
       phone: venue.phone || "",
       email: venue.email || "",
       website_url: venue.website_url || "",
+      group_booking_title: venue.group_booking_title || "",
+      group_booking_intro: venue.group_booking_intro || "",
+      group_booking_notes: venue.group_booking_notes || "",
+      group_booking_image_url: venue.group_booking_image_url || "",
     });
     setInitialized(true);
   }
+
+  const handleGroupImageUpload = async (file: File) => {
+    setUploadingGroupImage(true);
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `group-booking/${venueId}/hero.${ext}`;
+      const { error } = await supabase.storage.from("event-logos").upload(path, file, { upsert: true });
+      if (error) throw error;
+      const { data: urlData } = supabase.storage.from("event-logos").getPublicUrl(path);
+      setForm((prev) => ({ ...prev, group_booking_image_url: `${urlData.publicUrl}?t=${Date.now()}` }));
+      toast.success("Bild uppladdad!");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Uppladdning misslyckades");
+    } finally {
+      setUploadingGroupImage(false);
+      if (groupImageRef.current) groupImageRef.current.value = "";
+    }
+  };
 
   const handleSave = () => {
     updateVenue.mutate(form, {
@@ -237,6 +261,103 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
       </div>
 
       {/* Divider */}
+      <div className="h-px bg-border" />
+
+      <div className="space-y-3">
+        <div>
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Gruppbokningssida</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Text och bild på /book/group</p>
+        </div>
+
+        <div className="glass-card rounded-2xl p-4 space-y-4">
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Hero-bild</Label>
+            <input
+              ref={groupImageRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleGroupImageUpload(file);
+              }}
+            />
+            <div className="mt-2 flex items-center gap-3">
+              {form.group_booking_image_url ? (
+                <img src={form.group_booking_image_url} alt="" className="h-20 w-28 rounded-2xl object-cover border border-border" />
+              ) : (
+                <div className="h-20 w-28 rounded-2xl border-2 border-dashed border-border flex items-center justify-center">
+                  <Upload className="w-4 h-4 text-muted-foreground" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => groupImageRef.current?.click()}
+                  disabled={uploadingGroupImage}
+                  className="w-full"
+                >
+                  {uploadingGroupImage ? <Loader2 className="w-3 h-3 animate-spin" /> : "Ladda upp bild"}
+                </Button>
+                {form.group_booking_image_url && (
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, group_booking_image_url: "" }))}
+                    className="mt-2 text-[11px] text-muted-foreground underline underline-offset-4"
+                  >
+                    Ta bort bild
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Rubriktext</Label>
+            <textarea
+              className="w-full mt-1 min-h-20 rounded-xl px-3 py-2.5 text-sm font-medium text-foreground outline-none focus:ring-2 focus:ring-primary/50"
+              style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+              value={form.group_booking_title || ""}
+              onChange={(e) => setForm((p) => ({ ...p, group_booking_title: e.target.value }))}
+              placeholder="Berätta ungefär vad ni vill göra..."
+            />
+          </div>
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Introtext</Label>
+            <textarea
+              className="w-full mt-1 min-h-20 rounded-xl px-3 py-2.5 text-sm font-medium text-foreground outline-none focus:ring-2 focus:ring-primary/50"
+              style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+              value={form.group_booking_intro || ""}
+              onChange={(e) => setForm((p) => ({ ...p, group_booking_intro: e.target.value }))}
+              placeholder="Det här är en förfrågan..."
+            />
+          </div>
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Bra att veta, en rad per punkt</Label>
+            <textarea
+              className="w-full mt-1 min-h-28 rounded-xl px-3 py-2.5 text-sm font-medium text-foreground outline-none focus:ring-2 focus:ring-primary/50"
+              style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+              value={form.group_booking_notes || ""}
+              onChange={(e) => setForm((p) => ({ ...p, group_booking_notes: e.target.value }))}
+              placeholder="Ni behöver inte veta exakt bana..."
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={updateVenue.isPending}
+          className="w-full flex items-center justify-center gap-2 rounded-xl py-3 bg-primary text-primary-foreground font-semibold text-sm disabled:opacity-50"
+        >
+          {updateVenue.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Spara gruppbokningssida
+        </button>
+      </div>
+
       <div className="h-px bg-border" />
 
       {/* Event categories */}

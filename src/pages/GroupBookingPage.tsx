@@ -28,6 +28,13 @@ const TIME_OPTIONS = [
 
 const ACTIVITY_OPTIONS = ["Pickleball", "Dart", "Pingis", "Turnering", "Instruktör", "Mat & dryck"];
 const RESOURCE_OPTIONS = ["Hela hallen", "Lounge", "Restaurang", "Bar", "Scen"];
+const DEFAULT_GROUP_TITLE = "Berätta ungefär vad ni vill göra, så bygger vi ett upplägg med aktivitet, mat, yta och personal.";
+const DEFAULT_GROUP_INTRO = "Det här är en förfrågan, inte en bindande bokning. Vi återkommer med tider, pris och förslag.";
+const DEFAULT_GROUP_NOTES = [
+  "Ni behöver inte veta exakt bana, schema eller format nu.",
+  "Vi kan kombinera spel, turnering, mat, dryck, lounge och instruktör.",
+  "Förfrågan hamnar hos vårt team som återkommer med ett konkret upplägg.",
+].join("\n");
 
 function toggleValue(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
@@ -57,19 +64,27 @@ export default function GroupBookingPage() {
     staleTime: 60_000,
   });
 
-  const venueName = venueData?.venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna";
-  const canSubmit = name.trim().length > 1 && phone.trim().length > 4 && participants > 0 && preferredDate;
+  const venue = venueData?.venue;
+  const venueName = venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna";
+  const heroImage = venue?.group_booking_image_url || venue?.cover_image_url || weekendVibes;
+  const groupTitle = venue?.group_booking_title || DEFAULT_GROUP_TITLE;
+  const groupIntro = venue?.group_booking_intro || DEFAULT_GROUP_INTRO;
+  const groupNotes = String(venue?.group_booking_notes || DEFAULT_GROUP_NOTES)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const canSubmit = name.trim().length > 1 && phone.trim().length > 4 && email.trim().length > 4 && participants > 0 && preferredDate;
   const selectedTypeLabel = useMemo(
     () => GROUP_TYPES.find((type) => type.value === eventType)?.label || "Grupp",
     [eventType],
   );
   const quickDates = useMemo(() => {
-    const base = DateTime.now().setZone("Europe/Stockholm").startOf("day");
+    const base = DateTime.now().setZone("Europe/Stockholm").startOf("day").plus({ days: 7 });
     return Array.from({ length: 6 }, (_, index) => {
       const date = base.plus({ days: index });
       return {
         value: date.toISODate() || "",
-        label: index === 0 ? "Idag" : index === 1 ? "Imorgon" : date.setLocale("sv").toFormat("EEE"),
+        label: date.setLocale("sv").toFormat("EEE"),
         day: date.toFormat("d/M"),
       };
     });
@@ -143,7 +158,7 @@ export default function GroupBookingPage() {
 
         <section className="overflow-hidden rounded-[28px] bg-neutral-950 text-white">
           <div className="relative h-56">
-            <img src={weekendVibes} alt="" className="h-full w-full object-cover" />
+            <img src={heroImage} alt="" className="h-full w-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/15 to-transparent" />
             <div className="absolute bottom-5 left-5 right-5">
               <p className="text-[10px] uppercase tracking-[0.3em] text-white/60" style={{ fontFamily: FONT_MONO }}>
@@ -161,10 +176,10 @@ export default function GroupBookingPage() {
             skapa något tillsammans
           </p>
           <p className="mt-3 text-[18px] font-bold leading-snug" style={{ fontFamily: FONT_GROTESK }}>
-            Berätta ungefär vad ni vill göra, så bygger vi ett upplägg med aktivitet, mat, yta och personal.
+            {groupTitle}
           </p>
           <p className="mt-3 text-[13px] leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-            Det här är en förfrågan, inte en bindande bokning. Vi återkommer med tider, pris och förslag.
+            {groupIntro}
           </p>
         </section>
 
@@ -266,9 +281,9 @@ export default function GroupBookingPage() {
             Bra att veta
           </p>
           <div className="mt-4 space-y-3 text-[13px] leading-relaxed text-neutral-600" style={{ fontFamily: FONT_MONO }}>
-            <p>• Ni behöver inte veta exakt bana, schema eller format nu.</p>
-            <p>• Vi kan kombinera spel, turnering, mat, dryck, lounge och instruktör.</p>
-            <p>• Förfrågan hamnar hos vårt team som återkommer med ett konkret upplägg.</p>
+            {groupNotes.map((note) => (
+              <p key={note}>• {note}</p>
+            ))}
           </div>
         </section>
 
@@ -321,7 +336,7 @@ export default function GroupBookingPage() {
           <div className="mt-4 space-y-3">
             <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Namn / företag" className="h-14 w-full rounded-2xl border border-neutral-200 bg-[#f7f4ee] px-4 outline-none" style={{ fontFamily: FONT_GROTESK }} />
             <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Telefon" inputMode="tel" className="h-14 w-full rounded-2xl border border-neutral-200 bg-[#f7f4ee] px-4 outline-none" style={{ fontFamily: FONT_GROTESK }} />
-            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email (valfritt)" inputMode="email" className="h-14 w-full rounded-2xl border border-neutral-200 bg-[#f7f4ee] px-4 outline-none" style={{ fontFamily: FONT_GROTESK }} />
+            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" inputMode="email" required className="h-14 w-full rounded-2xl border border-neutral-200 bg-[#f7f4ee] px-4 outline-none" style={{ fontFamily: FONT_GROTESK }} />
             <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Övrigt, ungefärlig idé eller specialönskemål" rows={4} className="w-full resize-none rounded-2xl border border-neutral-200 bg-[#f7f4ee] px-4 py-4 outline-none" style={{ fontFamily: FONT_GROTESK }} />
           </div>
         </section>

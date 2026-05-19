@@ -274,6 +274,7 @@ Deno.serve(async (req) => {
       if (!slug) return errorResponse('Missing slug');
       if (!name || String(name).trim().length < 2) return errorResponse('Missing name');
       if (!phone || String(phone).trim().length < 5) return errorResponse('Missing phone');
+      if (!email || String(email).trim().length < 5) return errorResponse('Missing email');
       if (email && String(email).length > 255) return errorResponse('Email too long');
 
       const participantCount = Math.max(1, Math.min(Number(participants || 1), 500));
