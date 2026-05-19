@@ -23,6 +23,7 @@ const FONT_MONO = "'Space Mono', monospace";
 
 type SportFilter = "pickleball" | "dart";
 type TimePeriod = "MORGON" | "LUNCH" | "EFTERMIDDAG" | "KVÄLL";
+const PERIOD_OPTIONS: TimePeriod[] = ["MORGON", "LUNCH", "EFTERMIDDAG", "KVÄLL"];
 
 function generateDates(count = 14) {
   const dates: Date[] = [];
@@ -66,6 +67,11 @@ function formatDuration(minutes: number) {
   if (minutes === 90) return "1.5 tim";
   if (minutes === 120) return "2 tim";
   return `${minutes} min`;
+}
+
+function formatPeriodLabel(period: TimePeriod) {
+  if (period === "EFTERMIDDAG") return "Eftermiddag";
+  return period.charAt(0) + period.slice(1).toLowerCase();
 }
 
 interface CourtData {
@@ -474,6 +480,17 @@ export default function BookingPage() {
   const showProfileLoading = selectedCourts.length > 0 && !!user && !profileLoaded;
   const showContactFields = selectedCourts.length > 0 && !showProfileLoading && (!user || !hasContactDetails || editingContact);
   const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && Boolean(bookingName) && !editingContact;
+  const isToday = dateStr === todayStr;
+  const selectedDateLabel = isToday
+    ? "Idag"
+    : DateTime.fromJSDate(selectedDate).setZone("Europe/Stockholm").hasSame(
+        DateTime.now().setZone("Europe/Stockholm").plus({ days: 1 }),
+        "day"
+      )
+      ? "Imorgon"
+      : format(selectedDate, "EEEE", { locale: sv });
+  const footerRecommendations = recommendations.slice(0, 2);
+  const canSubmitBooking = Boolean(hasContactDetails && selectedTime && selectedEndTime && selectedCourts.length);
 
   const bookingMode: BookingMode = useCorporate || baseTotalPrice === 0 ? "direct" : "stripe";
 
@@ -570,7 +587,6 @@ export default function BookingPage() {
     bookMutation.mutate();
   };
 
-  const isToday = dateStr === todayStr;
   const isClosed = openingHours?.is_closed;
 
   if (isLoading) {
@@ -616,7 +632,7 @@ export default function BookingPage() {
           </button>
         </div>
       ) : (
-        <form onSubmit={handleBook} className="mx-auto max-w-md px-6 pt-[calc(env(safe-area-inset-top,0px)+34px)] py-4 pb-40 space-y-8">
+        <form onSubmit={handleBook} className="mx-auto max-w-md px-6 pt-[calc(env(safe-area-inset-top,0px)+34px)] py-4 pb-[340px] space-y-8">
           <header className="flex items-center justify-between">
             <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
             <div className="flex items-center gap-1.5 text-[13px]" style={{ fontFamily: FONT_MONO }}>
@@ -662,8 +678,9 @@ export default function BookingPage() {
             </div>
           </section>
 
-          <section className="-mx-6 overflow-x-auto px-6 pb-2" style={{ scrollbarWidth: "none" }}>
-            <div className="flex gap-3">
+          <section className="space-y-4">
+            <div className="-mx-6 overflow-x-auto px-6 pb-1" style={{ scrollbarWidth: "none" }}>
+              <div className="flex gap-2">
               {dates.slice(0, 7).map((date, index) => {
                 const isSelected = date.toDateString() === selectedDate.toDateString();
                 const label = index === 0 ? "Idag" : index === 1 ? "Imorgon" : format(date, "EEE", { locale: sv });
@@ -675,104 +692,75 @@ export default function BookingPage() {
                       setSelectedDate(date);
                       setSelectedCourts([]);
                     }}
-                    className="min-h-[236px] w-[260px] flex-shrink-0 rounded-lg border p-5 text-left transition-transform active:scale-[0.99]"
+                    className="min-w-[92px] rounded-2xl border px-3 py-3 text-left transition-transform active:scale-[0.98]"
                     style={{
-                      background: isSelected ? "#fff" : "#bdbdbd",
-                      borderColor: isSelected ? "rgba(17,17,17,0.12)" : "transparent",
-                      color: isSelected ? "#111" : "#fff",
+                      background: isSelected ? "#111" : "#fff",
+                      borderColor: isSelected ? "#111" : "rgba(17,17,17,0.08)",
+                      color: isSelected ? "#fff" : "#111",
                     }}
                   >
-                    <div className="flex h-full flex-col justify-between">
-                      <div>
-                        <p className="text-center text-[40px] leading-none" style={{ fontFamily: FONT_MONO }}>
-                          {format(date, "d/M")}
-                        </p>
-                        {!isSelected && (
-                          <p className="mt-14 text-[12px] font-bold" style={{ fontFamily: FONT_MONO }}>{label}</p>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        {(["LUNCH", "EFTERMIDDAG", "KVÄLL"] as TimePeriod[]).map((period) => (
-                          <span
-                            key={period}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setSelectedDate(date);
-                              setSelectedPeriod(period);
-                              setSelectedCourts([]);
-                            }}
-                            className="rounded-md px-2 py-2 text-center text-[11px]"
-                            style={{
-                              background: isSelected && selectedPeriod === period ? "#f2f2f2" : "rgba(255,255,255,0.72)",
-                              color: isSelected ? "#555" : "#777",
-                              fontFamily: FONT_MONO,
-                            }}
-                          >
-                            {period === "EFTERMIDDAG" ? "Eftermiddag" : period.charAt(0) + period.slice(1).toLowerCase()}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
+                    <p className="text-[10px] font-bold uppercase tracking-wide opacity-60" style={{ fontFamily: FONT_MONO }}>{label}</p>
+                    <p className="mt-1 text-[20px] leading-none" style={{ fontFamily: FONT_MONO }}>
+                      {format(date, "d/M")}
+                    </p>
                   </button>
                 );
               })}
+              </div>
             </div>
-          </section>
 
-          {isClosed ? (
-            <div className="rounded-[28px] border border-neutral-200 bg-white p-8 text-center text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-              stängt denna dag
-            </div>
-          ) : (
-            <section className="rounded-[22px] border border-neutral-950 bg-white p-7 text-neutral-950">
-              <div className="flex items-start justify-between gap-6">
+            <div className="min-h-[330px] rounded-[32px] border border-neutral-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+              <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-[28px] leading-none" style={{ fontFamily: FONT_MONO }}>{formatDuration(selectedDuration)}</p>
-                  <p className="mt-3 text-[24px] leading-tight" style={{ fontFamily: FONT_MONO }}>
-                    {recommendedCourt?.name || anyResourceLabel}
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                    {selectedDateLabel}
                   </p>
-                  <p className="mt-1 text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                    första lediga {sportCourtLabel}
-                  </p>
+                  <h2 className="mt-4 text-[72px] leading-none tracking-[-0.06em] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                    {format(selectedDate, "d/M")}
+                  </h2>
                 </div>
-                <div className="grid gap-2 text-right text-[12px]" style={{ fontFamily: FONT_MONO }}>
-                  <button type="button" onClick={() => setShowTimeList(true)} className="underline underline-offset-4 text-indigo-500">
-                    fler alternativ
-                  </button>
-                  <button type="button" onClick={() => setShowCourtList(true)} className="underline underline-offset-4 text-indigo-500">
-                    välj banor
-                  </button>
+                <div className="rounded-full border border-neutral-200 px-3 py-2 text-[11px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                  {sportTitle}
                 </div>
               </div>
 
-              <div className="mt-6 space-y-3">
-                {recommendations.slice(0, 2).length > 0 ? (
-                  recommendations.slice(0, 2).map((recommendation) => {
-                    const selected = selectedTime === recommendation.time && selectedCourts.includes(recommendation.court.id);
+              <div className="mt-12">
+                <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                  När på dagen?
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {PERIOD_OPTIONS.map((period) => {
+                    const hasSlots = filteredTimeSlots.some((slot) => getTimePeriod(slot) === period);
                     return (
                       <button
-                        key={`${recommendation.time}-${recommendation.court.id}`}
+                        key={period}
                         type="button"
-                        onClick={() => pickRecommendation(recommendation)}
-                        className="grid w-full grid-cols-[1fr_auto] items-center gap-3 text-left"
+                        disabled={!hasSlots || isClosed}
+                        onClick={() => {
+                          setSelectedPeriod(period);
+                          setSelectedCourts([]);
+                        }}
+                        className={`rounded-2xl px-4 py-4 text-left text-[13px] transition-all active:scale-[0.98] disabled:opacity-30 ${
+                          selectedPeriod === period ? "bg-[#32ef87] text-neutral-950" : "bg-neutral-100 text-neutral-500"
+                        }`}
                         style={{ fontFamily: FONT_MONO }}
                       >
-                        <span className={`text-[25px] leading-none ${selected ? "underline decoration-[#32ef87] decoration-2 underline-offset-4" : ""}`}>
-                          {recommendation.time.replace(":", ".")} – {recommendation.endTime.replace(":", ".")}
-                        </span>
-                        <span className="text-[25px] leading-none">{recommendation.price}kr</span>
+                        {formatPeriodLabel(period)}
                       </button>
                     );
-                  })
-                ) : (
-                  <p className="text-[16px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    Inga lediga tider i {selectedPeriod.toLowerCase()}.
-                  </p>
-                )}
+                  })}
+                </div>
               </div>
 
-              <div className="mt-6 flex gap-2">
-                {[60, 90, 120].map((duration) => (
+              {isClosed && (
+                <p className="mt-8 text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                  stängt denna dag
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              {[60, 90, 120].map((duration) => (
                   <button
                     key={duration}
                     type="button"
@@ -786,10 +774,9 @@ export default function BookingPage() {
                   >
                     {duration} min
                   </button>
-                ))}
-              </div>
-            </section>
-          )}
+              ))}
+            </div>
+          </section>
 
           {/* Contact info */}
           {showProfileLoading && (
@@ -901,49 +888,97 @@ export default function BookingPage() {
             </div>
           )}
 
-          {/* Summary + Book button */}
-		          {selectedCourts.length > 0 && hasContactDetails && (
-	            <div className="fixed left-0 right-0 bottom-[64px] z-30 px-4 pb-[env(safe-area-inset-bottom,0px)]">
-	              <div className="mx-auto max-w-md rounded-[28px] bg-white/95 p-3 shadow-[0_-12px_40px_rgba(15,23,42,0.12)] backdrop-blur">
-	                <div className="flex items-center justify-between text-[12px] mb-3" style={{ fontFamily: FONT_MONO }}>
-	                  <span className="text-neutral-400">
-	                    {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime}–{selectedEndTime} · {selectedCourtNames}
-	                  </span>
-	                  <span className="font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-	                    {useCorporate ? "0 kr" : `${totalPrice} kr`}
-	                  </span>
-	                </div>
-	                {!useCorporate && hasMemberCourtPrice && (
-	                  <p className="text-[11px] text-emerald-600 -mt-2 mb-3 text-right" style={{ fontFamily: FONT_MONO }}>
-	                    medlemspris · ord. {baseTotalPrice} kr
-	                  </p>
-	                )}
-	                {showContactSummary && (
-	                  <button
-	                    type="button"
-	                    onClick={() => setEditingContact(true)}
-	                    className="w-full text-left text-[10px] text-neutral-400 mb-2"
-	                    style={{ fontFamily: FONT_MONO }}
-	                  >
-		                    bokas som {bookingName} · ändra
-	                  </button>
-	                )}
+          {!isClosed && (
+            <div className="fixed left-0 right-0 bottom-[64px] z-30 px-4 pb-[env(safe-area-inset-bottom,0px)]">
+              <div className="mx-auto max-w-md rounded-[30px] border border-neutral-950 bg-white/96 p-5 shadow-[0_-18px_55px_rgba(15,23,42,0.18)] backdrop-blur">
+                <div className="flex items-start justify-between gap-6">
+                  <div>
+                    <p className="text-[26px] leading-none text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                      {formatDuration(selectedDuration)}
+                    </p>
+                    <p className="mt-2 text-[20px] leading-tight text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                      {recommendedCourt?.name || anyResourceLabel}
+                    </p>
+                    <p className="mt-1 text-[11px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                      första lediga {sportCourtLabel}
+                    </p>
+                  </div>
+                  <div className="grid gap-2 text-right text-[11px]" style={{ fontFamily: FONT_MONO }}>
+                    <button type="button" onClick={() => setShowTimeList(true)} className="underline underline-offset-4 text-indigo-500">
+                      fler alternativ
+                    </button>
+                    <button type="button" onClick={() => setShowCourtList(true)} className="underline underline-offset-4 text-indigo-500">
+                      välj banor
+                    </button>
+                  </div>
+                </div>
 
-	                <button
-	                  type="submit"
-	                  disabled={bookMutation.isPending}
-	                  className="w-full py-3 rounded-xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40"
-	                  style={{ fontFamily: FONT_MONO }}
-	                >
-	                  {bookMutation.isPending ? (
-	                    <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-	                  ) : (
-	                    "fortsätt"
-	                  )}
-	                </button>
-	              </div>
-	            </div>
-	          )}
+                <div className="mt-5 space-y-3">
+                  {footerRecommendations.length > 0 ? (
+                    footerRecommendations.map((recommendation) => {
+                      const selected = selectedTime === recommendation.time && selectedCourts.includes(recommendation.court.id);
+                      return (
+                        <button
+                          key={`${recommendation.time}-${recommendation.court.id}`}
+                          type="button"
+                          onClick={() => pickRecommendation(recommendation)}
+                          className="grid w-full grid-cols-[1fr_auto] items-center gap-3 text-left"
+                          style={{ fontFamily: FONT_MONO }}
+                        >
+                          <span className={`text-[24px] leading-none ${selected ? "underline decoration-[#32ef87] decoration-2 underline-offset-4" : ""}`}>
+                            {recommendation.time.replace(":", ".")} – {recommendation.endTime.replace(":", ".")}
+                          </span>
+                          <span className="text-[24px] leading-none">{recommendation.price}kr</span>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <p className="text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                      Inga lediga tider i {selectedPeriod.toLowerCase()}.
+                    </p>
+                  )}
+                </div>
+
+                {showContactSummary && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingContact(true)}
+                    className="mt-4 w-full text-left text-[10px] text-neutral-400"
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    bokas som {bookingName} · ändra
+                  </button>
+                )}
+
+                <div className="mt-4 flex items-center justify-between gap-3 border-t border-neutral-100 pt-4">
+                  <div className="min-w-0 text-[11px]" style={{ fontFamily: FONT_MONO }}>
+                    <p className="truncate text-neutral-400">
+                      {format(selectedDate, "d MMM", { locale: sv })} · {selectedTime || "--:--"}–{selectedEndTime || "--:--"} · {selectedCourtNames || anyResourceLabel}
+                    </p>
+                    {!useCorporate && hasMemberCourtPrice && (
+                      <p className="mt-1 text-emerald-600">
+                        medlemspris · ord. {baseTotalPrice} kr
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!canSubmitBooking || bookMutation.isPending}
+                    className="min-w-[124px] rounded-2xl bg-neutral-950 px-5 py-3 text-[12px] font-bold uppercase tracking-wider text-white transition-transform active:scale-[0.98] disabled:opacity-40"
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    {bookMutation.isPending ? (
+                      <Loader2 className="mx-auto h-4 w-4 animate-spin" />
+                    ) : canSubmitBooking ? (
+                      useCorporate ? "0 kr" : `${totalPrice} kr`
+                    ) : (
+                      "fortsätt"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </form>
       )}
       <Drawer open={showTimeList} onOpenChange={setShowTimeList}>
