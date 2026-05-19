@@ -81,6 +81,71 @@ Deno.serve(async (req) => {
 
 // ── Court booking ─────────────────────────────────────────────────────────────
 
+function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
+  const vatAmount = Math.round(totalIncVat * vatRate / (100 + vatRate));
+  return {
+    totalIncVat,
+    vatRate,
+    vatAmount,
+    totalExVat: Math.max(totalIncVat - vatAmount, 0),
+  };
+}
+
+async function createCourtBookingReceipt({
+  session,
+  meta,
+  serviceClient,
+  bookingUserId,
+  bookingRefs,
+  totalSek,
+}: {
+  session: Stripe.Checkout.Session;
+  meta: Record<string, string>;
+  serviceClient: any;
+  bookingUserId: string;
+  bookingRefs: string[];
+  totalSek: number;
+}) {
+  if (!bookingRefs.length || totalSek <= 0) return;
+
+  const { data: existing } = await serviceClient
+    .from('booking_receipts')
+    .select('id')
+    .eq('stripe_session_id', session.id)
+    .maybeSingle();
+  if (existing) return;
+
+  const vat = vatPartsFromIncludedTotal(totalSek, 6);
+  const { error } = await serviceClient.from('booking_receipts').insert({
+    booking_refs: bookingRefs,
+    stripe_session_id: session.id,
+    venue_id: meta.venue_id,
+    user_id: bookingUserId,
+    customer_name: meta.name || session.customer_details?.name || null,
+    customer_email: session.customer_details?.email || null,
+    customer_phone: meta.phone || session.customer_details?.phone || null,
+    total_inc_vat: vat.totalIncVat,
+    total_ex_vat: vat.totalExVat,
+    vat_amount: vat.vatAmount,
+    vat_rate: vat.vatRate,
+    currency: (session.currency || 'sek').toUpperCase(),
+    payment_provider: 'stripe',
+    payment_status: session.payment_status || 'paid',
+    metadata: {
+      product_type: meta.product_type || 'court_booking',
+      court_ids: meta.court_ids || '[]',
+      date: meta.date || null,
+      start_time: meta.start_time || null,
+      end_time: meta.end_time || null,
+    },
+  });
+
+  if (error) {
+    // Never fail a paid booking because the v1 receipt snapshot is not migrated yet.
+    console.error('Failed to create booking receipt:', error.message);
+  }
+}
+
 async function handleCourtBooking(
   session: Stripe.Checkout.Session,
   meta: Record<string, string>,
@@ -161,6 +226,26 @@ async function handleCourtBooking(
 
     if (error) throw new Error(`Failed to insert booking for court ${courtId}: ${error.message}`);
   }
+
+  const { data: sessionBookings, error: refsErr } = await serviceClient
+    .from('bookings')
+    .select('booking_ref')
+    .eq('stripe_session_id', session.id)
+    .neq('status', 'cancelled');
+
+  if (refsErr) {
+    console.error('Failed to fetch booking refs for receipt:', refsErr.message);
+    return;
+  }
+
+  await createCourtBookingReceipt({
+    session,
+    meta,
+    serviceClient,
+    bookingUserId,
+    bookingRefs: (sessionBookings || []).map((b: any) => b.booking_ref).filter(Boolean),
+    totalSek,
+  });
 }
 
 // ── Shared: resolve a real user from metadata + Stripe customer_details ──────

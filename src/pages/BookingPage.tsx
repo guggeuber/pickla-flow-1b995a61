@@ -10,7 +10,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
 import { PlayerNav } from "@/components/PlayerNav";
-import { getBookingChatResourceId } from "@/lib/bookingGroups";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
@@ -149,10 +148,6 @@ type BookingMutationResult =
   | { type: "direct"; bookings: DirectBookingRow[] }
   | { type: "free"; redirect?: string }
   | { type: "stripe"; url: string };
-
-function bookingChatPath(bookingRef: string, slug: string) {
-  return `/booking-chat/${bookingRef}?v=${encodeURIComponent(slug)}`;
-}
 
 export default function BookingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -591,8 +586,7 @@ export default function BookingPage() {
       const firstBooking = result.bookings?.[0];
       const firstRef = firstBooking?.booking_ref;
       if (firstRef) {
-        const chatKey = getBookingChatResourceId(firstBooking) || firstRef;
-        navigate(user ? bookingChatPath(encodeURIComponent(chatKey), slug) : `/b/${firstRef}`);
+        navigate(user ? `/my?booking=${encodeURIComponent(firstRef)}&v=${encodeURIComponent(slug)}` : `/b/${firstRef}`);
       } else {
         setConfirmed(true);
         toast.success("Bokad!");
@@ -678,7 +672,7 @@ export default function BookingPage() {
                   <button
                     key={option.value}
                     type="button"
-                    onClick={() => option.value === "event" ? navigate(`/events?v=${slug}`) : switchSport(option.value)}
+                    onClick={() => option.value === "event" ? navigate(`/book/group?v=${slug}`) : switchSport(option.value)}
                     className="relative h-36 overflow-hidden rounded-md border text-left shadow-sm transition-transform active:scale-[0.98]"
                     style={{ background: "#f4f0ee", borderColor: active ? "#32ef87" : "rgba(17,17,17,0.07)" }}
                   >

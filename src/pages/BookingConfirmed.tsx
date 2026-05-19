@@ -3,18 +3,26 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
 const TIMEOUT_MS   = 30_000;
 
+type BookingBySessionResponse = {
+  pending?: boolean;
+  booking_ref?: string;
+  venue_slug?: string;
+};
+
 export default function BookingConfirmed() {
   const [searchParams] = useSearchParams();
   const session  = searchParams.get("session") ?? "";
   const type     = searchParams.get("type") ?? "";
-  const next     = searchParams.get("next") ?? "/activity";
+  const next     = searchParams.get("next") ?? "/my";
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const [timedOut, setTimedOut] = useState(false);
 
   const isDayPass = type === "day_pass";
@@ -22,30 +30,31 @@ export default function BookingConfirmed() {
   // Day pass: show success immediately, redirect to activities after 3 s
   useEffect(() => {
     if (!isDayPass) return;
-    const id = setTimeout(() => navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/activity", { replace: true }), 1800);
+    const id = setTimeout(() => navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true }), 1800);
     return () => clearTimeout(id);
   }, [isDayPass, navigate, next]);
 
   // Poll until the webhook has created the booking (typically < 2 s)
-  const { data } = useQuery({
+  const { data } = useQuery<BookingBySessionResponse>({
     queryKey:       ["booking-by-session", session],
     enabled:        !!session && !timedOut && !isDayPass,
     queryFn:        () => apiGet("api-bookings", "by-session", { session }),
     staleTime:      0,
     refetchInterval: (query) => {
-      const d = query.state.data as any;
+      const d = query.state.data;
       return d && !d.pending ? false : 2000;
     },
   });
 
   // Redirect as soon as the webhook has created the booking.
   useEffect(() => {
-    const bookingRef = (data as any)?.booking_ref;
-    const venueSlug = (data as any)?.venue_slug;
-    if (bookingRef) {
-      navigate(`/booking-chat/${bookingRef}${venueSlug ? `?v=${venueSlug}` : ""}`, { replace: true });
+    const bookingRef = data?.booking_ref;
+    const venueSlug = data?.venue_slug;
+    if (bookingRef && !authLoading) {
+      const venueParam = venueSlug ? `&v=${encodeURIComponent(venueSlug)}` : "";
+      navigate(user ? `/my?booking=${encodeURIComponent(bookingRef)}${venueParam}` : `/b/${encodeURIComponent(bookingRef)}`, { replace: true });
     }
-  }, [data, navigate]);
+  }, [authLoading, data, navigate, user]);
 
   // Fallback: give up after TIMEOUT_MS and show a static message
   useEffect(() => {

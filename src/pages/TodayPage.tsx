@@ -343,7 +343,7 @@ export default function TodayPage() {
             {[
               { label: "Boka\nPickleball", href: `/book?v=${slug}&sport=pickleball`, image: null },
               { label: "Boka darts", href: `/book?v=${slug}&sport=dart`, image: null },
-              { label: "Boka event", href: `/book?v=${slug}`, image: weekendVibes },
+              { label: "Boka event", href: `/book/group?v=${slug}`, image: weekendVibes },
             ].map((action) => (
               <button
                 key={action.label}

@@ -78,8 +78,8 @@ async function createFreeEntitlementBookingResponse({
 
     const bookingRef = bookings[0]?.booking_ref;
     if (!bookingRef) return errorResponse('Booking could not be created', 500);
-    const slugParam = meta.slug ? `?v=${encodeURIComponent(meta.slug)}` : '';
-    return jsonResponse({ free: true, redirect: `/booking-chat/${bookingRef}${slugParam}` });
+    const slugParam = meta.slug ? `&v=${encodeURIComponent(meta.slug)}` : '';
+    return jsonResponse({ free: true, redirect: `/my?booking=${encodeURIComponent(bookingRef)}${slugParam}` });
   }
 
   if (product_type === 'day_pass' && meta.entitlement_type === 'free_day_pass_monthly') {
@@ -637,7 +637,7 @@ Deno.serve(async (req) => {
 
     // Get all bookings with same notes (grouped booking) or single
     const { data: booking } = await admin.from('bookings')
-      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, venue_courts(name, court_number)')
+      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, user_id, access_code, stripe_session_id, created_at, venue_courts(name, court_number)')
       .eq('booking_ref', ref).single();
 
     if (!booking) return errorResponse('Booking not found', 404);
@@ -646,24 +646,74 @@ Deno.serve(async (req) => {
     const { data: venue } = await admin.from('venues')
       .select('name, slug, address, city, logo_url').eq('id', booking.venue_id).single();
 
-    // Find sibling bookings (same time + same notes = same group booking)
-    const { data: siblings } = await admin.from('bookings')
+    // Find sibling bookings. Stripe groups by session; free/direct bookings fall back to the shared time+notes group.
+    let siblingQuery = admin.from('bookings')
       .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, venue_courts(name, court_number)')
       .eq('venue_id', booking.venue_id)
-      .eq('start_time', booking.start_time)
-      .eq('end_time', booking.end_time)
-      .eq('notes', booking.notes)
       .neq('status', 'cancelled');
+
+    if (booking.stripe_session_id) {
+      siblingQuery = siblingQuery.eq('stripe_session_id', booking.stripe_session_id);
+    } else {
+      siblingQuery = siblingQuery
+        .eq('start_time', booking.start_time)
+        .eq('end_time', booking.end_time)
+        .eq('notes', booking.notes);
+    }
+
+    const { data: siblings } = await siblingQuery;
+    const groupedBookings = siblings?.length ? siblings : [booking];
+    const totalPrice = groupedBookings.reduce((s: number, b: any) => s + (b.total_price || 0), 0);
+    const bookingRefs = groupedBookings.map((b: any) => b.booking_ref).filter(Boolean);
+
+    let receipt: any = null;
+    if (booking.stripe_session_id) {
+      const receiptResult = await admin.from('booking_receipts')
+        .select('*')
+        .eq('stripe_session_id', booking.stripe_session_id)
+        .maybeSingle();
+      receipt = receiptResult.data || null;
+      if (receiptResult.error) console.error('Receipt lookup failed:', receiptResult.error.message);
+    } else if (booking.booking_ref) {
+      const receiptResult = await admin.from('booking_receipts')
+        .select('*')
+        .contains('booking_refs', [booking.booking_ref])
+        .limit(1)
+        .maybeSingle();
+      receipt = receiptResult.data || null;
+      if (receiptResult.error) console.error('Receipt lookup failed:', receiptResult.error.message);
+    }
+
+    const vatRate = Number(receipt?.vat_rate || 6);
+    const fallbackVatAmount = Math.round(totalPrice * vatRate / (100 + vatRate));
+    const receiptView = {
+      receipt_number: receipt?.receipt_number || booking.booking_ref,
+      booking_refs: receipt?.booking_refs || bookingRefs,
+      stripe_session_id: receipt?.stripe_session_id || booking.stripe_session_id || null,
+      customer_name: receipt?.customer_name || (booking.notes || '').split(' | ')[0] || null,
+      customer_email: receipt?.customer_email || null,
+      customer_phone: receipt?.customer_phone || (booking.notes || '').split(' | ')[1] || null,
+      total_inc_vat: receipt?.total_inc_vat ?? totalPrice,
+      total_ex_vat: receipt?.total_ex_vat ?? Math.max(totalPrice - fallbackVatAmount, 0),
+      vat_amount: receipt?.vat_amount ?? fallbackVatAmount,
+      vat_rate: vatRate,
+      currency: receipt?.currency || 'SEK',
+      payment_provider: receipt?.payment_provider || (booking.stripe_session_id ? 'stripe' : 'pickla'),
+      payment_status: receipt?.payment_status || (totalPrice > 0 ? 'paid' : 'free'),
+      issued_at: receipt?.issued_at || booking.created_at,
+      is_snapshot: Boolean(receipt),
+    };
 
     return jsonResponse({
       booking,
       venue,
-      courts: (siblings || [booking]).map((b: any) => ({
+      courts: groupedBookings.map((b: any) => ({
         ref: b.booking_ref,
         court_name: b.venue_courts?.name,
         price: b.total_price,
       })),
-      totalPrice: (siblings || [booking]).reduce((s: number, b: any) => s + (b.total_price || 0), 0),
+      totalPrice,
+      receipt: receiptView,
     }, 200, 30);
   }
 

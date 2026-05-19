@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
@@ -1149,7 +1149,7 @@ const MyPage = () => {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
   const isActivityPage = pathname.startsWith("/activity");
   const authRedirectPath = isActivityPage ? "/activity" : "/my";
@@ -1163,9 +1163,35 @@ const MyPage = () => {
   const { data: threadPreviews = {} } = useActivityThreadPreviews(activityThreadIds);
   const queryClient = useQueryClient();
 
-  const [selectedBooking, setSelectedBooking] = useState<any | null>(null);
+  const [selectedBooking, setSelectedBooking] = useState<Record<string, unknown> | null>(null);
   const [showMembershipDetails, setShowMembershipDetails] = useState(false);
   const [showPast, setShowPast] = useState(false);
+
+  useEffect(() => {
+    const bookingRefParam = searchParams.get("booking");
+    if (!bookingRefParam || selectedBooking || !bookings?.length) return;
+    const grouped = groupBookingRows((bookings || []).filter((booking) => {
+      const status = (booking as { status?: string }).status;
+      return status === "confirmed" || status === "pending";
+    }));
+    const match = grouped.find((booking) => {
+      const bookingRecord = booking as Record<string, unknown>;
+      const keys = new Set<string>();
+      if (bookingRecord.id) keys.add(String(bookingRecord.id));
+      if (bookingRecord.booking_ref) keys.add(String(bookingRecord.booking_ref));
+      if (bookingRecord.primary_booking_ref) keys.add(String(bookingRecord.primary_booking_ref));
+      const chatKey = getBookingChatResourceId(booking);
+      if (chatKey) keys.add(String(chatKey));
+      const rows = Array.isArray(bookingRecord.bookings) ? bookingRecord.bookings : [];
+      rows.forEach((row) => {
+        const rowRecord = row as Record<string, unknown>;
+        if (rowRecord.id) keys.add(String(rowRecord.id));
+        if (rowRecord.booking_ref) keys.add(String(rowRecord.booking_ref));
+      });
+      return keys.has(bookingRefParam);
+    });
+    if (match) setSelectedBooking(match);
+  }, [bookings, searchParams, selectedBooking]);
 
   // Show success toast when returning from Stripe card setup
   useState(() => {
@@ -1208,8 +1234,14 @@ const MyPage = () => {
     Object.entries(threadPreviews).filter(([roomId]) => visibleThreadRoomIds.includes(roomId))
   );
   const membershipTier = (activeMembership as any)?.membership_tiers;
-  const openBookingChat = (booking: any) => {
-    navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`);
+  const closeBookingDetails = (open: boolean) => {
+    if (open) return;
+    setSelectedBooking(null);
+    if (searchParams.has("booking")) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("booking");
+      setSearchParams(nextParams, { replace: true });
+    }
   };
 
   return (
@@ -1329,7 +1361,7 @@ const MyPage = () => {
                 {activeBookings.slice(0, 5).map((b: any) => (
                   <button
                     key={getBookingChatResourceId(b)}
-                    onClick={() => openBookingChat(b)}
+                    onClick={() => setSelectedBooking(b)}
                     className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
                     style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                   >
@@ -1346,7 +1378,7 @@ const MyPage = () => {
                         </p>
                       )}
                       <p className="text-[11px] mt-1" style={{ color: TEXT_SECONDARY }}>
-                        Öppna bokningschatten →
+                        Visa detaljer →
                       </p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
@@ -1532,7 +1564,7 @@ const MyPage = () => {
       <BookingDetailsSheet
         booking={selectedBooking}
         open={!!selectedBooking}
-        onOpenChange={(o) => { if (!o) setSelectedBooking(null); }}
+        onOpenChange={closeBookingDetails}
       />
 
       <MembershipDetailsSheet

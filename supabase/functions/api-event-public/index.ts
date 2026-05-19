@@ -128,6 +128,110 @@ Deno.serve(async (req) => {
       return jsonResponse(data, 200, 10);
     }
 
+    // POST /api-event-public/group-inquiry — lightweight public lead for corporate/group bookings
+    if (req.method === 'POST' && path === 'group-inquiry') {
+      const body = await req.json();
+      const {
+        slug,
+        eventType,
+        participants,
+        preferredDate,
+        preferredTime,
+        activities,
+        resources,
+        name,
+        email,
+        phone,
+        notes,
+      } = body;
+
+      if (!slug) return errorResponse('Missing slug');
+      if (!name || String(name).trim().length < 2) return errorResponse('Missing name');
+      if (!phone || String(phone).trim().length < 5) return errorResponse('Missing phone');
+      if (email && String(email).length > 255) return errorResponse('Email too long');
+
+      const participantCount = Math.max(1, Math.min(Number(participants || 1), 500));
+      const requestedDate = typeof preferredDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(preferredDate)
+        ? preferredDate
+        : null;
+      const selectedActivities = Array.isArray(activities)
+        ? activities.map((value: unknown) => String(value).trim()).filter(Boolean).slice(0, 12)
+        : [];
+      const selectedResources = Array.isArray(resources)
+        ? resources.map((value: unknown) => String(value).trim()).filter(Boolean).slice(0, 12)
+        : [];
+      const resourceList = Array.from(new Set([...selectedActivities, ...selectedResources]));
+      const normalizedType = String(eventType || 'company');
+      const typeLabelMap: Record<string, string> = {
+        company: 'Företagsevent',
+        team: 'Teamaktivitet',
+        birthday: 'Födelsedag',
+        bachelorette: 'Möhippa / svensexa',
+        private: 'Privat grupp',
+        other: 'Gruppbokning',
+      };
+      const timeMap: Record<string, string> = {
+        morning: '10:00',
+        lunch: '12:00',
+        afternoon: '15:00',
+        evening: '18:00',
+      };
+      const typeLabel = typeLabelMap[normalizedType] || 'Gruppbokning';
+      const timeLabel = String(preferredTime || '').trim();
+      const startTime = timeMap[timeLabel] || (/^\d{2}:\d{2}$/.test(timeLabel) ? timeLabel : null);
+      const cleanName = String(name).trim().slice(0, 160);
+      const cleanPhone = String(phone).trim().slice(0, 50);
+      const cleanEmail = email ? String(email).trim().slice(0, 255) : null;
+      const cleanNotes = notes ? String(notes).trim().slice(0, 1200) : '';
+
+      const { data: venue, error: venueErr } = await client.from('venues')
+        .select('id, name')
+        .eq('slug', slug)
+        .eq('is_public', true)
+        .maybeSingle();
+      if (venueErr || !venue) return errorResponse('Venue not found', 404);
+
+      const partnerNotes = [
+        `Källa: publik gruppbokningsförfrågan`,
+        `Typ: ${typeLabel}`,
+        `Önskat datum: ${requestedDate || 'Flexibelt'}`,
+        `Önskad tid: ${timeLabel || 'Flexibelt'}`,
+        `Aktiviteter/resurser: ${resourceList.length ? resourceList.join(', ') : 'Ej valt'}`,
+        `Kontakt: ${cleanName}${cleanEmail ? ` · ${cleanEmail}` : ''} · ${cleanPhone}`,
+        cleanNotes ? `Övrigt: ${cleanNotes}` : null,
+      ].filter(Boolean).join('\n');
+
+      const { data: event, error: insertErr } = await client.from('events').insert({
+        venue_id: venue.id,
+        name: `${typeLabel} · ${cleanName}`,
+        display_name: `${typeLabel} · ${participantCount} pers`,
+        event_type: 'corporate_event',
+        format: 'custom',
+        category: 'corporate',
+        status: 'upcoming',
+        is_public: false,
+        planning_status: 'inquiry',
+        visibility: 'internal',
+        number_of_courts: 1,
+        start_date: requestedDate,
+        end_date: requestedDate,
+        start_time: startTime,
+        end_time: null,
+        customer_name: cleanName,
+        customer_email: cleanEmail,
+        customer_phone: cleanPhone,
+        expected_participants: participantCount,
+        owner_name: null,
+        partner_notes: partnerNotes,
+        internal_notes: cleanNotes || null,
+        resources: resourceList,
+      }).select('id').single();
+
+      if (insertErr) return errorResponse(insertErr.message, 500);
+
+      return jsonResponse({ success: true, event_id: event.id }, 201);
+    }
+
     // POST /api-event-public/register — register a player + auto-create account
     if (req.method === 'POST' && path === 'register') {
       const body = await req.json();
