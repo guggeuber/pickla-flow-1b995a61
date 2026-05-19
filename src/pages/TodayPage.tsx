@@ -40,6 +40,59 @@ type FeedItem = {
   isMine?: boolean;
 };
 
+type SessionRow = {
+  id: string;
+  name: string;
+  session_type: string | null;
+  session_date: string | null;
+  recurrence_days: number[] | null;
+  start_time: string;
+  end_time: string;
+  capacity: number | null;
+};
+
+type SessionOccurrence = SessionRow & {
+  occurrence_date: string;
+};
+
+type RegistrationRow = {
+  activity_session_id: string;
+  session_date: string;
+  status: string | null;
+};
+
+type EventRow = {
+  id: string;
+  name: string;
+  display_name: string | null;
+  slug: string | null;
+  category: string | null;
+  status: string | null;
+  start_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+};
+
+type BookingRow = {
+  id: string;
+  booking_ref: string | null;
+  stripe_session_id: string | null;
+  start_time: string;
+  end_time: string;
+  status: string | null;
+  notes: string | null;
+  access_code: string | null;
+  venue_courts?: { name: string | null } | null;
+};
+
+type BookingGroup = BookingRow & {
+  bookings?: BookingRow[];
+  primary_booking_ref?: string | null;
+  court_count?: number;
+  court_names?: string[];
+  access_codes?: string[];
+};
+
 function sectionLabel(date: DateTime, now: DateTime) {
   const prefix = date.hasSame(now, "day")
     ? "IDAG"
@@ -121,22 +174,24 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
               .gte("end_time", startUtc)
               .lt("start_time", endUtc)
               .order("start_time", { ascending: true })
-          : Promise.resolve({ data: [] as any[], error: null }),
+          : Promise.resolve({ data: [] as BookingRow[], error: null }),
       ]);
 
-      const sessionOccurrences: any[] = [];
-      for (const session of sessionsRes.data || []) {
+      const sessionOccurrences: SessionOccurrence[] = [];
+      for (const session of (sessionsRes.data || []) as SessionRow[]) {
         if (session.session_date) {
           const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
           if (date >= now.startOf("day") && date < now.plus({ days: DAYS_AHEAD }).startOf("day")) {
-            sessionOccurrences.push({ ...session, occurrence_date: date.toISODate() });
+            const occurrenceDate = date.toISODate();
+            if (occurrenceDate) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
           }
           continue;
         }
         for (let offset = 0; offset < DAYS_AHEAD; offset++) {
           const date = now.plus({ days: offset });
           if ((session.recurrence_days || []).includes(date.weekday % 7)) {
-            sessionOccurrences.push({ ...session, occurrence_date: date.toISODate() });
+            const occurrenceDate = date.toISODate();
+            if (occurrenceDate) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
           }
         }
       }
@@ -149,7 +204,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
             .in("activity_session_id", sessionIds)
             .gte("session_date", startDate)
             .lte("session_date", endDate)
-        : { data: [] as any[] };
+        : { data: [] as RegistrationRow[] };
 
       const registrationCounts = new Map<string, number>();
       for (const row of registrationsRes.data || []) {
@@ -176,7 +231,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         };
       });
 
-      const eventItems: FeedItem[] = (eventsRes.data || []).map((event) => ({
+      const eventItems: FeedItem[] = ((eventsRes.data || []) as EventRow[]).map((event) => ({
         id: `event:${event.id}`,
         kind: "event",
         title: event.display_name || event.name,
@@ -189,7 +244,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         cta: "Visa",
       }));
 
-      const bookingItems: FeedItem[] = groupBookingRows(bookingsRes.data || []).map((booking: any) => {
+      const bookingItems: FeedItem[] = (groupBookingRows((bookingsRes.data || []) as BookingRow[]) as BookingGroup[]).map((booking) => {
         const start = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
         const end = DateTime.fromISO(booking.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
         return {

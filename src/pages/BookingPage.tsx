@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
 import { PlayerNav } from "@/components/PlayerNav";
 import { getBookingChatResourceId } from "@/lib/bookingGroups";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -106,8 +107,18 @@ interface CorporateMembership {
 
 type BookingMode = "direct" | "stripe";
 
+type DirectBookingRow = {
+  id?: string;
+  booking_ref?: string;
+  stripe_session_id?: string | null;
+  start_time?: string;
+  end_time?: string;
+  notes?: string | null;
+  access_code?: string | null;
+};
+
 type BookingMutationResult =
-  | { type: "direct"; bookings: Array<any> }
+  | { type: "direct"; bookings: DirectBookingRow[] }
   | { type: "free"; redirect?: string }
   | { type: "stripe"; url: string };
 
@@ -374,6 +385,12 @@ export default function BookingPage() {
   const heroTitle = sportFilter === "dart" ? "när vill du kasta?" : "när vill du spela?";
   const anyResourceLabel = sportFilter === "dart" ? "Any dartboard" : "Any court";
   const firstAvailableCourt = availableSportCourts[0] || null;
+  const recommendedCourt = selectedCourtObjects[0] || firstAvailableCourt;
+
+  useEffect(() => {
+    if (!selectedTime || !firstAvailableCourt || selectedCourts.length > 0) return;
+    setSelectedCourts([firstAvailableCourt.id]);
+  }, [selectedTime, firstAvailableCourt?.id, selectedCourts.length]);
 
   const switchSport = (sport: SportFilter) => {
     if (sport === sportFilter) return;
@@ -807,132 +824,56 @@ export default function BookingPage() {
                 bästa match
               </h2>
 
-              {firstAvailableCourt && selectedEndTime && (
+              {recommendedCourt && selectedEndTime && (
                 <button
                   type="button"
-                  onClick={selectFirstAvailableCourt}
-                  className={`w-full rounded-3xl p-4 text-left border transition-all active:scale-[0.99] ${
-                    selectedCourts.length === 1 && selectedCourts[0] === firstAvailableCourt.id
-                      ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
-                      : "bg-white text-[#111] border-neutral-200 shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
-                  }`}
+                  onClick={() => setSelectedCourts([recommendedCourt.id])}
+                  className="w-full rounded-[28px] bg-white p-5 text-left border border-neutral-200 shadow-[0_16px_44px_rgba(15,23,42,0.10)] transition-all active:scale-[0.99]"
                 >
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p
-                        className="text-[16px] font-bold leading-tight"
+                        className="text-[22px] font-black leading-none text-neutral-950"
                         style={{ fontFamily: FONT_GROTESK }}
                       >
-                        {anyResourceLabel}
+                        {selectedCourtObjects.length > 0 ? recommendedCourt.name : anyResourceLabel}
                       </p>
                       <p
-                        className="text-[12px] text-current opacity-55 mt-1 truncate"
+                        className="text-[12px] text-neutral-400 mt-2 truncate"
                         style={{ fontFamily: FONT_MONO }}
                       >
-                        {firstAvailableCourt.name} · {selectedTime}-{selectedEndTime} · {selectedDuration} min
+                        {recommendedCourt.name} · {selectedTime}-{selectedEndTime}
+                      </p>
+                      <p className="text-[11px] text-neutral-400 mt-1" style={{ fontFamily: FONT_MONO }}>
+                        {selectedDuration} min · {sportFilter === "dart" ? "dart" : "pickleball"}
                       </p>
                     </div>
-                    <span
-                      className="text-[16px] font-bold whitespace-nowrap"
-                      style={{ fontFamily: FONT_GROTESK }}
-                    >
-                      {Math.round(getMemberCourtPrice(firstAvailableCourt) * durationHours)} kr
-                    </span>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-widest text-neutral-400" style={{ fontFamily: FONT_MONO }}>pris</p>
+                      <span
+                        className="text-[22px] font-black whitespace-nowrap text-neutral-950"
+                        style={{ fontFamily: FONT_GROTESK }}
+                      >
+                        {Math.round(getMemberCourtPrice(recommendedCourt) * durationHours)} kr
+                      </span>
+                    </div>
                   </div>
                 </button>
               )}
 
               <button
                 type="button"
-                onClick={() => setShowCourtList((value) => !value)}
-                className={`w-full rounded-3xl p-4 text-left border transition-all active:scale-[0.99] ${
-                  showCourtList || selectedCourts.length > 1
-                    ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
-                    : "bg-white text-[#111] border-neutral-200"
-                }`}
+                onClick={() => setShowCourtList(true)}
+                className="w-full px-1 py-3 text-left active:scale-[0.99] transition-transform"
+                style={{ fontFamily: FONT_MONO }}
               >
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <p
-                      className="text-[16px] font-bold leading-tight"
-                      style={{ fontFamily: FONT_GROTESK }}
-                    >
-                      Välj exakt {sportCourtLabel}
-                    </p>
-                    <p
-                      className="text-[12px] text-current opacity-55 mt-1 truncate"
-                      style={{ fontFamily: FONT_MONO }}
-                    >
-                      {selectedCourtObjects.length > 0 ? selectedCourtNames : `${availableSportCourts.length} lediga`}
-                    </p>
-                  </div>
-                  <span className="text-[20px] leading-none">›</span>
-                </div>
+                <span className="text-[12px] text-neutral-500 underline underline-offset-4">
+                  Välj exakt {sportCourtLabel} →
+                </span>
+                <span className="ml-2 text-[11px] text-neutral-400">
+                  {availableSportCourts.length} lediga
+                </span>
               </button>
-
-              {showCourtList && (
-                sportCourts.length === 0 ? (
-                  <p
-	                    className="text-[13px] text-neutral-400 text-center py-4"
-                    style={{ fontFamily: FONT_MONO }}
-                  >
-                    inga {sportCourtLabel} upplagda
-                  </p>
-                ) : (
-                  <div className={sportFilter === "dart" ? "grid grid-cols-3 gap-1.5" : "grid grid-cols-2 gap-1.5"}>
-                    {sportCourts.map((court) => {
-                      const available = courtAvailability[court.id] !== false;
-                      const selected = selectedCourts.includes(court.id);
-                      const basePrice = getCourtPrice(court);
-                      const memberPrice = getMemberCourtPrice(court);
-                      const hasDiscount = memberPrice < basePrice;
-                      return (
-                        <button
-                          key={court.id}
-                          type="button"
-                          disabled={!available}
-                          onClick={() => available && toggleCourt(court.id)}
-	                          className={`relative min-h-[58px] px-3 py-2.5 rounded-xl border text-left transition-all ${
-	                            !available
-	                              ? "opacity-35 bg-white border-neutral-200 cursor-not-allowed"
-	                              : selected
-	                              ? "bg-neutral-950 text-[#fffaf0] border-neutral-950 shadow-sm"
-	                              : "bg-white text-neutral-700 border-neutral-200 active:scale-[0.98]"
-	                          }`}
-                        >
-                          <p
-                            className="text-[11px] font-bold leading-tight"
-                            style={{ fontFamily: FONT_GROTESK }}
-                          >
-                            {court.name}
-                          </p>
-                          <div
-                            className={`text-[10px] mt-1 flex items-center gap-1 ${
-	                              selected ? "text-white/60" : "text-neutral-400"
-                            }`}
-                            style={{ fontFamily: FONT_MONO }}
-                          >
-                            {hasDiscount && (
-                              <span className="line-through opacity-60">{basePrice} kr/h</span>
-                            )}
-                            <span className={hasDiscount ? (selected ? "text-emerald-200" : "text-emerald-600") : undefined}>
-                              {memberPrice} kr/h
-                            </span>
-                          </div>
-                          {!available && (
-                            <span
-	                              className="text-[8px] text-neutral-400 mt-0.5 block"
-                              style={{ fontFamily: FONT_MONO }}
-                            >
-                              bokad
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )
-              )}
             </div>
           )}
 
@@ -1091,6 +1032,63 @@ export default function BookingPage() {
 	          )}
         </form>
       )}
+      <Drawer open={showCourtList} onOpenChange={setShowCourtList}>
+        <DrawerContent className="max-h-[82vh] rounded-t-[28px] border-0 bg-[#f7f4ee] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+18px)]">
+          <DrawerHeader className="px-1 pb-3 pt-4 text-left">
+            <DrawerTitle className="text-[22px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+              Välj exakt {sportCourtLabel}
+            </DrawerTitle>
+            <p className="text-[12px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+              {availableSportCourts.length} lediga · {selectedTime}-{selectedEndTime}
+            </p>
+          </DrawerHeader>
+          {availableSportCourts.length === 0 ? (
+            <p className="px-1 py-8 text-center text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+              inga lediga {sportCourtLabel}
+            </p>
+          ) : (
+            <div className="grid gap-2 overflow-y-auto pb-2">
+              {availableSportCourts.map((court) => {
+                const selected = selectedCourts.includes(court.id);
+                const basePrice = getCourtPrice(court);
+                const memberPrice = getMemberCourtPrice(court);
+                const hasDiscount = memberPrice < basePrice;
+                return (
+                  <button
+                    key={court.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCourts([court.id]);
+                      setShowCourtList(false);
+                    }}
+                    className={`rounded-2xl border px-4 py-3 text-left transition-all active:scale-[0.99] ${
+                      selected
+                        ? "border-neutral-950 bg-neutral-950 text-[#fffaf0]"
+                        : "border-neutral-200 bg-white text-neutral-950"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-[15px] font-bold" style={{ fontFamily: FONT_GROTESK }}>{court.name}</p>
+                        <p className={`mt-0.5 text-[11px] ${selected ? "text-white/55" : "text-neutral-400"}`} style={{ fontFamily: FONT_MONO }}>
+                          {selectedTime}-{selectedEndTime} · {selectedDuration} min
+                        </p>
+                      </div>
+                      <div className="text-right text-[12px]" style={{ fontFamily: FONT_MONO }}>
+                        {hasDiscount && <p className="line-through opacity-50">{basePrice} kr/h</p>}
+                        <p className={hasDiscount ? (selected ? "text-emerald-200" : "text-emerald-600") : undefined}>
+                          {memberPrice} kr/h
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </DrawerContent>
+      </Drawer>
+
       <PlayerNav />
     </div>
   );
