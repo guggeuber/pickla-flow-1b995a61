@@ -2,6 +2,132 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+async function sendGroupInquiryEmail({
+  to,
+  name,
+  venueName,
+  typeLabel,
+  preferredDate,
+  preferredTime,
+  participants,
+}: {
+  to: string | null;
+  name: string;
+  venueName: string;
+  typeLabel: string;
+  preferredDate: string | null;
+  preferredTime: string;
+  participants: number;
+}) {
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  if (!resendKey || !to) return;
+
+  const html = `
+    <div style="font-family:Inter,Arial,sans-serif;color:#111827;line-height:1.5">
+      <h1 style="font-size:26px;margin:0 0 12px">Vi har fått din förfrågan</h1>
+      <p style="margin:0 0 16px">Hej ${name}, tack! Vi har tagit emot din gruppbokning hos ${venueName}.</p>
+      <div style="border:1px solid #e5e7eb;border-radius:18px;padding:18px;background:#fafafa">
+        <p style="margin:0 0 8px"><strong>Typ:</strong> ${typeLabel}</p>
+        <p style="margin:0 0 8px"><strong>Antal:</strong> ${participants} personer</p>
+        <p style="margin:0 0 8px"><strong>Datum:</strong> ${preferredDate || 'Flexibelt'}</p>
+        <p style="margin:0"><strong>Tid:</strong> ${preferredTime || 'Flexibelt'}</p>
+      </div>
+      <p style="margin:16px 0 0">Vi återkommer med upplägg, tider och offert.</p>
+      <p style="margin:18px 0 0;color:#6b7280;font-size:13px">Pickla</p>
+    </div>
+  `;
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${resendKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: 'Pickla <hello@playpickla.com>',
+      to,
+      subject: `Vi har fått din förfrågan till ${venueName}`,
+      html,
+    }),
+  });
+
+  if (!res.ok) {
+    console.error('Resend group inquiry email failed:', await res.text());
+  }
+}
+
+async function createInquiryRoom({
+  client,
+  venueId,
+  eventId,
+  title,
+  subtitle,
+  message,
+}: {
+  client: any;
+  venueId: string;
+  eventId: string;
+  title: string;
+  subtitle: string;
+  message: string;
+}) {
+  const { data: existingRoom } = await client.from('chat_rooms')
+    .select('id')
+    .eq('resource_id', eventId)
+    .maybeSingle();
+
+  const roomResult = existingRoom?.id
+    ? await client.from('chat_rooms')
+        .update({ title, subtitle, updated_at: new Date().toISOString() })
+        .eq('id', existingRoom.id)
+        .select('id')
+        .maybeSingle()
+    : await client.from('chat_rooms')
+        .insert({
+          venue_id: venueId,
+          resource_id: eventId,
+          room_type: 'event',
+          title,
+          subtitle,
+          emoji: '📩',
+          is_public: false,
+        })
+        .select('id')
+        .maybeSingle();
+
+  const room = roomResult.data;
+  const roomErr = roomResult.error;
+
+  if (roomErr || !room?.id) {
+    console.error('Failed to create inquiry room:', roomErr?.message);
+    return null;
+  }
+
+  await client.from('chat_messages').insert({
+    room_id: room.id,
+    user_id: null,
+    message_type: 'bot',
+    content: message,
+    metadata: { source: 'group_inquiry', event_id: eventId },
+  });
+
+  const { data: staff } = await client.from('venue_staff')
+    .select('user_id')
+    .eq('venue_id', venueId)
+    .eq('is_active', true);
+
+  const participants = (staff || [])
+    .map((row: any) => row.user_id)
+    .filter(Boolean)
+    .map((userId: string) => ({ room_id: room.id, user_id: userId }));
+
+  if (participants.length) {
+    await client.from('chat_participants').upsert(participants, { onConflict: 'room_id,user_id' });
+  }
+
+  return room.id;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -185,7 +311,7 @@ Deno.serve(async (req) => {
       const cleanNotes = notes ? String(notes).trim().slice(0, 1200) : '';
 
       const { data: venue, error: venueErr } = await client.from('venues')
-        .select('id, name')
+        .select('id, name, email')
         .eq('slug', slug)
         .eq('is_public', true)
         .maybeSingle();
@@ -201,7 +327,7 @@ Deno.serve(async (req) => {
         cleanNotes ? `Övrigt: ${cleanNotes}` : null,
       ].filter(Boolean).join('\n');
 
-      const { data: event, error: insertErr } = await client.from('events').insert({
+      const eventPayload = {
         venue_id: venue.id,
         name: `${typeLabel} · ${cleanName}`,
         display_name: `${typeLabel} · ${participantCount} pers`,
@@ -225,11 +351,39 @@ Deno.serve(async (req) => {
         partner_notes: partnerNotes,
         internal_notes: cleanNotes || null,
         resources: resourceList,
-      }).select('id').single();
+      };
+
+      let { data: event, error: insertErr } = await client.from('events').insert(eventPayload).select('id').single();
+
+      if (insertErr && insertErr.message?.includes('invalid input value for enum event_format')) {
+        const fallbackPayload = { ...eventPayload, format: 'team_vs_team' };
+        const fallback = await client.from('events').insert(fallbackPayload).select('id').single();
+        event = fallback.data;
+        insertErr = fallback.error;
+      }
 
       if (insertErr) return errorResponse(insertErr.message, 500);
 
-      return jsonResponse({ success: true, event_id: event.id }, 201);
+      const roomId = await createInquiryRoom({
+        client,
+        venueId: venue.id,
+        eventId: event.id,
+        title: `${typeLabel} · ${cleanName}`,
+        subtitle: `${participantCount} pers · ${requestedDate || 'datum flexibelt'}`,
+        message: partnerNotes,
+      });
+
+      await sendGroupInquiryEmail({
+        to: cleanEmail,
+        name: cleanName,
+        venueName: venue.name || 'Pickla',
+        typeLabel,
+        preferredDate: requestedDate,
+        preferredTime: timeLabel,
+        participants: participantCount,
+      }).catch((err) => console.error('Confirmation email failed:', err?.message || err));
+
+      return jsonResponse({ success: true, event_id: event.id, room_id: roomId }, 201);
     }
 
     // POST /api-event-public/register — register a player + auto-create account

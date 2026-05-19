@@ -63,6 +63,20 @@ export default function GroupBookingPage() {
     () => GROUP_TYPES.find((type) => type.value === eventType)?.label || "Grupp",
     [eventType],
   );
+  const quickDates = useMemo(() => {
+    const base = DateTime.now().setZone("Europe/Stockholm").startOf("day");
+    return Array.from({ length: 6 }, (_, index) => {
+      const date = base.plus({ days: index });
+      return {
+        value: date.toISODate() || "",
+        label: index === 0 ? "Idag" : index === 1 ? "Imorgon" : date.setLocale("sv").toFormat("EEE"),
+        day: date.toFormat("d/M"),
+      };
+    });
+  }, []);
+  const selectedDateLabel = preferredDate
+    ? DateTime.fromISO(preferredDate).setLocale("sv").toFormat("d MMM yyyy")
+    : "Datum flexibelt";
 
   const inquiryMutation = useMutation({
     mutationFn: () => apiPost("api-event-public", "group-inquiry", {
@@ -144,6 +158,18 @@ export default function GroupBookingPage() {
 
         <section className="rounded-[28px] bg-white p-5 shadow-sm ring-1 ring-black/5">
           <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+            skapa något tillsammans
+          </p>
+          <p className="mt-3 text-[18px] font-bold leading-snug" style={{ fontFamily: FONT_GROTESK }}>
+            Berätta ungefär vad ni vill göra, så bygger vi ett upplägg med aktivitet, mat, yta och personal.
+          </p>
+          <p className="mt-3 text-[13px] leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            Det här är en förfrågan, inte en bindande bokning. Vi återkommer med tider, pris och förslag.
+          </p>
+        </section>
+
+        <section className="rounded-[28px] bg-white p-5 shadow-sm ring-1 ring-black/5">
+          <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
             Vad vill ni göra?
           </p>
           <div className="mt-4 grid grid-cols-2 gap-2">
@@ -188,14 +214,34 @@ export default function GroupBookingPage() {
           <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
             När passar det?
           </p>
-          <input
-            value={preferredDate}
-            onChange={(event) => setPreferredDate(event.target.value)}
-            min={today}
-            type="date"
-            className="mt-4 h-16 w-full rounded-2xl border border-neutral-200 bg-[#f7f4ee] px-4 text-[26px] outline-none"
-            style={{ fontFamily: FONT_MONO }}
-          />
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {quickDates.map((date) => {
+              const active = preferredDate === date.value;
+              return (
+                <button
+                  key={date.value}
+                  type="button"
+                  onClick={() => setPreferredDate(date.value)}
+                  className="rounded-2xl px-3 py-3 text-left transition-transform active:scale-[0.98]"
+                  style={{ background: active ? "#111" : "#f7f4ee", color: active ? "#fff" : "#111" }}
+                >
+                  <p className="text-[9px] uppercase tracking-wide opacity-60" style={{ fontFamily: FONT_MONO }}>{date.label}</p>
+                  <p className="mt-1 text-[20px] leading-none" style={{ fontFamily: FONT_MONO }}>{date.day}</p>
+                </button>
+              );
+            })}
+          </div>
+          <label className="mt-3 flex h-14 items-center justify-between rounded-2xl border border-neutral-200 bg-[#f7f4ee] px-4 py-3">
+            <span className="text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>Annat datum</span>
+            <input
+              value={preferredDate}
+              onChange={(event) => setPreferredDate(event.target.value)}
+              min={today}
+              type="date"
+              className="max-w-[145px] bg-transparent text-right text-[13px] outline-none"
+              style={{ fontFamily: FONT_MONO }}
+            />
+          </label>
           <div className="mt-4 grid grid-cols-2 gap-2">
             {TIME_OPTIONS.map((option) => (
               <button
@@ -212,6 +258,17 @@ export default function GroupBookingPage() {
                 {option.label}
               </button>
             ))}
+          </div>
+        </section>
+
+        <section className="rounded-[28px] bg-white p-5 shadow-sm ring-1 ring-black/5">
+          <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+            Bra att veta
+          </p>
+          <div className="mt-4 space-y-3 text-[13px] leading-relaxed text-neutral-600" style={{ fontFamily: FONT_MONO }}>
+            <p>• Ni behöver inte veta exakt bana, schema eller format nu.</p>
+            <p>• Vi kan kombinera spel, turnering, mat, dryck, lounge och instruktör.</p>
+            <p>• Förfrågan hamnar hos vårt team som återkommer med ett konkret upplägg.</p>
           </div>
         </section>
 
@@ -277,7 +334,7 @@ export default function GroupBookingPage() {
             {selectedTypeLabel} · {participants} pers
           </p>
           <p className="mt-1 text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-            {preferredDate} · {TIME_OPTIONS.find((option) => option.value === preferredTime)?.label}
+            {selectedDateLabel} · {TIME_OPTIONS.find((option) => option.value === preferredTime)?.label}
           </p>
           <button
             type="submit"

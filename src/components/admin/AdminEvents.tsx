@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, CalendarDays, Columns3, Presentation, Users, LayoutGrid, UserRoundCheck, Share2 } from "lucide-react";
+import { Loader2, Plus, ChevronRight, Trash2, Tag, Copy, ExternalLink, Upload, X, FileText, CalendarDays, Columns3, Presentation, Users, LayoutGrid, UserRoundCheck, Share2, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { useNavigate } from "react-router-dom";
 
 interface EventRow {
   id: string;
@@ -293,8 +294,8 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
       setExpectedParticipants(""); setOwnerName(""); setPartnerNotes(""); setInternalNotes("");
       setResourcesText(""); setStaffing("");
       onCreated();
-    } catch (e: any) {
-      toast.error(e.message);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte skapa event");
     } finally {
       setIsPending(false);
     }
@@ -554,8 +555,20 @@ function CreateEventDialog({ venueId, onCreated, categories }: { venueId: string
 /* ── Event Detail Editor ── */
 function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; venueId: string; onBack: () => void; categories: CategoryOption[] }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { data: venueCourts } = useVenueCourts(venueId);
+  const { data: eventRoom } = useQuery({
+    queryKey: ["event-chat-room", event.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("chat_rooms")
+        .select("id")
+        .eq("resource_id", event.id)
+        .maybeSingle();
+      return data;
+    },
+  });
   const [showOnSticker, setShowOnSticker] = useState(event.show_on_sticker);
   const [isPublic, setIsPublic] = useState(event.is_public !== false);
   const [displayName, setDisplayName] = useState(event.display_name || "");
@@ -634,8 +647,8 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
       const url = urlData.publicUrl + `?t=${Date.now()}`;
       setLogoUrl(url);
       toast.success("Logga uppladdad!");
-    } catch (err: any) {
-      toast.error(err.message || "Uppladdning misslyckades");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Uppladdning misslyckades");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -692,8 +705,8 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
       });
       toast.success("Event uppdaterat!");
       qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
-    } catch (e: any) {
-      toast.error(e.message);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte uppdatera event");
     } finally {
       setSaving(false);
     }
@@ -706,8 +719,8 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
       toast.success("Event borttaget");
       qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
       onBack();
-    } catch (e: any) {
-      toast.error(e.message);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte ta bort event");
     }
   };
 
@@ -731,6 +744,16 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
             </a>
           </Button>
         </div>
+        {eventRoom?.id && (
+          <Button
+            variant="outline"
+            className="mt-3 w-full justify-start gap-2"
+            onClick={() => navigate(`/chat/${eventRoom.id}`)}
+          >
+            <MessageSquare className="w-4 h-4" />
+            Öppna konversation
+          </Button>
+        )}
       </div>
 
       {/* Logo upload */}
@@ -1101,8 +1124,8 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
       } catch {
         toast.success("Möteslänk skapad. Länken visas nedan.");
       }
-    } catch (e: any) {
-      toast.error(e.message || "Kunde inte skapa möteslänk");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte skapa möteslänk");
     } finally {
       setCreatingShareLink(false);
     }
