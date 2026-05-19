@@ -25,10 +25,13 @@ type SportFilter = "pickleball" | "dart";
 type TimePeriod = "MORGON" | "LUNCH" | "EFTERMIDDAG" | "KVÄLL";
 const PERIOD_OPTIONS: TimePeriod[] = ["MORGON", "LUNCH", "EFTERMIDDAG", "KVÄLL"];
 
-function generateDates(count = 14) {
+function getStockholmTodayDate() {
+  return DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate();
+}
+
+function generateDates(startDate: Date, count = 7) {
   const dates: Date[] = [];
-  const today = DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate();
-  for (let i = 0; i < count; i++) dates.push(addDays(today, i));
+  for (let i = 0; i < count; i++) dates.push(addDays(startDate, i));
   return dates;
 }
 
@@ -158,15 +161,15 @@ export default function BookingPage() {
   const { user } = useAuth();
   const requestedSport: SportFilter = searchParams.get("sport") === "dart" ? "dart" : "pickleball";
 
-  const [selectedDate, setSelectedDate] = useState(() =>
-    DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate()
-  );
+  const [availabilityStartDate, setAvailabilityStartDate] = useState(() => getStockholmTodayDate());
+  const [selectedDate, setSelectedDate] = useState(() => getStockholmTodayDate());
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [selectedDuration, setSelectedDuration] = useState(60);
   const [selectedCourts, setSelectedCourts] = useState<string[]>([]);
   const [sportFilter, setSportFilter] = useState<SportFilter>(requestedSport);
   const [showCourtList, setShowCourtList] = useState(false);
   const [showTimeList, setShowTimeList] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>("EFTERMIDDAG");
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
@@ -208,6 +211,7 @@ export default function BookingPage() {
 
   const dateStr = format(selectedDate, "yyyy-MM-dd");
   const todayStr = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
+  const availabilityStartStr = format(availabilityStartDate, "yyyy-MM-dd");
   const durationHours = selectedDuration / 60;
   const selectedEndTime = selectedTime ? addMinutesToTime(selectedTime, selectedDuration) : null;
 
@@ -216,7 +220,9 @@ export default function BookingPage() {
     const todayStart = DateTime.now().setZone("Europe/Stockholm").startOf("day");
     const selStart = DateTime.fromJSDate(selectedDate).setZone("Europe/Stockholm").startOf("day");
     if (selStart < todayStart) {
-      setSelectedDate(todayStart.toJSDate());
+      const todayDate = todayStart.toJSDate();
+      setAvailabilityStartDate(todayDate);
+      setSelectedDate(todayDate);
       setSelectedTime(null);
       setSelectedCourts([]);
     }
@@ -228,7 +234,7 @@ export default function BookingPage() {
     setShowCourtList(false);
   }, [requestedSport]);
 
-  const dates = useMemo(() => generateDates(), []);
+  const dates = useMemo(() => generateDates(availabilityStartDate, 7), [availabilityStartDate]);
 
   // Fetch corporate packages for logged-in user
   const { data: corpData } = useQuery({
@@ -251,11 +257,11 @@ export default function BookingPage() {
 
   // Fetch courts + a week of availability so date changes feel instant.
   const { data, isLoading } = useQuery({
-    queryKey: ["public-courts-week", slug, todayStr],
+    queryKey: ["public-courts-week", slug, availabilityStartStr],
     staleTime: 10000,
     queryFn: async () => {
       const res = await fetch(
-        `${BASE_URL}/api-bookings/public-courts?slug=${slug}&date=${todayStr}&days=7`
+        `${BASE_URL}/api-bookings/public-courts?slug=${slug}&date=${availabilityStartStr}&days=7`
       );
       if (!res.ok) throw new Error("Kunde inte hämta banor");
       return res.json();
@@ -460,6 +466,15 @@ export default function BookingPage() {
     setSearchParams(nextParams, { replace: true });
   };
 
+  const selectDateRange = (date: Date) => {
+    const nextDate = DateTime.fromJSDate(date).setZone("Europe/Stockholm").startOf("day").toJSDate();
+    setAvailabilityStartDate(nextDate);
+    setSelectedDate(nextDate);
+    setSelectedTime(null);
+    setSelectedCourts([]);
+    setShowDatePicker(false);
+  };
+
   const baseTotalPrice = useMemo(() => {
     return selectedCourts.reduce((sum, id) => {
       const court = courts.find((c) => c.id === id);
@@ -492,6 +507,12 @@ export default function BookingPage() {
       ? "Imorgon"
       : format(selectedDate, "EEEE", { locale: sv });
   const canSubmitBooking = Boolean(hasContactDetails && selectedTime && selectedEndTime && selectedCourts.length);
+  const isViewingTodayRange = availabilityStartStr === todayStr;
+  const todayLuxon = DateTime.now().setZone("Europe/Stockholm").startOf("day");
+  const nextWeekDate = todayLuxon.plus({ days: 7 }).toJSDate();
+  const twoWeeksDate = todayLuxon.plus({ days: 14 }).toJSDate();
+  const daysUntilSaturday = ((6 - todayLuxon.weekday + 7) % 7) || 7;
+  const nextWeekendDate = todayLuxon.plus({ days: daysUntilSaturday }).toJSDate();
 
   const bookingMode: BookingMode = useCorporate || baseTotalPrice === 0 ? "direct" : "stripe";
 
@@ -684,7 +705,12 @@ export default function BookingPage() {
               <div className="flex gap-2">
               {dates.slice(0, 7).map((date, index) => {
                 const isSelected = date.toDateString() === selectedDate.toDateString();
-                const label = index === 0 ? "Idag" : index === 1 ? "Imorgon" : format(date, "EEE", { locale: sv });
+                const dateKey = format(date, "yyyy-MM-dd");
+                const label = dateKey === todayStr
+                  ? "Idag"
+                  : dateKey === DateTime.now().setZone("Europe/Stockholm").plus({ days: 1 }).toISODate()
+                  ? "Imorgon"
+                  : format(date, "EEE", { locale: sv });
                 return (
                   <button
                     key={date.toISOString()}
@@ -707,8 +733,31 @@ export default function BookingPage() {
                   </button>
                 );
               })}
+                <button
+                  type="button"
+                  onClick={() => setShowDatePicker(true)}
+                  className="min-w-[116px] rounded-2xl border border-dashed border-neutral-300 bg-white px-3 py-3 text-left text-neutral-950 transition-transform active:scale-[0.98]"
+                >
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                    Mer
+                  </p>
+                  <p className="mt-1 text-[16px] leading-none" style={{ fontFamily: FONT_MONO }}>
+                    Välj datum
+                  </p>
+                </button>
               </div>
             </div>
+
+            {!isViewingTodayRange && (
+              <button
+                type="button"
+                onClick={() => selectDateRange(getStockholmTodayDate())}
+                className="rounded-full bg-white px-4 py-2 text-[11px] text-neutral-500 shadow-sm"
+                style={{ fontFamily: FONT_MONO }}
+              >
+                Till idag
+              </button>
+            )}
 
             <div className="min-h-[520px] rounded-[32px] border border-neutral-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
               <div className="flex items-start justify-between gap-4">
@@ -967,6 +1016,59 @@ export default function BookingPage() {
 
         </form>
       )}
+
+      <Drawer open={showDatePicker} onOpenChange={setShowDatePicker}>
+        <DrawerContent className="rounded-t-[28px] border-0 bg-[#f7f4ee] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+18px)]">
+          <DrawerHeader className="px-1 pb-3 pt-4 text-left">
+            <DrawerTitle className="text-[22px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+              Välj datum
+            </DrawerTitle>
+            <p className="text-[12px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+              Vi hämtar 7 dagar från valt datum.
+            </p>
+          </DrawerHeader>
+
+          <div className="grid gap-3 pb-2">
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: "Nästa vecka", date: nextWeekDate },
+                { label: "Om 2 veckor", date: twoWeeksDate },
+                { label: "Nästa helg", date: nextWeekendDate },
+              ].map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={() => selectDateRange(option.date)}
+                  className="rounded-2xl bg-white px-3 py-4 text-left shadow-sm active:scale-[0.98]"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  <p className="text-[11px] font-bold text-neutral-950">{option.label}</p>
+                  <p className="mt-1 text-[18px] leading-none text-neutral-950">
+                    {format(option.date, "d/M")}
+                  </p>
+                </button>
+              ))}
+            </div>
+
+            <label className="mt-2 grid gap-2 text-[11px] font-bold uppercase tracking-widest text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+              Exakt datum
+              <input
+                type="date"
+                min={todayStr}
+                value={dateStr}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (!value) return;
+                  selectDateRange(DateTime.fromISO(value, { zone: "Europe/Stockholm" }).toJSDate());
+                }}
+                className="h-14 rounded-2xl border border-neutral-200 bg-white px-4 text-[16px] text-neutral-950 outline-none focus:border-neutral-950"
+                style={{ fontFamily: FONT_MONO }}
+              />
+            </label>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
       <Drawer open={showTimeList} onOpenChange={setShowTimeList}>
         <DrawerContent className="max-h-[82vh] rounded-t-[28px] border-0 bg-[#f7f4ee] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+18px)]">
           <DrawerHeader className="px-1 pb-3 pt-4 text-left">
