@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { CalendarDays, Clock3, Loader2, MessageCircle, Ticket, Zap } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { PlayerNav } from "@/components/PlayerNav";
@@ -12,15 +12,15 @@ import {
   groupBookingRows,
 } from "@/lib/bookingGroups";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
-const PAGE_BG = "#f6d7dc";
-const CARD = "#fffaf9";
-const TEXT = "#111827";
-const MUTED = "#6b7280";
-const NAVY = "#1a1f3a";
-const RED = "#cc2936";
-const GREEN = "#15803d";
-const BORDER = "rgba(17,24,39,0.09)";
+const PAGE_BG = "#fffaf7";
+const SOFT = "#f4f0ee";
+const TEXT = "#111111";
+const MUTED = "#76716f";
+const PINK = "#ed3f8f";
+const GREEN = "#32ef87";
+const BORDER = "rgba(17,17,17,0.07)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 const DAYS_AHEAD = 7;
@@ -35,17 +35,18 @@ type FeedItem = {
   category: string;
   status: string;
   spotsLeft?: number | null;
-  totalSpots?: number | null;
-  courtLabel?: string;
   href: string;
   cta: string;
   isMine?: boolean;
 };
 
-function dayLabel(date: DateTime, now: DateTime) {
-  if (date.hasSame(now, "day")) return "Idag";
-  if (date.hasSame(now.plus({ days: 1 }), "day")) return "Imorgon";
-  return date.setLocale("sv").toFormat("cccc d MMM");
+function sectionLabel(date: DateTime, now: DateTime) {
+  const prefix = date.hasSame(now, "day")
+    ? "IDAG"
+    : date.hasSame(now.plus({ days: 1 }), "day")
+      ? "IMORGON"
+      : date.setLocale("sv").toFormat("cccc").toUpperCase();
+  return `${prefix} ${date.toFormat("d/M")}`;
 }
 
 function useVenue(slug: string) {
@@ -58,6 +59,26 @@ function useVenue(slug: string) {
         .eq("slug", slug)
         .maybeSingle();
       return data;
+    },
+  });
+}
+
+function useVenueOpenStatus(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["today-open-status", venueId],
+    enabled: !!venueId,
+    staleTime: 60000,
+    queryFn: async () => {
+      const now = DateTime.now().setZone("Europe/Stockholm");
+      const { data } = await supabase
+        .from("opening_hours")
+        .select("day_of_week, open_time, close_time, is_closed")
+        .eq("venue_id", venueId!)
+        .eq("day_of_week", now.weekday % 7)
+        .maybeSingle();
+      if (!data || data.is_closed) return { open: false };
+      const nowTime = now.toFormat("HH:mm");
+      return { open: nowTime >= String(data.open_time).slice(0, 5) && nowTime < String(data.close_time).slice(0, 5) };
     },
   });
 }
@@ -77,14 +98,14 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const [sessionsRes, eventsRes, bookingsRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, price_sek, capacity, product_key")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")
           .order("start_time", { ascending: true }),
         supabase
           .from("events")
-          .select("id, name, display_name, slug, category, status, start_date, end_date, start_time, end_time")
+          .select("id, name, display_name, slug, category, status, start_date, start_time, end_time")
           .eq("venue_id", venueId!)
           .eq("is_public", true)
           .in("status", ["upcoming", "active", "live"])
@@ -103,7 +124,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           : Promise.resolve({ data: [] as any[], error: null }),
       ]);
 
-      const sessionOccurrences: Array<any> = [];
+      const sessionOccurrences: any[] = [];
       for (const session of sessionsRes.data || []) {
         if (session.session_date) {
           const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
@@ -114,8 +135,9 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         }
         for (let offset = 0; offset < DAYS_AHEAD; offset++) {
           const date = now.plus({ days: offset });
-          if (!(session.recurrence_days || []).includes(date.weekday % 7)) continue;
-          sessionOccurrences.push({ ...session, occurrence_date: date.toISODate() });
+          if ((session.recurrence_days || []).includes(date.weekday % 7)) {
+            sessionOccurrences.push({ ...session, occurrence_date: date.toISODate() });
+          }
         }
       }
 
@@ -147,9 +169,8 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           startTime: String(session.start_time).slice(0, 5),
           endTime: String(session.end_time).slice(0, 5),
           category: session.session_type === "open_play" ? "Open Play" : session.session_type === "group_training" ? "Träning" : session.session_type || "Pass",
-          status: capacity && count >= capacity ? "Full" : "Öppen",
+          status: capacity && count >= capacity ? "Full" : "Drop-in",
           spotsLeft: capacity ? Math.max(capacity - count, 0) : null,
-          totalSpots: capacity || null,
           href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
           cta: capacity && count >= capacity ? "Visa" : "Anmäl",
         };
@@ -179,8 +200,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           startTime: start.toFormat("HH:mm"),
           endTime: end.toFormat("HH:mm"),
           category: "Min bokning",
-          status: booking.status === "confirmed" ? "Bekräftad" : "Väntande",
-          courtLabel: getBookingCourtLabel(booking),
+          status: booking.status === "confirmed" ? "Bokad" : "Väntar",
           href: `/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}?v=${slug}`,
           cta: "Öppna",
           isMine: true,
@@ -194,54 +214,32 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
   });
 }
 
-function ItemCard({ item, now }: { item: FeedItem; now: DateTime }) {
+function FeedRow({ item, now, highlight }: { item: FeedItem; now: DateTime; highlight: boolean }) {
   const navigate = useNavigate();
-  const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
   const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
-  const isLive = start <= now && !!end && end >= now;
   const isPast = !!end && end < now;
-  const isFeatured = isLive || item.isMine;
-  const chips = [
-    item.category,
-    item.spotsLeft != null ? (item.spotsLeft === 0 ? "Full" : `${item.spotsLeft} platser kvar`) : null,
-    item.courtLabel,
-  ].filter(Boolean);
+  const meta = item.spotsLeft != null
+    ? item.spotsLeft === 0 ? "Full" : `${item.spotsLeft} kvar`
+    : item.status;
 
   return (
     <button
       type="button"
       onClick={() => navigate(item.href)}
-      className="w-full text-left active:scale-[0.99] transition-transform"
+      className="grid w-full grid-cols-[64px_1fr_auto] items-center gap-2 px-3 py-3 text-left transition-transform active:scale-[0.99]"
       style={{
-        background: CARD,
-        border: `1px solid ${isLive ? "rgba(204,41,54,0.34)" : BORDER}`,
-        borderRadius: isFeatured ? 22 : 16,
-        padding: isFeatured ? 16 : 13,
-        opacity: isPast ? 0.58 : 1,
-        boxShadow: isFeatured ? "0 14px 34px rgba(17,24,39,0.08)" : "none",
+        background: highlight ? GREEN : SOFT,
+        color: TEXT,
+        opacity: isPast || item.status === "Full" ? 0.48 : 1,
+        border: `1px solid ${highlight ? "rgba(50,239,135,0.55)" : BORDER}`,
+        fontFamily: FONT_MONO,
       }}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {isLive && <span className="rounded-full px-2 py-1 text-[10px] font-black text-white" style={{ background: RED }}>Live nu</span>}
-            {chips.map((chip) => (
-              <span key={chip} className="rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: "#f1f5f9", color: MUTED }}>
-                {chip}
-              </span>
-            ))}
-          </div>
-          <p className={`${isFeatured ? "text-lg" : "text-[15px]"} font-black leading-tight`} style={{ color: TEXT, fontFamily: FONT_HEADING }}>
-            {item.title}
-          </p>
-          <p className="mt-1 flex items-center gap-1.5 text-xs" style={{ color: MUTED, fontFamily: FONT_MONO }}>
-            <Clock3 className="h-3.5 w-3.5" /> {item.startTime}{item.endTime ? `-${item.endTime}` : ""}
-          </p>
-        </div>
-        <div className="shrink-0 rounded-full px-3 py-2 text-xs font-black" style={{ background: isLive ? RED : NAVY, color: "#fff", fontFamily: FONT_HEADING }}>
-          {item.cta}
-        </div>
-      </div>
+      <span className="text-[15px]">{item.startTime}</span>
+      <span className="min-w-0 truncate text-[15px]">{item.title}</span>
+      <span className="rounded-full bg-white/65 px-2 py-1 text-[10px] font-bold text-black/55">
+        {meta}
+      </span>
     </button>
   );
 }
@@ -252,85 +250,106 @@ export default function TodayPage() {
   const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenue(slug);
+  const { data: status } = useVenueOpenStatus(venue?.id);
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const now = DateTime.now().setZone("Europe/Stockholm");
+  const liveHighlightId = items.find((item) => {
+    const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
+    const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
+    return start <= now && !!end && end >= now && item.status !== "Full";
+  })?.id;
 
-  const days = useMemo(() => {
-    return Array.from({ length: DAYS_AHEAD }, (_, offset) => {
+  const days = useMemo(() => (
+    Array.from({ length: DAYS_AHEAD }, (_, offset) => {
       const date = now.plus({ days: offset }).startOf("day");
       return {
         key: date.toISODate()!,
         date,
         items: items.filter((item) => item.date === date.toISODate()),
       };
-    });
-  }, [items, now]);
+    })
+  ), [items, now]);
 
   return (
     <div className="min-h-[100dvh] pb-28" style={{ background: PAGE_BG, color: TEXT }}>
-      <header
-        className="fixed left-0 right-0 top-0 z-20 px-5 pb-4 pt-[calc(env(safe-area-inset-top,0px)+18px)] backdrop-blur-xl"
-        style={{
-          background: "linear-gradient(180deg, rgba(246,215,220,0.98) 0%, rgba(246,215,220,0.9) 72%, rgba(246,215,220,0) 100%)",
-        }}
-      >
-        <div className="mx-auto flex max-w-md items-end justify-between gap-3">
-          <div>
-            <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
-            <p className="mt-2 text-xs font-bold" style={{ color: MUTED, fontFamily: FONT_MONO }}>{venue?.name || "Pickla"}</p>
+      <header className="px-6 pb-5 pt-[calc(env(safe-area-inset-top,0px)+34px)]">
+        <div className="mx-auto flex max-w-md items-center justify-between gap-4">
+          <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
+          <div className="flex items-center gap-1.5 text-[13px]" style={{ fontFamily: FONT_MONO }}>
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: status?.open ? GREEN : "#d1d5db" }} />
+            <span>{venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}</span>
           </div>
-          <button type="button" onClick={() => navigate(`/book?v=${slug}`)} className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-black" style={{ background: NAVY, color: "#fff", fontFamily: FONT_HEADING }}>
-            <Zap className="h-4 w-4" /> Boka
-          </button>
         </div>
       </header>
 
-      <main className="mx-auto max-w-md px-5 pt-[calc(env(safe-area-inset-top,0px)+92px)]">
-        <div className="mb-6 pt-4">
-          <h1 className="text-[32px] font-black leading-none" style={{ fontFamily: FONT_HEADING }}>Nu</h1>
-          <p className="mt-2 text-sm" style={{ color: MUTED }}>Vad som händer nu och framåt.</p>
-        </div>
-
-        {venueLoading || isLoading ? (
-          <div className="grid min-h-48 place-items-center">
-            <Loader2 className="h-6 w-6 animate-spin" style={{ color: NAVY }} />
-          </div>
-        ) : (
-          <div className="space-y-7">
-            {days.map(({ key, date, items: dayItems }) => (
-              <section key={key}>
-                <div className="mb-3 flex items-center gap-2">
-                  <CalendarDays className="h-4 w-4" style={{ color: NAVY }} />
-                  <h2 className="text-sm font-black capitalize" style={{ fontFamily: FONT_HEADING }}>{dayLabel(date, now)}</h2>
-                  <span className="text-xs" style={{ color: MUTED, fontFamily: FONT_MONO }}>{date.toFormat("d/M")}</span>
-                </div>
-
-                {dayItems.length > 0 ? (
-                  <div className="space-y-2.5">
-                    {dayItems.map((item) => <ItemCard key={item.id} item={item} now={now} />)}
-                  </div>
+      <main>
+        <section className="mx-auto max-w-md px-6">
+          <div className="flex gap-3 overflow-x-auto pb-8" style={{ scrollbarWidth: "none" }}>
+            {[
+              { label: "Boka\nPickleball", href: `/book?v=${slug}&sport=pickleball`, image: null },
+              { label: "Boka darts", href: `/book?v=${slug}&sport=dart`, image: null },
+              { label: "Boka event", href: `/book?v=${slug}`, image: weekendVibes },
+            ].map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => navigate(action.href)}
+                className="relative h-36 w-[31%] min-w-[98px] overflow-hidden rounded-md border text-left shadow-sm active:scale-[0.98]"
+                style={{ background: SOFT, borderColor: BORDER }}
+              >
+                {action.image ? (
+                  <img src={action.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
                 ) : (
-                  <div className="rounded-2xl border px-4 py-4 text-sm" style={{ borderColor: BORDER, color: MUTED, background: "rgba(255,250,249,0.62)" }}>
-                    Inget schemalagt ännu.
-                  </div>
+                  <div className="absolute inset-x-4 top-5 h-16 rounded-full bg-white/45" />
                 )}
-              </section>
+                {action.image && <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/5 to-transparent" />}
+                <span
+                  className="absolute bottom-4 left-3 right-3 whitespace-pre-line text-[16px] leading-[0.95]"
+                  style={{ color: action.image ? "#fff" : TEXT, fontFamily: FONT_HEADING }}
+                >
+                  {action.label}
+                </span>
+              </button>
             ))}
           </div>
-        )}
+        </section>
 
-        <div className="mt-8 grid grid-cols-2 gap-3">
-          <button type="button" onClick={() => navigate(`/book?v=${slug}`)} className="rounded-2xl p-4 text-left" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-            <Ticket className="mb-3 h-5 w-5" style={{ color: NAVY }} />
-            <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Boka resurs</p>
-            <p className="mt-1 text-xs" style={{ color: MUTED }}>Bana, dart eller annat.</p>
-          </button>
-          <button type="button" onClick={() => navigate(`/hub?v=${slug}`)} className="rounded-2xl p-4 text-left" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-            <MessageCircle className="mb-3 h-5 w-5" style={{ color: NAVY }} />
-            <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Öppna rum</p>
-            <p className="mt-1 text-xs" style={{ color: MUTED }}>Chattar lever kvar i rätt kontext.</p>
-          </button>
-        </div>
+        <section className="relative h-[430px] overflow-hidden">
+          <img src={weekendVibes} alt="" className="absolute inset-0 h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/42 via-transparent to-transparent" />
+          <p className="absolute bottom-7 left-6 text-[26px] text-white" style={{ fontFamily: FONT_MONO }}>
+            weekend vibes
+          </p>
+        </section>
+
+        <section className="mx-auto max-w-md px-5 pt-8">
+          {venueLoading || isLoading ? (
+            <div className="grid min-h-48 place-items-center">
+              <Loader2 className="h-6 w-6 animate-spin" style={{ color: PINK }} />
+            </div>
+          ) : (
+            <div className="space-y-9">
+              {days.map(({ key, date, items: dayItems }) => (
+                <section key={key}>
+                  <h2 className="mb-4 text-[36px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_MONO }}>
+                    {sectionLabel(date, now)}
+                  </h2>
+                  {dayItems.length > 0 ? (
+                    <div className="space-y-2">
+                      {dayItems.map((item) => (
+                        <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-3 py-3 text-[14px]" style={{ background: SOFT, color: MUTED, fontFamily: FONT_MONO }}>
+                      inget schemalagt ännu
+                    </div>
+                  )}
+                </section>
+              ))}
+            </div>
+          )}
+        </section>
       </main>
 
       <PlayerNav />

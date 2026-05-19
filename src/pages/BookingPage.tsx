@@ -49,6 +49,14 @@ function addMinutesToTime(time: string, minutesToAdd: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function getTimePeriod(time: string) {
+  const hour = Number(time.slice(0, 2));
+  if (hour < 12) return "MORGON";
+  if (hour < 17) return "DAG";
+  if (hour < 20) return "AFTER WORK";
+  return "KVÄLL";
+}
+
 interface CourtData {
   id: string;
   name: string;
@@ -287,6 +295,17 @@ export default function BookingPage() {
     });
   }, [timeSlots, dateStr, todayStr, selectedDuration, openingHours?.close_time]);
 
+  const groupedTimeSlots = useMemo(() => {
+    const groups: Record<string, string[]> = {};
+    filteredTimeSlots.forEach((slot) => {
+      const period = getTimePeriod(slot);
+      groups[period] = [...(groups[period] || []), slot];
+    });
+    return ["MORGON", "DAG", "AFTER WORK", "KVÄLL"]
+      .map((label) => ({ label, slots: groups[label] || [] }))
+      .filter((group) => group.slots.length > 0);
+  }, [filteredTimeSlots]);
+
   // When date changes: auto-select first available slot
   useEffect(() => {
     setSelectedTime(filteredTimeSlots[0] ?? null);
@@ -353,6 +372,7 @@ export default function BookingPage() {
   const sportCourtPluralLabel = sportFilter === "dart" ? "dartbord" : "banor";
   const sportTitle = sportFilter === "dart" ? "boka dart" : "boka pickleball";
   const heroTitle = sportFilter === "dart" ? "när vill du kasta?" : "när vill du spela?";
+  const anyResourceLabel = sportFilter === "dart" ? "Any dartboard" : "Any court";
   const firstAvailableCourt = availableSportCourts[0] || null;
 
   const switchSport = (sport: SportFilter) => {
@@ -574,7 +594,7 @@ export default function BookingPage() {
               </p>
             )}
           </div>
-          {/* Sport picker */}
+          {/* Activity picker */}
           <div>
 	            <h2
 	              className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
@@ -582,17 +602,18 @@ export default function BookingPage() {
             >
               aktivitet
             </h2>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5">
               {([
                 { value: "pickleball", label: "Pickleball", meta: `${sportCounts.pickleball} banor` },
                 { value: "dart", label: "Dart", meta: `${sportCounts.dart} bord` },
+                { value: "event", label: "Event", meta: "program" },
               ] as const).map((option) => {
-                const active = sportFilter === option.value;
+                const active = option.value !== "event" && sportFilter === option.value;
                 return (
                   <button
                     key={option.value}
                     type="button"
-                    onClick={() => switchSport(option.value)}
+                    onClick={() => option.value === "event" ? navigate(`/events?v=${slug}`) : switchSport(option.value)}
 	                    className={`rounded-2xl px-3 py-3 text-left border transition-all ${
 	                      active
 	                        ? "bg-neutral-950 text-[#fffaf0] border-neutral-950 shadow-sm"
@@ -707,24 +728,33 @@ export default function BookingPage() {
                   inga fler tider idag
                 </p>
               ) : (
-                <div className="grid grid-cols-5 gap-1.5">
-                  {filteredTimeSlots.map((time) => (
-                    <button
-                      key={time}
-                      type="button"
-                      onClick={() => {
-                        setSelectedTime(time);
-                        setSelectedCourts([]);
-                      }}
-	                      className={`py-2 rounded-xl text-[12px] font-bold border transition-colors ${
-	                        selectedTime === time
-	                          ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
-	                          : "bg-white text-neutral-500 border-neutral-200"
-	                      }`}
-                      style={{ fontFamily: FONT_MONO }}
-                    >
-                      {time}
-                    </button>
+                <div className="space-y-3">
+                  {groupedTimeSlots.map((group) => (
+                    <div key={group.label}>
+                      <p className="mb-1.5 text-[9px] font-bold uppercase tracking-widest text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                        {group.label}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {group.slots.map((time) => (
+                          <button
+                            key={time}
+                            type="button"
+                            onClick={() => {
+                              setSelectedTime(time);
+                              setSelectedCourts([]);
+                            }}
+                            className={`min-w-[68px] py-2.5 rounded-xl text-[12px] font-bold border transition-colors ${
+                              selectedTime === time
+                                ? "bg-neutral-950 text-[#fffaf0] border-neutral-950"
+                                : "bg-white text-neutral-500 border-neutral-200"
+                            }`}
+                            style={{ fontFamily: FONT_MONO }}
+                          >
+                            {time}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
@@ -774,7 +804,7 @@ export default function BookingPage() {
                 className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest"
                 style={{ fontFamily: FONT_MONO }}
               >
-                välj alternativ
+                bästa match
               </h2>
 
               {firstAvailableCourt && selectedEndTime && (
@@ -793,7 +823,7 @@ export default function BookingPage() {
                         className="text-[16px] font-bold leading-tight"
                         style={{ fontFamily: FONT_GROTESK }}
                       >
-                        Första bästa {sportCourtLabel}
+                        {anyResourceLabel}
                       </p>
                       <p
                         className="text-[12px] text-current opacity-55 mt-1 truncate"
@@ -827,7 +857,7 @@ export default function BookingPage() {
                       className="text-[16px] font-bold leading-tight"
                       style={{ fontFamily: FONT_GROTESK }}
                     >
-                      Välj {sportCourtLabel} själv
+                      Välj exakt {sportCourtLabel}
                     </p>
                     <p
                       className="text-[12px] text-current opacity-55 mt-1 truncate"

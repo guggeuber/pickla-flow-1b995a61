@@ -13,7 +13,7 @@ export function PlayerNav() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  const isToday = pathname.startsWith("/today") || pathname.startsWith("/activity");
+  const isToday = pathname === "/" || pathname.startsWith("/today") || pathname.startsWith("/activity");
   const isBook = pathname.startsWith("/book");
   const isMy = pathname.startsWith("/my");
 
