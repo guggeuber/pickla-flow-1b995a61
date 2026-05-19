@@ -59,7 +59,8 @@ async function createFreeEntitlementBookingResponse({
     const weekStart = now.startOf('week').toISODate()!;
     const weekEnd   = now.endOf('week').toISODate()!;
     const durationHours = parseFloat(meta.duration_hours || '0');
-    if (durationHours > 0) {
+    const courtHours = durationHours * Math.max(courtIds.length, 1);
+    if (courtHours > 0) {
       const { data: currentUsage } = await adminFree
         .from('membership_usage')
         .select('used_value')
@@ -71,7 +72,7 @@ async function createFreeEntitlementBookingResponse({
 
       await adminFree.from('membership_usage').upsert({
         user_id: entitlementUserId, venue_id, entitlement_type: 'court_hours_per_week',
-        period_start: weekStart, period_end: weekEnd, used_value: (currentUsage?.used_value || 0) + durationHours,
+        period_start: weekStart, period_end: weekEnd, used_value: (currentUsage?.used_value || 0) + courtHours,
       }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
     }
 
@@ -383,7 +384,9 @@ Deno.serve(async (req) => {
           // Founder: hard cap 4h/week — check usage
           const weekLimit = hasEnt('court_hours_per_week');
           if (weekLimit) {
-            const bookingHours = parseFloat(meta.duration_hours || '0');
+            let courtIds: string[] = [];
+            try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
+            const bookingHours = parseFloat(meta.duration_hours || '0') * Math.max(courtIds.length, 1);
             if (bookingHours > 0) {
               const now = DateTime.now().setZone('Europe/Stockholm');
               const weekStart = now.startOf('week').toISODate()!;
@@ -669,6 +672,13 @@ Deno.serve(async (req) => {
     const venueSlug = url.searchParams.get('slug');
     const date = url.searchParams.get('date'); // YYYY-MM-DD
     if (!venueSlug || !date) return errorResponse('Missing slug or date');
+    const requestedDays = Number(url.searchParams.get('days') || '1');
+    const days = Number.isFinite(requestedDays)
+      ? Math.min(Math.max(Math.floor(requestedDays), 1), 14)
+      : 1;
+    const requestedDates = Array.from({ length: days }, (_, index) =>
+      DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).plus({ days: index }).toISODate()!
+    );
 
     // showAll=true skips the is_available filter — used by the ops display screen
     const showAll = url.searchParams.get('showAll') === 'true';
@@ -689,19 +699,21 @@ Deno.serve(async (req) => {
     if (!showAll) courtQuery = courtQuery.eq('is_available', true);
     const { data: courts } = await courtQuery;
 
-    // Get opening hours for requested day
-    const dayOfWeek = new Date(date + 'T12:00:00Z').getUTCDay();
-    const { data: hours } = await admin.from('opening_hours')
-      .select('open_time, close_time, is_closed')
-      .eq('venue_id', venue.id).eq('day_of_week', dayOfWeek).maybeSingle();
+    // Get opening hours for requested day(s)
+    const { data: hoursRows } = await admin.from('opening_hours')
+      .select('day_of_week, open_time, close_time, is_closed')
+      .eq('venue_id', venue.id);
+    const hoursByDay = new Map((hoursRows || []).map((row: any) => [row.day_of_week, row]));
 
-    // Get existing bookings for the date
-    const { start, end } = stockholmDateRangeUtc(date);
+    // Get existing bookings for the requested date range
+    const { start } = stockholmDateRangeUtc(requestedDates[0]);
+    const { end } = stockholmDateRangeUtc(requestedDates[requestedDates.length - 1]);
     const { data: bookings } = await admin.from('bookings')
       .select('venue_court_id, start_time, end_time')
       .eq('venue_id', venue.id)
       .neq('status', 'cancelled')
-      .gte('start_time', start).lte('start_time', end);
+      .lt('start_time', end)
+      .gt('end_time', start);
 
     // Get active pricing rules for this venue
     const { data: pricingRules } = await admin.from('pricing_rules')
@@ -709,16 +721,43 @@ Deno.serve(async (req) => {
       .eq('venue_id', venue.id).eq('is_active', true)
       .order('price', { ascending: false });
 
+    const emptyAvailability = () => ({ openingHours: null, bookings: [] as any[] });
+    const availabilityByDate: Record<string, { openingHours: any; bookings: any[] }> = Object.fromEntries(
+      requestedDates.map((dateKey) => {
+        const dayOfWeek = new Date(dateKey + 'T12:00:00Z').getUTCDay();
+        const hours = hoursByDay.get(dayOfWeek) || null;
+        return [dateKey, {
+          openingHours: hours ? {
+            open_time: hours.open_time,
+            close_time: hours.close_time,
+            is_closed: hours.is_closed,
+          } : null,
+          bookings: [],
+        }];
+      })
+    );
+
+    for (const booking of bookings || []) {
+      const bookingDate = DateTime.fromISO(booking.start_time, { zone: 'utc' })
+        .setZone('Europe/Stockholm')
+        .toISODate()!;
+      const bucket = availabilityByDate[bookingDate] || emptyAvailability();
+      bucket.bookings.push({
+        court_id: booking.venue_court_id,
+        start: booking.start_time,
+        end: booking.end_time,
+      });
+      availabilityByDate[bookingDate] = bucket;
+    }
+
+    const selectedAvailability = availabilityByDate[date] || emptyAvailability();
     return jsonResponse({
       venue: { id: venue.id, name: venue.name },
       courts: courts || [],
-      openingHours: hours || null,
-      bookings: (bookings || []).map((b: any) => ({
-        court_id: b.venue_court_id,
-        start: b.start_time,
-        end: b.end_time,
-      })),
+      openingHours: selectedAvailability.openingHours,
+      bookings: selectedAvailability.bookings,
       pricingRules: pricingRules || [],
+      ...(days > 1 ? { availabilityByDate } : {}),
     }, 200, 10);
   }
 

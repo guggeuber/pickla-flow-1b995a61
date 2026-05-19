@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Loader2, CheckCircle2, Building2 } from "lucide-react";
+import { Loader2, CheckCircle2, Building2, Check } from "lucide-react";
 import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
@@ -87,6 +87,15 @@ interface ExistingBooking {
   court_id: string;
   start: string;
   end: string;
+}
+
+interface DayAvailability {
+  openingHours: {
+    open_time: string | null;
+    close_time: string | null;
+    is_closed: boolean | null;
+  } | null;
+  bookings: ExistingBooking[];
 }
 
 interface PricingRule {
@@ -240,12 +249,13 @@ export default function BookingPage() {
     });
   }, [corpData]);
 
-  // Fetch courts + availability
+  // Fetch courts + a week of availability so date changes feel instant.
   const { data, isLoading } = useQuery({
-    queryKey: ["public-courts", slug, dateStr],
+    queryKey: ["public-courts-week", slug, todayStr],
+    staleTime: 10000,
     queryFn: async () => {
       const res = await fetch(
-        `${BASE_URL}/api-bookings/public-courts?slug=${slug}&date=${dateStr}`
+        `${BASE_URL}/api-bookings/public-courts?slug=${slug}&date=${todayStr}&days=7`
       );
       if (!res.ok) throw new Error("Kunde inte hämta banor");
       return res.json();
@@ -253,8 +263,15 @@ export default function BookingPage() {
   });
 
   const courts = useMemo<CourtData[]>(() => data?.courts || [], [data?.courts]);
-  const openingHours = data?.openingHours;
-  const existingBookings = useMemo<ExistingBooking[]>(() => data?.bookings || [], [data?.bookings]);
+  const dayAvailability = (data?.availabilityByDate?.[dateStr] || {
+    openingHours: data?.openingHours || null,
+    bookings: data?.bookings || [],
+  }) as DayAvailability;
+  const openingHours = dayAvailability.openingHours;
+  const existingBookings = useMemo<ExistingBooking[]>(
+    () => dayAvailability.bookings || [],
+    [dayAvailability.bookings]
+  );
   const venueName = data?.venue?.name || "";
   const pricingRules = useMemo<PricingRule[]>(() => data?.pricingRules || [], [data?.pricingRules]);
 
@@ -415,6 +432,12 @@ export default function BookingPage() {
   const sportTitle = sportFilter === "dart" ? "boka dart" : "boka pickleball";
   const firstAvailableCourt = availableSportCourts[0] || null;
   const recommendedCourt = selectedCourtObjects[0] || firstAvailableCourt;
+  const selectedCourtSummary =
+    selectedCourtObjects.length === 0
+      ? `Ingen ledig ${sportCourtLabel}`
+      : selectedCourtObjects.length <= 2
+      ? selectedCourtObjects.map((court) => court.name).join(", ")
+      : `${selectedCourtObjects.length} ${sportCourtPluralLabel}`;
 
   useEffect(() => {
     if (!selectedTime || !firstAvailableCourt || selectedCourts.length > 0) return;
@@ -783,7 +806,7 @@ export default function BookingPage() {
 
                       <div className="grid grid-cols-[1fr_auto] items-center gap-4">
                         <p className="truncate text-[25px] leading-none text-neutral-950" style={{ fontFamily: FONT_MONO }}>
-                          {recommendedCourt?.name || `Ingen ledig ${sportCourtLabel}`}
+                          {selectedCourtSummary}
                         </p>
                         <button
                           type="button"
@@ -998,10 +1021,10 @@ export default function BookingPage() {
         <DrawerContent className="max-h-[82vh] rounded-t-[28px] border-0 bg-[#f7f4ee] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+18px)]">
           <DrawerHeader className="px-1 pb-3 pt-4 text-left">
             <DrawerTitle className="text-[22px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
-              Välj exakt {sportCourtLabel}
+              Välj {sportCourtPluralLabel}
             </DrawerTitle>
             <p className="text-[12px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-              {availableSportCourts.length} lediga · {selectedTime}-{selectedEndTime}
+              {availableSportCourts.length} lediga · {selectedCourts.length} valda · {selectedTime}-{selectedEndTime}
             </p>
           </DrawerHeader>
           {availableSportCourts.length === 0 ? (
@@ -1020,8 +1043,12 @@ export default function BookingPage() {
                     key={court.id}
                     type="button"
                     onClick={() => {
-                      setSelectedCourts([court.id]);
-                      setShowCourtList(false);
+                      setSelectedCourts((current) => {
+                        if (current.includes(court.id)) {
+                          return current.length === 1 ? current : current.filter((id) => id !== court.id);
+                        }
+                        return [...current, court.id];
+                      });
                     }}
                     className={`rounded-2xl border px-4 py-3 text-left transition-all active:scale-[0.99] ${
                       selected
@@ -1030,11 +1057,18 @@ export default function BookingPage() {
                     }`}
                   >
                     <div className="flex items-center justify-between gap-4">
-                      <div>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border ${
+                          selected ? "border-[#32ef87] bg-[#32ef87] text-neutral-950" : "border-neutral-200 bg-white text-transparent"
+                        }`}>
+                          <Check className="h-3.5 w-3.5" />
+                        </span>
+                        <div className="min-w-0">
                         <p className="text-[15px] font-bold" style={{ fontFamily: FONT_GROTESK }}>{court.name}</p>
                         <p className={`mt-0.5 text-[11px] ${selected ? "text-white/55" : "text-neutral-400"}`} style={{ fontFamily: FONT_MONO }}>
                           {selectedTime}-{selectedEndTime} · {selectedDuration} min
                         </p>
+                        </div>
                       </div>
                       <div className="text-right text-[12px]" style={{ fontFamily: FONT_MONO }}>
                         {hasDiscount && <p className="line-through opacity-50">{basePrice} kr/h</p>}
@@ -1046,6 +1080,15 @@ export default function BookingPage() {
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={() => setShowCourtList(false)}
+                className="sticky bottom-0 mt-3 w-full rounded-2xl bg-neutral-950 px-5 py-4 text-[13px] font-bold uppercase tracking-wider text-white shadow-[0_-12px_30px_rgba(247,244,238,0.95)] disabled:opacity-35"
+                disabled={selectedCourts.length === 0}
+                style={{ fontFamily: FONT_MONO }}
+              >
+                Klar · {selectedCourts.length} {selectedCourts.length === 1 ? sportCourtLabel : sportCourtPluralLabel}
+              </button>
             </div>
           )}
         </DrawerContent>
