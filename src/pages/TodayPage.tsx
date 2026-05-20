@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { Loader2, MapPin, X } from "lucide-react";
+import { ArrowRight, BookOpen, CalendarDays, Loader2, MapPin, Menu, UserRound, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { PlayerNav } from "@/components/PlayerNav";
@@ -39,6 +39,7 @@ type FeedItem = {
   href: string;
   cta: string;
   isMine?: boolean;
+  bookingRef?: string | null;
 };
 
 type SessionRow = {
@@ -101,6 +102,38 @@ type OpeningHour = {
   is_closed: boolean | null;
 };
 
+type GuideKey = "pickleball" | "darts" | "pickla";
+
+const GUIDES: Record<GuideKey, {
+  title: string;
+  kicker: string;
+  body: string;
+  cta: string;
+  href: (slug: string) => string;
+}> = {
+  pickleball: {
+    title: "Pickleball 101",
+    kicker: "världens snabbaste lilla racketsport",
+    body: "Pickleball är en lättstartad racketsport och en av de snabbast växande sporterna i Nordamerika och Asien. Man spelar oftast till 11 och måste vinna med 2. Bara servande lag kan ta poäng. Serven slås underhand, bakom baslinjen, diagonalt över nätet. Efter serve måste returen studsa, och sedan måste även nästa slag studsa. Därefter får man volleya, men inte stå i köket och slå volley.",
+    cta: "Boka pickleball",
+    href: (slug) => `/book?v=${slug}&sport=pickleball`,
+  },
+  darts: {
+    title: "Darts 101",
+    kicker: "tre pilar, enkel matte, mycket känsla",
+    body: "På Pickla spelar många klassisk 501: varje spelare börjar på 501 och kastar tre pilar per runda. Poängen räknas ner mot exakt 0. Vanligt upplägg är dubbel ut, alltså att sista pilen måste träffa en dubbel. Bullseye är 50, yttre bull är 25, och tripplar ger mest tryck i spelet.",
+    cta: "Boka darts",
+    href: (slug) => `/book?v=${slug}&sport=dart`,
+  },
+  pickla: {
+    title: "Pickla 101",
+    kicker: "så funkar hallen",
+    body: "Boka bana, dartbord eller ett pass i appen. Du får bokningen på Mina sidor och en fyrsiffrig kod. När du kommer till hallen checkar du in på paddan vid din resurs. För grupper och företag planerar vi upplägget tillsammans via en förfrågan.",
+    cta: "Boka aktivitet",
+    href: (slug) => `/book?v=${slug}`,
+  },
+};
+
 function sectionLabel(date: DateTime, now: DateTime) {
   const prefix = date.hasSame(now, "day")
     ? "IDAG"
@@ -159,16 +192,30 @@ function formatHour(time?: string | null) {
   return time ? String(time).slice(0, 5) : "";
 }
 
-function InfoCard({ title, body }: { title: string; body: string }) {
+function userDisplayName(user: ReturnType<typeof useAuth>["user"]) {
+  if (!user) return "";
+  const meta = user.user_metadata || {};
+  return meta.display_name || meta.full_name || meta.name || user.email || "Mitt konto";
+}
+
+function userInitial(user: ReturnType<typeof useAuth>["user"]) {
+  const name = userDisplayName(user);
+  return name ? name.trim().charAt(0).toUpperCase() : "";
+}
+
+function HeroSticker({ guideKey, onClick }: { guideKey: GuideKey; onClick: (key: GuideKey) => void }) {
+  const guide = GUIDES[guideKey];
   return (
-    <div className="rounded-[24px] border border-black/10 bg-white p-5">
-      <h3 className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-        {title}
-      </h3>
-      <p className="mt-2 text-[13px] leading-relaxed text-neutral-600" style={{ fontFamily: FONT_MONO }}>
-        {body}
+    <button
+      type="button"
+      onClick={() => onClick(guideKey)}
+      className="min-w-[118px] rounded-2xl border border-white/30 bg-white/90 px-3 py-3 text-left shadow-sm backdrop-blur active:scale-[0.98]"
+    >
+      <p className="text-[12px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>{guide.title}</p>
+      <p className="mt-1 truncate text-[9px] uppercase tracking-[0.12em] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+        läs mer
       </p>
-    </div>
+    </button>
   );
 }
 
@@ -295,6 +342,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           href: `/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}?v=${slug}`,
           cta: "Öppna",
           isMine: true,
+          bookingRef: booking.primary_booking_ref || booking.booking_ref || booking.id,
         };
       });
 
@@ -338,6 +386,8 @@ function FeedRow({ item, now, highlight }: { item: FeedItem; now: DateTime; high
 export default function TodayPage() {
   const [searchParams] = useSearchParams();
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [activeGuide, setActiveGuide] = useState<GuideKey | null>(null);
   const navigate = useNavigate();
   const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -345,6 +395,16 @@ export default function TodayPage() {
   const { data: status } = useVenueOpenStatus(venue?.id);
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const now = DateTime.now().setZone("Europe/Stockholm");
+  const menuBookings = items.filter((item) => item.kind === "booking").slice(0, 5);
+  const openGuide = (guideKey: GuideKey) => {
+    setMenuOpen(false);
+    setActiveGuide(guideKey);
+  };
+  const go = (href: string) => {
+    setMenuOpen(false);
+    setActiveGuide(null);
+    navigate(href);
+  };
   const liveHighlightId = items.find((item) => {
     const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
     const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
@@ -364,17 +424,32 @@ export default function TodayPage() {
 
   return (
     <div className="min-h-[100dvh] pb-28" style={{ background: PAGE_BG, color: TEXT }}>
-      <header className="px-6 pb-5 pt-[calc(env(safe-area-inset-top,0px)+34px)]">
-        <div className="mx-auto flex max-w-md items-center justify-between gap-4">
+      <header className="sticky top-0 z-40 border-b border-black/5 bg-[#fffaf7]/90 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur">
+        <div className="mx-auto flex max-w-md items-center justify-between gap-3">
           <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
           <button
             type="button"
             onClick={() => setVenueSheetOpen(true)}
-            className="flex items-center gap-1.5 rounded-full px-2 py-1 text-[13px] active:scale-[0.98]"
+            className="min-w-0 flex-1 justify-center flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-[12px] shadow-sm active:scale-[0.98]"
             style={{ fontFamily: FONT_MONO }}
           >
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: status?.open ? GREEN : "#d1d5db" }} />
-            <span>{venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}</span>
+            <span className="truncate">{venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(user ? "/my" : "/auth")}
+            className="grid h-10 w-10 place-items-center rounded-full border border-black/10 bg-white text-[13px] font-black text-neutral-950 shadow-sm active:scale-[0.98]"
+            style={{ fontFamily: FONT_HEADING }}
+          >
+            {user ? userInitial(user) : <UserRound className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            className="grid h-10 w-10 place-items-center rounded-full border border-black/10 bg-white text-neutral-950 shadow-sm active:scale-[0.98]"
+          >
+            <Menu className="h-5 w-5" />
           </button>
         </div>
       </header>
@@ -414,24 +489,14 @@ export default function TodayPage() {
         <section className="relative h-[430px] overflow-hidden">
           <img src={weekendVibes} alt="" className="absolute inset-0 h-full w-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-t from-black/42 via-transparent to-transparent" />
-          <p className="absolute bottom-7 left-6 text-[26px] text-white" style={{ fontFamily: FONT_MONO }}>
+          <p className="absolute bottom-28 left-6 text-[26px] text-white" style={{ fontFamily: FONT_MONO }}>
             weekend vibes
           </p>
-        </section>
-
-        <section className="mx-auto max-w-md space-y-3 px-5 pt-8">
-          <InfoCard
-            title="Pickleball 101"
-            body="Pickleball är en lättstartad racketsport och en av de snabbast växande sporterna i Nordamerika och Asien. Man spelar oftast till 11 och måste vinna med 2. Bara servande lag kan ta poäng. Serven slås underhand, bakom baslinjen, diagonalt över nätet. Efter serve måste returen studsa, och sedan måste även nästa slag studsa. Därefter får man volleya, men inte stå i köket och slå volley."
-          />
-          <InfoCard
-            title="Darts 101"
-            body="På Pickla spelar många klassisk 501: varje spelare börjar på 501 och kastar tre pilar per runda. Poängen räknas ner mot exakt 0. Vanligt upplägg är dubbel ut, alltså att sista pilen måste träffa en dubbel. Bullseye är 50, yttre bull är 25, och tripplar ger mest tryck i spelet."
-          />
-          <InfoCard
-            title="Så funkar Pickla"
-            body="Boka bana, dartbord eller ett pass i appen. Du får bokningen på Mina sidor och en fyrsiffrig kod. När du kommer till hallen checkar du in på paddan vid din resurs. För grupper och företag planerar vi upplägget tillsammans via en förfrågan."
-          />
+          <div className="absolute inset-x-4 bottom-5 flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+            <HeroSticker guideKey="pickleball" onClick={openGuide} />
+            <HeroSticker guideKey="darts" onClick={openGuide} />
+            <HeroSticker guideKey="pickla" onClick={openGuide} />
+          </div>
         </section>
 
         <section className="mx-auto max-w-md px-5 pt-8">
@@ -507,6 +572,202 @@ export default function TodayPage() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      <Drawer open={!!activeGuide} onOpenChange={(open) => !open && setActiveGuide(null)}>
+        <DrawerContent className="rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+22px)] pt-5">
+          {activeGuide && (
+            <div className="mx-auto w-full max-w-md">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                    {GUIDES[activeGuide].kicker}
+                  </p>
+                  <h2 className="mt-2 text-[32px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                    {GUIDES[activeGuide].title}
+                  </h2>
+                </div>
+                <button type="button" onClick={() => setActiveGuide(null)} className="rounded-full p-2 text-neutral-950">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <p className="text-[14px] leading-relaxed text-neutral-700" style={{ fontFamily: FONT_MONO }}>
+                {GUIDES[activeGuide].body}
+              </p>
+              <button
+                type="button"
+                onClick={() => go(GUIDES[activeGuide].href(slug))}
+                className="mt-7 flex w-full items-center justify-between rounded-2xl bg-neutral-950 px-5 py-4 text-left text-white active:scale-[0.98]"
+                style={{ fontFamily: FONT_HEADING }}
+              >
+                <span>{GUIDES[activeGuide].cta}</span>
+                <ArrowRight className="h-5 w-5" />
+              </button>
+              {activeGuide === "pickla" && (
+                <button
+                  type="button"
+                  onClick={() => go(`/book/group?v=${slug}`)}
+                  className="mt-3 flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-5 py-4 text-left text-neutral-950 active:scale-[0.98]"
+                  style={{ fontFamily: FONT_HEADING }}
+                >
+                  <span>Planera event</span>
+                  <ArrowRight className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+          )}
+        </DrawerContent>
+      </Drawer>
+
+      <Drawer open={menuOpen} onOpenChange={setMenuOpen}>
+        <DrawerContent className="max-h-[88vh] rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+22px)] pt-5">
+          <div className="mx-auto flex w-full max-w-md flex-col">
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                  meny
+                </p>
+                <h2 className="mt-1 text-[30px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                  Pickla
+                </h2>
+              </div>
+              <button type="button" onClick={() => setMenuOpen(false)} className="rounded-full p-2 text-neutral-950">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-7 overflow-y-auto pb-4">
+              <section>
+                <div className="mb-3 flex items-center gap-2">
+                  <CalendarDays className="h-4 w-4 text-neutral-400" />
+                  <h3 className="text-[14px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>Mina bokningar</h3>
+                </div>
+                {user ? (
+                  menuBookings.length ? (
+                    <div className="space-y-2">
+                      {menuBookings.map((booking) => (
+                        <button
+                          key={booking.id}
+                          type="button"
+                          onClick={() => go(`/my?booking=${encodeURIComponent(booking.bookingRef || booking.id)}&v=${encodeURIComponent(slug)}`)}
+                          className="grid w-full grid-cols-[58px_1fr_auto] items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fffaf7] px-3 py-3 text-left active:scale-[0.99]"
+                        >
+                          <span className="font-mono text-[13px] text-neutral-500">{booking.startTime}</span>
+                          <span className="min-w-0 truncate text-[14px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                            {booking.title}
+                          </span>
+                          <ArrowRight className="h-4 w-4 text-neutral-400" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-2xl bg-[#fffaf7] px-4 py-4 text-[13px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                      inga kommande bokningar här än
+                    </p>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => go("/auth")}
+                    className="flex w-full items-center justify-between rounded-2xl bg-neutral-950 px-4 py-4 text-left text-white"
+                    style={{ fontFamily: FONT_HEADING }}
+                  >
+                    <span>Logga in för bokningar</span>
+                    <ArrowRight className="h-5 w-5" />
+                  </button>
+                )}
+              </section>
+
+              <section>
+                <h3 className="mb-3 text-[14px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>Snabbt</h3>
+                <div className="space-y-2">
+                  {[
+                    ["Boka pickleball", `/book?v=${slug}&sport=pickleball`],
+                    ["Boka darts", `/book?v=${slug}&sport=dart`],
+                    ["Planera event", `/book/group?v=${slug}`],
+                  ].map(([label, href]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => go(href)}
+                      className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-left text-neutral-950"
+                      style={{ fontFamily: FONT_HEADING }}
+                    >
+                      <span>{label}</span>
+                      <ArrowRight className="h-4 w-4 text-neutral-400" />
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <div className="mb-3 flex items-center gap-2">
+                  <BookOpen className="h-4 w-4 text-neutral-400" />
+                  <h3 className="text-[14px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>Guides</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["pickleball", "darts", "pickla"] as GuideKey[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => openGuide(key)}
+                      className="rounded-2xl bg-[#f4f0ee] px-3 py-4 text-left active:scale-[0.98]"
+                    >
+                      <span className="text-[12px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                        {GUIDES[key].title}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setVenueSheetOpen(true);
+                  }}
+                  className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-[#fffaf7] px-4 py-4 text-left"
+                >
+                  <span>
+                    <span className="block text-[14px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                      {venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}
+                    </span>
+                    <span className="mt-1 block text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                      {status?.label || "Öppettider"}
+                    </span>
+                  </span>
+                  <ArrowRight className="h-4 w-4 text-neutral-400" />
+                </button>
+              </section>
+
+              <section className="rounded-[24px] border border-neutral-200 bg-white p-4">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-11 w-11 place-items-center rounded-full bg-[#f4f0ee] text-[16px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                    {user ? userInitial(user) : <UserRound className="h-5 w-5" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[14px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                      {user ? userDisplayName(user) : "Inte inloggad"}
+                    </p>
+                    <p className="text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                      {user ? "konto och kvitton" : "logga in eller skapa konto"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => go(user ? "/my" : "/auth")}
+                    className="rounded-full bg-neutral-950 px-4 py-2 text-[12px] text-white"
+                    style={{ fontFamily: FONT_HEADING }}
+                  >
+                    {user ? "Öppna" : "Logga in"}
+                  </button>
+                </div>
+              </section>
             </div>
           </div>
         </DrawerContent>
