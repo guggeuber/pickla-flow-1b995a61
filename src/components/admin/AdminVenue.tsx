@@ -176,7 +176,9 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
   const { updateVenue } = useAdminMutation(venueId);
   const [form, setForm] = useState<Record<string, string>>({});
   const [initialized, setInitialized] = useState(false);
+  const [uploadingHeroImage, setUploadingHeroImage] = useState(false);
   const [uploadingGroupImage, setUploadingGroupImage] = useState(false);
+  const heroImageRef = useRef<HTMLInputElement>(null);
   const groupImageRef = useRef<HTMLInputElement>(null);
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
@@ -186,6 +188,7 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
       name: venue.name || "",
       slug: venue.slug || "",
       description: venue.description || "",
+      cover_image_url: venue.cover_image_url || "",
       address: venue.address || "",
       city: venue.city || "",
       phone: venue.phone || "",
@@ -198,6 +201,24 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
     });
     setInitialized(true);
   }
+
+  const handleHeroImageUpload = async (file: File) => {
+    setUploadingHeroImage(true);
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `venue-home/${venueId}/hero.${ext}`;
+      const { error } = await supabase.storage.from("event-logos").upload(path, file, { upsert: true });
+      if (error) throw error;
+      const { data: urlData } = supabase.storage.from("event-logos").getPublicUrl(path);
+      setForm((prev) => ({ ...prev, cover_image_url: `${urlData.publicUrl}?t=${Date.now()}` }));
+      toast.success("Startsidebild uppladdad!");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Uppladdning misslyckades");
+    } finally {
+      setUploadingHeroImage(false);
+      if (heroImageRef.current) heroImageRef.current.value = "";
+    }
+  };
 
   const handleGroupImageUpload = async (file: File) => {
     setUploadingGroupImage(true);
@@ -227,7 +248,6 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
   const fields = [
     { key: "name", label: "Namn" },
     { key: "slug", label: "Slug (URL)" },
-    { key: "description", label: "Beskrivning" },
     { key: "address", label: "Adress" },
     { key: "city", label: "Stad" },
     { key: "phone", label: "Telefon" },
@@ -261,6 +281,81 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
       </div>
 
       {/* Divider */}
+      <div className="h-px bg-border" />
+
+      <div className="space-y-3">
+        <div>
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Startsida</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Hero-bild och texten som ligger ovanpå bilden på playpickla.com</p>
+        </div>
+
+        <div className="glass-card rounded-2xl p-4 space-y-4">
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Hero-bild</Label>
+            <input
+              ref={heroImageRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleHeroImageUpload(file);
+              }}
+            />
+            <div className="mt-2 flex items-center gap-3">
+              {form.cover_image_url ? (
+                <img src={form.cover_image_url} alt="" className="h-24 w-32 rounded-2xl object-cover border border-border" />
+              ) : (
+                <div className="h-24 w-32 rounded-2xl border-2 border-dashed border-border flex items-center justify-center">
+                  <Upload className="w-4 h-4 text-muted-foreground" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => heroImageRef.current?.click()}
+                  disabled={uploadingHeroImage}
+                  className="w-full"
+                >
+                  {uploadingHeroImage ? <Loader2 className="w-3 h-3 animate-spin" /> : "Ladda upp bild"}
+                </Button>
+                {form.cover_image_url && (
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, cover_image_url: "" }))}
+                    className="mt-2 text-[11px] text-muted-foreground underline underline-offset-4"
+                  >
+                    Ta bort bild
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Text på bilden</Label>
+            <textarea
+              className="w-full mt-1 min-h-20 rounded-xl px-3 py-2.5 text-sm font-medium text-foreground outline-none focus:ring-2 focus:ring-primary/50"
+              style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+              value={form.description || ""}
+              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+              placeholder="Weekend vibes"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={updateVenue.isPending}
+          className="w-full flex items-center justify-center gap-2 rounded-xl py-3 bg-primary text-primary-foreground font-semibold text-sm disabled:opacity-50"
+        >
+          {updateVenue.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Spara startsida
+        </button>
+      </div>
+
       <div className="h-px bg-border" />
 
       <div className="space-y-3">

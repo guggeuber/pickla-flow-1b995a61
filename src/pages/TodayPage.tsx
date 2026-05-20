@@ -149,8 +149,24 @@ function useVenue(slug: string) {
     queryFn: async () => {
       const { data } = await supabase
         .from("venues")
-        .select("id, name, slug, address, city")
+        .select("id, name, slug, address, city, description, cover_image_url")
         .eq("slug", slug)
+        .maybeSingle();
+      return data;
+    },
+  });
+}
+
+function usePlayerProfile(userId: string | undefined) {
+  return useQuery({
+    queryKey: ["today-player-profile", userId],
+    enabled: !!userId,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("player_profiles")
+        .select("display_name, avatar_url")
+        .eq("auth_user_id", userId!)
         .maybeSingle();
       return data;
     },
@@ -192,14 +208,15 @@ function formatHour(time?: string | null) {
   return time ? String(time).slice(0, 5) : "";
 }
 
-function userDisplayName(user: ReturnType<typeof useAuth>["user"]) {
+function userDisplayName(user: ReturnType<typeof useAuth>["user"], profile?: { display_name?: string | null } | null) {
+  if (profile?.display_name) return profile.display_name;
   if (!user) return "";
   const meta = user.user_metadata || {};
   return meta.display_name || meta.full_name || meta.name || user.email || "Mitt konto";
 }
 
-function userInitial(user: ReturnType<typeof useAuth>["user"]) {
-  const name = userDisplayName(user);
+function userInitial(user: ReturnType<typeof useAuth>["user"], profile?: { display_name?: string | null } | null) {
+  const name = userDisplayName(user, profile);
   return name ? name.trim().charAt(0).toUpperCase() : "";
 }
 
@@ -209,9 +226,9 @@ function HeroSticker({ guideKey, onClick }: { guideKey: GuideKey; onClick: (key:
     <button
       type="button"
       onClick={() => onClick(guideKey)}
-      className="block w-fit bg-neutral-950 px-5 py-3 text-left shadow-sm active:scale-[0.98]"
+      className="block w-fit bg-neutral-950 px-4 py-2.5 text-left shadow-sm active:scale-[0.98]"
     >
-      <p className="text-[24px] leading-none text-pink-100" style={{ fontFamily: FONT_MONO }}>{guide.title}</p>
+      <p className="text-[20px] leading-none text-pink-100" style={{ fontFamily: FONT_MONO }}>{guide.title}</p>
     </button>
   );
 }
@@ -389,10 +406,13 @@ export default function TodayPage() {
   const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenue(slug);
+  const { data: profile } = usePlayerProfile(user?.id);
   const { data: status } = useVenueOpenStatus(venue?.id);
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const now = DateTime.now().setZone("Europe/Stockholm");
   const menuBookings = items.filter((item) => item.kind === "booking").slice(0, 5);
+  const heroImage = venue?.cover_image_url || weekendVibes;
+  const heroText = venue?.description?.trim() || "Weekend Vibes";
   const openGuide = (guideKey: GuideKey) => {
     setMenuOpen(false);
     setActiveGuide(guideKey);
@@ -420,8 +440,8 @@ export default function TodayPage() {
   ), [items, now]);
 
   return (
-    <div className="min-h-[100dvh] pb-28" style={{ background: PAGE_BG, color: TEXT }}>
-      <header className="sticky top-0 z-40 border-b border-black/5 bg-[#fffaf7]/90 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur">
+    <div className="min-h-[100dvh] pb-28 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
+      <header className="fixed left-0 right-0 top-0 z-50 border-b border-black/5 bg-[#fffaf7]/95 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-md items-center justify-between gap-3">
           <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
           <button
@@ -436,10 +456,16 @@ export default function TodayPage() {
           <button
             type="button"
             onClick={() => navigate(user ? "/my" : "/auth")}
-            className="grid h-10 w-10 place-items-center rounded-full border border-black/10 bg-white text-[13px] font-black text-neutral-950 shadow-sm active:scale-[0.98]"
+            className="grid h-10 w-10 place-items-center overflow-hidden rounded-full border border-black/10 bg-white text-[13px] font-black text-neutral-950 shadow-sm active:scale-[0.98]"
             style={{ fontFamily: FONT_HEADING }}
           >
-            {user ? userInitial(user) : <UserRound className="h-4 w-4" />}
+            {profile?.avatar_url ? (
+              <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
+            ) : user ? (
+              userInitial(user, profile)
+            ) : (
+              <UserRound className="h-4 w-4" />
+            )}
           </button>
           <button
             type="button"
@@ -452,28 +478,50 @@ export default function TodayPage() {
       </header>
 
       <main>
-        <section className="mx-auto max-w-md px-6">
-          <div className="flex gap-3 overflow-x-auto pb-8" style={{ scrollbarWidth: "none" }}>
+        <section className="relative mx-auto h-[510px] max-w-md overflow-hidden sm:rounded-b-[28px]">
+          <img src={heroImage} alt="" className="absolute inset-0 h-full w-full object-cover object-center" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/5" />
+          <div className="absolute left-0 top-[34%] flex flex-col items-start gap-2">
+            <HeroSticker guideKey="pickleball" onClick={openGuide} />
+            <HeroSticker guideKey="darts" onClick={openGuide} />
+            <HeroSticker guideKey="pickla" onClick={openGuide} />
+          </div>
+          <p
+            className="absolute bottom-8 left-6 right-4 max-w-[88%] text-[46px] uppercase leading-[0.9] text-white sm:text-[58px]"
+            style={{
+              fontFamily: FONT_MONO,
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {heroText}
+          </p>
+        </section>
+
+        <section className="mx-auto max-w-md px-6 py-7">
+          <div className="flex gap-3 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
             {[
               { label: "Boka\nPickleball", href: `/book?v=${slug}&sport=pickleball`, image: null },
               { label: "Boka darts", href: `/book?v=${slug}&sport=dart`, image: null },
-              { label: "Planera\nEvent", href: `/book/group?v=${slug}`, image: weekendVibes },
+              { label: "Planera\nEvent", href: `/book/group?v=${slug}`, image: heroImage },
             ].map((action) => (
               <button
                 key={action.label}
                 type="button"
                 onClick={() => navigate(action.href)}
-                className="relative h-36 w-[31%] min-w-[98px] overflow-hidden rounded-md border text-left shadow-sm active:scale-[0.98]"
+                className="relative h-32 w-[31%] min-w-[104px] overflow-hidden rounded-2xl border text-left shadow-sm active:scale-[0.98]"
                 style={{ background: SOFT, borderColor: BORDER }}
               >
                 {action.image ? (
                   <img src={action.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
                 ) : (
-                  <div className="absolute inset-x-4 top-5 h-16 rounded-full bg-white/45" />
+                  <div className="absolute inset-x-4 top-5 h-14 rounded-full bg-white/45" />
                 )}
-                {action.image && <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/5 to-transparent" />}
+                {action.image && <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />}
                 <span
-                  className="absolute bottom-4 left-3 right-3 whitespace-pre-line text-[16px] leading-[0.95]"
+                  className="absolute bottom-4 left-3 right-3 whitespace-pre-line text-[15px] leading-[0.95]"
                   style={{ color: action.image ? "#fff" : TEXT, fontFamily: FONT_HEADING }}
                 >
                   {action.label}
@@ -483,20 +531,7 @@ export default function TodayPage() {
           </div>
         </section>
 
-        <section className="relative mx-auto h-[560px] max-w-md overflow-hidden">
-          <img src={weekendVibes} alt="" className="absolute inset-0 h-full w-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/5" />
-          <div className="absolute left-0 top-[36%] flex flex-col items-start gap-2">
-            <HeroSticker guideKey="pickleball" onClick={openGuide} />
-            <HeroSticker guideKey="darts" onClick={openGuide} />
-            <HeroSticker guideKey="pickla" onClick={openGuide} />
-          </div>
-          <p className="absolute bottom-8 left-6 right-4 text-[54px] uppercase leading-[0.9] tracking-[-0.05em] text-white sm:text-[62px]" style={{ fontFamily: FONT_MONO }}>
-            Weekend Vibes
-          </p>
-        </section>
-
-        <section className="mx-auto max-w-md px-5 pt-8">
+        <section className="mx-auto max-w-md px-5 pt-1">
           {venueLoading || isLoading ? (
             <div className="grid min-h-48 place-items-center">
               <Loader2 className="h-6 w-6 animate-spin" style={{ color: PINK }} />
@@ -623,13 +658,24 @@ export default function TodayPage() {
         <DrawerContent className="max-h-[88vh] rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+22px)] pt-5">
           <div className="mx-auto flex w-full max-w-md flex-col">
             <div className="mb-6 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                  meny
-                </p>
-                <h2 className="mt-1 text-[30px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                  Pickla
-                </h2>
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full bg-[#f4f0ee] text-[17px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                  {profile?.avatar_url ? (
+                    <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
+                  ) : user ? (
+                    userInitial(user, profile)
+                  ) : (
+                    <UserRound className="h-5 w-5" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                    meny
+                  </p>
+                  <h2 className="mt-1 truncate text-[25px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                    {user ? userDisplayName(user, profile) : "Pickla"}
+                  </h2>
+                </div>
               </div>
               <button type="button" onClick={() => setMenuOpen(false)} className="rounded-full p-2 text-neutral-950">
                 <X className="h-5 w-5" />
@@ -637,6 +683,24 @@ export default function TodayPage() {
             </div>
 
             <div className="space-y-7 overflow-y-auto pb-4">
+              <section className="rounded-[24px] border border-neutral-200 bg-[#fffaf7] p-4">
+                <button
+                  type="button"
+                  onClick={() => go(user ? "/my" : "/auth")}
+                  className="flex w-full items-center justify-between text-left active:scale-[0.99]"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[16px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                      {user ? "Min sida" : "Logga in"}
+                    </span>
+                    <span className="mt-1 block text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                      {user ? "bokningar, kvitton och konto" : "för bokningar, kvitton och medlemskap"}
+                    </span>
+                  </span>
+                  <ArrowRight className="h-5 w-5 shrink-0 text-neutral-400" />
+                </button>
+              </section>
+
               <section>
                 <div className="mb-3 flex items-center gap-2">
                   <CalendarDays className="h-4 w-4 text-neutral-400" />
@@ -740,30 +804,6 @@ export default function TodayPage() {
                   </span>
                   <ArrowRight className="h-4 w-4 text-neutral-400" />
                 </button>
-              </section>
-
-              <section className="rounded-[24px] border border-neutral-200 bg-white p-4">
-                <div className="flex items-center gap-3">
-                  <div className="grid h-11 w-11 place-items-center rounded-full bg-[#f4f0ee] text-[16px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                    {user ? userInitial(user) : <UserRound className="h-5 w-5" />}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[14px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                      {user ? userDisplayName(user) : "Inte inloggad"}
-                    </p>
-                    <p className="text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                      {user ? "konto och kvitton" : "logga in eller skapa konto"}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => go(user ? "/my" : "/auth")}
-                    className="rounded-full bg-neutral-950 px-4 py-2 text-[12px] text-white"
-                    style={{ fontFamily: FONT_HEADING }}
-                  >
-                    {user ? "Öppna" : "Logga in"}
-                  </button>
-                </div>
               </section>
             </div>
           </div>
