@@ -31,6 +31,15 @@ function fmtTime(iso?: string | null) {
   return DateTime.fromISO(iso, { zone: "utc" }).setZone("Europe/Stockholm").toFormat("HH:mm");
 }
 
+function isDartDevice(data?: DeviceData) {
+  const text = [
+    data?.resource?.sport_type,
+    data?.resource?.name,
+    data?.device.name,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return text.includes("dart") || text.includes("tavla");
+}
+
 export default function DeviceDisplay() {
   const { token = "" } = useParams();
   const { data, isLoading, isError } = useQuery<DeviceData>({
@@ -43,11 +52,11 @@ export default function DeviceDisplay() {
 
   const defaultLinks = useMemo(() => {
     const links = data?.device.external_links || [];
-    if (links.length > 0) return links;
-    if (data?.resource?.sport_type === "dart") {
-      return [{ label: "Nakka", url: "https://n01darts.com/n01/web/n01.html" }];
+    const hasNakka = links.some((link) => link.url.includes("n01darts.com"));
+    if (isDartDevice(data) && !hasNakka) {
+      return [{ label: "Nakka", url: "https://n01darts.com/n01/web/n01.html" }, ...links];
     }
-    return [];
+    return links;
   }, [data]);
 
   if (isLoading) {
@@ -110,7 +119,11 @@ export default function DeviceDisplay() {
             {checkedIn ? (
               <div className="block rounded-[2rem] bg-emerald-300 p-7 text-neutral-950">
                 <p className="font-display text-4xl font-black">Redan incheckad</p>
-                <p className="mt-2 font-mono text-sm text-neutral-700">Resursen är upptagen just nu</p>
+                <p className="mt-2 font-mono text-sm text-neutral-700">
+                  {data.currentBooking?.player_name
+                    ? `${data.currentBooking.player_name} är inne`
+                    : "Resursen är upptagen just nu"}
+                </p>
               </div>
             ) : (
               <div>
@@ -124,23 +137,23 @@ export default function DeviceDisplay() {
               </div>
             )}
 
-            <a href="/today" className="block rounded-[2rem] border border-black/10 bg-white p-7">
-              <p className="font-display text-3xl font-black">Idag</p>
-              <p className="mt-2 font-mono text-sm text-neutral-500">Vad händer på Pickla</p>
-            </a>
-
             {defaultLinks.map((link) => (
               <a
                 key={`${link.label}-${link.url}`}
                 href={link.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block rounded-[1.5rem] border border-black/10 bg-white p-6"
+                className="block rounded-[2rem] border border-black/10 bg-white p-7"
               >
-                <p className="font-display text-2xl font-black">{link.label}</p>
+                <p className="font-display text-3xl font-black">{link.label}</p>
                 <p className="mt-1 font-mono text-xs text-neutral-500">Öppna verktyg</p>
               </a>
             ))}
+
+            <a href="/today" className="block rounded-[2rem] border border-black/10 bg-white p-7">
+              <p className="font-display text-3xl font-black">Idag</p>
+              <p className="mt-2 font-mono text-sm text-neutral-500">Vad händer på Pickla</p>
+            </a>
 
             <a href="/book" className="block rounded-[1.5rem] border border-black/10 bg-white p-6">
               <p className="font-display text-2xl font-black">Boka mer</p>

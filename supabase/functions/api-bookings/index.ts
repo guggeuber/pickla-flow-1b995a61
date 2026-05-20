@@ -11,6 +11,10 @@ function safeLocalPath(path?: string | null) {
   return path.slice(0, 450);
 }
 
+function nameFromBookingNotes(notes?: string | null) {
+  return (notes || '').split(' | ')[0].trim();
+}
+
 async function createFreeEntitlementBookingResponse({
   product_type,
   meta,
@@ -707,7 +711,7 @@ Deno.serve(async (req) => {
       currentBooking: currentBooking ? {
         ...currentBooking,
         checked_in: Boolean(currentCheckin),
-        player_name: currentCheckin?.player_name || null,
+        player_name: currentCheckin?.player_name || nameFromBookingNotes(currentBooking.notes) || null,
         checked_in_at: currentCheckin?.checked_in_at || null,
       } : null,
       nextBooking,
