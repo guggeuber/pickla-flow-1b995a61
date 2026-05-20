@@ -5,7 +5,6 @@ import { DateTime } from "luxon";
 import { ArrowRight, BookOpen, CalendarDays, Loader2, MapPin, Menu, UserRound, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { PlayerNav } from "@/components/PlayerNav";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import {
   getBookingChatResourceId,
@@ -440,10 +439,17 @@ export default function TodayPage() {
   ), [items, now]);
 
   return (
-    <div className="min-h-[100dvh] pb-28 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
+    <div className="min-h-[100dvh] pb-10 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-black/5 bg-[#fffaf7]/95 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-md items-center justify-between gap-3">
-          <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
+          <button
+            type="button"
+            onClick={() => navigate(`/?v=${encodeURIComponent(slug)}`)}
+            className="shrink-0 active:scale-[0.98]"
+            aria-label="Till startsidan"
+          >
+            <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
+          </button>
           <button
             type="button"
             onClick={() => setVenueSheetOpen(true)}
@@ -809,8 +815,6 @@ export default function TodayPage() {
           </div>
         </DrawerContent>
       </Drawer>
-
-      <PlayerNav />
     </div>
   );
 }
