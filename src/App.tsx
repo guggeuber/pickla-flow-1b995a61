@@ -33,6 +33,7 @@ import CorporateRegisterPage from "./pages/CorporateRegisterPage";
 import VenueDisplay from "./pages/VenueDisplay";
 import OpenPlayDisplay from "./pages/OpenPlayDisplay";
 import ResourceCheckinDisplay from "./pages/ResourceCheckinDisplay";
+import DeviceDisplay from "./pages/DeviceDisplay";
 import AuthCallback from "./pages/AuthCallback";
 import AuthReset from "./pages/AuthReset";
 import { Loader2 } from "lucide-react";
@@ -102,6 +103,7 @@ const App = () => (
             <Route path="/display/venue" element={<VenueDisplay />} />
             <Route path="/display/openplay" element={<OpenPlayDisplay />} />
             <Route path="/display/resource/:courtId" element={<ResourceCheckinDisplay />} />
+            <Route path="/display/device/:token" element={<DeviceDisplay />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

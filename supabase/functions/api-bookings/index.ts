@@ -637,6 +637,65 @@ Deno.serve(async (req) => {
     return jsonResponse({ venue, openingHours: hours || [], events: events || [], links: links || [] }, 200, 60);
   }
 
+  // ── Public endpoint: display device by token (no auth required) ──
+  if (req.method === 'GET' && path === 'display-device') {
+    const token = url.searchParams.get('token');
+    if (!token) return errorResponse('Missing token', 400);
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const admin = createClient(supabaseUrl, serviceKey);
+
+    const { data: device, error: deviceErr } = await admin
+      .from('display_devices')
+      .select('id, name, device_token, mode, is_active, external_links, instructions, venue_id, venue_court_id, venues(id, name, slug), venue_courts(id, name, court_number, sport_type)')
+      .eq('device_token', token)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (deviceErr || !device) return errorResponse('Device not found', 404);
+
+    await admin
+      .from('display_devices')
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq('id', device.id);
+
+    const nowSthlm = DateTime.now().setZone('Europe/Stockholm');
+    const today = nowSthlm.toISODate()!;
+    const { start, end } = stockholmDateRangeUtc(today);
+    const courtId = (device as any).venue_court_id;
+    let bookings: any[] = [];
+
+    if (courtId) {
+      const { data } = await admin
+        .from('bookings')
+        .select('id, start_time, end_time, status, booking_ref')
+        .eq('venue_id', (device as any).venue_id)
+        .eq('venue_court_id', courtId)
+        .neq('status', 'cancelled')
+        .lt('start_time', end)
+        .gt('end_time', start)
+        .order('start_time', { ascending: true });
+      bookings = data || [];
+    }
+
+    const nowMs = nowSthlm.toUTC().toMillis();
+    const currentBooking = bookings.find((booking: any) =>
+      DateTime.fromISO(booking.start_time, { zone: 'utc' }).toMillis() <= nowMs &&
+      DateTime.fromISO(booking.end_time, { zone: 'utc' }).toMillis() > nowMs
+    ) || null;
+    const nextBooking = bookings.find((booking: any) =>
+      DateTime.fromISO(booking.start_time, { zone: 'utc' }).toMillis() > nowMs
+    ) || null;
+
+    return jsonResponse({
+      device,
+      venue: (device as any).venues,
+      resource: (device as any).venue_courts,
+      currentBooking,
+      nextBooking,
+    }, 200, 10);
+  }
+
   // ── Public endpoint: booking by ref ──
   if (req.method === 'GET' && path === 'public-booking') {
     const ref = url.searchParams.get('ref');

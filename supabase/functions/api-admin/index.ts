@@ -303,6 +303,75 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
+    // ── DISPLAY DEVICES ──
+    if (req.method === 'GET' && path === 'display-devices') {
+      const { data, error: e } = await admin
+        .from('display_devices')
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .eq('venue_id', venueId)
+        .order('created_at', { ascending: false });
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data || [], 200, 10);
+    }
+
+    if (req.method === 'POST' && path === 'display-devices') {
+      const body = await req.json();
+      const safeName = String(body.name || '').trim();
+      if (safeName.length < 2) return errorResponse('Missing name');
+      const externalLinks = Array.isArray(body.external_links) ? body.external_links : [];
+      const { data, error: e } = await admin
+        .from('display_devices')
+        .insert({
+          venue_id: venueId,
+          venue_court_id: body.venue_court_id || null,
+          name: safeName.slice(0, 120),
+          mode: body.mode || 'resource_home',
+          is_active: body.is_active !== false,
+          external_links: externalLinks.slice(0, 8),
+          instructions: body.instructions ? String(body.instructions).slice(0, 1000) : null,
+        })
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 201);
+    }
+
+    if (req.method === 'PATCH' && path === 'display-devices') {
+      const body = await req.json();
+      const deviceId = body.deviceId || body.id;
+      if (!deviceId) return errorResponse('Missing deviceId');
+      const updates: any = {};
+      if (body.name !== undefined) updates.name = String(body.name).trim().slice(0, 120);
+      if (body.venue_court_id !== undefined) updates.venue_court_id = body.venue_court_id || null;
+      if (body.mode !== undefined) updates.mode = body.mode;
+      if (body.is_active !== undefined) updates.is_active = Boolean(body.is_active);
+      if (body.external_links !== undefined) updates.external_links = Array.isArray(body.external_links) ? body.external_links.slice(0, 8) : [];
+      if (body.instructions !== undefined) updates.instructions = body.instructions ? String(body.instructions).slice(0, 1000) : null;
+      if (body.rotate_token === true) updates.device_token = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '').slice(0, 16);
+
+      const { data, error: e } = await admin
+        .from('display_devices')
+        .update(updates)
+        .eq('id', deviceId)
+        .eq('venue_id', venueId)
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data);
+    }
+
+    if (req.method === 'DELETE' && path === 'display-devices') {
+      const deviceId = url.searchParams.get('deviceId');
+      if (!deviceId) return errorResponse('Missing deviceId');
+      const { error: e } = await admin
+        .from('display_devices')
+        .delete()
+        .eq('id', deviceId)
+        .eq('venue_id', venueId);
+      if (e) return errorResponse(e.message);
+      return jsonResponse({ ok: true });
+    }
+
     // ── OPENING HOURS ──
     if (req.method === 'GET' && path === 'hours') {
       const { data, error: e } = await admin.from('opening_hours')

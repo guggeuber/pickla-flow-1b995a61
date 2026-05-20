@@ -6,6 +6,7 @@ import {
   Ticket, CalendarCheck, ChevronRight, Plus, Camera, Trophy, Crown, FileText,
   MessageSquare,
   Package,
+  TabletSmartphone,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAdminCheck, useAdminVenues, useAdminStats, useAdminHistory } from "@/hooks/useAdmin";
@@ -24,12 +25,13 @@ import AdminCorporate from "@/components/admin/AdminCorporate";
 import AdminChannels from "@/components/admin/AdminChannels";
 import AdminProducts from "@/components/admin/AdminProducts";
 import AdminSchedule from "@/components/admin/AdminSchedule";
+import AdminDevices from "@/components/admin/AdminDevices";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-type SectionId = "venue" | "staff" | "courts" | "hours" | "pricing" | "products" | "schedule" | "links" | "stories" | "events" | "memberships" | "templates" | "corporate" | "channels" | null;
+type SectionId = "venue" | "staff" | "courts" | "devices" | "hours" | "pricing" | "products" | "schedule" | "links" | "stories" | "events" | "memberships" | "templates" | "corporate" | "channels" | null;
 
 /* ── Sparkline SVG ── */
 function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
@@ -198,6 +200,7 @@ const AdminPage = () => {
       venue: { label: "Venue Settings", icon: Building2 },
       staff: { label: "Personal", icon: Users },
       courts: { label: "Banor", icon: LayoutGrid },
+      devices: { label: "Paddor", icon: TabletSmartphone },
       hours: { label: "Öppettider", icon: Clock },
       pricing: { label: "Priser", icon: Tag },
       products: { label: "Produkter", icon: Package },
@@ -238,6 +241,7 @@ const AdminPage = () => {
           {activeSection === "venue" && <AdminVenue venueId={venueId} />}
           {activeSection === "staff" && <AdminStaff venueId={venueId} />}
           {activeSection === "courts" && <AdminCourts venueId={venueId} />}
+          {activeSection === "devices" && <AdminDevices venueId={venueId} />}
           {activeSection === "hours" && <AdminHours venueId={venueId} />}
           {activeSection === "pricing" && <AdminPricing venueId={venueId} />}
           {activeSection === "products" && <AdminProducts venueId={venueId} />}
@@ -258,6 +262,7 @@ const AdminPage = () => {
 
   const actionCards = [
     { id: "courts" as SectionId, icon: LayoutGrid, label: "Banor", stat: `${stats?.totalCourts || 0} banor`, color: "var(--court-free)" },
+    { id: "devices" as SectionId, icon: TabletSmartphone, label: "Paddor", stat: "Kiosk & incheckning", color: "var(--primary)" },
     { id: "pricing" as SectionId, icon: Tag, label: "Priser", stat: `${stats?.pricingRules || 0} aktiva regler`, color: "var(--sell)" },
     { id: "products" as SectionId, icon: Package, label: "Produkter", stat: "Access & biljetter", color: "var(--court-free)" },
     { id: "schedule" as SectionId, icon: CalendarCheck, label: "Schema", stat: "Program & pass", color: "var(--primary)" },
