@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
@@ -427,6 +427,13 @@ export default function TodayPage() {
     return start <= now && !!end && end >= now && item.status !== "Full";
   })?.id;
 
+  useEffect(() => {
+    if ("scrollRestoration" in window.history) {
+      window.history.scrollRestoration = "manual";
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, []);
+
   const days = useMemo(() => (
     Array.from({ length: DAYS_AHEAD }, (_, offset) => {
       const date = now.plus({ days: offset }).startOf("day");
@@ -439,8 +446,8 @@ export default function TodayPage() {
   ), [items, now]);
 
   return (
-    <div className="min-h-[100dvh] pb-10 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
-      <header className="fixed left-0 right-0 top-0 z-50 border-b border-black/5 bg-[#fffaf7]/95 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-xl">
+    <div className="min-h-[100dvh] pb-10" style={{ background: PAGE_BG, color: TEXT }}>
+      <header className="sticky top-0 z-50 border-b border-black/5 bg-[#fffaf7]/95 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-md items-center justify-between gap-3">
           <button
             type="button"
