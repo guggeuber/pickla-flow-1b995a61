@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
@@ -26,6 +26,17 @@ interface DeviceData {
   nextBooking?: { start_time: string; end_time: string } | null;
 }
 
+type WakeLockSentinel = {
+  release: () => Promise<void>;
+  addEventListener: (type: "release", listener: () => void) => void;
+};
+
+type WakeLockNavigator = Navigator & {
+  wakeLock?: {
+    request: (type: "screen") => Promise<WakeLockSentinel>;
+  };
+};
+
 function fmtTime(iso?: string | null) {
   if (!iso) return "";
   return DateTime.fromISO(iso, { zone: "utc" }).setZone("Europe/Stockholm").toFormat("HH:mm");
@@ -46,9 +57,39 @@ export default function DeviceDisplay() {
     queryKey: ["display-device", token],
     enabled: !!token,
     queryFn: () => apiGet("api-bookings", "display-device", { token }),
-    refetchInterval: 30_000,
-    staleTime: 10_000,
+    refetchInterval: 10_000,
+    staleTime: 5_000,
   });
+
+  useEffect(() => {
+    let wakeLock: WakeLockSentinel | null = null;
+    let cancelled = false;
+
+    const requestWakeLock = async () => {
+      try {
+        if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+        wakeLock = await (navigator as WakeLockNavigator).wakeLock!.request("screen");
+        wakeLock.addEventListener("release", () => {
+          wakeLock = null;
+        });
+      } catch {
+        wakeLock = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (!cancelled && document.visibilityState === "visible") requestWakeLock();
+    };
+
+    requestWakeLock();
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibility);
+      wakeLock?.release().catch(() => undefined);
+    };
+  }, []);
 
   const defaultLinks = useMemo(() => {
     const links = data?.device.external_links || [];
@@ -82,6 +123,14 @@ export default function DeviceDisplay() {
     : `/display/openplay?v=${venue?.slug || "pickla-arena-sthlm"}`;
   const active = Boolean(data.currentBooking);
   const checkedIn = Boolean(data.currentBooking?.checked_in);
+  const displayName = data.device.name || resource?.name || "Pickla";
+  const resourceName = resource?.name || null;
+  const statusLabel = checkedIn ? "INCHECKAD" : active ? "BOKAD NU" : "LEDIG";
+  const statusClass = checkedIn
+    ? "bg-emerald-300 text-neutral-950"
+    : active
+      ? "bg-pink-500 text-white"
+      : "bg-white text-neutral-950";
   const nextText = data.currentBooking
     ? checkedIn
       ? `Incheckad ${fmtTime(data.currentBooking.start_time)}-${fmtTime(data.currentBooking.end_time)}`
@@ -92,9 +141,9 @@ export default function DeviceDisplay() {
 
   return (
     <main className="min-h-screen bg-[#faf8f5] text-neutral-950">
-      <div className="mx-auto w-full max-w-3xl px-6 py-6">
-        <header className="mb-12 flex items-center justify-between gap-6">
-          <img src={picklaLogo} alt="Pickla" className="h-10 w-auto" />
+      <div className="mx-auto w-full max-w-4xl px-6 py-6">
+        <header className="mb-8 flex items-center justify-between gap-6">
+          <img src={picklaLogo} alt="Pickla" className="h-12 w-auto" />
           <div className="flex items-center gap-2 font-mono text-sm">
             <span className={`h-2.5 w-2.5 rounded-full ${checkedIn ? "bg-emerald-400" : active ? "bg-red-400" : "bg-pink-400"}`} />
             <span>{venue?.name || "Pickla"}</span>
@@ -104,9 +153,12 @@ export default function DeviceDisplay() {
         <section className="pb-10">
           <div className="mb-8">
             <p className="mb-3 font-mono text-xs uppercase tracking-[0.24em] text-neutral-400">Paddle Home</p>
-            <h1 className="font-display text-6xl font-black leading-none sm:text-7xl">
-              {resource?.name || data.device.name}
+            <h1 className="font-display text-7xl font-black leading-none sm:text-8xl">
+              {displayName}
             </h1>
+            {resourceName && resourceName !== displayName && (
+              <p className="mt-3 font-mono text-xl text-neutral-400">{resourceName}</p>
+            )}
             <p className="mt-4 max-w-2xl font-mono text-2xl text-neutral-500">{nextText}</p>
             {checkedIn && data.currentBooking?.player_name && (
               <p className="mt-2 font-mono text-base text-emerald-600">
@@ -116,9 +168,18 @@ export default function DeviceDisplay() {
           </div>
 
           <div className="space-y-4">
+            <div className={`rounded-[2rem] border border-black/10 p-7 ${statusClass}`}>
+              <p className="font-display text-7xl font-black leading-none sm:text-8xl">{statusLabel}</p>
+              <p className={`mt-3 font-mono text-xl ${checkedIn || active ? "text-current opacity-75" : "text-neutral-500"}`}>
+                {checkedIn && data.currentBooking?.player_name
+                  ? `${data.currentBooking.player_name} är inne`
+                  : nextText}
+              </p>
+            </div>
+
             {checkedIn ? (
-              <div className="block rounded-[2rem] bg-emerald-300 p-7 text-neutral-950">
-                <p className="font-display text-4xl font-black">Redan incheckad</p>
+              <div className="block rounded-[2rem] border border-black/10 bg-white p-7 text-neutral-950">
+                <p className="font-display text-4xl font-black">Incheckning klar</p>
                 <p className="mt-2 font-mono text-sm text-neutral-700">
                   {data.currentBooking?.player_name
                     ? `${data.currentBooking.player_name} är inne`
