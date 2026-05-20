@@ -1,18 +1,28 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
+import { useAuth } from "@/hooks/useAuth";
 
 export function useAdminCheck() {
+  const { session } = useAuth();
   return useQuery({
-    queryKey: ["admin-check"],
+    queryKey: ["admin-check", session?.user.id, session?.access_token],
+    enabled: !!session?.access_token,
     queryFn: () => apiGet("api-admin", "check"),
     retry: false,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 }
 
 export function useAdminVenues() {
+  const { session } = useAuth();
   return useQuery({
-    queryKey: ["admin-venues"],
+    queryKey: ["admin-venues", session?.user.id, session?.access_token],
+    enabled: !!session?.access_token,
     queryFn: () => apiGet("api-admin", "venues"),
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 }
 
