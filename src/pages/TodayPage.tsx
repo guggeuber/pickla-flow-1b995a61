@@ -12,6 +12,7 @@ import {
   groupBookingRows,
 } from "@/lib/bookingGroups";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
 const PAGE_BG = "#fffaf7";
@@ -410,7 +411,7 @@ export default function TodayPage() {
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const now = DateTime.now().setZone("Europe/Stockholm");
   const menuBookings = items.filter((item) => item.kind === "booking").slice(0, 5);
-  const heroImage = venue?.cover_image_url || weekendVibes;
+  const heroImage = venue?.cover_image_url || heroPhoto;
   const heroText = venue?.description?.trim() || "Weekend Vibes";
   const openGuide = (guideKey: GuideKey) => {
     setMenuOpen(false);
@@ -446,8 +447,8 @@ export default function TodayPage() {
   ), [items, now]);
 
   return (
-    <div className="min-h-[100dvh] pb-10" style={{ background: PAGE_BG, color: TEXT }}>
-      <header className="sticky top-0 z-50 border-b border-black/5 bg-[#fffaf7]/95 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-xl">
+    <div className="min-h-[100dvh] pb-10 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
+      <header className="fixed left-0 right-0 top-0 z-50 border-b border-black/5 bg-[#fffaf7]/95 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-md items-center justify-between gap-3">
           <button
             type="button"
