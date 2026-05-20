@@ -10,11 +10,14 @@ import {
   X,
   Loader2,
   Clock3,
+  Mail,
   MapPin,
   MessageCircle,
+  Phone,
   Sparkles,
   Ticket,
   Trophy,
+  User,
   Zap,
 } from "lucide-react";
 import { apiPost } from "@/lib/api";
@@ -89,6 +92,22 @@ interface RoomPreview {
   lastMessageAt: string;
   senderName: string | null;
   senderAvatarUrl: string | null;
+}
+
+interface InquiryEventDetails {
+  id: string;
+  planning_status?: string | null;
+  visibility?: string | null;
+  is_public?: boolean | null;
+  name?: string | null;
+  display_name?: string | null;
+  customer_name?: string | null;
+  customer_email?: string | null;
+  customer_phone?: string | null;
+  expected_participants?: number | null;
+  start_date?: string | null;
+  start_time?: string | null;
+  resources?: string[] | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -406,6 +425,23 @@ function useEventRooms(venueId: string | undefined) {
   });
 }
 
+function useInquiryEventDetails(eventId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["hub-inquiry-event", eventId],
+    enabled: enabled && !!eventId,
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("events")
+        .select("id, planning_status, visibility, is_public, name, display_name, customer_name, customer_email, customer_phone, expected_participants, start_date, start_time, resources")
+        .eq("id", eventId!)
+        .maybeSingle();
+      if (error) return null;
+      return data as InquiryEventDetails | null;
+    },
+  });
+}
+
 function useWeeklyProgram(venueId: string | undefined) {
   return useQuery({
     queryKey: ["hub-weekly-program", venueId],
@@ -524,7 +560,7 @@ function useRoomPreviews(roomIds: string[]) {
     queryFn: async () => {
       const { data: messages } = await supabase
         .from("chat_messages")
-        .select("room_id, content, created_at, user_id, message_type")
+        .select("room_id, content, created_at, user_id, message_type, metadata")
         .in("room_id", roomIds)
         .order("created_at", { ascending: false });
 
@@ -553,6 +589,8 @@ function useRoomPreviews(roomIds: string[]) {
       for (const [roomId, msg] of Object.entries(lastByRoom)) {
         const profile = msg.user_id ? profileMap[msg.user_id] : null;
         const previewText =
+          msg.metadata?.channel === "email" && msg.metadata?.direction === "outbound" ? `📧 Till kund: ${msg.content ?? ""}` :
+          msg.metadata?.channel === "email" && msg.metadata?.direction === "inbound" ? `📩 Från kund: ${msg.content ?? ""}` :
           msg.metadata?.type === "gif" ? "🎬 GIF" :
           msg.metadata?.type === "image" ? "📷 Bild" :
           msg.content ?? "Meddelande raderat";
@@ -588,8 +626,14 @@ function haptic(ms = 10) {
         osc.stop(ctx.currentTime + 0.002);
         osc.onended = () => ctx.close().catch(() => {});
       };
-      ctx.state === "suspended" ? ctx.resume().then(play) : play();
-    } catch {}
+      if (ctx.state === "suspended") {
+        ctx.resume().then(play);
+      } else {
+        play();
+      }
+    } catch {
+      return;
+    }
   } else {
     navigator.vibrate?.(ms);
   }
@@ -659,6 +703,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const qc = useQueryClient();
   const { messages, loading: msgsLoading } = useRoomMessages(room.id);
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
+  const { data: inquiryEvent } = useInquiryEventDetails(room.resource_id, room.room_type === "event" && !!room.resource_id);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const reactions = useRoomReactions(room.id);
   const [contextMsg, setContextMsg] = useState<ChatMessage | null>(null);
@@ -676,6 +721,10 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
   const headerSubtitle = room.room_type === "booking"
     ? stripBookingCodesFromText(room.subtitle)
     : room.subtitle;
+  const isInquiryEvent =
+    room.room_type === "event" &&
+    !!inquiryEvent &&
+    (inquiryEvent.planning_status === "inquiry" || inquiryEvent.visibility === "internal" || inquiryEvent.is_public === false);
 
   // #3 — push input above keyboard on iOS
   const [keyboardOffset, setKeyboardOffset] = useState(0);
@@ -957,12 +1006,16 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           <BookingSmartPanel room={room} venueId={venueId} userId={user?.id} onShare={shareRoom} />
         )}
 
-        {/* Event room: action card */}
+        {/* Event room: public event card or internal inquiry customer panel */}
         {room.room_type === "event" && room.resource_id && (
-           <EventCard
-           eventId={room.resource_id}
-           venueId={venueId}
-         />
+          isInquiryEvent && inquiryEvent ? (
+            <InquiryCustomerPanel event={inquiryEvent} />
+          ) : (
+            <EventCard
+              eventId={room.resource_id}
+              venueId={venueId}
+            />
+          )
         )}
 
         {/* #8 — message skeletons while loading */}
@@ -1784,6 +1837,176 @@ function ContextOverlay({ message, currentUserId, reactions, onReact, onReply, o
   );
 }
 
+// ── Inquiry customer communication ──────────────────────────────────────────
+function InquiryCustomerPanel({ event }: { event: InquiryEventDetails }) {
+  const qc = useQueryClient();
+  const [subject, setSubject] = useState("");
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const resources = Array.isArray(event.resources) ? event.resources.filter(Boolean) : [];
+  const dateLabel = event.start_date
+    ? DateTime.fromISO(event.start_date, { zone: "Europe/Stockholm" }).toFormat("d/M")
+    : "Datum flexibelt";
+  const timeLabel = event.start_time ? String(event.start_time).slice(0, 5) : "Tid flexibelt";
+  const canSend = !!event.customer_email && message.trim().length > 1 && !sending;
+
+  const sendCustomerEmail = async () => {
+    if (!canSend) return;
+    setSending(true);
+    try {
+      await apiPost("api-event-public", "customer-message", {
+        event_id: event.id,
+        message: message.trim(),
+        ...(subject.trim() ? { subject: subject.trim() } : {}),
+      });
+      setMessage("");
+      setSubject("");
+      toast.success("Mail skickat till kund");
+      qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Kunde inte skicka mail");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        border: `1px solid ${HUB_BORDER}`,
+        background: HUB_CARD,
+        borderRadius: 18,
+        padding: 16,
+        boxShadow: "0 8px 22px rgba(17,24,39,0.05)",
+        marginBottom: 10,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <p style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 700, color: HUB_MUTED, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4 }}>
+            Gruppförfrågan
+          </p>
+          <p style={{ fontFamily: FONT_HEADING, fontSize: 18, lineHeight: 1.15, fontWeight: 800, color: HUB_TEXT }}>
+            {event.display_name || event.name || "Kundförfrågan"}
+          </p>
+        </div>
+        <span
+          style={{
+            borderRadius: 999,
+            background: "rgba(34,197,94,0.12)",
+            color: "#15803d",
+            padding: "5px 9px",
+            fontSize: 10,
+            fontFamily: FONT_HEADING,
+            fontWeight: 800,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            flexShrink: 0,
+          }}
+        >
+          Inquiry
+        </span>
+      </div>
+
+      <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
+        <InfoLine icon={<User />} label={event.customer_name || "Okänd kund"} />
+        <InfoLine icon={<Mail />} label={event.customer_email || "Email saknas"} muted={!event.customer_email} />
+        <InfoLine icon={<Phone />} label={event.customer_phone || "Telefon saknas"} muted={!event.customer_phone} />
+        <InfoLine icon={<Clock3 />} label={`${dateLabel} · ${timeLabel}${event.expected_participants ? ` · ${event.expected_participants} pers` : ""}`} />
+        {resources.length > 0 && <InfoLine icon={<Sparkles />} label={resources.join(", ")} />}
+      </div>
+
+      <div
+        style={{
+          borderTop: `1px solid ${HUB_BORDER}`,
+          paddingTop: 12,
+          display: "grid",
+          gap: 8,
+        }}
+      >
+        <p style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: HUB_TEXT }}>
+          Skicka till kund
+        </p>
+        <input
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          placeholder="Ämne (valfritt)"
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            border: `1px solid ${HUB_BORDER}`,
+            borderRadius: 12,
+            background: HUB_BG,
+            padding: "10px 12px",
+            fontSize: 13,
+            color: HUB_TEXT,
+            outline: "none",
+          }}
+        />
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder={event.customer_email ? "Skriv ett kundmail..." : "Lägg till kundens email i eventet först"}
+          disabled={!event.customer_email}
+          rows={3}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            border: `1px solid ${HUB_BORDER}`,
+            borderRadius: 12,
+            background: event.customer_email ? HUB_BG : "rgba(156,163,175,0.10)",
+            padding: "10px 12px",
+            fontSize: 14,
+            color: HUB_TEXT,
+            outline: "none",
+            resize: "vertical",
+            minHeight: 86,
+          }}
+        />
+        <motion.button
+          whileTap={{ scale: 0.97 }}
+          onClick={sendCustomerEmail}
+          disabled={!canSend}
+          style={{
+            height: 42,
+            borderRadius: 999,
+            border: "none",
+            background: canSend ? HUB_TEXT : HUB_BORDER,
+            color: canSend ? "#fff" : HUB_MUTED,
+            fontFamily: FONT_HEADING,
+            fontSize: 13,
+            fontWeight: 800,
+            cursor: canSend ? "pointer" : "default",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          {sending ? <Loader2 style={{ width: 15, height: 15, animation: "spin 1s linear infinite" }} /> : <Mail style={{ width: 15, height: 15 }} />}
+          Skicka mail till kund
+        </motion.button>
+        <p style={{ fontSize: 11, color: HUB_MUTED, lineHeight: 1.35 }}>
+          Interna meddelanden skrivs längst ner i chatten. Endast detta block mailar kunden.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function InfoLine({ icon, label, muted = false }: { icon: ReactNode; label: string; muted?: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      <span style={{ width: 18, height: 18, color: muted ? HUB_MUTED : HUB_SUB, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        {icon}
+      </span>
+      <span style={{ fontSize: 13, color: muted ? HUB_MUTED : HUB_TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
 // ── MessageBubble ─────────────────────────────────────────────────────────────
 function LinkifiedText({ text, isOwn }: { text: string; isOwn: boolean }) {
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
@@ -1832,6 +2055,9 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
   const isBot = message.message_type === "bot";
   const isDeleted = message.content === null;
   const isMedia = !isDeleted && (message.metadata?.type === "gif" || message.metadata?.type === "image");
+  const isEmail = message.metadata?.channel === "email";
+  const isInboundEmail = isEmail && message.metadata?.direction === "inbound";
+  const emailLabel = isInboundEmail ? "Mail från kund" : isEmail ? "Mail till kund" : "";
   const longPress = useLongPress(onLongPress);
   const hasReactions = reactions.length > 0;
 
@@ -1854,11 +2080,19 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
         {...longPress}
         style={{
           position: "relative",
-          maxWidth: "75%",
+          maxWidth: isEmail ? "88%" : "75%",
           padding: isMedia ? "0" : "8px 12px",
           borderRadius: isOwn ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
-          background: isMedia ? "transparent" : isOwn ? "linear-gradient(135deg, #2d3a8c 0%, #4a5cc7 100%)" : HUB_CARD,
-          border: isMedia ? "none" : isOwn ? "none" : `1px solid ${HUB_BORDER}`,
+          background: isMedia
+            ? "transparent"
+            : isInboundEmail
+              ? "#fff7ed"
+              : isEmail
+                ? "#ecfdf5"
+                : isOwn
+                  ? "linear-gradient(135deg, #2d3a8c 0%, #4a5cc7 100%)"
+                  : HUB_CARD,
+          border: isMedia ? "none" : isOwn && !isEmail ? "none" : `1px solid ${isEmail ? "rgba(34,197,94,0.22)" : HUB_BORDER}`,
           boxShadow: isMedia ? "none" : isOwn ? "none" : "0 1px 2px rgba(0,0,0,0.04)",
           overflow: "visible",
           userSelect: "none",
@@ -1907,15 +2141,30 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
             )}
           </div>
         ) : (
-          <p style={{ fontSize: 14, color: isOwn ? "#fff" : HUB_TEXT, lineHeight: 1.4 }}>
-            <LinkifiedText text={message.content ?? ""} isOwn={isOwn} />
-          </p>
+          <>
+            {isEmail && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <Mail style={{ width: 12, height: 12, color: isInboundEmail ? "#c2410c" : "#15803d" }} />
+                <span style={{ fontSize: 9, fontFamily: FONT_HEADING, fontWeight: 800, letterSpacing: "0.10em", textTransform: "uppercase", color: isInboundEmail ? "#c2410c" : "#15803d" }}>
+                  {emailLabel}
+                </span>
+              </div>
+            )}
+            <p style={{ fontSize: 14, color: isOwn && !isEmail ? "#fff" : HUB_TEXT, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
+              <LinkifiedText text={message.content ?? ""} isOwn={isOwn && !isEmail} />
+            </p>
+            {isEmail && message.metadata?.subject && (
+              <p style={{ fontSize: 10, color: HUB_MUTED, marginTop: 6, lineHeight: 1.3 }}>
+                {message.metadata.subject}
+              </p>
+            )}
+          </>
         )}
 
         {!isMedia && (
           <>
             {showTimestamp && (
-              <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: 3, textAlign: "right" }}>
+              <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn && !isEmail ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: 3, textAlign: "right" }}>
                 {relativeTime(message.created_at)}
               </p>
             )}

@@ -1,41 +1,95 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
-import { getServiceClient } from '../_shared/auth.ts';
+import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-async function sendGroupInquiryEmail({
+const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
+const RESEND_REPLY_DOMAIN = Deno.env.get('RESEND_INBOUND_DOMAIN') || 'reply.playpickla.com';
+
+function escapeHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function eventReplyAddress(eventId: string) {
+  return `event-${eventId}@${RESEND_REPLY_DOMAIN}`;
+}
+
+function formatSubject(base: string, eventId: string) {
+  const token = `[Pickla ${eventId}]`;
+  return base.includes(token) ? base : `${base} ${token}`;
+}
+
+function stripHtml(html: string | null | undefined) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function verifyResendWebhook(req: Request) {
+  const raw = await req.text();
+  const secret = Deno.env.get('RESEND_WEBHOOK_SECRET');
+  if (!secret) throw new Error('Missing RESEND_WEBHOOK_SECRET');
+
+  const id = req.headers.get('svix-id') || '';
+  const timestamp = req.headers.get('svix-timestamp') || '';
+  const signatureHeader = req.headers.get('svix-signature') || '';
+  if (!id || !timestamp || !signatureHeader) throw new Error('Missing webhook signature headers');
+
+  const signedContent = `${id}.${timestamp}.${raw}`;
+  const keyBytes = base64ToBytes(secret.startsWith('whsec_') ? secret.slice('whsec_'.length) : secret);
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const expected = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedContent)));
+  const signatures = signatureHeader.split(' ').flatMap((part) => part.split(',')).filter((part) => part && part !== 'v1');
+  const isValid = signatures.some((sig) => constantTimeEqual(base64ToBytes(sig), expected));
+  if (!isValid) throw new Error('Invalid webhook signature');
+  return JSON.parse(raw);
+}
+
+function base64ToBytes(value: string) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
+  return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+}
+
+function constantTimeEqual(a: Uint8Array, b: Uint8Array) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+async function fetchReceivedEmail(emailId: string) {
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  if (!resendKey) throw new Error('Missing RESEND_API_KEY');
+
+  const res = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
+    headers: { Authorization: `Bearer ${resendKey}` },
+  });
+  if (!res.ok) throw new Error(`Could not fetch received email: ${await res.text()}`);
+  const body = await res.json();
+  return body?.data || body;
+}
+
+async function sendResendEmail({
   to,
-  name,
-  venueName,
-  typeLabel,
-  preferredDate,
-  preferredTime,
-  participants,
+  subject,
+  html,
+  replyTo,
 }: {
-  to: string | null;
-  name: string;
-  venueName: string;
-  typeLabel: string;
-  preferredDate: string | null;
-  preferredTime: string;
-  participants: number;
+  to: string;
+  subject: string;
+  html: string;
+  replyTo?: string;
 }) {
   const resendKey = Deno.env.get('RESEND_API_KEY');
-  if (!resendKey || !to) return;
-
-  const html = `
-    <div style="font-family:Inter,Arial,sans-serif;color:#111827;line-height:1.5">
-      <h1 style="font-size:26px;margin:0 0 12px">Vi har fått din förfrågan</h1>
-      <p style="margin:0 0 16px">Hej ${name}, tack! Vi har tagit emot din gruppbokning hos ${venueName}.</p>
-      <div style="border:1px solid #e5e7eb;border-radius:18px;padding:18px;background:#fafafa">
-        <p style="margin:0 0 8px"><strong>Typ:</strong> ${typeLabel}</p>
-        <p style="margin:0 0 8px"><strong>Antal:</strong> ${participants} personer</p>
-        <p style="margin:0 0 8px"><strong>Datum:</strong> ${preferredDate || 'Flexibelt'}</p>
-        <p style="margin:0"><strong>Tid:</strong> ${preferredTime || 'Flexibelt'}</p>
-      </div>
-      <p style="margin:16px 0 0">Vi återkommer med upplägg, tider och offert.</p>
-      <p style="margin:18px 0 0;color:#6b7280;font-size:13px">Pickla</p>
-    </div>
-  `;
+  if (!resendKey) throw new Error('Missing RESEND_API_KEY');
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -44,16 +98,85 @@ async function sendGroupInquiryEmail({
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'Pickla <hello@playpickla.com>',
+      from: RESEND_FROM,
       to,
-      subject: `Vi har fått din förfrågan till ${venueName}`,
+      subject,
       html,
+      ...(replyTo ? { reply_to: replyTo } : {}),
     }),
   });
 
-  if (!res.ok) {
-    console.error('Resend group inquiry email failed:', await res.text());
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.message || data?.error || 'Resend email failed');
+  return data;
+}
+
+function findEventIdFromInbound(email: any) {
+  const recipients = [
+    ...(Array.isArray(email?.to) ? email.to : []),
+    ...(Array.isArray(email?.cc) ? email.cc : []),
+  ].map((value) => emailAddressField(value));
+
+  for (const recipient of recipients) {
+    const match = recipient.match(/event-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})@/i);
+    if (match?.[1]) return match[1];
   }
+
+  const subjectMatch = String(email?.subject || '').match(/\[Pickla\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/i);
+  return subjectMatch?.[1] || null;
+}
+
+function emailAddressField(value: any) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (value.email && value.name) return `${value.name} <${value.email}>`;
+  if (value.email) return String(value.email);
+  return String(value);
+}
+
+async function sendGroupInquiryEmail({
+  to,
+  eventId,
+  name,
+  venueName,
+  typeLabel,
+  preferredDate,
+  preferredTime,
+  participants,
+}: {
+  to: string | null;
+  eventId: string;
+  name: string;
+  venueName: string;
+  typeLabel: string;
+  preferredDate: string | null;
+  preferredTime: string;
+  participants: number;
+}) {
+  if (!to) return null;
+
+  const html = `
+    <div style="font-family:Inter,Arial,sans-serif;color:#111827;line-height:1.5">
+      <h1 style="font-size:26px;margin:0 0 12px">Vi har fått din förfrågan</h1>
+      <p style="margin:0 0 16px">Hej ${escapeHtml(name)}, tack! Vi har tagit emot din gruppbokning hos ${escapeHtml(venueName)}.</p>
+      <div style="border:1px solid #e5e7eb;border-radius:18px;padding:18px;background:#fafafa">
+        <p style="margin:0 0 8px"><strong>Typ:</strong> ${escapeHtml(typeLabel)}</p>
+        <p style="margin:0 0 8px"><strong>Antal:</strong> ${participants} personer</p>
+        <p style="margin:0 0 8px"><strong>Datum:</strong> ${escapeHtml(preferredDate || 'Flexibelt')}</p>
+        <p style="margin:0"><strong>Tid:</strong> ${escapeHtml(preferredTime || 'Flexibelt')}</p>
+      </div>
+      <p style="margin:16px 0 0">Vi återkommer med upplägg, tider och offert.</p>
+      <p style="margin:8px 0 0">Du kan svara direkt på det här mailet så hamnar svaret hos vårt team.</p>
+      <p style="margin:18px 0 0;color:#6b7280;font-size:13px">Pickla</p>
+    </div>
+  `;
+
+  return await sendResendEmail({
+    to,
+    subject: formatSubject(`Vi har fått din förfrågan till ${venueName}`, eventId),
+    html,
+    replyTo: eventReplyAddress(eventId),
+  });
 }
 
 async function createInquiryRoom({
@@ -138,6 +261,208 @@ Deno.serve(async (req) => {
 
   try {
     const client = getServiceClient();
+
+    // POST /api-event-public/email-webhook — Resend inbound email webhook
+    if (req.method === 'POST' && path === 'email-webhook') {
+      let event: any;
+      try {
+        event = await verifyResendWebhook(req);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Invalid webhook signature', 401);
+      }
+
+      if (event?.type !== 'email.received') {
+        return jsonResponse({ received: true, ignored: true }, 200);
+      }
+
+      const providerEventId = req.headers.get('svix-id') || null;
+      if (providerEventId) {
+        const { data: existing } = await client.from('event_communications')
+          .select('id')
+          .eq('provider', 'resend')
+          .eq('provider_event_id', providerEventId)
+          .maybeSingle();
+        if (existing?.id) return jsonResponse({ success: true, duplicate: true });
+      }
+
+      const emailId = event?.data?.email_id || event?.data?.id;
+      if (!emailId) return errorResponse('Missing email id', 400);
+
+      const email = await fetchReceivedEmail(emailId);
+      const eventId = findEventIdFromInbound(email);
+      if (!eventId) return errorResponse('Could not route inbound email', 404);
+
+      const { data: eventRow, error: eventErr } = await client.from('events')
+        .select('id, venue_id, customer_email')
+        .eq('id', eventId)
+        .maybeSingle();
+      if (eventErr || !eventRow) return errorResponse('Event not found', 404);
+
+      const { data: room } = await client.from('chat_rooms')
+        .select('id')
+        .eq('resource_id', eventId)
+        .eq('room_type', 'event')
+        .maybeSingle();
+      if (!room?.id) return errorResponse('Event room not found', 404);
+
+      const textBody = String(email?.text || stripHtml(email?.html) || '').trim();
+      const content = textBody.length > 4000 ? `${textBody.slice(0, 4000)}...` : textBody;
+
+      const { data: communication, error: commErr } = await client.from('event_communications')
+        .insert({
+          event_id: eventId,
+          room_id: room.id,
+          direction: 'inbound',
+          channel: 'email',
+          from_email: emailAddressField(email?.from || event?.data?.from) || null,
+          to_email: Array.isArray(email?.to) ? email.to.map(emailAddressField).filter(Boolean).join(', ') : null,
+          subject: email?.subject || event?.data?.subject || null,
+          body_text: textBody || null,
+          body_html: email?.html || null,
+          provider: 'resend',
+          provider_message_id: emailId,
+          provider_event_id: providerEventId,
+          status: 'received',
+          metadata: {
+            message_id: email?.message_id || event?.data?.message_id || null,
+            cc: email?.cc || [],
+            attachments: email?.attachments || [],
+          },
+        })
+        .select('id')
+        .single();
+
+      if (commErr) {
+        if (commErr.code === '23505') return jsonResponse({ success: true, duplicate: true });
+        return errorResponse(commErr.message, 500);
+      }
+
+      await client.from('chat_messages').insert({
+        room_id: room.id,
+        user_id: null,
+        message_type: 'text',
+        content: content || '(tomt mailsvar)',
+        metadata: {
+          channel: 'email',
+          direction: 'inbound',
+          communication_id: communication.id,
+          event_id: eventId,
+          from: emailAddressField(email?.from || event?.data?.from) || null,
+          subject: email?.subject || event?.data?.subject || null,
+        },
+      });
+
+      return jsonResponse({ success: true, communication_id: communication.id });
+    }
+
+    // POST /api-event-public/customer-message — staff email response from inquiry room
+    if (req.method === 'POST' && path === 'customer-message') {
+      const { userId, error: authError } = await getAuthenticatedClient(req);
+      if (authError || !userId) return errorResponse(authError || 'Unauthorized', 401);
+
+      const body = await req.json();
+      const eventId = String(body.event_id || '').trim();
+      const message = String(body.message || '').trim();
+      if (!eventId) return errorResponse('Missing event_id');
+      if (message.length < 2) return errorResponse('Missing message');
+      if (message.length > 5000) return errorResponse('Message too long');
+
+      const { data: eventRow, error: eventErr } = await client.from('events')
+        .select('id, venue_id, name, display_name, customer_name, customer_email, customer_phone, venues(name)')
+        .eq('id', eventId)
+        .maybeSingle();
+      if (eventErr || !eventRow) return errorResponse('Event not found', 404);
+      if (!eventRow.customer_email) return errorResponse('Kunden saknar email', 400);
+
+      const { data: staff } = await client.from('venue_staff')
+        .select('id')
+        .eq('venue_id', eventRow.venue_id)
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (!staff?.id) return errorResponse('Forbidden', 403);
+
+      const { data: room } = await client.from('chat_rooms')
+        .select('id')
+        .eq('resource_id', eventId)
+        .eq('room_type', 'event')
+        .maybeSingle();
+      if (!room?.id) return errorResponse('Event room not found', 404);
+
+      const venueName = (eventRow.venues as any)?.name || 'Pickla';
+      const subject = formatSubject(
+        String(body.subject || '').trim() || `Angående din förfrågan till ${venueName}`,
+        eventId,
+      );
+      const htmlMessage = escapeHtml(message).replaceAll('\n', '<br>');
+      const html = `
+        <div style="font-family:Inter,Arial,sans-serif;color:#111827;line-height:1.55">
+          <p style="margin:0 0 16px">Hej ${escapeHtml(eventRow.customer_name || '')},</p>
+          <div style="font-size:15px">${htmlMessage}</div>
+          <p style="margin:20px 0 0;color:#6b7280;font-size:13px">Svara direkt på detta mail om du har frågor.</p>
+          <p style="margin:8px 0 0;color:#111827;font-weight:700">${escapeHtml(venueName)}</p>
+        </div>
+      `;
+
+      const { data: pendingCommunication, error: pendingErr } = await client.from('event_communications')
+        .insert({
+          event_id: eventId,
+          room_id: room.id,
+          direction: 'outbound',
+          channel: 'email',
+          from_email: RESEND_FROM,
+          to_email: eventRow.customer_email,
+          subject,
+          body_text: message,
+          body_html: html,
+          provider: 'resend',
+          status: 'pending',
+          created_by: userId,
+        })
+        .select('id')
+        .single();
+      if (pendingErr) return errorResponse(pendingErr.message, 500);
+
+      let sendResult: any;
+      try {
+        sendResult = await sendResendEmail({
+          to: eventRow.customer_email,
+          subject,
+          html,
+          replyTo: eventReplyAddress(eventId),
+        });
+      } catch (err) {
+        await client.from('event_communications')
+          .update({ status: 'failed', metadata: { error: err instanceof Error ? err.message : String(err) } })
+          .eq('id', pendingCommunication.id);
+        return errorResponse(err instanceof Error ? err.message : 'Email failed', 502);
+      }
+
+      await client.from('event_communications')
+        .update({
+          status: 'sent',
+          provider_message_id: sendResult?.id || null,
+          metadata: { resend_response: sendResult },
+        })
+        .eq('id', pendingCommunication.id);
+
+      await client.from('chat_messages').insert({
+        room_id: room.id,
+        user_id: userId,
+        message_type: 'text',
+        content: message,
+        metadata: {
+          channel: 'email',
+          direction: 'outbound',
+          communication_id: pendingCommunication.id,
+          event_id: eventId,
+          to: eventRow.customer_email,
+          subject,
+        },
+      });
+
+      return jsonResponse({ success: true, communication_id: pendingCommunication.id });
+    }
 
     // GET /api-event-public/detail?id=X or ?slug=X — public event info
     if (req.method === 'GET' && path === 'detail') {
@@ -374,14 +699,32 @@ Deno.serve(async (req) => {
         message: partnerNotes,
       });
 
+      const confirmationSubject = formatSubject(`Vi har fått din förfrågan till ${venue.name || 'Pickla'}`, event.id);
       await sendGroupInquiryEmail({
         to: cleanEmail,
+        eventId: event.id,
         name: cleanName,
         venueName: venue.name || 'Pickla',
         typeLabel,
         preferredDate: requestedDate,
         preferredTime: timeLabel,
         participants: participantCount,
+      }).then(async (result) => {
+        if (!result || !roomId) return;
+        await client.from('event_communications').insert({
+          event_id: event.id,
+          room_id: roomId,
+          direction: 'outbound',
+          channel: 'email',
+          from_email: RESEND_FROM,
+          to_email: cleanEmail,
+          subject: confirmationSubject,
+          body_text: `Vi har fått din förfrågan till ${venue.name || 'Pickla'}. Vi återkommer med upplägg, tider och offert.`,
+          provider: 'resend',
+          provider_message_id: result?.id || null,
+          status: 'sent',
+          metadata: { source: 'group_inquiry_confirmation' },
+        });
       }).catch((err) => console.error('Confirmation email failed:', err?.message || err));
 
       return jsonResponse({ success: true, event_id: event.id, room_id: roomId }, 201);
