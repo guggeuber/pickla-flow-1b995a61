@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import { CalendarCheck, ExternalLink, LogIn, Play, Trophy } from "lucide-react";
 import { DateTime } from "luxon";
 import { apiGet } from "@/lib/api";
@@ -76,8 +75,8 @@ export default function DeviceDisplay() {
       : "Ingen mer bokning idag";
 
   return (
-    <main className="min-h-screen bg-[#faf8f5] text-neutral-950">
-      <div className="mx-auto flex min-h-screen max-w-4xl flex-col px-8 py-8">
+    <main className="min-h-[100svh] overflow-hidden bg-[#faf8f5] text-neutral-950">
+      <div className="mx-auto flex min-h-[100svh] max-w-4xl flex-col px-8 py-8">
         <header className="flex items-center justify-between gap-6">
           <img src={picklaLogo} alt="Pickla" className="h-10 w-auto" />
           <div className="flex items-center gap-2 font-mono text-sm">
@@ -97,10 +96,10 @@ export default function DeviceDisplay() {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
-              <motion.div whileTap={{ scale: 0.97 }} className="sm:col-span-2">
+              <div className="sm:col-span-2">
                 <Link
                   to={checkinUrl}
-                  className="flex min-h-48 flex-col justify-between rounded-[2rem] bg-neutral-950 p-7 text-white shadow-xl shadow-neutral-950/10"
+                  className="flex min-h-48 flex-col justify-between rounded-[2rem] bg-neutral-950 p-7 text-white"
                 >
                   <LogIn className="h-9 w-9 text-emerald-300" />
                   <div>
@@ -108,60 +107,56 @@ export default function DeviceDisplay() {
                     <p className="mt-2 font-mono text-sm text-white/55">Slå koden från bokningen</p>
                   </div>
                 </Link>
-              </motion.div>
+              </div>
 
-              <motion.a
-                whileTap={{ scale: 0.97 }}
+              <a
                 href="/today"
-                className="flex min-h-48 flex-col justify-between rounded-[2rem] border border-black/10 bg-white p-7 shadow-sm"
+                className="flex min-h-48 flex-col justify-between rounded-[2rem] border border-black/10 bg-white p-7"
               >
                 <CalendarCheck className="h-8 w-8 text-pink-500" />
                 <div>
                   <p className="font-display text-3xl font-black">Idag</p>
                   <p className="mt-2 font-mono text-sm text-neutral-500">Vad händer på Pickla</p>
                 </div>
-              </motion.a>
+              </a>
 
               {defaultLinks.map((link) => (
-                <motion.a
+                <a
                   key={`${link.label}-${link.url}`}
-                  whileTap={{ scale: 0.97 }}
                   href={link.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex min-h-36 flex-col justify-between rounded-[1.5rem] border border-black/10 bg-white p-6 shadow-sm"
+                  className="flex min-h-36 flex-col justify-between rounded-[1.5rem] border border-black/10 bg-white p-6"
                 >
                   <ExternalLink className="h-6 w-6 text-neutral-500" />
                   <div>
                     <p className="font-display text-2xl font-black">{link.label}</p>
                     <p className="mt-1 font-mono text-xs text-neutral-500">Öppna verktyg</p>
                   </div>
-                </motion.a>
+                </a>
               ))}
 
-              <motion.a
-                whileTap={{ scale: 0.97 }}
+              <a
                 href="/book"
-                className="flex min-h-36 flex-col justify-between rounded-[1.5rem] border border-black/10 bg-white p-6 shadow-sm"
+                className="flex min-h-36 flex-col justify-between rounded-[1.5rem] border border-black/10 bg-white p-6"
               >
                 <Play className="h-6 w-6 text-emerald-500" />
                 <div>
                   <p className="font-display text-2xl font-black">Boka mer</p>
                   <p className="mt-1 font-mono text-xs text-neutral-500">Nästa aktivitet</p>
                 </div>
-              </motion.a>
+              </a>
 
-              <motion.a
-                whileTap={{ scale: 0.97 }}
+              <a
                 href="/events"
-                className="flex min-h-36 flex-col justify-between rounded-[1.5rem] border border-black/10 bg-white p-6 shadow-sm"
+                className="flex min-h-36 flex-col justify-between rounded-[1.5rem] border border-black/10 bg-white p-6"
               >
                 <Trophy className="h-6 w-6 text-pink-500" />
                 <div>
                   <p className="font-display text-2xl font-black">Events</p>
                   <p className="mt-1 font-mono text-xs text-neutral-500">Träning & turnering</p>
                 </div>
-              </motion.a>
+              </a>
             </div>
           </div>
         </section>
