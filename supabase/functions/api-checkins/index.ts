@@ -210,11 +210,12 @@ Deno.serve(async (req) => {
     // POST /api-checkins/code — self-service check-in via booking access code (no auth required)
     if (req.method === 'POST' && path === 'code') {
       const body = await req.json();
-      const { venue_id, access_code } = body;
+      const { venue_id, access_code, resource_id } = body;
       if (!venue_id || !access_code) return errorResponse('Missing venue_id or access_code');
 
       const safeCode = String(access_code).trim();
       if (!/^\d{4}$/.test(safeCode)) return errorResponse('Ogiltig kod', 400);
+      const resourceId = resource_id ? String(resource_id).trim() : null;
 
       const serviceClient = getServiceClient();
 
@@ -226,7 +227,7 @@ Deno.serve(async (req) => {
 
       const { data: bookings, error: bErr } = await serviceClient
         .from('bookings')
-        .select('id, user_id, venue_id, start_time, end_time, status, booking_ref, notes, venue_courts(name, court_number)')
+        .select('id, user_id, venue_id, venue_court_id, start_time, end_time, status, booking_ref, notes, venue_courts(id, name, court_number, sport_type)')
         .eq('venue_id', venue_id)
         .eq('access_code', safeCode)
         .eq('status', 'confirmed')
@@ -236,6 +237,25 @@ Deno.serve(async (req) => {
 
       if (bErr || !bookings?.length) return errorResponse('Ogiltig eller utgången kod', 404);
       const booking = bookings[0];
+      const expectedResources = bookings
+        .map((b: any) => b.venue_courts ? { ...b.venue_courts, id: b.venue_court_id || b.venue_courts.id } : null)
+        .filter(Boolean);
+
+      if (resourceId && !bookings.some((b: any) => b.venue_court_id === resourceId)) {
+        return jsonResponse({
+          wrong_resource: true,
+          expected_resources: expectedResources,
+          booking: {
+            id: booking.id,
+            booking_ref: (booking as any).booking_ref,
+            start_time: booking.start_time,
+            end_time: booking.end_time,
+            court: (booking as any).venue_courts,
+            courts: expectedResources,
+            customer_name: nameFromBookingNotes((booking as any).notes) || null,
+          },
+        }, 200);
+      }
 
       // ── Time-window validation ──────────────────────────────────────────────
       const startSthlm = DateTime.fromISO(booking.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
@@ -320,7 +340,7 @@ Deno.serve(async (req) => {
           start_time: booking.start_time,
           end_time: booking.end_time,
           court: (booking as any).venue_courts,
-          courts: bookings.map((b: any) => b.venue_courts).filter(Boolean),
+          courts: expectedResources,
           customer_name: customerName || null,
         },
       }, 201);
