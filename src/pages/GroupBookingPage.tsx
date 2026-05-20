@@ -165,7 +165,7 @@ export default function GroupBookingPage() {
                 gruppbokning
               </p>
               <h1 className="mt-2 text-[42px] leading-[0.92] tracking-[-0.04em]" style={{ fontFamily: FONT_MONO }}>
-                Boka event
+                Planera ditt event
               </h1>
             </div>
           </div>

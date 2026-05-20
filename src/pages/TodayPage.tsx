@@ -1,11 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { Loader2 } from "lucide-react";
+import { Loader2, MapPin, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { PlayerNav } from "@/components/PlayerNav";
+import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import {
   getBookingChatResourceId,
   getBookingCourtLabel,
@@ -93,6 +94,13 @@ type BookingGroup = BookingRow & {
   access_codes?: string[];
 };
 
+type OpeningHour = {
+  day_of_week: number;
+  open_time: string | null;
+  close_time: string | null;
+  is_closed: boolean | null;
+};
+
 function sectionLabel(date: DateTime, now: DateTime) {
   const prefix = date.hasSame(now, "day")
     ? "IDAG"
@@ -108,7 +116,7 @@ function useVenue(slug: string) {
     queryFn: async () => {
       const { data } = await supabase
         .from("venues")
-        .select("id, name, slug")
+        .select("id, name, slug, address, city")
         .eq("slug", slug)
         .maybeSingle();
       return data;
@@ -127,13 +135,41 @@ function useVenueOpenStatus(venueId: string | undefined) {
         .from("opening_hours")
         .select("day_of_week, open_time, close_time, is_closed")
         .eq("venue_id", venueId!)
-        .eq("day_of_week", now.weekday % 7)
-        .maybeSingle();
-      if (!data || data.is_closed) return { open: false };
+        .order("day_of_week");
+      const openingHours = (data || []) as OpeningHour[];
+      const today = openingHours.find((row) => row.day_of_week === now.weekday % 7);
+      if (!today || today.is_closed || !today.open_time || !today.close_time) {
+        return { open: false, label: "Stängt idag", openingHours };
+      }
       const nowTime = now.toFormat("HH:mm");
-      return { open: nowTime >= String(data.open_time).slice(0, 5) && nowTime < String(data.close_time).slice(0, 5) };
+      const openTime = String(today.open_time).slice(0, 5);
+      const closeTime = String(today.close_time).slice(0, 5);
+      const open = nowTime >= openTime && nowTime < closeTime;
+      const label = open ? `Öppet till ${closeTime} ikväll` : nowTime < openTime ? `Öppnar ${openTime} idag` : "Stängt för idag";
+      return { open, label, openingHours };
     },
   });
+}
+
+function dayLabel(day: number) {
+  return ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"][day] || "";
+}
+
+function formatHour(time?: string | null) {
+  return time ? String(time).slice(0, 5) : "";
+}
+
+function InfoCard({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-[24px] border border-black/10 bg-white p-5">
+      <h3 className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+        {title}
+      </h3>
+      <p className="mt-2 text-[13px] leading-relaxed text-neutral-600" style={{ fontFamily: FONT_MONO }}>
+        {body}
+      </p>
+    </div>
+  );
 }
 
 function useTodayFeed(venueId: string | undefined, userId: string | undefined, slug: string) {
@@ -301,6 +337,7 @@ function FeedRow({ item, now, highlight }: { item: FeedItem; now: DateTime; high
 
 export default function TodayPage() {
   const [searchParams] = useSearchParams();
+  const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const navigate = useNavigate();
   const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -330,10 +367,15 @@ export default function TodayPage() {
       <header className="px-6 pb-5 pt-[calc(env(safe-area-inset-top,0px)+34px)]">
         <div className="mx-auto flex max-w-md items-center justify-between gap-4">
           <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
-          <div className="flex items-center gap-1.5 text-[13px]" style={{ fontFamily: FONT_MONO }}>
+          <button
+            type="button"
+            onClick={() => setVenueSheetOpen(true)}
+            className="flex items-center gap-1.5 rounded-full px-2 py-1 text-[13px] active:scale-[0.98]"
+            style={{ fontFamily: FONT_MONO }}
+          >
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: status?.open ? GREEN : "#d1d5db" }} />
             <span>{venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}</span>
-          </div>
+          </button>
         </div>
       </header>
 
@@ -343,7 +385,7 @@ export default function TodayPage() {
             {[
               { label: "Boka\nPickleball", href: `/book?v=${slug}&sport=pickleball`, image: null },
               { label: "Boka darts", href: `/book?v=${slug}&sport=dart`, image: null },
-              { label: "Boka event", href: `/book/group?v=${slug}`, image: weekendVibes },
+              { label: "Planera\nEvent", href: `/book/group?v=${slug}`, image: weekendVibes },
             ].map((action) => (
               <button
                 key={action.label}
@@ -377,6 +419,21 @@ export default function TodayPage() {
           </p>
         </section>
 
+        <section className="mx-auto max-w-md space-y-3 px-5 pt-8">
+          <InfoCard
+            title="Pickleball 101"
+            body="Pickleball är en lättstartad racketsport och en av de snabbast växande sporterna i Nordamerika och Asien. Man spelar oftast till 11 och måste vinna med 2. Bara servande lag kan ta poäng. Serven slås underhand, bakom baslinjen, diagonalt över nätet. Efter serve måste returen studsa, och sedan måste även nästa slag studsa. Därefter får man volleya, men inte stå i köket och slå volley."
+          />
+          <InfoCard
+            title="Darts 101"
+            body="På Pickla spelar många klassisk 501: varje spelare börjar på 501 och kastar tre pilar per runda. Poängen räknas ner mot exakt 0. Vanligt upplägg är dubbel ut, alltså att sista pilen måste träffa en dubbel. Bullseye är 50, yttre bull är 25, och tripplar ger mest tryck i spelet."
+          />
+          <InfoCard
+            title="Så funkar Pickla"
+            body="Boka bana, dartbord eller ett pass i appen. Du får bokningen på Mina sidor och en fyrsiffrig kod. När du kommer till hallen checkar du in på paddan vid din resurs. För grupper och företag planerar vi upplägget tillsammans via en förfrågan."
+          />
+        </section>
+
         <section className="mx-auto max-w-md px-5 pt-8">
           {venueLoading || isLoading ? (
             <div className="grid min-h-48 place-items-center">
@@ -406,6 +463,54 @@ export default function TodayPage() {
           )}
         </section>
       </main>
+
+      <Drawer open={venueSheetOpen} onOpenChange={setVenueSheetOpen}>
+        <DrawerContent className="rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+22px)] pt-5">
+          <div className="mx-auto w-full max-w-md">
+            <div className="mb-7 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-[28px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                  {venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}
+                </h2>
+                <p className="mt-4 text-[13px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                  {status?.label || "Öppettider laddas"}
+                </p>
+                <p className="mt-1 text-[13px] text-neutral-700" style={{ fontFamily: FONT_MONO }}>
+                  {[venue?.address || "Svetsarvägen 22", venue?.city || "Solna"].filter(Boolean).join(", ")}
+                </p>
+              </div>
+              <button type="button" onClick={() => setVenueSheetOpen(false)} className="rounded-full p-2 text-neutral-950">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([venue?.address || "Svetsarvägen 22", venue?.city || "Solna"].filter(Boolean).join(", "))}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-full border border-neutral-950 px-4 py-2 text-[13px] font-bold text-neutral-950"
+              style={{ fontFamily: FONT_HEADING }}
+            >
+              <MapPin className="h-4 w-4" />
+              Vägbeskrivning
+            </a>
+
+            <div className="mt-9">
+              <h3 className="text-[16px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                Öppettider
+              </h3>
+              <div className="mt-3 space-y-1">
+                {(status?.openingHours || []).map((hour) => (
+                  <div key={hour.day_of_week} className="flex justify-between gap-8 text-[13px] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                    <span>{dayLabel(hour.day_of_week)}</span>
+                    <span>{hour.is_closed ? "Stängt" : `${formatHour(hour.open_time)} - ${formatHour(hour.close_time)}`}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
 
       <PlayerNav />
     </div>

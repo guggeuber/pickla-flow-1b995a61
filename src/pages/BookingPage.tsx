@@ -703,7 +703,7 @@ export default function BookingPage() {
               {([
                 { value: "pickleball", label: "Boka\nPickleball", meta: `${sportCounts.pickleball} banor`, image: null },
                 { value: "dart", label: "Boka darts", meta: `${sportCounts.dart} bord`, image: null },
-                { value: "event", label: "Boka event", meta: "program", image: weekendVibes },
+                { value: "event", label: "Planera event", meta: "grupper", image: weekendVibes },
               ] as const).map((option) => {
                 const active = option.value !== "event" && sportFilter === option.value;
                 return (
