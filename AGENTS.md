@@ -370,11 +370,74 @@ Supabase secrets required: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `VAPID_
 - Admin has a `Schema` section for creating programs and recurring schedule sessions.
 - Ordinary recurring activities should live in Schema/Activity Sessions, not as heavy `events`. Use `events` for larger campaigns/productions/partner-facing planning that may contain or reference sessions.
 
+## Session 2026-05-20
+
+### Mobile app / booking UX
+- Root route `/` now opens the lightweight Today surface instead of an older landing/home.
+- Today/Book/Me direction was simplified around two core player surfaces:
+  - Today = live venue/community feed with quick actions, hero image, and chronological schedule.
+  - Book = focused booking flow for activities/resources, progressive decisions, no calendar-first UI.
+- BookingPage was redesigned into a large airy booking card:
+  - activity -> date -> period -> duration -> first available time/resource -> book.
+  - fixed “Uber footer” was removed.
+  - exact time/resource selection stays behind drawers/secondary actions.
+- Public court availability supports `days=7` batch fetching, so switching dates reads from `availabilityByDate` instead of full reloads.
+- Multi-resource booking was restored in the court/resource drawer; booking price sums selected resources and entitlement usage counts court-hours (`durationHours * resourceCount`).
+- Added longer-date selection so users can jump beyond the first visible week.
+
+### Purchase flow, receipts, and My page
+- After normal paid/free court booking, logged-in customers land on `/my?booking=<ref>&v=<slug>` instead of directly in the booking chat.
+- `/my?booking=...` opens the selected booking detail sheet; chat is now an explicit action from the detail view.
+- Guest bookings can still use `/b/:ref`.
+- Added Pickla receipt view with VAT/moms fields and fallback calculation for older bookings.
+- Added `booking_receipts` snapshot model for new paid bookings, with one shared receipt for grouped/multi-resource bookings.
+- Free/corporate/entitlement bookings must show `0 kr` receipts instead of fallback list-price totals.
+- Wellness/friskvård direction: receipts are the base for future yearly wellness certificate export.
+
+### Group booking inquiries
+- `Boka event` now routes to `/book/group?v=<slug>`.
+- `GroupBookingPage` is a public mobile inquiry form for company events, bachelor/bachelorette groups, birthdays, etc.
+- Group inquiry creates an internal event lead in the existing admin event pipeline (`planning_status='inquiry'`, `visibility='internal'`, `is_public=false`).
+- Group inquiries require email so Pickla can send confirmation and continue the conversation.
+- Public group-booking copy/image/notes are venue-configurable from admin.
+
+### Event/customer communication
+- Event/inquiry chat in Hub remains internal staff chat.
+- Added explicit customer email composer in inquiry/event rooms: “Skicka mail till kund”.
+- Added `event_communications` for outbound/inbound email log.
+- Added `api-event-public/customer-message` for staff-sent Resend emails.
+- Added `api-event-public/email-webhook` for future Resend inbound replies mapped back to the same event thread.
+- Group inquiry confirmation email uses an event-specific reply address/token so customer replies can be attached to the lead.
+
+### Resource-based check-in and paddor
+- Added resource station URLs:
+  - `/display/resource/:courtId?v=<venue-slug>` for per-resource code check-in.
+  - `/display/device/:token` for physical padda home screen.
+- `api-checkins/code` accepts optional `resource_id`:
+  - valid code on the right resource checks in the whole booking group.
+  - valid code on the wrong resource returns expected resources and does not check in.
+  - repeated code entry is idempotent and returns “already checked in”.
+- `display_devices` table and admin section `Paddor` were added.
+- `api-admin/display-devices` supports full CRUD:
+  - create padda, rename, reassign resource, update external links/instructions, toggle active, rotate token, delete.
+- `api-bookings/display-device` is the public no-auth token lookup for padda home screens and updates `last_seen_at`.
+- Dart paddor always expose Nakka (`https://n01darts.com/n01/web/n01.html`) either from configured links or automatic fallback based on dart/tavla resource naming.
+- Padda home was made deliberately static for older Lenovo/Chrome tablets:
+  - no Framer Motion, no CSS transforms, no heavy shadows, no fixed clipped layout.
+  - after successful resource check-in, station returns to `/display/device/:token`.
+  - device home displays current booking state and “Redan incheckad” with customer-name fallback from booking notes.
+
+### Admin/auth/deploy fixes
+- Added explicit `vercel.json` so Vercel builds this Vite app with `npm ci`, `npm run build`, output `dist`, and SPA rewrite to `/index.html`.
+- `useAdmin` query keys now include session user/access token and refetch on mount/focus, reducing stale admin access after login/logout on shared tablets.
+- Recent edge deploys included `api-bookings`, `api-checkins`, `api-admin`, and event communication functions as their features changed.
+- Supabase `.temp/*` files often change locally after CLI deploys; do not stage them unless explicitly intended.
+
 ## Next Up
 - Design-uppdatering av hela appen
 - Membership visas på /my (webhook skapar korrekt, men query i MyPage kan behöva verifieras)
-- `access_code` on `day_passes` (shown to customer after purchase)
-- SMS to customer on day pass purchase
-- `/display/dart/:court_id` — dart kiosk webapp
 - Real resource/staff planning model for events (separate resources like hall/lounge/stage/bar and staff assignments instead of lightweight text tags)
 - Verify grouped multi-court booking UX end-to-end in production with Stripe webhook + Hub chat list
+- Polish device/padda admin once real staff use it for a few days: search/filter, bulk-create for all dart boards, clearer kiosk setup checklist.
+- Finish inbound Resend DNS/webhook production setup for event customer replies.
+- Build friskvård yearly certificate export from receipt snapshots.

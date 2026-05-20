@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, ExternalLink, Loader2, Plus, RotateCcw, TabletSmartphone } from "lucide-react";
+import { Copy, ExternalLink, Loader2, Pencil, Plus, RotateCcw, TabletSmartphone } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 interface Court {
@@ -21,8 +22,27 @@ interface DisplayDevice {
   mode: string;
   is_active: boolean;
   last_seen_at: string | null;
+  instructions?: string | null;
   external_links?: Array<{ label: string; url: string }>;
   venue_courts?: Court | null;
+}
+
+function linksToText(links?: Array<{ label: string; url: string }>) {
+  return (links || []).map((link) => `${link.label} | ${link.url}`).join("\n");
+}
+
+function parseLinks(text: string) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [label, ...urlParts] = line.split("|").map((part) => part.trim());
+      const url = urlParts.join("|").trim();
+      return { label, url };
+    })
+    .filter((link) => link.label && link.url && /^https?:\/\//i.test(link.url))
+    .slice(0, 8);
 }
 
 export default function AdminDevices({ venueId }: { venueId: string }) {
@@ -30,6 +50,11 @@ export default function AdminDevices({ venueId }: { venueId: string }) {
   const [name, setName] = useState("");
   const [courtId, setCourtId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editCourtId, setEditCourtId] = useState("");
+  const [editLinks, setEditLinks] = useState("");
+  const [editInstructions, setEditInstructions] = useState("");
 
   const { data: devices = [], isLoading } = useQuery<DisplayDevice[]>({
     queryKey: ["admin-display-devices", venueId],
@@ -86,6 +111,34 @@ export default function AdminDevices({ venueId }: { venueId: string }) {
 
   const selectedCourt = sortedCourts.find((court) => court.id === courtId);
   const deviceUrl = (token: string) => `${window.location.origin}/display/device/${token}`;
+
+  const startEdit = (device: DisplayDevice) => {
+    setEditingId(device.id);
+    setEditName(device.name);
+    setEditCourtId(device.venue_court_id || "");
+    setEditLinks(linksToText(device.external_links));
+    setEditInstructions(device.instructions || "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditName("");
+    setEditCourtId("");
+    setEditLinks("");
+    setEditInstructions("");
+  };
+
+  const saveEdit = (deviceId: string) => {
+    updateDevice.mutate({
+      deviceId,
+      name: editName.trim(),
+      venue_court_id: editCourtId || null,
+      external_links: parseLinks(editLinks),
+      instructions: editInstructions.trim() || null,
+    }, {
+      onSuccess: cancelEdit,
+    });
+  };
 
   const copy = async (text: string, label = "Kopierad") => {
     await navigator.clipboard.writeText(text);
@@ -147,27 +200,79 @@ export default function AdminDevices({ venueId }: { venueId: string }) {
         <div className="space-y-3">
           {devices.map((device) => {
             const url = deviceUrl(device.device_token);
+            const editing = editingId === device.id;
             return (
               <div key={device.id} className="rounded-2xl border border-border bg-card p-4">
-                <div className="mb-3 flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-display text-base font-bold">{device.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {device.venue_courts?.name || "Venue home"} · {device.is_active ? "Aktiv" : "Avstängd"}
-                    </p>
-                    {device.last_seen_at && (
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        senast sedd {new Date(device.last_seen_at).toLocaleString("sv-SE")}
-                      </p>
-                    )}
+                {editing ? (
+                  <div className="mb-4 space-y-3">
+                    <Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Paddnamn" />
+                    <select
+                      value={editCourtId}
+                      onChange={(e) => setEditCourtId(e.target.value)}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="">Ingen resurs / venue home</option>
+                      {sortedCourts.map((court) => (
+                        <option key={court.id} value={court.id}>
+                          {court.name} · {court.sport_type || "resource"}
+                        </option>
+                      ))}
+                    </select>
+                    <Textarea
+                      value={editLinks}
+                      onChange={(e) => setEditLinks(e.target.value)}
+                      placeholder="Externa länkar, en per rad: Nakka | https://n01darts.com/n01/web/n01.html"
+                      rows={3}
+                    />
+                    <Textarea
+                      value={editInstructions}
+                      onChange={(e) => setEditInstructions(e.target.value)}
+                      placeholder="Intern instruktion för denna padda"
+                      rows={2}
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={() => saveEdit(device.id)}
+                        disabled={!editName.trim() || updateDevice.isPending}
+                        className="flex-1"
+                      >
+                        {updateDevice.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Spara"}
+                      </Button>
+                      <Button variant="outline" onClick={cancelEdit}>Avbryt</Button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => updateDevice.mutate({ deviceId: device.id, is_active: !device.is_active })}
-                    className={`rounded-full px-3 py-1 text-xs font-bold ${device.is_active ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground"}`}
-                  >
-                    {device.is_active ? "ON" : "OFF"}
-                  </button>
-                </div>
+                ) : (
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-display text-base font-bold">{device.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {device.venue_courts?.name || "Venue home"} · {device.is_active ? "Aktiv" : "Avstängd"}
+                      </p>
+                      {device.external_links?.length ? (
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          länkar: {device.external_links.map((link) => link.label).join(", ")}
+                        </p>
+                      ) : null}
+                      {device.last_seen_at && (
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          senast sedd {new Date(device.last_seen_at).toLocaleString("sv-SE")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => startEdit(device)} className="gap-2">
+                        <Pencil className="h-3.5 w-3.5" />
+                        Redigera
+                      </Button>
+                      <button
+                        onClick={() => updateDevice.mutate({ deviceId: device.id, is_active: !device.is_active })}
+                        className={`rounded-full px-3 py-1 text-xs font-bold ${device.is_active ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground"}`}
+                      >
+                        {device.is_active ? "ON" : "OFF"}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="mb-3 rounded-xl bg-muted/40 p-3">
                   <p className="break-all font-mono text-xs text-muted-foreground">{url}</p>
