@@ -668,7 +668,7 @@ Deno.serve(async (req) => {
     if (courtId) {
       const { data } = await admin
         .from('bookings')
-        .select('id, start_time, end_time, status, booking_ref')
+        .select('id, start_time, end_time, status, booking_ref, notes')
         .eq('venue_id', (device as any).venue_id)
         .eq('venue_court_id', courtId)
         .neq('status', 'cancelled')
@@ -687,11 +687,29 @@ Deno.serve(async (req) => {
       DateTime.fromISO(booking.start_time, { zone: 'utc' }).toMillis() > nowMs
     ) || null;
 
+    let currentCheckin: any = null;
+    if (currentBooking?.id) {
+      const { data: checkin } = await admin
+        .from('venue_checkins')
+        .select('id, player_name, checked_in_at')
+        .eq('venue_id', (device as any).venue_id)
+        .eq('entry_type', 'booking_code')
+        .eq('entitlement_id', currentBooking.id)
+        .is('checked_out_at', null)
+        .maybeSingle();
+      currentCheckin = checkin || null;
+    }
+
     return jsonResponse({
       device,
       venue: (device as any).venues,
       resource: (device as any).venue_courts,
-      currentBooking,
+      currentBooking: currentBooking ? {
+        ...currentBooking,
+        checked_in: Boolean(currentCheckin),
+        player_name: currentCheckin?.player_name || null,
+        checked_in_at: currentCheckin?.checked_in_at || null,
+      } : null,
       nextBooking,
     }, 200, 10);
   }

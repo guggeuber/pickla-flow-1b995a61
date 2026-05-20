@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, Clock3, XCircle } from "lucide-react";
 import { DateTime } from "luxon";
 import { apiGet, apiPost } from "@/lib/api";
@@ -97,7 +96,9 @@ function DigitBox({
 export default function ResourceCheckinDisplay() {
   const { courtId = "" } = useParams();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const slug = searchParams.get("v") ?? "";
+  const deviceToken = searchParams.get("device") ?? "";
   const now = useRealtimeClock();
   const today = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
 
@@ -214,7 +215,13 @@ export default function ResourceCheckinDisplay() {
         });
         setPhase("success");
         if (phaseTimerRef.current) clearTimeout(phaseTimerRef.current);
-        phaseTimerRef.current = setTimeout(reset, 5_000);
+        phaseTimerRef.current = setTimeout(() => {
+          if (deviceToken) {
+            navigate(`/display/device/${encodeURIComponent(deviceToken)}`, { replace: true });
+          } else {
+            reset();
+          }
+        }, 2_200);
       } catch (err: any) {
         setErrorMsg(err?.message?.includes("utgången") ? "Koden har gått ut" : err?.message || "Ogiltig kod");
         setPhase("error");
@@ -222,7 +229,7 @@ export default function ResourceCheckinDisplay() {
         phaseTimerRef.current = setTimeout(reset, 3_000);
       }
     },
-    [venueId, courtId, phase, resource?.name, reset],
+    [venueId, courtId, phase, resource?.name, reset, deviceToken, navigate],
   );
 
   const handleInput = useCallback(
@@ -292,12 +299,12 @@ export default function ResourceCheckinDisplay() {
   const occupied = Boolean(currentAndNext.current);
 
   return (
-    <div className="flex h-screen select-none flex-col items-center justify-between overflow-hidden bg-slate-950 px-6 py-8 text-white">
+    <div className="flex min-h-screen select-none flex-col items-center justify-between bg-slate-950 px-6 py-8 text-white">
       <div className="flex w-full flex-col items-center gap-5 text-center">
         <p className="font-mono text-sm uppercase tracking-widest text-slate-500">
           {venue?.name ?? slug}
         </p>
-        <div className="rounded-[2rem] border border-slate-800 bg-slate-900/80 px-8 py-6 shadow-2xl shadow-black/30">
+        <div className="rounded-[2rem] border border-slate-800 bg-slate-900 px-8 py-6">
           <div className="mb-3 flex items-center justify-center gap-2">
             <span className={`h-3 w-3 rounded-full ${occupied ? "bg-red-400" : "bg-emerald-300"}`} />
             <span className="font-mono text-xs font-bold uppercase tracking-widest text-slate-400">
@@ -319,15 +326,9 @@ export default function ResourceCheckinDisplay() {
       </div>
 
       <div className="flex flex-1 items-center justify-center w-full">
-        <AnimatePresence mode="wait">
+        <div className="w-full">
           {phase === "success" && resultInfo && (
-            <motion.div
-              key="success"
-              initial={{ opacity: 0, scale: 0.92 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.92 }}
-              className="flex flex-col items-center gap-5 text-center"
-            >
+            <div className="flex flex-col items-center gap-5 text-center">
               <CheckCircle2 className="h-20 w-20 text-emerald-300" />
               <div>
                 <p className="font-display text-5xl font-black leading-tight text-white">{resultInfo.title}</p>
@@ -335,54 +336,35 @@ export default function ResourceCheckinDisplay() {
                 {resultInfo.details && <p className="mt-2 font-mono text-xl text-slate-400">{resultInfo.details}</p>}
                 {resultInfo.time && <p className="mt-3 font-mono text-2xl text-slate-400">{resultInfo.time}</p>}
               </div>
-            </motion.div>
+            </div>
           )}
 
           {phase === "wrong" && resultInfo && (
-            <motion.div
-              key="wrong"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              className="flex max-w-3xl flex-col items-center gap-5 text-center"
-            >
+            <div className="mx-auto flex max-w-3xl flex-col items-center gap-5 text-center">
               <XCircle className="h-20 w-20 text-amber-300" />
               <div>
                 <p className="font-display text-5xl font-black text-amber-300">{resultInfo.title}</p>
                 <p className="mt-3 font-display text-4xl font-bold leading-tight text-white">{resultInfo.subtitle}</p>
                 {resultInfo.time && <p className="mt-4 font-mono text-2xl text-slate-400">{resultInfo.time}</p>}
               </div>
-            </motion.div>
+            </div>
           )}
 
           {phase === "error" && (
-            <motion.div
-              key="error"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1, x: [0, -14, 14, -10, 10, -6, 6, 0] }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.45 }}
-              className="flex flex-col items-center gap-5 text-center"
-            >
+            <div className="flex flex-col items-center gap-5 text-center">
               <XCircle className="h-20 w-20 text-red-400" />
               <p className="font-display text-4xl font-bold text-red-400">{errorMsg}</p>
               <p className="font-mono text-base text-slate-500">försök igen</p>
-            </motion.div>
+            </div>
           )}
 
           {(phase === "idle" || phase === "loading") && (
-            <motion.div
-              key="input"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex w-full flex-col items-center gap-8"
-            >
+            <div className="flex w-full flex-col items-center gap-8">
               <div className="text-center">
                 <p className="font-display text-3xl font-bold tracking-tight text-white">Ange din incheckningskod</p>
                 <p className="mt-2 font-mono text-base text-slate-500">koden finns i din bokningsbekräftelse</p>
               </div>
-              <motion.div className="flex gap-4" animate={phase === "loading" ? { opacity: 0.5 } : { opacity: 1 }}>
+              <div className={`flex gap-4 ${phase === "loading" ? "opacity-50" : ""}`}>
                 {digits.map((digit, index) => (
                   <DigitBox
                     key={index}
@@ -395,11 +377,11 @@ export default function ResourceCheckinDisplay() {
                     disabled={phase === "loading"}
                   />
                 ))}
-              </motion.div>
+              </div>
               {phase === "loading" && <p className="animate-pulse font-mono text-sm text-slate-500">kontrollerar kod…</p>}
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
+        </div>
       </div>
 
       <p className="text-center font-mono text-xs uppercase tracking-wider text-slate-600">
