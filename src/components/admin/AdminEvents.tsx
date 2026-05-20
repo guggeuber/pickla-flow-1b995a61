@@ -620,10 +620,39 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
   const eventUrl = slug
     ? `${window.location.origin}/e/${slug}`
     : `${window.location.origin}/event/${event.id}`;
+  const publicLinkReady = isPublic && visibility === "public";
 
   const copyLink = () => {
+    if (!publicLinkReady) {
+      toast.error("Publicera eventet först");
+      return;
+    }
     navigator.clipboard.writeText(eventUrl);
     toast.success("Länk kopierad!");
+  };
+
+  const publishAndCopyLink = async () => {
+    const nextSlug = (slug.trim() || generateSlug(displayName || event.name || event.id)).slice(0, 120);
+    try {
+      await apiPatch("api-events", "update", {
+        id: event.id,
+        isPublic: true,
+        visibility: "public",
+        planningStatus: "published",
+        slug: nextSlug,
+        registrationFields: regFields.includes("email") ? regFields : [...regFields, "email"],
+      });
+      setIsPublic(true);
+      setVisibility("public");
+      setPlanningStatus("published");
+      setSlug(nextSlug);
+      const nextUrl = `${window.location.origin}/e/${nextSlug}`;
+      await navigator.clipboard.writeText(nextUrl);
+      toast.success("Publik anmälningslänk skapad och kopierad");
+      qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte skapa publik länk");
+    }
   };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -728,22 +757,34 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
     <div className="space-y-4">
       <button onClick={onBack} className="text-sm text-primary font-semibold hover:underline">← Tillbaka</button>
 
-      {/* Shareable link */}
+      {/* Public registration link + internal conversation */}
       <div className="glass-card rounded-2xl p-4">
-        <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Delbar länk</Label>
+        <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">Publik anmälningslänk</Label>
+        <p className="text-xs text-muted-foreground mt-1">
+          Används för gäster som ska anmäla sig. Intern planering sker i konversationen nedan.
+        </p>
         <div className="flex items-center gap-2 mt-2">
           <div className="flex-1 text-xs text-muted-foreground bg-secondary rounded-xl px-3 py-2.5 truncate font-mono">
-            {eventUrl}
+            {publicLinkReady ? eventUrl : "Inte publicerad ännu"}
           </div>
-          <Button size="icon" variant="ghost" onClick={copyLink} className="shrink-0">
+          <Button size="icon" variant="ghost" onClick={copyLink} disabled={!publicLinkReady} className="shrink-0">
             <Copy className="w-4 h-4" />
           </Button>
-          <Button size="icon" variant="ghost" asChild className="shrink-0">
-            <a href={eventUrl} target="_blank" rel="noopener noreferrer">
+          <Button size="icon" variant="ghost" asChild={publicLinkReady} disabled={!publicLinkReady} className="shrink-0">
+            {publicLinkReady ? (
+              <a href={eventUrl} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            ) : (
               <ExternalLink className="w-4 h-4" />
-            </a>
+            )}
           </Button>
         </div>
+        {!publicLinkReady && (
+          <Button variant="default" className="mt-3 w-full" onClick={publishAndCopyLink}>
+            Skapa publik anmälningslänk
+          </Button>
+        )}
         {eventRoom?.id && (
           <Button
             variant="outline"
