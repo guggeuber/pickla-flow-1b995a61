@@ -76,6 +76,19 @@ function formatPeriodLabel(period: TimePeriod) {
   return period.charAt(0) + period.slice(1).toLowerCase();
 }
 
+function phoneDigitCount(value: string) {
+  return value.replace(/\D/g, "").length;
+}
+
+function isValidPhone(value: string) {
+  const digits = phoneDigitCount(value);
+  return digits >= 7 && digits <= 15;
+}
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
 interface CourtData {
   id: string;
   name: string;
@@ -491,15 +504,19 @@ export default function BookingPage() {
   const bookingName = name.trim() || user?.email?.split("@")[0] || "";
   const bookingPhone = phone.trim();
   const bookingEmail = email.trim() || user?.email || "";
-  const needsPhoneForDirectBooking = !user || useCorporate || baseTotalPrice === 0;
+  const needsPhoneForDirectBooking = true;
   const needsEmailForBooking = !user || baseTotalPrice === 0;
+  const phoneIsReady = !needsPhoneForDirectBooking || isValidPhone(bookingPhone);
+  const emailIsReady = !needsEmailForBooking || isValidEmail(bookingEmail);
   const hasContactDetails = Boolean(
+    user &&
     bookingName &&
-    (!needsPhoneForDirectBooking || bookingPhone) &&
-    (!needsEmailForBooking || bookingEmail)
+    phoneIsReady &&
+    emailIsReady
   );
   const showProfileLoading = selectedCourts.length > 0 && !!user && !profileLoaded;
-  const showContactFields = selectedCourts.length > 0 && !showProfileLoading && (!user || !hasContactDetails || editingContact);
+  const showAuthPrompt = selectedCourts.length > 0 && !user;
+  const showContactFields = selectedCourts.length > 0 && !showProfileLoading && !!user && (!hasContactDetails || editingContact);
   const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && Boolean(bookingName) && !editingContact;
   const isToday = dateStr === todayStr;
   const selectedDateLabel = isToday
@@ -510,7 +527,7 @@ export default function BookingPage() {
       )
       ? "Imorgon"
       : format(selectedDate, "EEEE", { locale: sv });
-  const canSubmitBooking = Boolean(hasContactDetails && selectedTime && selectedEndTime && selectedCourts.length);
+  const canSubmitBooking = Boolean(user && hasContactDetails && selectedTime && selectedEndTime && selectedCourts.length);
   const isViewingTodayRange = availabilityStartStr === todayStr;
   const todayLuxon = DateTime.now().setZone("Europe/Stockholm").startOf("day");
   const nextWeekDate = todayLuxon.plus({ days: 7 }).toJSDate();
@@ -519,6 +536,11 @@ export default function BookingPage() {
   const nextWeekendDate = todayLuxon.plus({ days: daysUntilSaturday }).toJSDate();
 
   const bookingMode: BookingMode = useCorporate || baseTotalPrice === 0 ? "direct" : "stripe";
+
+  const goToAuth = () => {
+    sessionStorage.setItem("pickla_auth_redirect", window.location.pathname + window.location.search);
+    navigate("/auth");
+  };
 
   const createDirectBooking = async (): Promise<BookingMutationResult> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -610,6 +632,10 @@ export default function BookingPage() {
 
   const handleBook = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) {
+      goToAuth();
+      return;
+    }
     if (!hasContactDetails || !selectedTime || !selectedEndTime || !selectedCourts.length) return;
     bookMutation.mutate();
   };
@@ -887,6 +913,90 @@ export default function BookingPage() {
                     </button>
                   )}
 
+                  {showProfileLoading && (
+                    <div
+                      className="mt-7 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-4 text-[11px] text-neutral-400"
+                      style={{ fontFamily: FONT_MONO }}
+                    >
+                      hämtar dina uppgifter...
+                    </div>
+                  )}
+
+                  {showAuthPrompt && (
+                    <div className="mt-7 rounded-[24px] border border-neutral-200 bg-neutral-50 p-4">
+                      <p className="text-[12px] font-bold uppercase tracking-widest text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                        konto
+                      </p>
+                      <p className="mt-2 text-[13px] leading-relaxed text-neutral-600" style={{ fontFamily: FONT_MONO }}>
+                        Logga in eller skapa konto för att boka. Då sparas bokningen, kvittot och telefonnumret rätt.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={goToAuth}
+                        className="mt-4 w-full rounded-2xl bg-neutral-950 px-4 py-3 text-[13px] text-white"
+                        style={{ fontFamily: FONT_MONO }}
+                      >
+                        Logga in / skapa konto
+                      </button>
+                    </div>
+                  )}
+
+                  {showContactFields && (
+                    <div className="mt-7 rounded-[24px] border border-neutral-200 bg-neutral-50 p-4">
+                      <h2
+                        className="mb-3 text-[10px] font-bold uppercase tracking-widest text-neutral-400"
+                        style={{ fontFamily: FONT_MONO }}
+                      >
+                        {user ? "komplettera profil" : "dina uppgifter"}
+                      </h2>
+                      <div className="grid gap-2">
+                        <input
+                          placeholder="ditt namn"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          required
+                          maxLength={100}
+                          className="min-w-0 rounded-xl border border-neutral-200 bg-white px-3 py-3 text-[16px] text-[#111] placeholder:text-black/25 transition-colors focus:border-black/40 focus:outline-none"
+                          style={{ fontFamily: FONT_MONO }}
+                        />
+                        <input
+                          type="tel"
+                          inputMode="tel"
+                          placeholder="telefon"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value.replace(/[^\d+\s-]/g, ""))}
+                          required={needsPhoneForDirectBooking}
+                          maxLength={20}
+                          className="min-w-0 rounded-xl border border-neutral-200 bg-white px-3 py-3 text-[16px] text-[#111] placeholder:text-black/25 transition-colors focus:border-black/40 focus:outline-none"
+                          style={{ fontFamily: FONT_MONO }}
+                        />
+                        {needsPhoneForDirectBooking && bookingPhone && !phoneIsReady && (
+                          <p className="px-1 text-[10px] text-red-500" style={{ fontFamily: FONT_MONO }}>
+                            skriv hela telefonnumret
+                          </p>
+                        )}
+                        <input
+                          type="email"
+                          placeholder="email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          required={needsEmailForBooking}
+                          maxLength={200}
+                          className="min-w-0 rounded-xl border border-neutral-200 bg-white px-3 py-3 text-[16px] text-[#111] placeholder:text-black/25 transition-colors focus:border-black/40 focus:outline-none"
+                          style={{ fontFamily: FONT_MONO }}
+                        />
+                        {needsEmailForBooking && bookingEmail && !emailIsReady && (
+                          <p className="px-1 text-[10px] text-red-500" style={{ fontFamily: FONT_MONO }}>
+                            skriv en giltig email
+                          </p>
+                        )}
+                      </div>
+                      <p className="mt-3 text-[10px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                        vi använder detta på bokningen och kvittot
+                      </p>
+                    </div>
+                  )}
+
                   {!useCorporate && hasMemberCourtPrice && (
                     <p className="mt-5 text-right text-[11px] text-emerald-600" style={{ fontFamily: FONT_MONO }}>
                       medlemspris · ord. {baseTotalPrice} kr
@@ -902,77 +1012,13 @@ export default function BookingPage() {
                     {bookMutation.isPending ? (
                       <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                     ) : (
-                      `Boka ${useCorporate ? 0 : totalPrice} kr`
+                      user ? `Boka ${useCorporate ? 0 : totalPrice} kr` : "Logga in för att boka"
                     )}
                   </button>
                 </>
               )}
             </div>
           </section>
-
-          {/* Contact info */}
-          {showProfileLoading && (
-            <div>
-	              <div className="h-px bg-neutral-200 mb-3" />
-	              <div
-	                className="rounded-2xl bg-white border border-neutral-200 px-3 py-3 text-[11px] text-neutral-400"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                hämtar dina uppgifter...
-              </div>
-            </div>
-          )}
-
-          {showContactFields && (
-            <div>
-	              <div className="h-px bg-neutral-200 mb-4" />
-	              <h2
-	                className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                {user ? "komplettera profil" : "dina uppgifter"}
-              </h2>
-              <div className="grid gap-2">
-                <input
-	                  placeholder="ditt namn"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                  maxLength={100}
-	                  className="min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
-                  style={{ fontFamily: FONT_MONO }}
-                />
-                <input
-                  type="tel"
-	                  placeholder="telefon"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  required
-                  maxLength={20}
-	                  className="min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
-                  style={{ fontFamily: FONT_MONO }}
-                />
-                <input
-                  type="email"
-                  placeholder="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required={needsEmailForBooking}
-                  maxLength={200}
-                  className="min-w-0 px-3 py-3 rounded-xl bg-white border border-neutral-200 text-[#111] text-[16px] placeholder:text-black/25 focus:outline-none focus:border-black/40 transition-colors"
-                  style={{ fontFamily: FONT_MONO }}
-                />
-              </div>
-              {user && (
-                <p
-	                  className="text-[10px] text-neutral-400 mt-2"
-                  style={{ fontFamily: FONT_MONO }}
-                >
-                  vi använder detta på bokningen och kvittot
-                </p>
-              )}
-            </div>
-          )}
 
           {/* Corporate payment option */}
           {selectedCourts.length > 0 && activePackages.length > 0 && (
