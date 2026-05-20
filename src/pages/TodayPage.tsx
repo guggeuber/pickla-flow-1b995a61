@@ -209,12 +209,9 @@ function HeroSticker({ guideKey, onClick }: { guideKey: GuideKey; onClick: (key:
     <button
       type="button"
       onClick={() => onClick(guideKey)}
-      className="min-w-[118px] rounded-2xl border border-white/30 bg-white/90 px-3 py-3 text-left shadow-sm backdrop-blur active:scale-[0.98]"
+      className="block w-fit bg-neutral-950 px-5 py-3 text-left shadow-sm active:scale-[0.98]"
     >
-      <p className="text-[12px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>{guide.title}</p>
-      <p className="mt-1 truncate text-[9px] uppercase tracking-[0.12em] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-        läs mer
-      </p>
+      <p className="text-[24px] leading-none text-pink-100" style={{ fontFamily: FONT_MONO }}>{guide.title}</p>
     </button>
   );
 }
@@ -486,17 +483,17 @@ export default function TodayPage() {
           </div>
         </section>
 
-        <section className="relative h-[430px] overflow-hidden">
+        <section className="relative mx-auto h-[560px] max-w-md overflow-hidden">
           <img src={weekendVibes} alt="" className="absolute inset-0 h-full w-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/42 via-transparent to-transparent" />
-          <p className="absolute bottom-28 left-6 text-[26px] text-white" style={{ fontFamily: FONT_MONO }}>
-            weekend vibes
-          </p>
-          <div className="absolute inset-x-4 bottom-5 flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+          <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/5" />
+          <div className="absolute left-0 top-[36%] flex flex-col items-start gap-2">
             <HeroSticker guideKey="pickleball" onClick={openGuide} />
             <HeroSticker guideKey="darts" onClick={openGuide} />
             <HeroSticker guideKey="pickla" onClick={openGuide} />
           </div>
+          <p className="absolute bottom-8 left-6 right-4 text-[54px] uppercase leading-[0.9] tracking-[-0.05em] text-white sm:text-[62px]" style={{ fontFamily: FONT_MONO }}>
+            Weekend Vibes
+          </p>
         </section>
 
         <section className="mx-auto max-w-md px-5 pt-8">
