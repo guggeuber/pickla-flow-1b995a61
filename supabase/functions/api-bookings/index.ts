@@ -672,7 +672,7 @@ Deno.serve(async (req) => {
     if (courtId) {
       const { data } = await admin
         .from('bookings')
-        .select('id, start_time, end_time, status, booking_ref, notes')
+        .select('id, start_time, end_time, status, booking_ref, notes, access_code')
         .eq('venue_id', (device as any).venue_id)
         .eq('venue_court_id', courtId)
         .neq('status', 'cancelled')
@@ -692,16 +692,34 @@ Deno.serve(async (req) => {
     ) || null;
 
     let currentCheckin: any = null;
+    let currentCheckins: any[] = [];
     if (currentBooking?.id) {
-      const { data: checkin } = await admin
-        .from('venue_checkins')
-        .select('id, player_name, checked_in_at')
-        .eq('venue_id', (device as any).venue_id)
-        .eq('entry_type', 'booking_code')
-        .eq('entitlement_id', currentBooking.id)
-        .is('checked_out_at', null)
-        .maybeSingle();
-      currentCheckin = checkin || null;
+      let groupBookingIds = [currentBooking.id];
+      if (currentBooking.access_code) {
+        const { data: groupBookings } = await admin
+          .from('bookings')
+          .select('id')
+          .eq('venue_id', (device as any).venue_id)
+          .eq('access_code', currentBooking.access_code)
+          .eq('start_time', currentBooking.start_time)
+          .eq('end_time', currentBooking.end_time)
+          .neq('status', 'cancelled');
+        groupBookingIds = (groupBookings || []).map((booking: any) => booking.id).filter(Boolean);
+        if (groupBookingIds.length === 0) groupBookingIds = [currentBooking.id];
+      }
+
+      if (groupBookingIds.length > 0) {
+        const { data: checkins } = await admin
+          .from('venue_checkins')
+          .select('id, player_name, checked_in_at')
+          .eq('venue_id', (device as any).venue_id)
+          .eq('entry_type', 'booking_code')
+          .in('entitlement_id', groupBookingIds)
+          .is('checked_out_at', null)
+          .order('checked_in_at', { ascending: false });
+        currentCheckins = checkins || [];
+        currentCheckin = currentCheckins[0] || null;
+      }
     }
 
     return jsonResponse({
@@ -710,7 +728,7 @@ Deno.serve(async (req) => {
       resource: (device as any).venue_courts,
       currentBooking: currentBooking ? {
         ...currentBooking,
-        checked_in: Boolean(currentCheckin),
+        checked_in: currentCheckins.length > 0,
         player_name: currentCheckin?.player_name || nameFromBookingNotes(currentBooking.notes) || null,
         checked_in_at: currentCheckin?.checked_in_at || null,
       } : null,

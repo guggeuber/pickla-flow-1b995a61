@@ -236,12 +236,18 @@ Deno.serve(async (req) => {
         .order('start_time', { ascending: true });
 
       if (bErr || !bookings?.length) return errorResponse('Ogiltig eller utgången kod', 404);
-      const booking = bookings[0];
-      const expectedResources = bookings
+      const booking = resourceId
+        ? (bookings.find((b: any) => b.venue_court_id === resourceId) || bookings[0])
+        : bookings[0];
+      const groupBookings = bookings.filter((b: any) =>
+        b.start_time === booking.start_time &&
+        b.end_time === booking.end_time
+      );
+      const expectedResources = groupBookings
         .map((b: any) => b.venue_courts ? { ...b.venue_courts, id: b.venue_court_id || b.venue_courts.id } : null)
         .filter(Boolean);
 
-      if (resourceId && !bookings.some((b: any) => b.venue_court_id === resourceId)) {
+      if (resourceId && !groupBookings.some((b: any) => b.venue_court_id === resourceId)) {
         return jsonResponse({
           wrong_resource: true,
           expected_resources: expectedResources,
@@ -279,7 +285,7 @@ Deno.serve(async (req) => {
       }
       // ──────────────────────────────────────────────────────────────────────
 
-      const bookingIds = bookings.map((b: any) => b.id).filter(Boolean);
+      const bookingIds = groupBookings.map((b: any) => b.id).filter(Boolean);
       const { data: existingRows } = await serviceClient
         .from('venue_checkins')
         .select('*')
@@ -293,7 +299,7 @@ Deno.serve(async (req) => {
       // Extract customer name from "Name | Phone" notes format
       const customerName = nameFromBookingNotes((booking as any).notes);
 
-      const checkinRows = bookings.filter((b: any) => !existingIds.has(b.id)).map((b: any) => ({
+      const checkinRows = groupBookings.filter((b: any) => !existingIds.has(b.id)).map((b: any) => ({
         venue_id,
         user_id: b.user_id || null,
         player_name: customerName || null,
