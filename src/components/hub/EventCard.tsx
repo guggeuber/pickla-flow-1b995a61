@@ -47,6 +47,20 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
     },
   });
 
+  const { data: programSession } = useQuery({
+    queryKey: ["hub-program-session-detail", eventId],
+    enabled: !event,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("activity_sessions")
+        .select("id, name, description, session_type, start_time, end_time, capacity, price_sek, venue_id")
+        .eq("id", eventId)
+        .maybeSingle();
+      return data;
+    },
+  });
+
   const { data: players = [] } = useQuery<EventPlayer[]>({
     queryKey: ["hub-event-player-list", eventId],
     staleTime: 30000,
@@ -72,6 +86,61 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
       }));
     },
   });
+
+  if (!event && programSession) {
+    const timeStr = [
+      programSession.start_time ? String(programSession.start_time).slice(0, 5) : null,
+      programSession.end_time ? String(programSession.end_time).slice(0, 5) : null,
+    ].filter(Boolean).join("-");
+    const sessionType = programSession.session_type === "open_play"
+      ? "Open Play"
+      : programSession.session_type === "group_training"
+        ? "Träning"
+        : "Aktivitet";
+
+    return (
+      <motion.div
+        style={{
+          background: HUB_NAVY,
+          borderRadius: 14,
+          overflow: "hidden",
+          marginBottom: 4,
+        }}
+      >
+        <div style={{ padding: "14px" }}>
+          <p style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: "rgba(255,255,255,0.55)", marginBottom: 4 }}>
+            {sessionType}{timeStr ? ` · ${timeStr}` : ""}
+          </p>
+          <p style={{ fontFamily: FONT_HEADING, fontSize: 17, fontWeight: 800, color: "#fff", marginBottom: 6 }}>
+            {programSession.name}
+          </p>
+          {programSession.description && (
+            <p style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter, sans-serif", marginBottom: 10, lineHeight: 1.4 }}>
+              {String(programSession.description).slice(0, 110)}{String(programSession.description).length > 110 ? "…" : ""}
+            </p>
+          )}
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={() => navigate(`/program/${eventId}`)}
+            style={{
+              width: "100%",
+              background: HUB_RED,
+              color: "#fff",
+              border: "none",
+              borderRadius: 10,
+              padding: "11px 0",
+              fontFamily: FONT_HEADING,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {programSession.price_sek ? `Anmäl · ${programSession.price_sek} kr` : "Anmäl / visa detaljer"}
+          </motion.button>
+        </div>
+      </motion.div>
+    );
+  }
 
   if (!event) return null;
 

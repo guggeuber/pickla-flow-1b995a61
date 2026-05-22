@@ -34,7 +34,6 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { DateTime } from "luxon";
-import { ActionCard } from "@/components/hub/ActionCard";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { EventCard } from "@/components/hub/EventCard";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -946,6 +945,23 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
         )}
       </div>
 
+      {/* Pinned action for activity/event chats */}
+      {room.room_type === "event" && room.resource_id && !isInquiryEvent && (
+        <div
+          style={{
+            padding: "10px 16px 8px",
+            borderBottom: `1px solid ${HUB_BORDER}`,
+            background: HUB_BG,
+            flexShrink: 0,
+          }}
+        >
+          <EventCard
+            eventId={room.resource_id}
+            venueId={venueId}
+          />
+        </div>
+      )}
+
       {/* Messages — #1 scroll feel */}
       <div
         style={{
@@ -972,31 +988,6 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
               }
               time="nu"
             />
-
-            {botData.nextSession && (
-              <ActionCard
-                title={`${botData.nextSession.name || "Open Play"} · ${formatSwedishTime(botData.nextSession.start_time)}`}
-                description={
-                  botData.nextSession.daysOffset === 0
-                    ? "Idag"
-                    : botData.nextSession.daysOffset === 1
-                    ? "Imorgon"
-                    : `Om ${botData.nextSession.daysOffset} dagar`
-                }
-                ctaLabel="Köp inträde"
-                ctaPrice={botData.nextSession.price_sek}
-                onAction={() => navigate("/openplay")}
-              />
-            )}
-
-            {botData.freeCount > 0 && (
-              <ActionCard
-                title="Boka en ledig bana"
-                description={`${botData.freeCount} ${botData.freeCount === 1 ? "bana" : "banor"} tillgänglig${botData.freeCount === 1 ? "" : "a"} nu`}
-                ctaLabel="Boka nu"
-                onAction={() => navigate("/book")}
-              />
-            )}
           </>
         )}
 
@@ -1006,15 +997,8 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
         )}
 
         {/* Event room: public event card or internal inquiry customer panel */}
-        {room.room_type === "event" && room.resource_id && (
-          isInquiryEvent && inquiryEvent ? (
+        {room.room_type === "event" && room.resource_id && isInquiryEvent && inquiryEvent && (
             <InquiryCustomerPanel event={inquiryEvent} />
-          ) : (
-            <EventCard
-              eventId={room.resource_id}
-              venueId={venueId}
-            />
-          )
         )}
 
         {/* #8 — message skeletons while loading */}
