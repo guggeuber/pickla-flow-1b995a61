@@ -782,11 +782,7 @@ function DayPassSection() {
   };
 
   if (isLoading) {
-    return (
-      <motion.div variants={item} className="flex justify-center py-4">
-        <Loader2 className="w-5 h-5 animate-spin" style={{ color: TEXT_MUTED }} />
-      </motion.div>
-    );
+    return null;
   }
 
   return (
@@ -1017,8 +1013,11 @@ function WalletSection() {
 
       <div className="rounded-2xl overflow-hidden" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
         {isLoading ? (
-          <div className="flex items-center justify-center py-6">
+          <div className="flex items-center justify-center gap-2 px-4 py-4">
             <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} />
+            <span className="text-xs" style={{ color: TEXT_MUTED, fontFamily: FONT_MONO }}>
+              hämtar kort...
+            </span>
           </div>
         ) : methods.length === 0 ? (
           <div className="px-4 py-4 text-center">

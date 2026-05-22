@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
+const SLOW_API_MS = 700;
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const { data: { session } } = await supabase.auth.getSession();
@@ -14,6 +15,20 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
+function logApiTiming(method: string, url: string, startedAt: number, status?: number, error?: unknown) {
+  const duration = Math.round(performance.now() - startedAt);
+  if (!import.meta.env.DEV && duration < SLOW_API_MS && !error) return;
+
+  const label = `[api] ${method} ${new URL(url).pathname} ${status ?? "ERR"} ${duration}ms`;
+  if (error || status && status >= 400) {
+    console.warn(label, error || "");
+  } else if (duration >= SLOW_API_MS) {
+    console.info(label);
+  } else {
+    console.debug(label);
+  }
+}
+
 export async function apiGet<T = any>(
   fn: string,
   endpoint: string,
@@ -24,7 +39,10 @@ export async function apiGet<T = any>(
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   }
-  const res = await fetch(url.toString(), { headers });
+  const startedAt = performance.now();
+  const requestUrl = url.toString();
+  const res = await fetch(requestUrl, { headers });
+  logApiTiming("GET", requestUrl, startedAt, res.status);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `API error ${res.status}`);
@@ -38,11 +56,14 @@ export async function apiPost<T = any>(
   body: Record<string, any>
 ): Promise<T> {
   const headers = await getAuthHeaders();
-  const res = await fetch(`${BASE_URL}/${fn}/${endpoint}`, {
+  const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
+  const startedAt = performance.now();
+  const res = await fetch(requestUrl, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
   });
+  logApiTiming("POST", requestUrl, startedAt, res.status);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `API error ${res.status}`);
@@ -56,11 +77,14 @@ export async function apiPatch<T = any>(
   body: Record<string, any>
 ): Promise<T> {
   const headers = await getAuthHeaders();
-  const res = await fetch(`${BASE_URL}/${fn}/${endpoint}`, {
+  const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
+  const startedAt = performance.now();
+  const res = await fetch(requestUrl, {
     method: "PATCH",
     headers,
     body: JSON.stringify(body),
   });
+  logApiTiming("PATCH", requestUrl, startedAt, res.status);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `API error ${res.status}`);
@@ -78,7 +102,10 @@ export async function apiDelete<T = any>(
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   }
-  const res = await fetch(url.toString(), { method: "DELETE", headers });
+  const startedAt = performance.now();
+  const requestUrl = url.toString();
+  const res = await fetch(requestUrl, { method: "DELETE", headers });
+  logApiTiming("DELETE", requestUrl, startedAt, res.status);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `API error ${res.status}`);
