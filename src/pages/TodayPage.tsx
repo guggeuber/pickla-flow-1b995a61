@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { ArrowRight, BookOpen, CalendarDays, Loader2, MapPin, Menu, UserRound, X } from "lucide-react";
+import { ArrowRight, BookOpen, CalendarDays, Loader2, MapPin, Menu, MessageCircle, UserRound, X, LogOut } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
@@ -38,6 +38,10 @@ type FeedItem = {
   spotsLeft?: number | null;
   href: string;
   cta: string;
+  chatResourceId?: string;
+  chatTitle?: string;
+  chatSubtitle?: string | null;
+  chatEmoji?: string;
   isMine?: boolean;
   bookingRef?: string | null;
 };
@@ -325,6 +329,10 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           spotsLeft: capacity ? Math.max(capacity - count, 0) : null,
           href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
           cta: capacity && count >= capacity ? "Visa" : "Anmäl",
+          chatResourceId: session.id,
+          chatTitle: session.name,
+          chatSubtitle: `${session.occurrence_date} · ${String(session.start_time).slice(0, 5)}-${String(session.end_time).slice(0, 5)}`,
+          chatEmoji: "📅",
         };
       });
 
@@ -339,6 +347,12 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         status: event.status === "live" || event.status === "active" ? "Live" : "Kommande",
         href: event.slug ? `/e/${event.slug}` : `/event/${event.id}`,
         cta: "Visa",
+        chatResourceId: event.id,
+        chatTitle: event.display_name || event.name,
+        chatSubtitle: event.start_date
+          ? DateTime.fromISO(event.start_date).toFormat("d MMM", { locale: "sv" })
+          : null,
+        chatEmoji: "🏆",
       }));
 
       const bookingItems: FeedItem[] = (groupBookingRows((bookingsRes.data || []) as BookingRow[]) as BookingGroup[]).map((booking) => {
@@ -367,18 +381,42 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
   });
 }
 
-function FeedRow({ item, now, highlight }: { item: FeedItem; now: DateTime; highlight: boolean }) {
+function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now: DateTime; highlight: boolean; venueId?: string; slug: string }) {
   const navigate = useNavigate();
+  const [opening, setOpening] = useState(false);
   const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
   const isPast = !!end && end < now;
   const meta = item.spotsLeft != null
     ? item.spotsLeft === 0 ? "Full" : `${item.spotsLeft} kvar`
     : item.status;
+  const openItem = async () => {
+    if (item.kind === "booking" || !item.chatResourceId || !venueId) {
+      navigate(item.href);
+      return;
+    }
+    setOpening(true);
+    try {
+      const { data } = await supabase.rpc("upsert_resource_chat_room", {
+        p_venue_id: venueId,
+        p_resource_id: item.chatResourceId,
+        p_room_type: "event",
+        p_title: item.chatTitle || item.title,
+        p_subtitle: item.chatSubtitle || `${item.date} · ${item.startTime}-${item.endTime}`,
+        p_emoji: item.chatEmoji || "📅",
+        p_is_public: true,
+      });
+      const roomId = data?.[0]?.id;
+      navigate(roomId ? `/chat/${roomId}?v=${encodeURIComponent(slug)}` : item.href);
+    } finally {
+      setOpening(false);
+    }
+  };
 
   return (
     <button
       type="button"
-      onClick={() => navigate(item.href)}
+      onClick={openItem}
+      disabled={opening}
       className="grid w-full grid-cols-[64px_1fr_auto] items-center gap-2 px-3 py-3 text-left transition-transform active:scale-[0.99]"
       style={{
         background: highlight ? GREEN : SOFT,
@@ -391,7 +429,7 @@ function FeedRow({ item, now, highlight }: { item: FeedItem; now: DateTime; high
       <span className="text-[15px]">{item.startTime}</span>
       <span className="min-w-0 truncate text-[15px]">{item.title}</span>
       <span className="rounded-full bg-white/65 px-2 py-1 text-[10px] font-bold text-black/55">
-        {meta}
+        {opening ? "Öppnar" : meta}
       </span>
     </button>
   );
@@ -403,7 +441,7 @@ export default function TodayPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeGuide, setActiveGuide] = useState<GuideKey | null>(null);
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenue(slug);
   const { data: profile } = usePlayerProfile(user?.id);
@@ -421,6 +459,16 @@ export default function TodayPage() {
     setMenuOpen(false);
     setActiveGuide(null);
     navigate(href);
+  };
+  const openDailyRoom = async () => {
+    if (!venue?.id) return;
+    const { data } = await supabase.rpc("upsert_daily_chat_room", {
+      p_venue_id: venue.id,
+      p_session_date: DateTime.now().setZone("Europe/Stockholm").toISODate(),
+      p_name: "Pickla Idag",
+    });
+    const room = data?.[0];
+    navigate(room?.id ? `/chat/${room.id}?v=${encodeURIComponent(slug)}` : `/hub?v=${encodeURIComponent(slug)}`);
   };
   const liveHighlightId = items.find((item) => {
     const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
@@ -466,20 +514,6 @@ export default function TodayPage() {
           >
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: status?.open ? GREEN : "#d1d5db" }} />
             <span className="truncate">{venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(user ? "/my" : "/auth")}
-            className="grid h-10 w-10 place-items-center overflow-hidden rounded-full border border-black/10 bg-white text-[13px] font-black text-neutral-950 shadow-sm active:scale-[0.98]"
-            style={{ fontFamily: FONT_HEADING }}
-          >
-            {profile?.avatar_url ? (
-              <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
-            ) : user ? (
-              userInitial(user, profile)
-            ) : (
-              <UserRound className="h-4 w-4" />
-            )}
           </button>
           <button
             type="button"
@@ -543,6 +577,23 @@ export default function TodayPage() {
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            onClick={openDailyRoom}
+            className="mt-5 flex w-full items-center gap-4 rounded-[26px] border border-black/10 bg-white p-4 text-left shadow-sm active:scale-[0.99]"
+          >
+            <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-green-100 text-green-600">
+              <MessageCircle className="h-7 w-7" />
+            </span>
+            <span className="min-w-0">
+              <span className="flex items-center gap-2 text-[20px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                Pickla Idag <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
+              </span>
+              <span className="mt-1 block truncate text-[13px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                Öppen kanal · lediga banor & Open Play
+              </span>
+            </span>
+          </button>
         </section>
 
         <section className="mx-auto max-w-md px-5 pt-1">
@@ -560,7 +611,7 @@ export default function TodayPage() {
                   {dayItems.length > 0 ? (
                     <div className="space-y-2">
                       {dayItems.map((item) => (
-                        <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} />
+                        <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} venueId={venue?.id} slug={slug} />
                       ))}
                     </div>
                   ) : (
@@ -744,15 +795,9 @@ export default function TodayPage() {
                     </p>
                   )
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => go("/auth")}
-                    className="flex w-full items-center justify-between rounded-2xl bg-neutral-950 px-4 py-4 text-left text-white"
-                    style={{ fontFamily: FONT_HEADING }}
-                  >
-                    <span>Logga in för bokningar</span>
-                    <ArrowRight className="h-5 w-5" />
-                  </button>
+                  <p className="rounded-2xl bg-[#fffaf7] px-4 py-4 text-[13px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                    logga in högst upp för bokningar och kvitton
+                  </p>
                 )}
               </section>
 
@@ -819,6 +864,23 @@ export default function TodayPage() {
                   <ArrowRight className="h-4 w-4 text-neutral-400" />
                 </button>
               </section>
+
+              {user && (
+                <section>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await signOut();
+                      go(`/?v=${slug}`);
+                    }}
+                    className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-[#f4f0ee] px-4 py-4 text-left text-neutral-950"
+                    style={{ fontFamily: FONT_HEADING }}
+                  >
+                    <span>Logga ut</span>
+                    <LogOut className="h-4 w-4 text-neutral-400" />
+                  </button>
+                </section>
+              )}
             </div>
           </div>
         </DrawerContent>

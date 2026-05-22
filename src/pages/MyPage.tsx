@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, LogOut, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText } from "lucide-react";
+import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
-import { PlayerNav } from "@/components/PlayerNav";
+import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -24,7 +24,6 @@ import {
   stripBookingCodesFromText,
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
-import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -1145,7 +1144,7 @@ function SettingsSection() {
 }
 
 const MyPage = () => {
-  const { user, loading, signOut } = useAuth();
+  const { user, loading } = useAuth();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1245,39 +1244,10 @@ const MyPage = () => {
 
   return (
     <div className="min-h-screen" style={{ background: PAGE_BG }}>
-      {/* ═══ STICKY TOP: Logo ═══ */}
-      <header
-        className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
-        style={{
-          background: "linear-gradient(to bottom, rgba(248,250,252,0.95) 0%, rgba(248,250,252,0.7) 50%, transparent 100%)",
-        }}
-      >
-        <div className="pt-2">
-          <img
-            src={picklaLogo}
-            alt="Pickla"
-            className="h-7 w-auto"
-          />
-        </div>
-        {!isActivityPage ? (
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={async () => {
-              await signOut();
-              navigate(`/?v=${venueSlug}`);
-            }}
-            className="w-9 h-9 rounded-xl flex items-center justify-center mb-1"
-            style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}
-          >
-            <LogOut className="w-4 h-4" style={{ color: TEXT_MUTED }} />
-          </motion.button>
-        ) : (
-          <div className="w-9 h-9 mb-1" />
-        )}
-      </header>
+      <PicklaTopBar slug={venueSlug} showVenue={false} background={PAGE_BG} />
 
       {/* ═══ MAIN CONTENT ═══ */}
-      <main className="pt-24 px-5 pb-28">
+      <main className="pt-[calc(env(safe-area-inset-top,0px)+104px)] px-5 pb-16">
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
           <motion.div variants={item}>
             <p className="text-lg font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
@@ -1592,8 +1562,6 @@ const MyPage = () => {
         open={showMembershipDetails}
         onOpenChange={setShowMembershipDetails}
       />
-
-      <PlayerNav />
     </div>
   );
 };

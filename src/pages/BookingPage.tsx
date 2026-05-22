@@ -9,9 +9,8 @@ import { DateTime } from "luxon";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
-import { PlayerNav } from "@/components/PlayerNav";
+import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
-import picklaLogo from "@/assets/pickla-logo.svg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
@@ -737,15 +736,12 @@ export default function BookingPage() {
           </button>
         </div>
       ) : (
-        <form onSubmit={handleBook} className="mx-auto max-w-md px-6 pt-[calc(env(safe-area-inset-top,0px)+34px)] py-4 pb-28 space-y-8">
-          <header className="flex items-center justify-between">
-            <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
-            <div className="flex items-center gap-1.5 text-[13px]" style={{ fontFamily: FONT_MONO }}>
-              <span className="h-2.5 w-2.5 rounded-full bg-[#32ef87]" />
-              <span>{venueName.replace("Pickla Arena ", "Pickla ") || "Pickla Solna"}</span>
-            </div>
-          </header>
-
+        <form onSubmit={handleBook} className="mx-auto max-w-md px-6 pt-[calc(env(safe-area-inset-top,0px)+118px)] py-4 pb-16 space-y-8">
+          <PicklaTopBar
+            slug={slug}
+            venueName={venueName.replace("Pickla Arena ", "Pickla ") || "Pickla Stockholm"}
+            background="#f7f4ee"
+          />
           <section>
             <h1 className="text-[40px] leading-none tracking-[-0.04em] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
               Boka aktivitet
@@ -1321,8 +1317,6 @@ export default function BookingPage() {
           )}
         </DrawerContent>
       </Drawer>
-
-      <PlayerNav />
     </div>
   );
 }

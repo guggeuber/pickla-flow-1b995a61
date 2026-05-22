@@ -5,7 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import picklaLogo from "@/assets/pickla-logo.svg";
+import { PicklaTopBar } from "@/components/PicklaTopBar";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -82,7 +82,8 @@ const Auth = () => {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
+    <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 pt-[calc(env(safe-area-inset-top,0px)+84px)]">
+      <PicklaTopBar slug={venueParam || "pickla-arena-sthlm"} showVenue={false} background="#ffffff" />
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
@@ -91,28 +92,18 @@ const Auth = () => {
       >
         {/* Logo + heading */}
         <div className="text-center space-y-3">
-          <motion.img
-            src={picklaLogo}
-            alt="Pickla"
-            className="w-10 h-10 mx-auto"
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ delay: 0.1, duration: 0.4 }}
-          />
           <div>
             <h1
               className="text-[28px] font-bold text-neutral-900 tracking-tight"
               style={{ fontFamily: FONT_GROTESK }}
             >
-              {isDesk ? "Pickla Desk" : "Pickla"}
+              {mode === "forgot" ? "Återställ lösenord" : mode === "signup" ? "Skapa konto" : isDesk ? "Desk login" : "Logga in"}
             </h1>
             <p
               className="text-[11px] text-neutral-400 mt-1 uppercase tracking-widest"
               style={{ fontFamily: FONT_MONO }}
             >
-              {mode === "login"
-                ? isDesk ? "STAFF LOGIN" : "LOGGA IN"
-                : "SKAPA KONTO"}
+              {isDesk ? "PICKLA STAFF" : "PICKLA KONTO"}
             </p>
           </div>
         </div>

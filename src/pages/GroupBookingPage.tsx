@@ -5,7 +5,7 @@ import { CheckCircle2, Loader2 } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
-import { PlayerNav } from "@/components/PlayerNav";
+import { PicklaTopBar } from "@/components/PicklaTopBar";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
@@ -140,22 +140,14 @@ export default function GroupBookingPage() {
             Tillbaka till idag
           </button>
         </main>
-        <PlayerNav />
       </div>
     );
   }
 
   return (
-    <div className="min-h-[100dvh] bg-[#f7f4ee] pb-24 text-[#111]">
-      <form onSubmit={handleSubmit} className="mx-auto max-w-md space-y-7 px-6 pt-[calc(env(safe-area-inset-top,0px)+34px)]">
-        <header className="flex items-center justify-between">
-          <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
-          <div className="flex items-center gap-1.5 text-[13px]" style={{ fontFamily: FONT_MONO }}>
-            <span className="h-2.5 w-2.5 rounded-full bg-[#32ef87]" />
-            <span>{venueName}</span>
-          </div>
-        </header>
-
+    <div className="min-h-[100dvh] bg-[#f7f4ee] pb-16 text-[#111]">
+      <PicklaTopBar slug={slug} venueName={venueName} background="#f7f4ee" />
+      <form onSubmit={handleSubmit} className="mx-auto max-w-md space-y-7 px-6 pt-[calc(env(safe-area-inset-top,0px)+118px)]">
         <section className="overflow-hidden rounded-[28px] bg-neutral-950 text-white">
           <div className="relative h-56">
             <img src={heroImage} alt="" className="h-full w-full object-cover" />
@@ -361,7 +353,6 @@ export default function GroupBookingPage() {
           </button>
         </section>
       </form>
-      <PlayerNav />
     </div>
   );
 }

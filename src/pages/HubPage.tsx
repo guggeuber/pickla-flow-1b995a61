@@ -36,7 +36,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { DateTime } from "luxon";
 import { ActionCard } from "@/components/hub/ActionCard";
 import { BotMessage } from "@/components/hub/BotMessage";
-import { PlayerNav } from "@/components/PlayerNav";
 import { EventCard } from "@/components/hub/EventCard";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { toast } from "sonner";
@@ -2783,7 +2782,7 @@ function HubList({
                     <div style={{ display: "flex", gap: 8, marginTop: 13 }}>
                       <button
                         type="button"
-                        onClick={() => isProgramSession ? navigate(programUrl) : openEventRoom(ev)}
+                        onClick={() => openEventRoom(ev)}
                         style={{
                           flex: 1,
                           border: 0,
@@ -2797,11 +2796,11 @@ function HubList({
                           cursor: "pointer",
                         }}
                       >
-                        {isProgramSession ? "Anmäl" : "Öppna"}
+                        Öppna chat
                       </button>
                       <button
                         type="button"
-                        onClick={() => openEventRoom(ev)}
+                        onClick={() => isProgramSession ? navigate(programUrl) : openEventRoom(ev)}
                         style={{
                           border: `1px solid ${HUB_BORDER}`,
                           borderRadius: 13,
@@ -2814,7 +2813,7 @@ function HubList({
                           cursor: "pointer",
                         }}
                       >
-                        Chatta
+                        {isProgramSession ? "Anmäl" : "Visa"}
                       </button>
                     </div>
                   </motion.div>
@@ -2858,7 +2857,6 @@ function HubList({
         openingHours={openingHours}
       />
 
-      <PlayerNav />
     </div>
   );
 }
