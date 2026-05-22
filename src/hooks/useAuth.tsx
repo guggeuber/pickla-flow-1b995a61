@@ -17,6 +17,11 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
 
+function authRedirectOrigin() {
+  if (window.location.hostname === "www.playpickla.com") return "https://playpickla.com";
+  return window.location.origin;
+}
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -69,7 +74,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       password,
       options: {
         data: { display_name: displayName },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${authRedirectOrigin()}/auth/callback`,
       },
     });
     return { error: error ? new Error(error.message) : null };

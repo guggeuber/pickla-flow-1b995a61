@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import type { EmailOtpType } from "@supabase/supabase-js";
 
 const CREAM = "#faf8f5";
 const DARK_BLUE = "#1a1f3a";
@@ -11,19 +12,39 @@ const TEXT_MUTED = "rgba(26,26,26,0.55)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
+const OTP_TYPES = new Set(["signup", "invite", "magiclink", "recovery", "email_change", "email"]);
+
+function callbackParam(searchParams: URLSearchParams, hashParams: URLSearchParams, key: string) {
+  return searchParams.get(key) || hashParams.get(key);
+}
+
+function normalizeOtpType(type?: string | null): EmailOtpType {
+  return OTP_TYPES.has(type || "") ? (type as EmailOtpType) : "signup";
+}
+
 export default function AuthCallback() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
-
-  const type = searchParams.get("type");
-  const isSignup = type === "signup" || type === "email_change";
+  const [successText, setSuccessText] = useState("Du är inloggad");
 
   useEffect(() => {
     const exchange = async () => {
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const authError = callbackParam(searchParams, hashParams, "error_description")
+        || callbackParam(searchParams, hashParams, "error");
+      if (authError) {
+        setErrorMsg(authError);
+        setStatus("error");
+        return;
+      }
+
+      const type = callbackParam(searchParams, hashParams, "type");
+      const isSignup = type === "signup" || type === "email_change";
+
       // PKCE flow: Supabase sends ?code= — must exchange for session
-      const code = searchParams.get("code");
+      const code = callbackParam(searchParams, hashParams, "code");
       if (code) {
         const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
         if (error) {
@@ -31,13 +52,44 @@ export default function AuthCallback() {
           setStatus("error");
           return;
         }
+        setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
+        setStatus("success");
+        setTimeout(() => navigate("/my", { replace: true }), 3000);
+        return;
       }
-      // Implicit flow fallback: #access_token already handled by Supabase client on load
-      setStatus("success");
-      setTimeout(() => navigate("/my", { replace: true }), 3000);
+
+      // OTP hash flow: used by custom Supabase email templates with {{ .TokenHash }}
+      const tokenHash = callbackParam(searchParams, hashParams, "token_hash");
+      if (tokenHash) {
+        const { error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: normalizeOtpType(type),
+        });
+        if (error) {
+          setErrorMsg(error.message);
+          setStatus("error");
+          return;
+        }
+        setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
+        setStatus("success");
+        setTimeout(() => navigate("/my", { replace: true }), 3000);
+        return;
+      }
+
+      // Implicit flow fallback: #access_token may already be handled by Supabase client on load
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setSuccessText("Du är inloggad");
+        setStatus("success");
+        setTimeout(() => navigate("/my", { replace: true }), 3000);
+        return;
+      }
+
+      setErrorMsg("Länken saknar verifieringskod. Testa att be om ett nytt bekräftelsemail.");
+      setStatus("error");
     };
     exchange();
-  }, []);
+  }, [navigate, searchParams]);
 
   return (
     <div
@@ -94,7 +146,7 @@ export default function AuthCallback() {
                 Välkommen till Pickla!
               </h1>
               <p className="text-[13px] mt-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-                {isSignup ? "Din e-post är bekräftad" : "Du är inloggad"}
+                {successText}
               </p>
             </div>
             <button
