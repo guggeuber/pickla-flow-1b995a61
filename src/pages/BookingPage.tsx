@@ -185,6 +185,7 @@ export default function BookingPage() {
   const [editingContact, setEditingContact] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [savedProfilePhone, setSavedProfilePhone] = useState("");
   const [useCorporate, setUseCorporate] = useState(false);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
 
@@ -213,6 +214,7 @@ export default function BookingPage() {
         if (fallbackName) setName((current) => current || fallbackName);
         if (fallbackPhone) setPhone((current) => current || fallbackPhone);
         if (fallbackEmail) setEmail((current) => current || fallbackEmail);
+        setSavedProfilePhone(fallbackPhone.trim());
       } finally {
         setProfileLoaded(true);
       }
@@ -508,16 +510,25 @@ export default function BookingPage() {
   const needsEmailForBooking = !user || baseTotalPrice === 0;
   const phoneIsReady = !needsPhoneForDirectBooking || isValidPhone(bookingPhone);
   const emailIsReady = !needsEmailForBooking || isValidEmail(bookingEmail);
+  const contactFormIsReady = Boolean(bookingName && phoneIsReady && emailIsReady);
+  const contactNeedsProfileSave = Boolean(
+    user &&
+    profileLoaded &&
+    contactFormIsReady &&
+    bookingPhone &&
+    bookingPhone !== savedProfilePhone.trim()
+  );
   const hasContactDetails = Boolean(
     user &&
     bookingName &&
     phoneIsReady &&
-    emailIsReady
+    emailIsReady &&
+    !contactNeedsProfileSave
   );
   const showProfileLoading = selectedCourts.length > 0 && !!user && !profileLoaded;
   const showAuthPrompt = selectedCourts.length > 0 && !user;
-  const showContactFields = selectedCourts.length > 0 && !showProfileLoading && !!user && (!hasContactDetails || editingContact);
-  const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && Boolean(bookingName) && !editingContact;
+  const showContactFields = selectedCourts.length > 0 && !showProfileLoading && !!user && (!hasContactDetails || editingContact || contactNeedsProfileSave);
+  const showContactSummary = selectedCourts.length > 0 && !showProfileLoading && !!user && hasContactDetails && !editingContact;
   const isToday = dateStr === todayStr;
   const selectedDateLabel = isToday
     ? "Idag"
@@ -528,6 +539,13 @@ export default function BookingPage() {
       ? "Imorgon"
       : format(selectedDate, "EEEE", { locale: sv });
   const canSubmitBooking = Boolean(user && hasContactDetails && selectedTime && selectedEndTime && selectedCourts.length);
+  const bookingButtonLabel = !user
+    ? "Logga in för att boka"
+    : !contactFormIsReady
+      ? "Fyll i uppgifter"
+      : contactNeedsProfileSave
+        ? "Spara telefonnummer först"
+        : `Boka ${useCorporate ? 0 : totalPrice} kr`;
   const isViewingTodayRange = availabilityStartStr === todayStr;
   const todayLuxon = DateTime.now().setZone("Europe/Stockholm").startOf("day");
   const nextWeekDate = todayLuxon.plus({ days: 7 }).toJSDate();
@@ -600,6 +618,35 @@ export default function BookingPage() {
     return { type: "stripe", url: result.url };
   };
 
+  const saveContactMutation = useMutation({
+    mutationFn: async () => {
+      if (!user) throw new Error("Du behöver vara inloggad");
+      if (!contactFormIsReady) throw new Error("Fyll i namn och telefonnummer först");
+
+      const { error } = await supabase
+        .from("player_profiles")
+        .upsert(
+          {
+            auth_user_id: user.id,
+            display_name: bookingName,
+            phone: bookingPhone,
+          },
+          { onConflict: "auth_user_id" }
+        );
+
+      if (error) throw error;
+      return bookingPhone;
+    },
+    onSuccess: (savedPhone) => {
+      setSavedProfilePhone(savedPhone);
+      setEditingContact(false);
+      toast.success("Telefonnummer sparat");
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Kunde inte spara telefonnummer");
+    },
+  });
+
   const bookMutation = useMutation({
     mutationFn: async () => {
       return bookingMode === "direct"
@@ -634,6 +681,10 @@ export default function BookingPage() {
     e.preventDefault();
     if (!user) {
       goToAuth();
+      return;
+    }
+    if (contactNeedsProfileSave) {
+      toast.error("Spara telefonnumret först");
       return;
     }
     if (!hasContactDetails || !selectedTime || !selectedEndTime || !selectedCourts.length) return;
@@ -991,8 +1042,21 @@ export default function BookingPage() {
                           </p>
                         )}
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => saveContactMutation.mutate()}
+                        disabled={!contactFormIsReady || saveContactMutation.isPending}
+                        className="mt-4 w-full rounded-2xl bg-neutral-950 px-4 py-3 text-[13px] text-white transition-transform active:scale-[0.98] disabled:opacity-35"
+                        style={{ fontFamily: FONT_MONO }}
+                      >
+                        {saveContactMutation.isPending ? (
+                          <Loader2 className="mx-auto h-4 w-4 animate-spin" />
+                        ) : (
+                          "Spara telefonnummer"
+                        )}
+                      </button>
                       <p className="mt-3 text-[10px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                        vi använder detta på bokningen och kvittot
+                        spara först, sedan kan du boka och numret finns kvar på din profil
                       </p>
                     </div>
                   )}
@@ -1012,7 +1076,7 @@ export default function BookingPage() {
                     {bookMutation.isPending ? (
                       <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                     ) : (
-                      user ? `Boka ${useCorporate ? 0 : totalPrice} kr` : "Logga in för att boka"
+                      bookingButtonLabel
                     )}
                   </button>
                 </>
