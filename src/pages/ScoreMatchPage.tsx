@@ -423,7 +423,7 @@ export default function ScoreMatchPage() {
                 <div className="mt-2 rounded-xl bg-emerald-50 px-3 py-2">
                   <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700">Utgångsförslag</p>
                   <p className="mt-1 font-display text-xl font-black text-neutral-950">
-                    {currentRemaining}: {checkoutHint}
+                    Gå ut: {checkoutHint}
                   </p>
                 </div>
               )}
@@ -658,7 +658,7 @@ function ScoreCelebration({ tone, text }: { tone: "win" | "checkout" | "bust" | 
   );
 }
 
-const singleSegments = Array.from({ length: 20 }, (_, index) => ({ label: String(index + 1), value: index + 1 }));
+const singleSegments = Array.from({ length: 20 }, (_, index) => ({ label: `S${index + 1}`, value: index + 1 }));
 const doubleSegments = Array.from({ length: 20 }, (_, index) => ({ label: `D${index + 1}`, value: (index + 1) * 2 }));
 const tripleSegments = Array.from({ length: 20 }, (_, index) => ({ label: `T${index + 1}`, value: (index + 1) * 3 }));
 const bullSegments = [{ label: "25", value: 25 }, { label: "BULL", value: 50 }];
