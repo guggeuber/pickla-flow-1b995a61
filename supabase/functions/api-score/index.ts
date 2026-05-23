@@ -359,7 +359,7 @@ Deno.serve(async (req) => {
     if (req.method === 'GET' && path === 'live-state') {
       const scoreSessionId = url.searchParams.get('scoreSessionId');
       if (!scoreSessionId) return errorResponse('Missing scoreSessionId');
-      return jsonResponse(await liveState(admin, scoreSessionId), 200, 2);
+      return jsonResponse(await liveState(admin, scoreSessionId));
     }
 
     if (req.method === 'GET' && path === 'match') {
@@ -378,7 +378,7 @@ Deno.serve(async (req) => {
         .eq('match_id', matchId)
         .order('created_at', { ascending: false })
         .limit(20);
-      return jsonResponse({ match, turns: turns || [] }, 200, 2);
+      return jsonResponse({ match, turns: turns || [] });
     }
 
     if (req.method === 'GET' && path === 'event-session') {

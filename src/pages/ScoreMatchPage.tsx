@@ -35,6 +35,17 @@ type PlayerSlot = {
   remaining: number;
 };
 
+type ScoreResponse = {
+  match: ScoreMatch;
+  turn?: {
+    score: number;
+    is_bust?: boolean;
+    is_checkout?: boolean;
+    player_number?: number;
+    remaining_after?: number;
+  };
+};
+
 const keypad = [1, 2, 3, 4, 5, 6, 7, 8, 9, "del", 0, "enter"] as const;
 
 export default function ScoreMatchPage() {
@@ -44,6 +55,7 @@ export default function ScoreMatchPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [input, setInput] = useState("");
+  const [notice, setNotice] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const { data, isLoading, isError } = useQuery<{ match: ScoreMatch; turns: unknown[] }>({
     queryKey: ["score-match", matchId],
@@ -91,15 +103,28 @@ export default function ScoreMatchPage() {
   }, [currentRemaining, input, match]);
 
   const scoreMutation = useMutation({
-    mutationFn: (score: number) => apiPost("api-score", "score", {
+    mutationFn: (score: number) => apiPost<ScoreResponse>("api-score", "score", {
       match_id: matchId,
       score,
       darts_used: 3,
       device_token: deviceToken || undefined,
     }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setInput("");
-      queryClient.invalidateQueries({ queryKey: ["score-match", matchId] });
+      queryClient.setQueryData(["score-match", matchId], (current: { match: ScoreMatch; turns: unknown[] } | undefined) => ({
+        match: result.match,
+        turns: current?.turns || [],
+      }));
+      if (result.turn?.is_bust) {
+        setNotice({ tone: "warn", text: "BUST - score står kvar, turen går vidare" });
+      } else if (result.turn?.is_checkout) {
+        setNotice({ tone: "ok", text: "UT - legget är klart" });
+      } else if (result.turn) {
+        setNotice({ tone: "ok", text: `${result.turn.score} registrerat` });
+      }
+      window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["score-match", matchId] });
+      }, 150);
     },
     onError: (error: Error) => toast.error(error.message || "Kunde inte registrera score"),
   });
@@ -131,6 +156,7 @@ export default function ScoreMatchPage() {
 
   const press = (key: typeof keypad[number]) => {
     if (key === "del") {
+      setNotice(null);
       setInput((value) => value.slice(0, -1));
       return;
     }
@@ -140,6 +166,7 @@ export default function ScoreMatchPage() {
       scoreMutation.mutate(score);
       return;
     }
+    setNotice(null);
     setInput((value) => `${value}${key}`.slice(0, 3));
   };
 
@@ -253,7 +280,16 @@ export default function ScoreMatchPage() {
 
           <aside className="flex min-h-0 flex-col rounded-[1.5rem] border border-white/10 bg-white p-3 text-neutral-950">
             <div className="mb-2 shrink-0 rounded-[1.25rem] bg-neutral-100 p-3">
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-neutral-400">Score</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-neutral-400">Score</p>
+                {notice && (
+                  <p className={`truncate font-mono text-[10px] uppercase tracking-[0.12em] ${
+                    notice.tone === "warn" ? "text-pink-600" : "text-emerald-600"
+                  }`}>
+                    {notice.text}
+                  </p>
+                )}
+              </div>
               <div className="mt-0.5 flex items-end justify-between">
                 <p className="font-display text-[clamp(3rem,10vh,5rem)] font-black leading-none">{input || "0"}</p>
                 <p className={`font-mono text-lg ${projected === "BUST" ? "text-pink-600" : projected === 0 ? "text-emerald-600" : "text-neutral-400"}`}>
