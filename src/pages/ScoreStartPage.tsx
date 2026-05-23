@@ -51,6 +51,14 @@ const createSetupId = () => {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
+const scoreJoinOrigin = () => {
+  const { hostname, origin } = window.location;
+  if (hostname === "playpickla.com" || hostname === "www.playpickla.com") {
+    return "https://www.playpickla.com";
+  }
+  return origin;
+};
+
 export default function ScoreStartPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -79,7 +87,7 @@ export default function ScoreStartPage() {
     queryKey: ["score-join-state", deviceToken, setupId],
     enabled: !!deviceToken && !!setupId,
     queryFn: () => apiGet("api-score", "join-state", { device: deviceToken, setupId }),
-    refetchInterval: 2_000,
+    refetchInterval: linkIndex !== null ? 1_000 : 2_000,
   });
 
   useEffect(() => {
@@ -103,13 +111,12 @@ export default function ScoreStartPage() {
   }, [joinState]);
 
   const joinUrl = (index: number) => {
-    const origin = window.location.origin;
     const params = new URLSearchParams({
       setup: setupId,
       device: deviceToken,
       slot: String(index),
     });
-    return `${origin}/score/join?${params.toString()}`;
+    return `${scoreJoinOrigin()}/score/join?${params.toString()}`;
   };
 
   const startMutation = useMutation({
