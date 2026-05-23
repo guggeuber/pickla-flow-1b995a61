@@ -7,6 +7,7 @@ type TurnRow = Record<string, any>;
 type PlayerSlot = {
   number: number;
   id: string | null;
+  auth_user_id?: string | null;
   name: string;
   legs: number;
   remaining: number;
@@ -58,6 +59,7 @@ function slotsFromMatch(match: MatchRow): PlayerSlot[] {
     return raw.map((slot: any, index: number) => ({
       number: Number(slot.number || index + 1),
       id: slot.id || null,
+      auth_user_id: slot.auth_user_id || null,
       name: cleanName(slot.name, `Spelare ${index + 1}`),
       legs: Number(slot.legs || 0),
       remaining: Number(slot.remaining ?? match.target_score ?? targetScore(match.game_type)),
@@ -67,6 +69,7 @@ function slotsFromMatch(match: MatchRow): PlayerSlot[] {
     {
       number: 1,
       id: match.player1_id || null,
+      auth_user_id: null,
       name: cleanName(match.player1_name, 'Spelare 1'),
       legs: Number(match.player1_legs || 0),
       remaining: Number(match.player1_remaining ?? match.target_score ?? targetScore(match.game_type)),
@@ -74,6 +77,7 @@ function slotsFromMatch(match: MatchRow): PlayerSlot[] {
     {
       number: 2,
       id: match.player2_id || null,
+      auth_user_id: null,
       name: cleanName(match.player2_name, 'Spelare 2'),
       legs: Number(match.player2_legs || 0),
       remaining: Number(match.player2_remaining ?? match.target_score ?? targetScore(match.game_type)),
@@ -96,9 +100,55 @@ function mirrorFromSlots(state: MatchRow, slots: PlayerSlot[]) {
   return state;
 }
 
+function parsePicklaUserId(value: unknown) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.type === 'pickla_user' && parsed.uid) return String(parsed.uid);
+  } catch {
+    // Fall back to raw UUID below.
+  }
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw) ? raw : null;
+}
+
+async function resolvePlayerProfile(client: any, userId: string) {
+  const { data: profile, error } = await client
+    .from('player_profiles')
+    .select('auth_user_id, display_name, avatar_url, phone')
+    .eq('auth_user_id', userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (profile) {
+    return {
+      user_id: profile.auth_user_id,
+      display_name: cleanName(profile.display_name, 'Pickla spelare'),
+      avatar_url: profile.avatar_url || null,
+      phone: profile.phone || null,
+    };
+  }
+  const authUser = await client.auth.admin.getUserById(userId);
+  if (authUser.error || !authUser.data?.user) return null;
+  const emailName = authUser.data.user.email?.split('@')[0] || 'Pickla spelare';
+  return {
+    user_id: authUser.data.user.id,
+    display_name: cleanName(authUser.data.user.user_metadata?.display_name || emailName, 'Pickla spelare'),
+    avatar_url: authUser.data.user.user_metadata?.avatar_url || null,
+    phone: authUser.data.user.phone || null,
+  };
+}
+
 function currentSlot(match: MatchRow) {
   const slots = slotsFromMatch(match);
   return slots.find((slot) => slot.number === Number(match.current_player)) || slots[0];
+}
+
+function playerIdForNumber(match: MatchRow, playerNumber: number) {
+  const slot = slotsFromMatch(match).find((item) => item.number === playerNumber);
+  if (slot?.id) return slot.id;
+  if (playerNumber === 1) return match.player1_id || null;
+  if (playerNumber === 2) return match.player2_id || null;
+  return null;
 }
 
 async function assertDeviceOwnsMatch(client: any, match: MatchRow, deviceToken?: string) {
@@ -403,6 +453,81 @@ Deno.serve(async (req) => {
       return jsonResponse({ session: data || null }, 200, 5);
     }
 
+    if (req.method === 'GET' && path === 'my-stats') {
+      const { client, userId, error } = await getAuthenticatedClient(req);
+      if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+      const { data: players, error: playerErr } = await client
+        .from('score_players')
+        .select('id, display_name, created_at')
+        .eq('auth_user_id', userId);
+      if (playerErr) return errorResponse(playerErr.message);
+      const playerIds = (players || []).map((player: any) => player.id);
+      if (!playerIds.length) {
+        return jsonResponse({
+          matches_played: 0,
+          wins: 0,
+          turns: 0,
+          darts: 0,
+          scored: 0,
+          average: 0,
+          high_score: 0,
+          one_eighties: 0,
+          checkouts: 0,
+          high_checkout: 0,
+          recent_matches: [],
+        }, 200, 20);
+      }
+
+      const { data: turns, error: turnErr } = await client
+        .from('score_turns')
+        .select('id, match_id, player_id, score, is_bust, is_checkout, darts_used, created_at')
+        .in('player_id', playerIds)
+        .order('created_at', { ascending: false })
+        .limit(5000);
+      if (turnErr) return errorResponse(turnErr.message);
+
+      const turnRows = turns || [];
+      const playedMatchIds = Array.from(new Set(turnRows.map((turn: any) => turn.match_id).filter(Boolean)));
+      const { data: wonMatches, error: winsErr } = await client
+        .from('score_matches')
+        .select('id, winner_player_id')
+        .in('winner_player_id', playerIds)
+        .eq('status', 'completed');
+      if (winsErr) return errorResponse(winsErr.message);
+      const matchIds = Array.from(new Set([...playedMatchIds, ...((wonMatches || []).map((match: any) => match.id))]));
+      const { data: matches, error: matchErr } = matchIds.length
+        ? await client
+          .from('score_matches')
+          .select('id, status, winner_player_id, winner_name, game_type, completed_at, started_at, venue_courts(name, court_number)')
+          .in('id', matchIds)
+          .order('started_at', { ascending: false })
+          .limit(50)
+        : { data: [], error: null };
+      if (matchErr) return errorResponse(matchErr.message);
+
+      const scoredTurns = turnRows.map((turn: any) => turn.is_bust ? 0 : Number(turn.score || 0));
+      const scored = scoredTurns.reduce((sum: number, score: number) => sum + score, 0);
+      const darts = turnRows.reduce((sum: number, turn: any) => sum + Number(turn.darts_used || 3), 0);
+      const checkouts = turnRows.filter((turn: any) => turn.is_checkout);
+      const highCheckout = checkouts.reduce((high: number, turn: any) => Math.max(high, Number(turn.score || 0)), 0);
+      const wins = (matches || []).filter((match: any) => playerIds.includes(match.winner_player_id)).length;
+
+      return jsonResponse({
+        matches_played: matchIds.length,
+        wins,
+        turns: turnRows.length,
+        darts,
+        scored,
+        average: turnRows.length ? scored / turnRows.length : 0,
+        high_score: scoredTurns.reduce((high: number, score: number) => Math.max(high, score), 0),
+        one_eighties: scoredTurns.filter((score: number) => score === 180).length,
+        checkouts: checkouts.length,
+        high_checkout: highCheckout,
+        recent_matches: (matches || []).slice(0, 5),
+      }, 200, 20);
+    }
+
     if (req.method === 'POST' && path === 'walk-in') {
       const body = await req.json();
       const token = String(body.device_token || body.device || '');
@@ -422,6 +547,7 @@ Deno.serve(async (req) => {
       const inputNames = Array.isArray(body.player_names)
         ? body.player_names.map((name: unknown, index: number) => cleanName(name, `Spelare ${index + 1}`)).filter(Boolean).slice(0, 4)
         : [];
+      const inputUsers = Array.isArray(body.player_users) ? body.player_users.map((id: unknown) => id ? String(id) : null).slice(0, 4) : [];
       const defaultNames = inputNames.length >= 2 ? inputNames : [
         cleanName(body.player1_name, 'Spelare 1'),
         cleanName(body.player2_name, 'Spelare 2'),
@@ -473,6 +599,7 @@ Deno.serve(async (req) => {
         const matchNames = Array.isArray(input.player_names)
           ? input.player_names.map((name: unknown, playerIndex: number) => cleanName(name, `Spelare ${playerIndex + 1}`)).filter(Boolean).slice(0, 4)
           : defaultNames;
+        const matchUsers = Array.isArray(input.player_users) ? input.player_users.map((id: unknown) => id ? String(id) : null).slice(0, 4) : inputUsers;
         const normalizedNames = matchNames.length >= 2 ? matchNames : ['Spelare 1', 'Spelare 2'];
         const courtDevice = (devicesForCourts || []).find((d: any) => d.venue_court_id === courtIds[index]);
 
@@ -482,6 +609,7 @@ Deno.serve(async (req) => {
             .from('score_players')
             .insert({
               score_session_id: session.id,
+              auth_user_id: matchUsers[playerIndex] || null,
               display_name: normalizedNames[playerIndex],
               seed: index * 8 + playerIndex + 1,
             })
@@ -491,6 +619,7 @@ Deno.serve(async (req) => {
           playerSlots.push({
             number: playerIndex + 1,
             id: playerRow.id,
+            auth_user_id: matchUsers[playerIndex] || null,
             name: normalizedNames[playerIndex],
             legs: 0,
             remaining: target,
@@ -537,6 +666,19 @@ Deno.serve(async (req) => {
       return jsonResponse({ session, matches: createdMatches, match: createdMatches[0] }, 201);
     }
 
+    if (req.method === 'POST' && path === 'resolve-player') {
+      const body = await req.json();
+      const token = String(body.device_token || body.device || '');
+      if (!token) return errorResponse('Missing device token');
+      const device = await getDevice(admin, token);
+      if (!device) return errorResponse('Paddan hittades inte', 404);
+      const userId = parsePicklaUserId(body.qr_payload || body.user_id || body.uid);
+      if (!userId) return errorResponse('Ogiltig QR-kod');
+      const player = await resolvePlayerProfile(admin, userId);
+      if (!player?.user_id) return errorResponse('Användaren hittades inte', 404);
+      return jsonResponse({ player }, 200, 5);
+    }
+
     if (req.method === 'POST' && path === 'score') {
       const body = await req.json();
       const matchId = String(body.match_id || '');
@@ -563,7 +705,7 @@ Deno.serve(async (req) => {
           venue_court_id: match.venue_court_id,
           leg_number: match.current_leg,
           player_number: player,
-          player_id: player === 1 ? match.player1_id : match.player2_id,
+          player_id: playerIdForNumber(match, player),
           score,
           remaining_before: before,
           remaining_after: isBust ? before : Math.max(after, 0),
@@ -764,7 +906,7 @@ Deno.serve(async (req) => {
           venue_court_id: baseMatch.venue_court_id,
           leg_number: baseMatch.current_leg,
           player_number: player,
-          player_id: player === 1 ? baseMatch.player1_id : baseMatch.player2_id,
+          player_id: playerIdForNumber(baseMatch, player),
           score,
           remaining_before: before,
           remaining_after: isBust ? before : Math.max(after, 0),

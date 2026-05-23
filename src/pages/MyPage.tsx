@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText } from "lucide-react";
+import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, BarChart3, Flame, Trophy } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
@@ -84,6 +85,18 @@ type ActivityThread = {
   joined_at: string | null;
 };
 
+type MyDartStats = {
+  matches_played: number;
+  wins: number;
+  turns: number;
+  scored: number;
+  average: number;
+  high_score: number;
+  one_eighties: number;
+  checkouts: number;
+  high_checkout: number;
+};
+
 function usePlayerProfile() {
   const { user } = useAuth();
   return useQuery({
@@ -137,6 +150,16 @@ function useMyActivityThreads() {
         .map((row) => ({ joined_at: row.joined_at, room: row.chat_rooms }))
         .filter((row) => row.room && row.room.room_type !== "daily") as ActivityThread[];
     },
+  });
+}
+
+function useMyDartStats() {
+  const { user } = useAuth();
+  return useQuery<MyDartStats>({
+    queryKey: ["my-dart-stats", user?.id],
+    enabled: !!user,
+    staleTime: 30000,
+    queryFn: () => apiGet("api-score", "my-stats"),
   });
 }
 
@@ -588,6 +611,62 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
         )}
       </div>
     </motion.div>
+  );
+}
+
+function DartStatsSection() {
+  const { data, isLoading } = useMyDartStats();
+  const hasStats = !!data && data.matches_played > 0;
+
+  return (
+    <motion.div
+      variants={item}
+      className="rounded-2xl p-4"
+      style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}`, boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-4 h-4" style={{ color: GREEN }} />
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina dartstats</span>
+        </div>
+        <span className="rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: GREEN_LIGHT, color: GREEN, fontFamily: FONT_HEADING }}>
+          SCORE
+        </span>
+      </div>
+
+      {isLoading ? (
+        <div className="flex h-24 items-center justify-center">
+          <Loader2 className="w-5 h-5 animate-spin" style={{ color: TEXT_MUTED }} />
+        </div>
+      ) : !hasStats ? (
+        <div className="rounded-xl p-3" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+          <p className="text-xs" style={{ color: TEXT_MUTED }}>
+            Skanna din Pickla-QR när du startar dartmatch på paddan, så sparas stats här.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-2">
+          <StatMini label="Matcher" value={String(data.matches_played)} icon={<Trophy className="w-3.5 h-3.5" />} />
+          <StatMini label="Vinster" value={String(data.wins)} icon={<Check className="w-3.5 h-3.5" />} />
+          <StatMini label="Snitt" value={data.average.toFixed(1)} icon={<BarChart3 className="w-3.5 h-3.5" />} />
+          <StatMini label="Högsta" value={String(data.high_score)} icon={<Flame className="w-3.5 h-3.5" />} />
+          <StatMini label="180s" value={String(data.one_eighties)} icon={<Sparkles className="w-3.5 h-3.5" />} />
+          <StatMini label="Checkout" value={data.high_checkout ? String(data.high_checkout) : "-"} icon={<Ticket className="w-3.5 h-3.5" />} />
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+function StatMini({ label, value, icon }: { label: string; value: string; icon: ReactNode }) {
+  return (
+    <div className="rounded-xl p-3" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+      <div className="mb-2 flex items-center gap-1.5" style={{ color: TEXT_MUTED }}>
+        {icon}
+        <span className="text-[9px] uppercase tracking-[0.12em]" style={{ fontFamily: FONT_MONO }}>{label}</span>
+      </div>
+      <p className="text-xl font-black leading-none" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{value}</p>
+    </div>
   );
 }
 
@@ -1262,6 +1341,8 @@ const MyPage = () => {
             <>
               {/* Profile card with edit */}
               <ProfileCard profile={profile} user={user} displayName={displayName} />
+
+              <DartStatsSection />
 
               {/* Membership */}
               {activeMembership ? (

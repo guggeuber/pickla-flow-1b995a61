@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowRight, Minus, Plus, Radio, Trophy } from "lucide-react";
+import { ArrowRight, Camera, Check, Minus, Plus, Radio, Trophy, X } from "lucide-react";
+import { Html5Qrcode } from "html5-qrcode";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { apiGet, apiPost } from "@/lib/api";
@@ -28,6 +29,20 @@ type WalkInResult = {
   matches?: Array<{ id: string }>;
 };
 
+type MatchPlayer = {
+  name: string;
+  auth_user_id?: string | null;
+  linked?: boolean;
+};
+
+type ResolvedPlayer = {
+  player: {
+    user_id: string;
+    display_name: string;
+    avatar_url?: string | null;
+  };
+};
+
 export default function ScoreStartPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -42,13 +57,83 @@ export default function ScoreStartPage() {
   const [bestOfLegs, setBestOfLegs] = useState(1);
   const [gameType, setGameType] = useState<"301" | "501" | "701">("501");
   const [checkoutRule, setCheckoutRule] = useState<"double_out" | "single_out">("double_out");
-  const [playerNames, setPlayerNames] = useState(["", ""]);
+  const [players, setPlayers] = useState<MatchPlayer[]>([{ name: "" }, { name: "" }]);
+  const [scanIndex, setScanIndex] = useState<number | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const processedScanRef = useRef(false);
 
   const activeCourt = useMemo(() => data?.resource || null, [data?.resource]);
   const normalizedNames = useMemo(
-    () => playerNames.map((name, index) => name.trim() || `Spelare ${index + 1}`),
-    [playerNames],
+    () => players.map((player, index) => player.name.trim() || `Spelare ${index + 1}`),
+    [players],
   );
+
+  const stopScanner = useCallback(async () => {
+    if (!scannerRef.current) return;
+    try {
+      const state = scannerRef.current.getState();
+      if (state === 2) await scannerRef.current.stop();
+    } catch {
+      // no-op
+    }
+    scannerRef.current = null;
+  }, []);
+
+  const closeScanner = useCallback(() => {
+    stopScanner();
+    setScanIndex(null);
+    setScanError(null);
+    processedScanRef.current = false;
+  }, [stopScanner]);
+
+  const handleQrDetected = useCallback(async (decodedText: string) => {
+    if (processedScanRef.current || scanIndex === null) return;
+    processedScanRef.current = true;
+    setScanError(null);
+    try {
+      const result = await apiPost<ResolvedPlayer>("api-score", "resolve-player", {
+        device_token: deviceToken,
+        qr_payload: decodedText,
+      });
+      const resolved = result.player;
+      setPlayers((current) => current.map((player, index) => index === scanIndex
+        ? { name: resolved.display_name, auth_user_id: resolved.user_id, linked: true }
+        : player
+      ));
+      toast.success(`${resolved.display_name} kopplad`);
+      closeScanner();
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : "Kunde inte läsa QR");
+      processedScanRef.current = false;
+    }
+  }, [closeScanner, deviceToken, scanIndex]);
+
+  useEffect(() => {
+    if (scanIndex === null) return;
+    let mounted = true;
+    const start = async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      if (!mounted) return;
+      const scanner = new Html5Qrcode("score-player-qr-reader");
+      scannerRef.current = scanner;
+      try {
+        await scanner.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 230, height: 230 } },
+          (decodedText) => handleQrDetected(decodedText),
+          () => {},
+        );
+      } catch {
+        if (mounted) setScanError("Kunde inte starta kameran. Kontrollera kamerabehörighet.");
+      }
+    };
+    start();
+    return () => {
+      mounted = false;
+      stopScanner();
+    };
+  }, [handleQrDetected, scanIndex, stopScanner]);
 
   const startMutation = useMutation({
     mutationFn: () => apiPost("api-score", "walk-in", {
@@ -58,6 +143,7 @@ export default function ScoreStartPage() {
       checkout_rule: checkoutRule,
       court_ids: activeCourt?.id ? [activeCourt.id] : [],
       player_names: normalizedNames,
+      player_users: players.map((player) => player.auth_user_id || null),
     }),
     onSuccess: (result: WalkInResult) => {
       const first = result.match || result.matches?.[0];
@@ -72,15 +158,15 @@ export default function ScoreStartPage() {
   });
 
   const updateName = (index: number, value: string) => {
-    setPlayerNames((current) => current.map((name, i) => (i === index ? value : name)));
+    setPlayers((current) => current.map((player, i) => (i === index ? { ...player, name: value } : player)));
   };
 
   const addPlayer = () => {
-    setPlayerNames((current) => (current.length >= 4 ? current : [...current, ""]));
+    setPlayers((current) => (current.length >= 4 ? current : [...current, { name: "" }]));
   };
 
   const removePlayer = (index: number) => {
-    setPlayerNames((current) => (current.length <= 2 ? current : current.filter((_, i) => i !== index)));
+    setPlayers((current) => (current.length <= 2 ? current : current.filter((_, i) => i !== index)));
   };
 
   if (isLoading) {
@@ -195,17 +281,30 @@ export default function ScoreStartPage() {
                 Lägg till
               </button>
             </div>
-            {playerNames.map((name, index) => (
+            {players.map((player, index) => (
               <div key={index} className="flex items-center gap-3 rounded-2xl border border-black/10 bg-[#faf8f5] p-3">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-950 font-display text-xl font-black text-white">
-                  {index + 1}
+                  {player.linked ? <Check className="h-5 w-5 text-emerald-300" /> : index + 1}
                 </div>
                 <input
-                  value={name}
+                  value={player.name}
                   onChange={(e) => updateName(index, e.target.value)}
                   placeholder={`Spelare ${index + 1}`}
                   className="h-14 min-w-0 flex-1 rounded-2xl border border-black/10 bg-white px-4 font-mono text-base outline-none focus:border-emerald-300"
                 />
+                <button
+                  type="button"
+                  onClick={() => {
+                    processedScanRef.current = false;
+                    setScanIndex(index);
+                  }}
+                  className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${
+                    player.linked ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-600"
+                  }`}
+                  title="Skanna konto"
+                >
+                  <Camera className="h-4 w-4" />
+                </button>
                 <button
                   type="button"
                   onClick={() => removePlayer(index)}
@@ -228,6 +327,27 @@ export default function ScoreStartPage() {
           </button>
         </section>
       </div>
+
+      {scanIndex !== null && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-4 sm:items-center">
+          <div className="w-full max-w-md rounded-[2rem] bg-white p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.2em] text-neutral-400">Skanna konto</p>
+                <h2 className="mt-1 font-display text-3xl font-black text-neutral-950">Spelare {scanIndex + 1}</h2>
+                <p className="mt-1 font-mono text-sm text-neutral-500">Visa QR-koden från Min sida på spelarens mobil.</p>
+              </div>
+              <button onClick={closeScanner} className="rounded-full bg-neutral-100 p-3 text-neutral-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div id="score-player-qr-reader" className="min-h-[280px] overflow-hidden rounded-2xl bg-neutral-950" />
+            {scanError && (
+              <p className="mt-3 rounded-xl bg-pink-50 px-3 py-2 font-mono text-sm text-pink-700">{scanError}</p>
+            )}
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }
