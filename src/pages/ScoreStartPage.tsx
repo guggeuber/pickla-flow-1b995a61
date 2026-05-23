@@ -274,7 +274,7 @@ export default function ScoreStartPage() {
               <button
                 type="button"
                 onClick={addPlayer}
-                disabled={playerNames.length >= 4}
+                disabled={players.length >= 4}
                 className="inline-flex items-center gap-2 rounded-full bg-neutral-100 px-4 py-2 font-mono text-xs text-neutral-700 disabled:opacity-40"
               >
                 <Plus className="h-4 w-4" />
@@ -308,7 +308,7 @@ export default function ScoreStartPage() {
                 <button
                   type="button"
                   onClick={() => removePlayer(index)}
-                  disabled={playerNames.length <= 2}
+                  disabled={players.length <= 2}
                   className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-500 disabled:opacity-30"
                 >
                   <Minus className="h-4 w-4" />
