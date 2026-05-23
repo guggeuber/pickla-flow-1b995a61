@@ -569,6 +569,10 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
       return data;
     },
   });
+  const { data: scoreSessionData, refetch: refetchScoreSession } = useQuery<{ session: { id: string; name: string; status: string } | null }>({
+    queryKey: ["event-score-session", event.id],
+    queryFn: () => apiGet("api-score", "event-session", { eventId: event.id }),
+  });
   const [showOnSticker, setShowOnSticker] = useState(event.show_on_sticker);
   const [isPublic, setIsPublic] = useState(event.is_public !== false);
   const [displayName, setDisplayName] = useState(event.display_name || "");
@@ -652,6 +656,27 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
       qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Kunde inte skapa publik länk");
+    }
+  };
+
+  const openOrCreateScoreSession = async () => {
+    try {
+      const existing = scoreSessionData?.session;
+      if (existing?.id) {
+        window.open(`/display/broadcast/${existing.id}`, "_blank", "noopener,noreferrer");
+        return;
+      }
+      const result = await apiPost<{ session: { id: string } }>("api-score", "event-session", {
+        event_id: event.id,
+        venue_id: venueId,
+        name: displayName.trim() || event.display_name || event.name || "Darttävling",
+        best_of_legs: 3,
+      });
+      await refetchScoreSession();
+      toast.success("Score-session skapad");
+      window.open(`/display/broadcast/${result.session.id}`, "_blank", "noopener,noreferrer");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte skapa score-session");
     }
   };
 
@@ -795,6 +820,14 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
             Öppna konversation
           </Button>
         )}
+        <Button
+          variant="outline"
+          className="mt-3 w-full justify-start gap-2"
+          onClick={openOrCreateScoreSession}
+        >
+          <Presentation className="w-4 h-4" />
+          {scoreSessionData?.session ? "Öppna score/broadcast" : "Skapa score/broadcast"}
+        </Button>
       </div>
 
       {/* Logo upload */}

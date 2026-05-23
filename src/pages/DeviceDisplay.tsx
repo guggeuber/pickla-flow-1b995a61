@@ -32,6 +32,7 @@ interface ScoreDeviceState {
     score_session_id: string;
     player1_name: string;
     player2_name: string;
+    player_slots?: Array<{ name: string }>;
   } | null;
 }
 
@@ -141,6 +142,11 @@ export default function DeviceDisplay() {
   const active = Boolean(data.currentBooking);
   const checkedIn = Boolean(data.currentBooking?.checked_in);
   const activeScoreMatch = scoreState?.activeMatch || null;
+  const activeScorePlayers = activeScoreMatch?.player_slots?.length
+    ? activeScoreMatch.player_slots.map((player) => player.name).filter(Boolean).join(" · ")
+    : activeScoreMatch
+      ? `${activeScoreMatch.player1_name} vs ${activeScoreMatch.player2_name}`
+      : "";
   const displayName = data.device.name || resource?.name || "Pickla";
   const resourceName = resource?.name || null;
   const statusLabel = checkedIn ? "INCHECKAD" : active ? "BOKAD NU" : "LEDIG";
@@ -201,9 +207,10 @@ export default function DeviceDisplay() {
                   to={`/score/match/${activeScoreMatch.id}?device=${encodeURIComponent(token)}`}
                   className="block rounded-[2rem] bg-emerald-300 p-7 text-neutral-950"
                 >
-                  <p className="font-display text-4xl font-black">Fortsätt match</p>
+                  <p className="font-mono text-xs uppercase tracking-[0.2em] text-neutral-700">Match live</p>
+                  <p className="mt-1 font-display text-4xl font-black">Fortsätt match</p>
                   <p className="mt-2 font-mono text-sm text-neutral-700">
-                    {activeScoreMatch.player1_name} vs {activeScoreMatch.player2_name}
+                    {activeScorePlayers}
                   </p>
                 </Link>
               ) : (

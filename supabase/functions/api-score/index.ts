@@ -110,6 +110,7 @@ function eventTitle(type: string, match: MatchRow, score?: number) {
   if (type === 'MATCH_FINISHED') return `${player} vinner matchen`;
   if (type === 'PLAYER_ON_FINISH') return `${player} står på finish`;
   if (type === 'MATCH_STARTED') return `${match.player1_name} vs ${match.player2_name} startar`;
+  if (type === 'MATCH_ENDED') return `${match.player1_name} vs ${match.player2_name} avslutad`;
   if (type === 'UNDO') return `Undo på ${match.player1_name} vs ${match.player2_name}`;
   return `${match.player1_name} vs ${match.player2_name} uppdaterad`;
 }
@@ -380,6 +381,24 @@ Deno.serve(async (req) => {
       return jsonResponse({ match, turns: turns || [] }, 200, 2);
     }
 
+    if (req.method === 'GET' && path === 'event-session') {
+      const { client, error } = await getAuthenticatedClient(req);
+      if (error || !client) return errorResponse(error || 'Unauthorized', 401);
+      const eventId = url.searchParams.get('eventId');
+      const venueId = url.searchParams.get('venueId');
+      if (!eventId && !venueId) return errorResponse('Missing eventId or venueId');
+      let query = client
+        .from('score_sessions')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (eventId) query = query.eq('event_id', eventId);
+      if (venueId) query = query.eq('venue_id', venueId);
+      const { data, error: sessionErr } = await query.maybeSingle();
+      if (sessionErr) return errorResponse(sessionErr.message);
+      return jsonResponse({ session: data || null }, 200, 5);
+    }
+
     if (req.method === 'POST' && path === 'walk-in') {
       const body = await req.json();
       const token = String(body.device_token || body.device || '');
@@ -592,6 +611,26 @@ Deno.serve(async (req) => {
       else await createScoreEvent(admin, updated, isBust ? 'BUST' : 'MATCH_UPDATED', { score, board }, isBust ? 2 : 1);
 
       return jsonResponse({ match: updated, turn });
+    }
+
+    if (req.method === 'POST' && path === 'end-match') {
+      const body = await req.json();
+      const matchId = String(body.match_id || '');
+      if (!matchId) return errorResponse('Missing match_id');
+      const match = await assertDeviceCanScore(admin, matchId, body.device_token);
+      const { data: updated, error: updateErr } = await admin
+        .from('score_matches')
+        .update({
+          status: 'cancelled',
+          completed_at: new Date().toISOString(),
+          last_event_type: 'MATCH_ENDED',
+        })
+        .eq('id', match.id)
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .single();
+      if (updateErr) return errorResponse(updateErr.message);
+      await createScoreEvent(admin, updated, 'MATCH_ENDED', { board: updated.venue_courts?.court_number }, 2);
+      return jsonResponse({ match: updated });
     }
 
     if (req.method === 'POST' && path === 'undo') {

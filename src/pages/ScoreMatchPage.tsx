@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MonitorPlay, RotateCcw, Trophy } from "lucide-react";
+import { ArrowLeft, MonitorPlay, RotateCcw, Square, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
@@ -41,6 +41,7 @@ export default function ScoreMatchPage() {
   const { matchId = "" } = useParams();
   const [searchParams] = useSearchParams();
   const deviceToken = searchParams.get("device") || "";
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [input, setInput] = useState("");
 
@@ -116,6 +117,18 @@ export default function ScoreMatchPage() {
     onError: (error: Error) => toast.error(error.message || "Kunde inte ångra"),
   });
 
+  const endMutation = useMutation({
+    mutationFn: () => apiPost("api-score", "end-match", {
+      match_id: matchId,
+      device_token: deviceToken || undefined,
+    }),
+    onSuccess: () => {
+      toast.success("Match avslutad");
+      navigate(deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today", { replace: true });
+    },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte avsluta match"),
+  });
+
   const press = (key: typeof keypad[number]) => {
     if (key === "del") {
       setInput((value) => value.slice(0, -1));
@@ -139,49 +152,74 @@ export default function ScoreMatchPage() {
   }
 
   const completed = match.status === "completed";
+  const ended = completed || match.status === "cancelled";
+  const quickScores = [26, 41, 45, 60, 81, 85, 100, 140, 180, Number(currentRemaining || 0)]
+    .filter((value, index, list) => value > 0 && list.indexOf(value) === index);
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-white">
-      <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-5 py-5">
-        <header className="mb-5 flex items-center justify-between gap-3">
-          <Link to={deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today"} className="rounded-full bg-white/10 p-4">
-            <ArrowLeft className="h-6 w-6" />
+    <main className="h-[100svh] overflow-hidden bg-neutral-950 text-white">
+      <div className="mx-auto flex h-full w-full max-w-6xl flex-col px-3 py-3 sm:px-4">
+        <header className="mb-2 flex h-14 shrink-0 items-center justify-between gap-3">
+          <Link to={deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today"} className="rounded-full bg-white/10 p-3">
+            <ArrowLeft className="h-5 w-5" />
           </Link>
           <div className="text-center">
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-white/35">
               {match.venue_courts?.name || "Pickla Score"}
             </p>
-            <p className="font-display text-3xl font-black">{match.game_type || "501"}</p>
+            <p className="font-display text-[clamp(1.5rem,4vh,2.3rem)] font-black leading-none">
+              {match.game_type || "501"} · först till {Math.floor(match.best_of_legs / 2) + 1}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <Link
               to={`/display/broadcast/${match.score_session_id}`}
-              className="rounded-full bg-emerald-300 p-4 text-neutral-950"
+              className="rounded-full bg-emerald-300 p-3 text-neutral-950"
               title="Öppna broadcast"
             >
-              <MonitorPlay className="h-6 w-6" />
+              <MonitorPlay className="h-5 w-5" />
             </Link>
             <button
               onClick={() => undoMutation.mutate()}
-              disabled={undoMutation.isPending || completed}
-              className="rounded-full bg-white/10 p-4 disabled:opacity-30"
+              disabled={undoMutation.isPending || ended}
+              className="rounded-full bg-white/10 p-3 disabled:opacity-30"
             >
-              <RotateCcw className="h-6 w-6" />
+              <RotateCcw className="h-5 w-5" />
             </button>
+            {!ended && (
+              <button
+                onClick={() => {
+                  if (confirm("Avsluta matchen och gå tillbaka till start?")) endMutation.mutate();
+                }}
+                disabled={endMutation.isPending}
+                className="rounded-full bg-white/10 p-3 disabled:opacity-30"
+                title="Avsluta match"
+              >
+                <Square className="h-5 w-5" />
+              </button>
+            )}
+            {ended && (
+              <Link
+                to={deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today"}
+                className="rounded-full bg-white px-4 py-3 font-mono text-xs font-bold text-neutral-950"
+              >
+                Ny match
+              </Link>
+            )}
           </div>
         </header>
 
-        <section className="grid flex-1 gap-4 lg:grid-cols-[1fr_380px]">
-          <div className="flex flex-col gap-4">
+        <section className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto_auto] gap-3">
             {activePlayer && (
               <ActivePlayerPanel
-                completed={completed}
+                completed={ended}
                 name={activePlayer.name}
                 legs={activePlayer.legs}
                 remaining={activePlayer.remaining}
               />
             )}
-            <div className={`grid gap-3 ${otherPlayers.length > 1 ? "sm:grid-cols-2" : ""}`}>
+            <div className={`grid gap-2 ${otherPlayers.length > 1 ? "sm:grid-cols-2" : ""}`}>
               {otherPlayers.map((player) => (
                 <PlayerPanel
                   key={player.number}
@@ -191,61 +229,61 @@ export default function ScoreMatchPage() {
                 />
               ))}
             </div>
-            <div className="rounded-[2rem] border border-white/10 bg-white/5 p-6">
-              <div className="flex items-end justify-between">
+            <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="font-mono text-xs uppercase tracking-[0.2em] text-white/35">Leg {match.current_leg}</p>
-                  <p className="mt-1 font-display text-3xl font-black">
-                    Först till {Math.floor(match.best_of_legs / 2) + 1} · {match.checkout_rule === "single_out" ? "enkel ut" : "dubbel ut"}
+                  <p className="mt-0.5 font-display text-[clamp(1.15rem,3vh,1.8rem)] font-black leading-none">
+                    {match.checkout_rule === "single_out" ? "enkel ut" : "dubbel ut"}
                   </p>
                 </div>
                 {completed ? (
-                  <div className="flex items-center gap-2 rounded-full bg-emerald-300 px-5 py-3 text-neutral-950">
-                    <Trophy className="h-5 w-5" />
-                    <span className="font-display text-xl font-black">{match.winner_name}</span>
+                  <div className="flex items-center gap-2 rounded-full bg-emerald-300 px-4 py-2 text-neutral-950">
+                    <Trophy className="h-4 w-4" />
+                    <span className="font-display text-lg font-black">{match.winner_name}</span>
                   </div>
+                ) : ended ? (
+                  <p className="font-mono text-sm text-white/50">Match avslutad</p>
                 ) : (
-                  <p className="font-mono text-lg text-emerald-300">{currentName} kastar</p>
+                  <p className="font-mono text-[clamp(0.95rem,2.5vh,1.25rem)] text-emerald-300">{currentName} kastar</p>
                 )}
               </div>
             </div>
           </div>
 
-          <aside className="rounded-[2rem] border border-white/10 bg-white p-5 text-neutral-950">
-            <div className="mb-4 rounded-[1.5rem] bg-neutral-100 p-5">
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Score</p>
-              <div className="mt-1 flex items-end justify-between">
-                <p className="font-display text-7xl font-black leading-none">{input || "0"}</p>
-                <p className={`font-mono text-xl ${projected === "BUST" ? "text-pink-600" : "text-neutral-400"}`}>
-                  {projected === null ? "" : projected}
+          <aside className="flex min-h-0 flex-col rounded-[1.5rem] border border-white/10 bg-white p-3 text-neutral-950">
+            <div className="mb-2 shrink-0 rounded-[1.25rem] bg-neutral-100 p-3">
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-neutral-400">Score</p>
+              <div className="mt-0.5 flex items-end justify-between">
+                <p className="font-display text-[clamp(3rem,10vh,5rem)] font-black leading-none">{input || "0"}</p>
+                <p className={`font-mono text-lg ${projected === "BUST" ? "text-pink-600" : projected === 0 ? "text-emerald-600" : "text-neutral-400"}`}>
+                  {projected === null ? "" : projected === 0 ? "UT" : projected}
                 </p>
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid flex-1 grid-cols-3 gap-2">
               {keypad.map((key) => (
                 <button
                   key={key}
                   onClick={() => press(key)}
-                  disabled={completed || scoreMutation.isPending}
-                  className={`h-20 rounded-2xl font-display text-3xl font-black disabled:opacity-30 ${
+                  disabled={ended || scoreMutation.isPending}
+                  className={`min-h-0 rounded-xl font-display text-[clamp(1.45rem,5vh,2.35rem)] font-black disabled:opacity-30 ${
                     key === "enter" ? "bg-emerald-300 text-neutral-950" : key === "del" ? "bg-neutral-200 text-neutral-500" : "bg-neutral-950 text-white"
                   }`}
                 >
-                  {key === "del" ? "⌫" : key === "enter" ? "OK" : key}
+                  {key === "del" ? "⌫" : key === "enter" ? (projected === 0 ? "UT" : "OK") : key}
                 </button>
               ))}
             </div>
 
-            <div className="mt-4 grid grid-cols-4 gap-2">
-              {[26, 41, 60, 81, 100, 140, 180, Number(currentRemaining || 0)]
-                .filter((value, index, list) => value > 0 && list.indexOf(value) === index)
-                .map((quick) => (
+            <div className="mt-2 grid shrink-0 grid-cols-5 gap-1.5">
+              {quickScores.map((quick) => (
                 <button
                   key={quick}
                   onClick={() => setInput(String(quick))}
-                  disabled={completed}
-                  className="rounded-xl bg-neutral-100 py-3 font-mono text-sm text-neutral-600 disabled:opacity-30"
+                  disabled={ended}
+                  className="rounded-lg bg-neutral-100 py-2 font-mono text-xs text-neutral-600 disabled:opacity-30"
                 >
                   {quick}
                 </button>
@@ -260,33 +298,35 @@ export default function ScoreMatchPage() {
 
 function ActivePlayerPanel({ completed, name, legs, remaining }: { completed: boolean; name: string; legs: number; remaining: number }) {
   return (
-    <div className={`rounded-[2rem] border p-7 transition-all ${
+    <div className={`min-h-0 rounded-[1.75rem] border p-4 transition-all ${
       completed ? "border-white/10 bg-white/5 text-white" : "border-emerald-300 bg-emerald-300 text-neutral-950"
     }`}>
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className={`font-mono text-xs uppercase tracking-[0.2em] ${completed ? "text-white/35" : "text-neutral-700"}`}>Kastar nu</p>
-          <h2 className="mt-2 font-display text-5xl font-black leading-none">{name}</h2>
+      <div className="flex h-full min-h-0 flex-col justify-between gap-2">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className={`font-mono text-xs uppercase tracking-[0.2em] ${completed ? "text-white/35" : "text-neutral-700"}`}>Kastar nu</p>
+            <h2 className="mt-1 truncate font-display text-[clamp(2.2rem,7vh,4.5rem)] font-black leading-none">{name}</h2>
+          </div>
+          <div className="text-right">
+            <p className={`font-mono text-xs uppercase tracking-[0.2em] ${completed ? "text-white/35" : "text-neutral-700"}`}>Legs</p>
+            <p className="font-display text-[clamp(2rem,6vh,4rem)] font-black leading-none">{legs}</p>
+          </div>
         </div>
-        <div className="text-right">
-          <p className={`font-mono text-xs uppercase tracking-[0.2em] ${completed ? "text-white/35" : "text-neutral-700"}`}>Legs</p>
-          <p className="font-display text-5xl font-black">{legs}</p>
-        </div>
+        <p className="font-display text-[clamp(6rem,26vh,12rem)] font-black leading-none tracking-tight">{remaining}</p>
       </div>
-      <p className="mt-7 font-display text-[9rem] font-black leading-none tracking-tight">{remaining}</p>
     </div>
   );
 }
 
 function PlayerPanel({ name, legs, remaining }: { name: string; legs: number; remaining: number }) {
   return (
-    <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-5 text-white">
+    <div className="rounded-[1.25rem] border border-white/10 bg-white/5 p-3 text-white">
       <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="font-display text-3xl font-black leading-none">{name}</p>
-          <p className="mt-2 font-mono text-sm text-white/35">Legs {legs}</p>
+        <div className="min-w-0">
+          <p className="truncate font-display text-[clamp(1.3rem,4vh,2rem)] font-black leading-none">{name}</p>
+          <p className="mt-1 font-mono text-xs text-white/35">Legs {legs}</p>
         </div>
-        <p className="font-display text-6xl font-black leading-none">{remaining}</p>
+        <p className="font-display text-[clamp(2.2rem,6vh,4rem)] font-black leading-none">{remaining}</p>
       </div>
     </div>
   );
