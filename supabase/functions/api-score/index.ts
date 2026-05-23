@@ -101,6 +101,16 @@ function currentSlot(match: MatchRow) {
   return slots.find((slot) => slot.number === Number(match.current_player)) || slots[0];
 }
 
+async function assertDeviceOwnsMatch(client: any, match: MatchRow, deviceToken?: string) {
+  if (!deviceToken) return;
+  const device = await getDevice(client, deviceToken);
+  if (!device) throw new Error('Paddan hittades inte');
+  if (match.display_device_id && match.display_device_id !== device.id) throw new Error('Fel padda för matchen');
+  if (match.venue_court_id && device.venue_court_id && match.venue_court_id !== device.venue_court_id) {
+    throw new Error('Fel tavla för matchen');
+  }
+}
+
 function eventTitle(type: string, match: MatchRow, score?: number) {
   const player = currentSlot(match)?.name || match.player1_name;
   if (type === 'ONE_EIGHTY') return `${player} kastar 180`;
@@ -263,14 +273,7 @@ async function assertDeviceCanScore(client: any, matchId: string, deviceToken?: 
   if (!match) throw new Error('Matchen hittades inte');
   if (match.status === 'completed') throw new Error('Matchen är redan avslutad');
 
-  if (deviceToken) {
-    const device = await getDevice(client, deviceToken);
-    if (!device) throw new Error('Paddan hittades inte');
-    if (match.display_device_id && match.display_device_id !== device.id) throw new Error('Fel padda för matchen');
-    if (match.venue_court_id && device.venue_court_id && match.venue_court_id !== device.venue_court_id) {
-      throw new Error('Fel tavla för matchen');
-    }
-  }
+  await assertDeviceOwnsMatch(client, match, deviceToken);
 
   return match;
 }
@@ -378,7 +381,7 @@ Deno.serve(async (req) => {
         .select('*')
         .eq('match_id', matchId)
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(500);
       return jsonResponse({ match, turns: turns || [] });
     }
 
@@ -633,6 +636,82 @@ Deno.serve(async (req) => {
       if (updateErr) return errorResponse(updateErr.message);
       await createScoreEvent(admin, updated, 'MATCH_ENDED', { board: updated.venue_courts?.court_number }, 2);
       return jsonResponse({ match: updated });
+    }
+
+    if (req.method === 'POST' && path === 'rematch') {
+      const body = await req.json();
+      const matchId = String(body.match_id || '');
+      if (!matchId) return errorResponse('Missing match_id');
+
+      const { data: match, error: matchErr } = await admin
+        .from('score_matches')
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchErr) return errorResponse(matchErr.message);
+      if (!match) return errorResponse('Matchen hittades inte', 404);
+      await assertDeviceOwnsMatch(admin, match, body.device_token);
+      if (!['completed', 'cancelled'].includes(match.status)) return errorResponse('Avsluta matchen först');
+
+      const target = Number(match.target_score || targetScore(match.game_type));
+      const oldSlots = slotsFromMatch(match);
+      const newStartingPlayer = nextPlayerNumber(Number(match.starting_player || 1), oldSlots.length);
+      const newSlots = oldSlots.map((slot) => ({
+        ...slot,
+        legs: 0,
+        remaining: target,
+      }));
+
+      const { data: latestMatch } = await admin
+        .from('score_matches')
+        .select('match_number')
+        .eq('score_session_id', match.score_session_id)
+        .order('match_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const { data: rematch, error: rematchErr } = await admin
+        .from('score_matches')
+        .insert({
+          score_session_id: match.score_session_id,
+          venue_id: match.venue_id,
+          event_id: match.event_id || null,
+          venue_court_id: match.venue_court_id,
+          display_device_id: match.display_device_id,
+          match_type: match.match_type || 'walk_in',
+          status: 'in_progress',
+          round_label: match.round_label || null,
+          match_number: Number(latestMatch?.match_number || match.match_number || 0) + 1,
+          player1_id: newSlots[0]?.id || null,
+          player2_id: newSlots[1]?.id || null,
+          player1_name: newSlots[0]?.name || match.player1_name,
+          player2_name: newSlots[1]?.name || match.player2_name,
+          game_type: match.game_type || '501',
+          best_of_legs: match.best_of_legs || 1,
+          target_score: target,
+          checkout_rule: match.checkout_rule || 'double_out',
+          in_rule: match.in_rule || 'straight_in',
+          current_leg: 1,
+          player1_legs: 0,
+          player2_legs: 0,
+          player1_remaining: target,
+          player2_remaining: target,
+          current_player: newStartingPlayer,
+          starting_player: newStartingPlayer,
+          leg_starting_player: newStartingPlayer,
+          player_slots: newSlots,
+          started_at: new Date().toISOString(),
+          metadata: {
+            ...(match.metadata || {}),
+            rematch_of: match.id,
+          },
+        })
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .single();
+      if (rematchErr) return errorResponse(rematchErr.message);
+
+      await createScoreEvent(admin, rematch, 'MATCH_STARTED', { board: rematch.venue_courts?.court_number }, 2);
+      return jsonResponse({ match: rematch }, 201);
     }
 
     if (req.method === 'POST' && path === 'undo') {

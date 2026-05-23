@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MonitorPlay, RotateCcw, Square, Trophy } from "lucide-react";
+import { ArrowLeft, MonitorPlay, RotateCcw, Sparkles, Square, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
@@ -38,12 +38,32 @@ type PlayerSlot = {
 type ScoreResponse = {
   match: ScoreMatch;
   turn?: {
+    id: string;
     score: number;
     is_bust?: boolean;
     is_checkout?: boolean;
     player_number?: number;
     remaining_after?: number;
   };
+};
+
+type ScoreTurn = {
+  id: string;
+  player_number: number;
+  score: number;
+  is_bust?: boolean;
+  is_checkout?: boolean;
+  darts_used?: number;
+};
+
+type PlayerStats = {
+  player: PlayerSlot;
+  turns: number;
+  darts: number;
+  scored: number;
+  average: number;
+  high: number;
+  checkout: number;
 };
 
 const keypad = [1, 2, 3, 4, 5, 6, 7, 8, 9, "del", 0, "enter"] as const;
@@ -57,7 +77,7 @@ export default function ScoreMatchPage() {
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
-  const { data, isLoading, isError } = useQuery<{ match: ScoreMatch; turns: unknown[] }>({
+  const { data, isLoading, isError } = useQuery<{ match: ScoreMatch; turns: ScoreTurn[] }>({
     queryKey: ["score-match", matchId],
     enabled: !!matchId,
     queryFn: () => apiGet("api-score", "match", { matchId }),
@@ -112,10 +132,16 @@ export default function ScoreMatchPage() {
     }),
     onSuccess: (result) => {
       setInput("");
-      queryClient.setQueryData(["score-match", matchId], (current: { match: ScoreMatch; turns: unknown[] } | undefined) => ({
-        match: result.match,
-        turns: current?.turns || [],
-      }));
+      queryClient.setQueryData(["score-match", matchId], (current: { match: ScoreMatch; turns: ScoreTurn[] } | undefined) => {
+        const currentTurns = current?.turns || [];
+        const turns = result.turn
+          ? [
+              result.turn as ScoreTurn,
+              ...currentTurns.filter((turn) => turn.id !== result.turn?.id),
+            ]
+          : currentTurns;
+        return { match: result.match, turns };
+      });
       if (result.turn?.is_bust) {
         setNotice({ tone: "warn", text: "BUST - score står kvar, turen går vidare" });
       } else if (result.turn?.is_checkout) {
@@ -155,6 +181,18 @@ export default function ScoreMatchPage() {
     onError: (error: Error) => toast.error(error.message || "Kunde inte avsluta match"),
   });
 
+  const rematchMutation = useMutation({
+    mutationFn: () => apiPost<ScoreResponse>("api-score", "rematch", {
+      match_id: matchId,
+      device_token: deviceToken || undefined,
+    }),
+    onSuccess: (result) => {
+      toast.success("Rematch startad");
+      navigate(`/score/match/${result.match.id}${deviceToken ? `?device=${encodeURIComponent(deviceToken)}` : ""}`, { replace: true });
+    },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte starta rematch"),
+  });
+
   const press = (key: typeof keypad[number]) => {
     if (key === "del") {
       setNotice(null);
@@ -183,6 +221,8 @@ export default function ScoreMatchPage() {
   const ended = completed || match.status === "cancelled";
   const quickScores = [26, 41, 45, 60, 81, 85, 100, 140, 180, Number(currentRemaining || 0)]
     .filter((value, index, list) => value > 0 && list.indexOf(value) === index);
+  const stats = computeStats(players, data?.turns || []);
+  const winnerStats = stats.find((item) => item.player.name === match.winner_name) || stats[0];
 
   return (
     <main className="h-[100svh] overflow-hidden bg-neutral-950 text-white">
@@ -329,6 +369,16 @@ export default function ScoreMatchPage() {
           </aside>
         </section>
       </div>
+      {completed && winnerStats && (
+        <WinnerView
+          winner={winnerStats}
+          stats={stats}
+          onRematch={() => rematchMutation.mutate()}
+          onNewMatch={() => navigate(deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today")}
+          onClose={() => navigate(deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today", { replace: true })}
+          rematchPending={rematchMutation.isPending}
+        />
+      )}
     </main>
   );
 }
@@ -365,6 +415,117 @@ function PlayerPanel({ name, legs, remaining }: { name: string; legs: number; re
         </div>
         <p className="font-display text-[clamp(2.2rem,6vh,4rem)] font-black leading-none">{remaining}</p>
       </div>
+    </div>
+  );
+}
+
+function computeStats(players: PlayerSlot[], turns: ScoreTurn[]): PlayerStats[] {
+  return players.map((player) => {
+    const playerTurns = turns.filter((turn) => Number(turn.player_number) === player.number);
+    const scoredTurns = playerTurns.map((turn) => (turn.is_bust ? 0 : Number(turn.score || 0)));
+    const scored = scoredTurns.reduce((sum, score) => sum + score, 0);
+    const darts = playerTurns.reduce((sum, turn) => sum + Number(turn.darts_used || 3), 0);
+    const checkout = playerTurns
+      .filter((turn) => turn.is_checkout)
+      .reduce((high, turn) => Math.max(high, Number(turn.score || 0)), 0);
+    return {
+      player,
+      turns: playerTurns.length,
+      darts,
+      scored,
+      average: playerTurns.length ? scored / playerTurns.length : 0,
+      high: scoredTurns.reduce((high, score) => Math.max(high, score), 0),
+      checkout,
+    };
+  });
+}
+
+function WinnerView({
+  winner,
+  stats,
+  onRematch,
+  onNewMatch,
+  onClose,
+  rematchPending,
+}: {
+  winner: PlayerStats;
+  stats: PlayerStats[];
+  onRematch: () => void;
+  onNewMatch: () => void;
+  onClose: () => void;
+  rematchPending: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-emerald-300 p-5 text-neutral-950">
+      <div className="flex h-full w-full max-w-5xl flex-col justify-between">
+        <header className="flex items-center justify-between gap-4">
+          <div className="inline-flex items-center gap-3 rounded-full bg-neutral-950 px-5 py-3 text-white">
+            <Trophy className="h-6 w-6 text-emerald-300" />
+            <span className="font-mono text-xs uppercase tracking-[0.2em]">Match klar</span>
+          </div>
+          <button onClick={onClose} className="rounded-full bg-white/70 px-5 py-3 font-mono text-xs font-bold">
+            Avbryt
+          </button>
+        </header>
+
+        <section className="grid min-h-0 flex-1 items-center gap-6 py-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div>
+            <p className="mb-3 font-mono text-sm uppercase tracking-[0.26em] text-neutral-700">Vinnare</p>
+            <h1 className="font-display text-[clamp(5rem,18vh,13rem)] font-black leading-none tracking-tight">
+              {winner.player.name}
+            </h1>
+            <div className="mt-5 grid grid-cols-3 gap-3">
+              <StatTile label="3-pilsnitt" value={winner.average.toFixed(1)} />
+              <StatTile label="Högsta" value={String(winner.high)} />
+              <StatTile label="Checkout" value={winner.checkout ? String(winner.checkout) : "-"} />
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] bg-neutral-950 p-5 text-white">
+            <div className="mb-4 flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-emerald-300" />
+              <p className="font-mono text-xs uppercase tracking-[0.2em] text-white/50">Match stats</p>
+            </div>
+            <div className="space-y-2">
+              {stats.map((item) => (
+                <div key={item.player.number} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-2xl bg-white/8 px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-display text-2xl font-black">{item.player.name}</p>
+                    <p className="font-mono text-xs text-white/40">{item.turns} rundor · {item.scored} poäng</p>
+                  </div>
+                  <p className="font-mono text-sm text-white/65">{item.average.toFixed(1)} avg</p>
+                  <p className="font-display text-3xl font-black">{item.player.legs}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <footer className="grid grid-cols-3 gap-3">
+          <button
+            onClick={onRematch}
+            disabled={rematchPending}
+            className="rounded-full bg-neutral-950 px-5 py-5 font-display text-2xl font-black text-white disabled:opacity-50"
+          >
+            Spela igen
+          </button>
+          <button onClick={onNewMatch} className="rounded-full bg-white px-5 py-5 font-display text-2xl font-black">
+            Ny match
+          </button>
+          <button onClick={onClose} className="rounded-full border border-neutral-950/20 bg-white/40 px-5 py-5 font-display text-2xl font-black">
+            Stäng
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[1.5rem] bg-white/65 p-4">
+      <p className="font-mono text-xs uppercase tracking-[0.16em] text-neutral-500">{label}</p>
+      <p className="mt-2 font-display text-4xl font-black leading-none">{value}</p>
     </div>
   );
 }
