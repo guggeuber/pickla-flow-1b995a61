@@ -148,7 +148,8 @@ function applyTurn(state: MatchRow, turn: TurnRow) {
   const slot = slots.find((s) => s.number === player) || slots[0];
   const before = slot.remaining;
   const after = before - score;
-  const isBust = score > before || after === 1;
+  const checkoutRule = parseCheckoutRule(state.checkout_rule);
+  const isBust = score > before || (checkoutRule === 'double_out' && after === 1);
   const isCheckout = after === 0 && !isBust;
 
   if (!isBust) {
@@ -547,7 +548,8 @@ Deno.serve(async (req) => {
       const activeSlot = currentSlot(match);
       const before = activeSlot?.remaining ?? match.player1_remaining;
       const after = before - score;
-      const isBust = score > before || after === 1;
+      const checkoutRule = parseCheckoutRule(match.checkout_rule);
+      const isBust = score > before || (checkoutRule === 'double_out' && after === 1);
       const isCheckout = after === 0 && !isBust;
 
       const { data: turn, error: turnErr } = await admin

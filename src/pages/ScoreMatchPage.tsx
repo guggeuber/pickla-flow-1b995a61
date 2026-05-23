@@ -98,7 +98,8 @@ export default function ScoreMatchPage() {
     const score = Number(input);
     if (!Number.isInteger(score)) return null;
     const after = Number(currentRemaining) - score;
-    if (score > Number(currentRemaining) || after === 1) return "BUST";
+    const doubleOut = match.checkout_rule !== "single_out";
+    if (score > Number(currentRemaining) || (doubleOut && after === 1)) return "BUST";
     return after;
   }, [currentRemaining, input, match]);
 
