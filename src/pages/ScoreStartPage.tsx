@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check, Radio, Trophy } from "lucide-react";
+import { ArrowRight, Minus, Plus, Radio, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { apiGet, apiPost } from "@/lib/api";
@@ -28,8 +28,6 @@ type WalkInResult = {
   matches?: Array<{ id: string }>;
 };
 
-type MatchNames = Record<string, { player1_name: string; player2_name: string }>;
-
 export default function ScoreStartPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -41,36 +39,25 @@ export default function ScoreStartPage() {
     refetchInterval: 5_000,
   });
 
-  const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>([]);
   const [bestOfLegs, setBestOfLegs] = useState(1);
-  const [matchNames, setMatchNames] = useState<MatchNames>({});
+  const [gameType, setGameType] = useState<"301" | "501" | "701">("501");
+  const [checkoutRule, setCheckoutRule] = useState<"double_out" | "single_out">("double_out");
+  const [playerNames, setPlayerNames] = useState(["", ""]);
 
-  useEffect(() => {
-    if (!data?.resource?.id || selectedCourtIds.length) return;
-    setSelectedCourtIds([data.resource.id]);
-    setMatchNames({
-      [data.resource.id]: { player1_name: "", player2_name: "" },
-    });
-  }, [data?.resource?.id, selectedCourtIds.length]);
-
-  const selectedCourts = useMemo(
-    () => (data?.courts || []).filter((court) => selectedCourtIds.includes(court.id)),
-    [data?.courts, selectedCourtIds],
+  const activeCourt = useMemo(() => data?.resource || null, [data?.resource]);
+  const normalizedNames = useMemo(
+    () => playerNames.map((name, index) => name.trim() || `Spelare ${index + 1}`),
+    [playerNames],
   );
 
   const startMutation = useMutation({
     mutationFn: () => apiPost("api-score", "walk-in", {
       device_token: deviceToken,
       best_of_legs: bestOfLegs,
-      court_ids: selectedCourtIds,
-      matches: selectedCourtIds.map((courtId, index) => {
-        const fallback = index + 1;
-        return {
-          court_id: courtId,
-          player1_name: matchNames[courtId]?.player1_name || `Spelare ${fallback}A`,
-          player2_name: matchNames[courtId]?.player2_name || `Spelare ${fallback}B`,
-        };
-      }),
+      game_type: gameType,
+      checkout_rule: checkoutRule,
+      court_ids: activeCourt?.id ? [activeCourt.id] : [],
+      player_names: normalizedNames,
     }),
     onSuccess: (result: WalkInResult) => {
       const first = result.match || result.matches?.[0];
@@ -84,29 +71,16 @@ export default function ScoreStartPage() {
     onError: (error: Error) => toast.error(error.message || "Kunde inte starta match"),
   });
 
-  const toggleCourt = (courtId: string) => {
-    setSelectedCourtIds((current) => {
-      if (current.includes(courtId)) {
-        if (current.length === 1) return current;
-        return current.filter((id) => id !== courtId);
-      }
-      return [...current, courtId];
-    });
-    setMatchNames((current) => ({
-      ...current,
-      [courtId]: current[courtId] || { player1_name: "", player2_name: "" },
-    }));
+  const updateName = (index: number, value: string) => {
+    setPlayerNames((current) => current.map((name, i) => (i === index ? value : name)));
   };
 
-  const updateName = (courtId: string, field: "player1_name" | "player2_name", value: string) => {
-    setMatchNames((current) => ({
-      ...current,
-      [courtId]: {
-        player1_name: current[courtId]?.player1_name || "",
-        player2_name: current[courtId]?.player2_name || "",
-        [field]: value,
-      },
-    }));
+  const addPlayer = () => {
+    setPlayerNames((current) => (current.length >= 4 ? current : [...current, ""]));
+  };
+
+  const removePlayer = (index: number) => {
+    setPlayerNames((current) => (current.length <= 2 ? current : current.filter((_, i) => i !== index)));
   };
 
   if (isLoading) {
@@ -128,7 +102,7 @@ export default function ScoreStartPage() {
             Starta match
           </h1>
           <p className="mt-4 max-w-xl font-mono text-lg text-neutral-500">
-            Walk-in 501 direkt på {data.resource?.name || data.device.name}.
+            Walk-in direkt på {data.resource?.name || data.device.name}. En tavla, 2-4 spelare.
           </p>
         </header>
 
@@ -149,7 +123,28 @@ export default function ScoreStartPage() {
 
         <section className="space-y-6 rounded-[2rem] border border-black/10 bg-white p-6 shadow-sm">
           <div>
-            <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Format</p>
+            <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Match</p>
+            <div className="mb-3 rounded-2xl border border-black/10 bg-[#faf8f5] p-4">
+              <p className="font-display text-2xl font-black">{activeCourt?.name || data.device.name}</p>
+              <p className="mt-1 font-mono text-sm text-neutral-500">Paddan startar match på sin egen tavla.</p>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {(["301", "501", "701"] as const).map((game) => (
+                <button
+                  key={game}
+                  onClick={() => setGameType(game)}
+                  className={`rounded-2xl px-4 py-4 font-mono text-sm ${
+                    gameType === game ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+                  }`}
+                >
+                  {game}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Ben</p>
             <div className="grid grid-cols-3 gap-3">
               {[1, 3, 5].map((best) => (
                 <button
@@ -159,63 +154,77 @@ export default function ScoreStartPage() {
                     bestOfLegs === best ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
                   }`}
                 >
-                  Bäst av {best}
+                  Först till {Math.floor(best / 2) + 1}
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Tavlor</p>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {(data.courts || []).map((court) => {
-                const selected = selectedCourtIds.includes(court.id);
-                return (
-                  <button
-                    key={court.id}
-                    onClick={() => toggleCourt(court.id)}
-                    className={`flex min-h-20 items-center justify-between rounded-2xl border p-4 text-left ${
-                      selected ? "border-emerald-300 bg-emerald-50" : "border-black/10 bg-neutral-50"
-                    }`}
-                  >
-                    <span className="font-display text-xl font-black">{court.name}</span>
-                    {selected && <Check className="h-5 w-5 text-emerald-500" />}
-                  </button>
-                );
-              })}
+            <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Utgång</p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setCheckoutRule("double_out")}
+                className={`rounded-2xl px-4 py-4 font-mono text-sm ${
+                  checkoutRule === "double_out" ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+                }`}
+              >
+                Dubbel ut
+              </button>
+              <button
+                onClick={() => setCheckoutRule("single_out")}
+                className={`rounded-2xl px-4 py-4 font-mono text-sm ${
+                  checkoutRule === "single_out" ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+                }`}
+              >
+                Enkel ut
+              </button>
             </div>
           </div>
 
           <div className="space-y-4">
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Spelare</p>
-            {selectedCourts.map((court, index) => (
-              <div key={court.id} className="rounded-2xl border border-black/10 bg-[#faf8f5] p-4">
-                <p className="mb-3 font-display text-2xl font-black">{court.name}</p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <input
-                    value={matchNames[court.id]?.player1_name || ""}
-                    onChange={(e) => updateName(court.id, "player1_name", e.target.value)}
-                    placeholder={`Spelare ${index + 1}A`}
-                    className="h-14 rounded-2xl border border-black/10 bg-white px-4 font-mono text-base outline-none focus:border-emerald-300"
-                  />
-                  <input
-                    value={matchNames[court.id]?.player2_name || ""}
-                    onChange={(e) => updateName(court.id, "player2_name", e.target.value)}
-                    placeholder={`Spelare ${index + 1}B`}
-                    className="h-14 rounded-2xl border border-black/10 bg-white px-4 font-mono text-base outline-none focus:border-emerald-300"
-                  />
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Spelare</p>
+              <button
+                type="button"
+                onClick={addPlayer}
+                disabled={playerNames.length >= 4}
+                className="inline-flex items-center gap-2 rounded-full bg-neutral-100 px-4 py-2 font-mono text-xs text-neutral-700 disabled:opacity-40"
+              >
+                <Plus className="h-4 w-4" />
+                Lägg till
+              </button>
+            </div>
+            {playerNames.map((name, index) => (
+              <div key={index} className="flex items-center gap-3 rounded-2xl border border-black/10 bg-[#faf8f5] p-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-950 font-display text-xl font-black text-white">
+                  {index + 1}
                 </div>
+                <input
+                  value={name}
+                  onChange={(e) => updateName(index, e.target.value)}
+                  placeholder={`Spelare ${index + 1}`}
+                  className="h-14 min-w-0 flex-1 rounded-2xl border border-black/10 bg-white px-4 font-mono text-base outline-none focus:border-emerald-300"
+                />
+                <button
+                  type="button"
+                  onClick={() => removePlayer(index)}
+                  disabled={playerNames.length <= 2}
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-500 disabled:opacity-30"
+                >
+                  <Minus className="h-4 w-4" />
+                </button>
               </div>
             ))}
           </div>
 
           <button
-            disabled={!selectedCourtIds.length || startMutation.isPending}
+            disabled={!activeCourt?.id || startMutation.isPending}
             onClick={() => startMutation.mutate()}
             className="flex h-16 w-full items-center justify-center gap-3 rounded-full bg-neutral-950 font-display text-2xl font-black text-white disabled:bg-neutral-300"
           >
             <Radio className="h-6 w-6" />
-            Starta 501
+            Starta {gameType}
           </button>
         </section>
       </div>

@@ -4,8 +4,17 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 
 type MatchRow = Record<string, any>;
 type TurnRow = Record<string, any>;
+type PlayerSlot = {
+  number: number;
+  id: string | null;
+  name: string;
+  legs: number;
+  remaining: number;
+};
 
 const INVALID_DART_TOTALS = new Set([179, 178, 176, 175, 173, 172, 169]);
+const GAME_TYPES = new Set(['301', '501', '701']);
+const CHECKOUT_RULES = new Set(['single_out', 'double_out']);
 
 function cleanName(value: unknown, fallback: string) {
   const name = String(value || '').trim().replace(/\s+/g, ' ');
@@ -17,6 +26,20 @@ function parseBestOf(value: unknown) {
   return [1, 3, 5].includes(best) ? best : 1;
 }
 
+function parseGameType(value: unknown) {
+  const game = String(value || '501');
+  return GAME_TYPES.has(game) ? game : '501';
+}
+
+function targetScore(gameType: string) {
+  return Number(parseGameType(gameType));
+}
+
+function parseCheckoutRule(value: unknown) {
+  const rule = String(value || 'double_out');
+  return CHECKOUT_RULES.has(rule) ? rule : 'double_out';
+}
+
 function requiredLegs(bestOfLegs: number) {
   return Math.floor(bestOfLegs / 2) + 1;
 }
@@ -25,12 +48,61 @@ function validScore(score: number) {
   return Number.isInteger(score) && score >= 0 && score <= 180 && !INVALID_DART_TOTALS.has(score);
 }
 
-function switchPlayer(player: number) {
-  return player === 1 ? 2 : 1;
+function nextPlayerNumber(current: number, playerCount: number) {
+  return current >= playerCount ? 1 : current + 1;
+}
+
+function slotsFromMatch(match: MatchRow): PlayerSlot[] {
+  const raw = Array.isArray(match.player_slots) ? match.player_slots : [];
+  if (raw.length) {
+    return raw.map((slot: any, index: number) => ({
+      number: Number(slot.number || index + 1),
+      id: slot.id || null,
+      name: cleanName(slot.name, `Spelare ${index + 1}`),
+      legs: Number(slot.legs || 0),
+      remaining: Number(slot.remaining ?? match.target_score ?? targetScore(match.game_type)),
+    }));
+  }
+  return [
+    {
+      number: 1,
+      id: match.player1_id || null,
+      name: cleanName(match.player1_name, 'Spelare 1'),
+      legs: Number(match.player1_legs || 0),
+      remaining: Number(match.player1_remaining ?? match.target_score ?? targetScore(match.game_type)),
+    },
+    {
+      number: 2,
+      id: match.player2_id || null,
+      name: cleanName(match.player2_name, 'Spelare 2'),
+      legs: Number(match.player2_legs || 0),
+      remaining: Number(match.player2_remaining ?? match.target_score ?? targetScore(match.game_type)),
+    },
+  ];
+}
+
+function mirrorFromSlots(state: MatchRow, slots: PlayerSlot[]) {
+  const first = slots[0];
+  const second = slots[1] || slots[0];
+  state.player_slots = slots;
+  state.player1_id = first?.id || state.player1_id || null;
+  state.player2_id = second?.id || state.player2_id || null;
+  state.player1_name = first?.name || state.player1_name || 'Spelare 1';
+  state.player2_name = second?.name || state.player2_name || 'Spelare 2';
+  state.player1_legs = first?.legs || 0;
+  state.player2_legs = second?.legs || 0;
+  state.player1_remaining = first?.remaining ?? state.target_score ?? targetScore(state.game_type);
+  state.player2_remaining = second?.remaining ?? state.target_score ?? targetScore(state.game_type);
+  return state;
+}
+
+function currentSlot(match: MatchRow) {
+  const slots = slotsFromMatch(match);
+  return slots.find((slot) => slot.number === Number(match.current_player)) || slots[0];
 }
 
 function eventTitle(type: string, match: MatchRow, score?: number) {
-  const player = match.current_player === 1 ? match.player1_name : match.player2_name;
+  const player = currentSlot(match)?.name || match.player1_name;
   if (type === 'ONE_EIGHTY') return `${player} kastar 180`;
   if (type === 'HIGH_CHECKOUT') return `${player} checkout ${score}`;
   if (type === 'CHECKOUT') return `${player} tar legget`;
@@ -43,6 +115,7 @@ function eventTitle(type: string, match: MatchRow, score?: number) {
 }
 
 async function createScoreEvent(client: any, match: MatchRow, eventType: string, payload: Record<string, any> = {}, priority = 1) {
+  const active = currentSlot(match);
   await client.from('score_events').insert({
     score_session_id: match.score_session_id,
     match_id: match.id,
@@ -54,9 +127,10 @@ async function createScoreEvent(client: any, match: MatchRow, eventType: string,
     payload: {
       board: payload.board,
       score: payload.score,
-      player: match.current_player === 1 ? match.player1_name : match.player2_name,
+      player: active?.name || match.player1_name,
       player1: match.player1_name,
       player2: match.player2_name,
+      players: slotsFromMatch(match).map((slot) => slot.name),
       player1_legs: match.player1_legs,
       player2_legs: match.player2_legs,
       ...payload,
@@ -66,41 +140,43 @@ async function createScoreEvent(client: any, match: MatchRow, eventType: string,
 
 function applyTurn(state: MatchRow, turn: TurnRow) {
   if (state.status === 'completed') return state;
+  const target = Number(state.target_score || targetScore(state.game_type));
+  const slots = slotsFromMatch(state);
   const player = Number(turn.player_number);
   const score = Number(turn.score);
-  const before = player === 1 ? state.player1_remaining : state.player2_remaining;
+  const slot = slots.find((s) => s.number === player) || slots[0];
+  const before = slot.remaining;
   const after = before - score;
   const isBust = score > before || after === 1;
   const isCheckout = after === 0 && !isBust;
 
   if (!isBust) {
-    if (player === 1) state.player1_remaining = after;
-    else state.player2_remaining = after;
+    slot.remaining = after;
   }
 
   if (isCheckout) {
-    if (player === 1) state.player1_legs += 1;
-    else state.player2_legs += 1;
+    slot.legs += 1;
 
-    if (state.player1_legs >= requiredLegs(state.best_of_legs) || state.player2_legs >= requiredLegs(state.best_of_legs)) {
+    if (slot.legs >= requiredLegs(state.best_of_legs)) {
       state.status = 'completed';
-      state.winner_player_id = player === 1 ? state.player1_id : state.player2_id;
-      state.winner_name = player === 1 ? state.player1_name : state.player2_name;
+      state.winner_player_id = slot.id;
+      state.winner_name = slot.name;
       state.completed_at = new Date().toISOString();
     } else {
       state.current_leg += 1;
-      state.player1_remaining = 501;
-      state.player2_remaining = 501;
-      state.leg_starting_player = switchPlayer(state.leg_starting_player);
+      slots.forEach((s) => {
+        s.remaining = target;
+      });
+      state.leg_starting_player = nextPlayerNumber(state.leg_starting_player, slots.length);
       state.current_player = state.leg_starting_player;
     }
   } else {
-    state.current_player = switchPlayer(player);
+    state.current_player = nextPlayerNumber(player, slots.length);
   }
 
   state.last_score = score;
   state.last_event_type = isCheckout ? 'CHECKOUT' : isBust ? 'BUST' : 'MATCH_UPDATED';
-  return state;
+  return mirrorFromSlots(state, slots);
 }
 
 async function recomputeMatch(client: any, match: MatchRow) {
@@ -117,10 +193,17 @@ async function recomputeMatch(client: any, match: MatchRow) {
     current_leg: 1,
     player1_legs: 0,
     player2_legs: 0,
-    player1_remaining: 501,
-    player2_remaining: 501,
+    player1_remaining: match.target_score || targetScore(match.game_type),
+    player2_remaining: match.target_score || targetScore(match.game_type),
     current_player: match.starting_player || 1,
     leg_starting_player: match.starting_player || 1,
+    target_score: match.target_score || targetScore(match.game_type),
+    checkout_rule: match.checkout_rule || 'double_out',
+    player_slots: slotsFromMatch(match).map((slot) => ({
+      ...slot,
+      legs: 0,
+      remaining: match.target_score || targetScore(match.game_type),
+    })),
     winner_player_id: null,
     winner_name: null,
     completed_at: null,
@@ -137,6 +220,7 @@ async function recomputeMatch(client: any, match: MatchRow) {
     player2_legs: state.player2_legs,
     player1_remaining: state.player1_remaining,
     player2_remaining: state.player2_remaining,
+    player_slots: state.player_slots,
     current_player: state.current_player,
     leg_starting_player: state.leg_starting_player,
     winner_player_id: state.winner_player_id,
@@ -190,18 +274,38 @@ async function assertDeviceCanScore(client: any, matchId: string, deviceToken?: 
 }
 
 async function liveState(client: any, scoreSessionId: string) {
-  const { data: session, error: sessionErr } = await client
+  let resolvedSessionId = scoreSessionId;
+  const { data: initialSession, error: sessionErr } = await client
     .from('score_sessions')
     .select('*, events(id, name, display_name), venues(id, name, slug)')
-    .eq('id', scoreSessionId)
+    .eq('id', resolvedSessionId)
     .maybeSingle();
+  let session = initialSession;
   if (sessionErr) throw new Error(sessionErr.message);
+  if (!session) {
+    const { data: matchById, error: matchLookupErr } = await client
+      .from('score_matches')
+      .select('score_session_id')
+      .eq('id', scoreSessionId)
+      .maybeSingle();
+    if (matchLookupErr) throw new Error(matchLookupErr.message);
+    if (matchById?.score_session_id) {
+      resolvedSessionId = matchById.score_session_id;
+      const retry = await client
+        .from('score_sessions')
+        .select('*, events(id, name, display_name), venues(id, name, slug)')
+        .eq('id', resolvedSessionId)
+        .maybeSingle();
+      if (retry.error) throw new Error(retry.error.message);
+      session = retry.data;
+    }
+  }
   if (!session) throw new Error('Score session hittades inte');
 
   const { data: matches, error: matchErr } = await client
     .from('score_matches')
     .select('*, venue_courts(id, name, court_number, sport_type)')
-    .eq('score_session_id', scoreSessionId)
+    .eq('score_session_id', resolvedSessionId)
     .order('status')
     .order('updated_at', { ascending: false });
   if (matchErr) throw new Error(matchErr.message);
@@ -209,7 +313,7 @@ async function liveState(client: any, scoreSessionId: string) {
   const { data: events, error: eventErr } = await client
     .from('score_events')
     .select('*, venue_courts(id, name, court_number, sport_type)')
-    .eq('score_session_id', scoreSessionId)
+    .eq('score_session_id', resolvedSessionId)
     .order('created_at', { ascending: false })
     .limit(30);
   if (eventErr) throw new Error(eventErr.message);
@@ -284,10 +388,21 @@ Deno.serve(async (req) => {
       const device = await getDevice(admin, token);
       if (!device) return errorResponse('Paddan hittades inte', 404);
       const defaultCourtId = device.venue_court_id;
-      const courtIds = Array.isArray(body.court_ids) && body.court_ids.length
+      const requestedCourtIds = Array.isArray(body.court_ids) && body.court_ids.length
         ? body.court_ids.map(String)
         : defaultCourtId ? [defaultCourtId] : [];
+      const courtIds = body.allow_multi_board === true ? requestedCourtIds : defaultCourtId ? [defaultCourtId] : requestedCourtIds.slice(0, 1);
       if (!courtIds.length) return errorResponse('Ingen darttavla vald');
+      const gameType = parseGameType(body.game_type);
+      const target = targetScore(gameType);
+      const checkoutRule = parseCheckoutRule(body.checkout_rule);
+      const inputNames = Array.isArray(body.player_names)
+        ? body.player_names.map((name: unknown, index: number) => cleanName(name, `Spelare ${index + 1}`)).filter(Boolean).slice(0, 4)
+        : [];
+      const defaultNames = inputNames.length >= 2 ? inputNames : [
+        cleanName(body.player1_name, 'Spelare 1'),
+        cleanName(body.player2_name, 'Spelare 2'),
+      ];
 
       const { data: courts, error: courtsErr } = await admin
         .from('venue_courts')
@@ -306,8 +421,13 @@ Deno.serve(async (req) => {
           sport_type: 'dart',
           name: body.name ? String(body.name).slice(0, 80) : 'Walk-in darts',
           status: 'live',
-          game_type: '501',
+          game_type: gameType,
           best_of_legs: parseBestOf(body.best_of_legs),
+          settings: {
+            checkout_rule: checkoutRule,
+            in_rule: 'straight_in',
+            player_count: defaultNames.length,
+          },
           created_from_device_id: device.id,
           started_at: new Date().toISOString(),
         })
@@ -327,23 +447,32 @@ Deno.serve(async (req) => {
       for (let index = 0; index < courtIds.length; index++) {
         const court = (courts || []).find((c: any) => c.id === courtIds[index]);
         const input = matchInputs.find((m: any) => m.court_id === courtIds[index]) || {};
-        const p1Name = cleanName(input.player1_name || body.player1_name, 'Spelare 1');
-        const p2Name = cleanName(input.player2_name || body.player2_name, 'Spelare 2');
+        const matchNames = Array.isArray(input.player_names)
+          ? input.player_names.map((name: unknown, playerIndex: number) => cleanName(name, `Spelare ${playerIndex + 1}`)).filter(Boolean).slice(0, 4)
+          : defaultNames;
+        const normalizedNames = matchNames.length >= 2 ? matchNames : ['Spelare 1', 'Spelare 2'];
         const courtDevice = (devicesForCourts || []).find((d: any) => d.venue_court_id === courtIds[index]);
 
-        const { data: p1, error: p1Err } = await admin
-          .from('score_players')
-          .insert({ score_session_id: session.id, display_name: p1Name, seed: index * 2 + 1 })
-          .select('id')
-          .single();
-        if (p1Err) return errorResponse(p1Err.message);
-
-        const { data: p2, error: p2Err } = await admin
-          .from('score_players')
-          .insert({ score_session_id: session.id, display_name: p2Name, seed: index * 2 + 2 })
-          .select('id')
-          .single();
-        if (p2Err) return errorResponse(p2Err.message);
+        const playerSlots = [];
+        for (let playerIndex = 0; playerIndex < normalizedNames.length; playerIndex++) {
+          const { data: playerRow, error: playerErr } = await admin
+            .from('score_players')
+            .insert({
+              score_session_id: session.id,
+              display_name: normalizedNames[playerIndex],
+              seed: index * 8 + playerIndex + 1,
+            })
+            .select('id')
+            .single();
+          if (playerErr) return errorResponse(playerErr.message);
+          playerSlots.push({
+            number: playerIndex + 1,
+            id: playerRow.id,
+            name: normalizedNames[playerIndex],
+            legs: 0,
+            remaining: target,
+          });
+        }
 
         const { data: match, error: matchErr } = await admin
           .from('score_matches')
@@ -355,14 +484,25 @@ Deno.serve(async (req) => {
             match_type: 'walk_in',
             status: 'in_progress',
             match_number: index + 1,
-            player1_id: p1.id,
-            player2_id: p2.id,
-            player1_name: p1Name,
-            player2_name: p2Name,
-            game_type: '501',
+            player1_id: playerSlots[0]?.id,
+            player2_id: playerSlots[1]?.id,
+            player1_name: playerSlots[0]?.name || 'Spelare 1',
+            player2_name: playerSlots[1]?.name || 'Spelare 2',
+            game_type: gameType,
+            target_score: target,
+            checkout_rule: checkoutRule,
+            in_rule: 'straight_in',
             best_of_legs: parseBestOf(body.best_of_legs),
+            player1_remaining: target,
+            player2_remaining: target,
+            player_slots: playerSlots,
             started_at: new Date().toISOString(),
-            metadata: { source: 'device_walk_in', started_from_device_token: token },
+            metadata: {
+              source: 'device_walk_in',
+              started_from_device_token: token,
+              player_count: playerSlots.length,
+              checkout_rule: checkoutRule,
+            },
           })
           .select('*, venue_courts(id, name, court_number, sport_type)')
           .single();
@@ -385,7 +525,8 @@ Deno.serve(async (req) => {
 
       const match = await assertDeviceCanScore(admin, matchId, body.device_token);
       const player = match.current_player;
-      const before = player === 1 ? match.player1_remaining : match.player2_remaining;
+      const activeSlot = currentSlot(match);
+      const before = activeSlot?.remaining ?? match.player1_remaining;
       const after = before - score;
       const isBust = score > before || after === 1;
       const isCheckout = after === 0 && !isBust;
@@ -422,6 +563,7 @@ Deno.serve(async (req) => {
           player2_remaining: state.player2_remaining,
           current_player: state.current_player,
           leg_starting_player: state.leg_starting_player,
+          player_slots: state.player_slots,
           winner_player_id: state.winner_player_id,
           winner_name: state.winner_name,
           completed_at: state.completed_at,
@@ -439,7 +581,11 @@ Deno.serve(async (req) => {
       else if (isCheckout) await createScoreEvent(admin, match, 'CHECKOUT', { score, board }, 4);
       if (!isBust && !isCheckout && after <= 170) await createScoreEvent(admin, match, 'PLAYER_ON_FINISH', { score, board, remaining: after }, 3);
       const need = requiredLegs(match.best_of_legs);
-      if (updated.status !== 'completed' && updated.player1_legs === need - 1 && updated.player2_legs === need - 1) {
+      const slots = slotsFromMatch(updated);
+      const lastLegReady = slots.length === 2
+        ? slots.every((slot) => slot.legs === need - 1)
+        : slots.filter((slot) => slot.legs === need - 1).length >= 2;
+      if (updated.status !== 'completed' && lastLegReady) {
         await createScoreEvent(admin, updated, 'LAST_LEG', { board }, 4);
       }
       if (updated.status === 'completed') await createScoreEvent(admin, updated, 'MATCH_FINISHED', { score, board }, 6);

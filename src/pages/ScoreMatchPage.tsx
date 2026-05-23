@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, RotateCcw, Trophy } from "lucide-react";
+import { ArrowLeft, MonitorPlay, RotateCcw, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
@@ -16,11 +16,23 @@ type ScoreMatch = {
   player2_legs: number;
   player1_remaining: number;
   player2_remaining: number;
-  current_player: 1 | 2;
+  current_player: number;
   current_leg: number;
   best_of_legs: number;
+  game_type?: string;
+  target_score?: number;
+  checkout_rule?: "single_out" | "double_out";
+  player_slots?: PlayerSlot[];
   winner_name?: string | null;
   venue_courts?: { name: string; court_number: number } | null;
+};
+
+type PlayerSlot = {
+  number: number;
+  id?: string | null;
+  name: string;
+  legs: number;
+  remaining: number;
 };
 
 const keypad = [1, 2, 3, 4, 5, 6, 7, 8, 9, "del", 0, "enter"] as const;
@@ -56,14 +68,24 @@ export default function ScoreMatchPage() {
   }, [matchId, queryClient]);
 
   const match = data?.match;
-  const currentName = match?.current_player === 1 ? match.player1_name : match?.player2_name;
-  const currentRemaining = match?.current_player === 1 ? match.player1_remaining : match?.player2_remaining;
+  const players = useMemo<PlayerSlot[]>(() => {
+    if (!match) return [];
+    if (Array.isArray(match.player_slots) && match.player_slots.length) return match.player_slots;
+    return [
+      { number: 1, id: match.player1_name, name: match.player1_name, legs: match.player1_legs, remaining: match.player1_remaining },
+      { number: 2, id: match.player2_name, name: match.player2_name, legs: match.player2_legs, remaining: match.player2_remaining },
+    ];
+  }, [match]);
+  const activePlayer = players.find((player) => player.number === match?.current_player) || players[0];
+  const otherPlayers = players.filter((player) => player.number !== activePlayer?.number);
+  const currentName = activePlayer?.name;
+  const currentRemaining = activePlayer?.remaining;
   const projected = useMemo(() => {
     if (!match || !input) return null;
     const score = Number(input);
     if (!Number.isInteger(score)) return null;
-    const after = currentRemaining! - score;
-    if (score > currentRemaining! || after === 1) return "BUST";
+    const after = Number(currentRemaining) - score;
+    if (score > Number(currentRemaining) || after === 1) return "BUST";
     return after;
   }, [currentRemaining, input, match]);
 
@@ -129,36 +151,53 @@ export default function ScoreMatchPage() {
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-white/35">
               {match.venue_courts?.name || "Pickla Score"}
             </p>
-            <p className="font-display text-3xl font-black">501</p>
+            <p className="font-display text-3xl font-black">{match.game_type || "501"}</p>
           </div>
-          <button
-            onClick={() => undoMutation.mutate()}
-            disabled={undoMutation.isPending || completed}
-            className="rounded-full bg-white/10 p-4 disabled:opacity-30"
-          >
-            <RotateCcw className="h-6 w-6" />
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              to={`/display/broadcast/${match.score_session_id}`}
+              className="rounded-full bg-emerald-300 p-4 text-neutral-950"
+              title="Öppna broadcast"
+            >
+              <MonitorPlay className="h-6 w-6" />
+            </Link>
+            <button
+              onClick={() => undoMutation.mutate()}
+              disabled={undoMutation.isPending || completed}
+              className="rounded-full bg-white/10 p-4 disabled:opacity-30"
+            >
+              <RotateCcw className="h-6 w-6" />
+            </button>
+          </div>
         </header>
 
-        <section className="grid flex-1 gap-4 lg:grid-cols-[1fr_360px]">
+        <section className="grid flex-1 gap-4 lg:grid-cols-[1fr_380px]">
           <div className="flex flex-col gap-4">
-            <PlayerPanel
-              active={!completed && match.current_player === 1}
-              name={match.player1_name}
-              legs={match.player1_legs}
-              remaining={match.player1_remaining}
-            />
-            <PlayerPanel
-              active={!completed && match.current_player === 2}
-              name={match.player2_name}
-              legs={match.player2_legs}
-              remaining={match.player2_remaining}
-            />
+            {activePlayer && (
+              <ActivePlayerPanel
+                completed={completed}
+                name={activePlayer.name}
+                legs={activePlayer.legs}
+                remaining={activePlayer.remaining}
+              />
+            )}
+            <div className={`grid gap-3 ${otherPlayers.length > 1 ? "sm:grid-cols-2" : ""}`}>
+              {otherPlayers.map((player) => (
+                <PlayerPanel
+                  key={player.number}
+                  name={player.name}
+                  legs={player.legs}
+                  remaining={player.remaining}
+                />
+              ))}
+            </div>
             <div className="rounded-[2rem] border border-white/10 bg-white/5 p-6">
               <div className="flex items-end justify-between">
                 <div>
                   <p className="font-mono text-xs uppercase tracking-[0.2em] text-white/35">Leg {match.current_leg}</p>
-                  <p className="mt-1 font-display text-3xl font-black">Bäst av {match.best_of_legs}</p>
+                  <p className="mt-1 font-display text-3xl font-black">
+                    Först till {Math.floor(match.best_of_legs / 2) + 1} · {match.checkout_rule === "single_out" ? "enkel ut" : "dubbel ut"}
+                  </p>
                 </div>
                 {completed ? (
                   <div className="flex items-center gap-2 rounded-full bg-emerald-300 px-5 py-3 text-neutral-950">
@@ -199,7 +238,9 @@ export default function ScoreMatchPage() {
             </div>
 
             <div className="mt-4 grid grid-cols-4 gap-2">
-              {[26, 41, 60, 81, 100, 140, 180, Number(currentRemaining || 0)].map((quick) => (
+              {[26, 41, 60, 81, 100, 140, 180, Number(currentRemaining || 0)]
+                .filter((value, index, list) => value > 0 && list.indexOf(value) === index)
+                .map((quick) => (
                 <button
                   key={quick}
                   onClick={() => setInput(String(quick))}
@@ -217,22 +258,36 @@ export default function ScoreMatchPage() {
   );
 }
 
-function PlayerPanel({ active, name, legs, remaining }: { active: boolean; name: string; legs: number; remaining: number }) {
+function ActivePlayerPanel({ completed, name, legs, remaining }: { completed: boolean; name: string; legs: number; remaining: number }) {
   return (
     <div className={`rounded-[2rem] border p-7 transition-all ${
-      active ? "border-emerald-300 bg-emerald-300 text-neutral-950" : "border-white/10 bg-white/5 text-white"
+      completed ? "border-white/10 bg-white/5 text-white" : "border-emerald-300 bg-emerald-300 text-neutral-950"
     }`}>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className={`font-mono text-xs uppercase tracking-[0.2em] ${active ? "text-neutral-700" : "text-white/35"}`}>Spelare</p>
+          <p className={`font-mono text-xs uppercase tracking-[0.2em] ${completed ? "text-white/35" : "text-neutral-700"}`}>Kastar nu</p>
           <h2 className="mt-2 font-display text-5xl font-black leading-none">{name}</h2>
         </div>
         <div className="text-right">
-          <p className={`font-mono text-xs uppercase tracking-[0.2em] ${active ? "text-neutral-700" : "text-white/35"}`}>Legs</p>
+          <p className={`font-mono text-xs uppercase tracking-[0.2em] ${completed ? "text-white/35" : "text-neutral-700"}`}>Legs</p>
           <p className="font-display text-5xl font-black">{legs}</p>
         </div>
       </div>
       <p className="mt-7 font-display text-[9rem] font-black leading-none tracking-tight">{remaining}</p>
+    </div>
+  );
+}
+
+function PlayerPanel({ name, legs, remaining }: { name: string; legs: number; remaining: number }) {
+  return (
+    <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-5 text-white">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="font-display text-3xl font-black leading-none">{name}</p>
+          <p className="mt-2 font-mono text-sm text-white/35">Legs {legs}</p>
+        </div>
+        <p className="font-display text-6xl font-black leading-none">{remaining}</p>
+      </div>
     </div>
   );
 }
