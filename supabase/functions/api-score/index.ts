@@ -453,6 +453,24 @@ Deno.serve(async (req) => {
       return jsonResponse({ session: data || null }, 200, 5);
     }
 
+    if (req.method === 'GET' && path === 'join-state') {
+      const token = url.searchParams.get('device') || '';
+      const setupId = url.searchParams.get('setupId') || '';
+      if (!token) return errorResponse('Missing device token');
+      if (!setupId) return errorResponse('Missing setupId');
+      const device = await getDevice(admin, token);
+      if (!device) return errorResponse('Paddan hittades inte', 404);
+      const { data: links, error: linkErr } = await admin
+        .from('score_player_links')
+        .select('slot_number, auth_user_id, display_name, avatar_url, updated_at')
+        .eq('display_device_id', device.id)
+        .eq('setup_id', setupId)
+        .gt('expires_at', new Date().toISOString())
+        .order('slot_number');
+      if (linkErr) return errorResponse(linkErr.message);
+      return jsonResponse({ players: links || [] }, 200, 2);
+    }
+
     if (req.method === 'GET' && path === 'my-stats') {
       const { client, userId, error } = await getAuthenticatedClient(req);
       if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
@@ -664,6 +682,40 @@ Deno.serve(async (req) => {
       }
 
       return jsonResponse({ session, matches: createdMatches, match: createdMatches[0] }, 201);
+    }
+
+    if (req.method === 'POST' && path === 'join-player') {
+      const { userId, error } = await getAuthenticatedClient(req);
+      if (error || !userId) return errorResponse(error || 'Unauthorized', 401);
+      const body = await req.json();
+      const token = String(body.device_token || body.device || '');
+      const setupId = String(body.setup_id || '').trim();
+      const slotNumber = Number(body.slot_number);
+      if (!token) return errorResponse('Missing device token');
+      if (!setupId) return errorResponse('Missing setup_id');
+      if (!Number.isInteger(slotNumber) || slotNumber < 0 || slotNumber > 7) return errorResponse('Ogiltig spelarslot');
+
+      const device = await getDevice(admin, token);
+      if (!device) return errorResponse('Paddan hittades inte', 404);
+      const player = await resolvePlayerProfile(admin, userId);
+      if (!player?.user_id) return errorResponse('Användaren hittades inte', 404);
+
+      const { data: link, error: linkErr } = await admin
+        .from('score_player_links')
+        .upsert({
+          setup_id: setupId,
+          display_device_id: device.id,
+          venue_id: device.venue_id,
+          slot_number: slotNumber,
+          auth_user_id: player.user_id,
+          display_name: player.display_name,
+          avatar_url: player.avatar_url || null,
+          expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        }, { onConflict: 'setup_id,display_device_id,slot_number' })
+        .select('slot_number, auth_user_id, display_name, avatar_url, updated_at')
+        .single();
+      if (linkErr) return errorResponse(linkErr.message);
+      return jsonResponse({ player: link }, 200, 2);
     }
 
     if (req.method === 'POST' && path === 'resolve-player') {

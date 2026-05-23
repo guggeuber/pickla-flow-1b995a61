@@ -35,6 +35,7 @@ import OpenPlayDisplay from "./pages/OpenPlayDisplay";
 import ResourceCheckinDisplay from "./pages/ResourceCheckinDisplay";
 import DeviceDisplay from "./pages/DeviceDisplay";
 import ScoreStartPage from "./pages/ScoreStartPage";
+import ScoreJoinPage from "./pages/ScoreJoinPage";
 import ScoreMatchPage from "./pages/ScoreMatchPage";
 import ScoreBroadcastPage from "./pages/ScoreBroadcastPage";
 import AuthCallback from "./pages/AuthCallback";
@@ -109,6 +110,7 @@ const App = () => (
             <Route path="/display/device/:token" element={<DeviceDisplay />} />
             <Route path="/display/broadcast/:scoreSessionId" element={<ScoreBroadcastPage />} />
             <Route path="/score/start" element={<ScoreStartPage />} />
+            <Route path="/score/join" element={<ScoreJoinPage />} />
             <Route path="/score/match/:matchId" element={<ScoreMatchPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

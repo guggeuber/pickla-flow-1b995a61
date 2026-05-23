@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowRight, Camera, Check, Minus, Plus, Radio, Trophy, X } from "lucide-react";
-import { Html5Qrcode } from "html5-qrcode";
+import { ArrowRight, Check, Link2, Minus, Plus, Radio, Trophy, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { apiGet, apiPost } from "@/lib/api";
@@ -35,12 +35,20 @@ type MatchPlayer = {
   linked?: boolean;
 };
 
-type ResolvedPlayer = {
-  player: {
-    user_id: string;
-    display_name: string;
-    avatar_url?: string | null;
-  };
+type LinkedPlayer = {
+  slot_number: number;
+  auth_user_id: string;
+  display_name: string;
+  avatar_url?: string | null;
+};
+
+type JoinState = {
+  players: LinkedPlayer[];
+};
+
+const createSetupId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
 export default function ScoreStartPage() {
@@ -58,10 +66,8 @@ export default function ScoreStartPage() {
   const [gameType, setGameType] = useState<"301" | "501" | "701">("501");
   const [checkoutRule, setCheckoutRule] = useState<"double_out" | "single_out">("double_out");
   const [players, setPlayers] = useState<MatchPlayer[]>([{ name: "" }, { name: "" }]);
-  const [scanIndex, setScanIndex] = useState<number | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const scannerRef = useRef<Html5Qrcode | null>(null);
-  const processedScanRef = useRef(false);
+  const [setupId] = useState(createSetupId);
+  const [linkIndex, setLinkIndex] = useState<number | null>(null);
 
   const activeCourt = useMemo(() => data?.resource || null, [data?.resource]);
   const normalizedNames = useMemo(
@@ -69,71 +75,42 @@ export default function ScoreStartPage() {
     [players],
   );
 
-  const stopScanner = useCallback(async () => {
-    if (!scannerRef.current) return;
-    try {
-      const state = scannerRef.current.getState();
-      if (state === 2) await scannerRef.current.stop();
-    } catch {
-      // no-op
-    }
-    scannerRef.current = null;
-  }, []);
-
-  const closeScanner = useCallback(() => {
-    stopScanner();
-    setScanIndex(null);
-    setScanError(null);
-    processedScanRef.current = false;
-  }, [stopScanner]);
-
-  const handleQrDetected = useCallback(async (decodedText: string) => {
-    if (processedScanRef.current || scanIndex === null) return;
-    processedScanRef.current = true;
-    setScanError(null);
-    try {
-      const result = await apiPost<ResolvedPlayer>("api-score", "resolve-player", {
-        device_token: deviceToken,
-        qr_payload: decodedText,
-      });
-      const resolved = result.player;
-      setPlayers((current) => current.map((player, index) => index === scanIndex
-        ? { name: resolved.display_name, auth_user_id: resolved.user_id, linked: true }
-        : player
-      ));
-      toast.success(`${resolved.display_name} kopplad`);
-      closeScanner();
-    } catch (error) {
-      setScanError(error instanceof Error ? error.message : "Kunde inte läsa QR");
-      processedScanRef.current = false;
-    }
-  }, [closeScanner, deviceToken, scanIndex]);
+  const { data: joinState } = useQuery<JoinState>({
+    queryKey: ["score-join-state", deviceToken, setupId],
+    enabled: !!deviceToken && !!setupId,
+    queryFn: () => apiGet("api-score", "join-state", { device: deviceToken, setupId }),
+    refetchInterval: 2_000,
+  });
 
   useEffect(() => {
-    if (scanIndex === null) return;
-    let mounted = true;
-    const start = async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
-      if (!mounted) return;
-      const scanner = new Html5Qrcode("score-player-qr-reader");
-      scannerRef.current = scanner;
-      try {
-        await scanner.start(
-          { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 230, height: 230 } },
-          (decodedText) => handleQrDetected(decodedText),
-          () => {},
-        );
-      } catch {
-        if (mounted) setScanError("Kunde inte starta kameran. Kontrollera kamerabehörighet.");
-      }
-    };
-    start();
-    return () => {
-      mounted = false;
-      stopScanner();
-    };
-  }, [handleQrDetected, scanIndex, stopScanner]);
+    if (!joinState?.players?.length) return;
+    setPlayers((current) => {
+      let changed = false;
+      const next = current.map((player, index) => {
+        const link = joinState.players.find((item) => item.slot_number === index);
+        if (!link) return player;
+        if (player.auth_user_id === link.auth_user_id && player.name === link.display_name) return player;
+        changed = true;
+        return {
+          ...player,
+          name: link.display_name,
+          auth_user_id: link.auth_user_id,
+          linked: true,
+        };
+      });
+      return changed ? next : current;
+    });
+  }, [joinState]);
+
+  const joinUrl = (index: number) => {
+    const origin = window.location.origin;
+    const params = new URLSearchParams({
+      setup: setupId,
+      device: deviceToken,
+      slot: String(index),
+    });
+    return `${origin}/score/join?${params.toString()}`;
+  };
 
   const startMutation = useMutation({
     mutationFn: () => apiPost("api-score", "walk-in", {
@@ -295,15 +272,14 @@ export default function ScoreStartPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    processedScanRef.current = false;
-                    setScanIndex(index);
+                    setLinkIndex(index);
                   }}
                   className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${
                     player.linked ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-600"
                   }`}
-                  title="Skanna konto"
+                  title="Koppla konto"
                 >
-                  <Camera className="h-4 w-4" />
+                  <Link2 className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
@@ -328,22 +304,37 @@ export default function ScoreStartPage() {
         </section>
       </div>
 
-      {scanIndex !== null && (
+      {linkIndex !== null && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-4 sm:items-center">
           <div className="w-full max-w-md rounded-[2rem] bg-white p-5 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
-                <p className="font-mono text-xs uppercase tracking-[0.2em] text-neutral-400">Skanna konto</p>
-                <h2 className="mt-1 font-display text-3xl font-black text-neutral-950">Spelare {scanIndex + 1}</h2>
-                <p className="mt-1 font-mono text-sm text-neutral-500">Visa QR-koden från Min sida på spelarens mobil.</p>
+                <p className="font-mono text-xs uppercase tracking-[0.2em] text-neutral-400">Koppla konto</p>
+                <h2 className="mt-1 font-display text-3xl font-black text-neutral-950">Spelare {linkIndex + 1}</h2>
+                <p className="mt-1 font-mono text-sm text-neutral-500">Spelaren skannar denna QR med sin egen mobil.</p>
               </div>
-              <button onClick={closeScanner} className="rounded-full bg-neutral-100 p-3 text-neutral-600">
+              <button onClick={() => setLinkIndex(null)} className="rounded-full bg-neutral-100 p-3 text-neutral-600">
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div id="score-player-qr-reader" className="min-h-[280px] overflow-hidden rounded-2xl bg-neutral-950" />
-            {scanError && (
-              <p className="mt-3 rounded-xl bg-pink-50 px-3 py-2 font-mono text-sm text-pink-700">{scanError}</p>
+            <div className="flex flex-col items-center rounded-[1.5rem] bg-[#faf8f5] p-5">
+              <div className="rounded-2xl bg-white p-4 shadow-sm">
+                <QRCodeSVG
+                  value={joinUrl(linkIndex)}
+                  size={220}
+                  level="M"
+                  bgColor="#ffffff"
+                  fgColor="#111827"
+                />
+              </div>
+              <p className="mt-4 text-center font-mono text-sm text-neutral-500">
+                Öppnar Pickla på mobilen och kopplar kontot till matchen.
+              </p>
+            </div>
+            {players[linkIndex]?.linked && (
+              <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 font-mono text-sm text-emerald-700">
+                {players[linkIndex].name} är kopplad.
+              </div>
             )}
           </div>
         </div>
