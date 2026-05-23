@@ -82,6 +82,7 @@ export default function ScoreMatchPage() {
   const [notice, setNotice] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [dismissWinner, setDismissWinner] = useState(false);
+  const [celebration, setCelebration] = useState<{ tone: "win" | "checkout" | "bust" | "hot"; text: string } | null>(null);
 
   const { data, isLoading, isError } = useQuery<{ match: ScoreMatch; turns: ScoreTurn[] }>({
     queryKey: ["score-match", matchId],
@@ -120,6 +121,7 @@ export default function ScoreMatchPage() {
   const latestTurn = data?.turns?.[0];
   const currentName = activePlayer?.name;
   const currentRemaining = correctionOpen && latestTurn ? latestTurn.remaining_before : activePlayer?.remaining;
+  const matchEnded = match?.status === "completed" || match?.status === "cancelled";
   const projected = useMemo(() => {
     if (!match || !input) return null;
     const score = Number(input);
@@ -129,6 +131,15 @@ export default function ScoreMatchPage() {
     if (score > Number(currentRemaining) || (doubleOut && after === 1)) return "BUST";
     return after;
   }, [currentRemaining, input, match]);
+  const checkoutHint = useMemo(() => {
+    if (!match || !currentRemaining || correctionOpen || matchEnded) return null;
+    return getCheckoutHint(Number(currentRemaining), match.checkout_rule || "double_out");
+  }, [correctionOpen, currentRemaining, match, matchEnded]);
+
+  const showCelebration = (next: { tone: "win" | "checkout" | "bust" | "hot"; text: string }) => {
+    setCelebration(next);
+    window.setTimeout(() => setCelebration((current) => (current?.text === next.text ? null : current)), 1_450);
+  };
 
   const mergeScoreResult = (result: ScoreResponse) => {
     queryClient.setQueryData(["score-match", matchId], (current: { match: ScoreMatch; turns: ScoreTurn[] } | undefined) => {
@@ -156,10 +167,13 @@ export default function ScoreMatchPage() {
       mergeScoreResult(result);
       if (result.turn?.is_bust) {
         setNotice({ tone: "warn", text: "BUST - score står kvar, turen går vidare" });
+        showCelebration({ tone: "bust", text: "BUST" });
       } else if (result.turn?.is_checkout) {
         setNotice({ tone: "ok", text: "UT - legget är klart" });
+        showCelebration({ tone: result.match.status === "completed" ? "win" : "checkout", text: result.match.status === "completed" ? "MATCH!" : "UT!" });
       } else if (result.turn) {
         setNotice({ tone: "ok", text: `${result.turn.score} registrerat` });
+        if (result.turn.score === 180) showCelebration({ tone: "hot", text: "180!" });
       }
       window.setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ["score-match", matchId] });
@@ -181,6 +195,7 @@ export default function ScoreMatchPage() {
       setDismissWinner(false);
       mergeScoreResult(result);
       setNotice({ tone: "ok", text: "Score ändrad" });
+      if (result.turn?.is_checkout) showCelebration({ tone: result.match.status === "completed" ? "win" : "checkout", text: result.match.status === "completed" ? "MATCH!" : "UT!" });
       toast.success("Senaste score ändrad");
       window.setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ["score-match", matchId] });
@@ -404,6 +419,14 @@ export default function ScoreMatchPage() {
                   </button>
                 </div>
               )}
+              {checkoutHint && (
+                <div className="mt-2 rounded-xl bg-emerald-50 px-3 py-2">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700">Utgångsförslag</p>
+                  <p className="mt-1 font-display text-xl font-black text-neutral-950">
+                    {currentRemaining}: {checkoutHint}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="grid flex-1 grid-cols-3 gap-2">
@@ -453,6 +476,7 @@ export default function ScoreMatchPage() {
           rematchPending={rematchMutation.isPending}
         />
       )}
+      {celebration && <ScoreCelebration tone={celebration.tone} text={celebration.text} />}
     </main>
   );
 }
@@ -609,4 +633,55 @@ function StatTile({ label, value }: { label: string; value: string }) {
       <p className="mt-2 font-display text-4xl font-black leading-none">{value}</p>
     </div>
   );
+}
+
+function ScoreCelebration({ tone, text }: { tone: "win" | "checkout" | "bust" | "hot"; text: string }) {
+  const className = tone === "bust"
+    ? "bg-pink-500 text-white"
+    : tone === "hot"
+      ? "bg-white text-neutral-950"
+      : "bg-emerald-300 text-neutral-950";
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center">
+      <style>
+        {`@keyframes score-pop {
+          0% { opacity: 0; transform: scale(0.72) rotate(-2deg); }
+          16% { opacity: 1; transform: scale(1.08) rotate(1deg); }
+          64% { opacity: 1; transform: scale(1) rotate(0deg); }
+          100% { opacity: 0; transform: scale(1.18) rotate(0deg); }
+        }`}
+      </style>
+      <div className={`animate-[score-pop_1.45s_ease-out_forwards] rounded-[2rem] px-10 py-7 shadow-2xl ${className}`}>
+        <p className="font-display text-[clamp(5rem,18vh,13rem)] font-black leading-none tracking-tight">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+const singleSegments = Array.from({ length: 20 }, (_, index) => ({ label: String(index + 1), value: index + 1 }));
+const doubleSegments = Array.from({ length: 20 }, (_, index) => ({ label: `D${index + 1}`, value: (index + 1) * 2 }));
+const tripleSegments = Array.from({ length: 20 }, (_, index) => ({ label: `T${index + 1}`, value: (index + 1) * 3 }));
+const bullSegments = [{ label: "25", value: 25 }, { label: "BULL", value: 50 }];
+const allSegments = [...tripleSegments, ...doubleSegments, ...singleSegments, ...bullSegments].sort((a, b) => b.value - a.value);
+const doubleOutSegments = [...doubleSegments, { label: "BULL", value: 50 }].sort((a, b) => b.value - a.value);
+
+function getCheckoutHint(remaining: number, rule: "single_out" | "double_out") {
+  if (remaining <= 0 || remaining > 170) return null;
+  const finalSegments = rule === "double_out" ? doubleOutSegments : [...singleSegments, ...doubleSegments, ...tripleSegments, ...bullSegments];
+  for (const last of finalSegments) {
+    if (last.value === remaining) return last.label;
+  }
+  for (const first of allSegments) {
+    for (const last of finalSegments) {
+      if (first.value + last.value === remaining) return `${first.label} ${last.label}`;
+    }
+  }
+  for (const first of allSegments) {
+    for (const second of allSegments) {
+      for (const last of finalSegments) {
+        if (first.value + second.value + last.value === remaining) return `${first.label} ${second.label} ${last.label}`;
+      }
+    }
+  }
+  return null;
 }

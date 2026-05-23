@@ -65,6 +65,7 @@ export default function ScoreBroadcastPage() {
   const { scoreSessionId = "" } = useParams();
   const queryClient = useQueryClient();
   const [rotationIndex, setRotationIndex] = useState(0);
+  const [celebrationEvent, setCelebrationEvent] = useState<BroadcastEvent | null>(null);
 
   const { data, isLoading, isError } = useQuery<BroadcastState>({
     queryKey: ["score-broadcast", scoreSessionId],
@@ -100,6 +101,19 @@ export default function ScoreBroadcastPage() {
   const featured = hotMatches.length ? hotMatches[rotationIndex % hotMatches.length] : ranked[0];
   const upNext = matches.find((match) => match.status === "pending") || ranked.find((match) => match.id !== featured?.id);
   const tickerItems = (data?.events || []).slice(0, 12);
+  const latestCelebration = useMemo(
+    () => (data?.events || []).find((event) => ["ONE_EIGHTY", "MATCH_FINISHED", "HIGH_CHECKOUT", "CHECKOUT"].includes(event.event_type)),
+    [data?.events],
+  );
+
+  useEffect(() => {
+    if (!latestCelebration) return;
+    const ageMs = Date.now() - new Date(latestCelebration.created_at).getTime();
+    if (ageMs > 45_000) return;
+    setCelebrationEvent(latestCelebration);
+    const id = window.setTimeout(() => setCelebrationEvent((current) => (current?.id === latestCelebration.id ? null : current)), 5_200);
+    return () => window.clearTimeout(id);
+  }, [latestCelebration]);
 
   if (isLoading) {
     return <main className="flex h-screen items-center justify-center bg-[#050508] text-white">loading broadcast...</main>;
@@ -231,6 +245,7 @@ export default function ScoreBroadcastPage() {
           {!tickerItems.length && <span className="px-10 text-white/40">Pickla Score live...</span>}
         </motion.div>
       </div>
+      {celebrationEvent && <BroadcastCelebration event={celebrationEvent} />}
     </main>
   );
 }
@@ -289,5 +304,33 @@ function MatchRow({ match, active }: { match: BroadcastMatch; active: boolean })
         {players.map((player) => `${player.name} ${player.legs}`).join(" · ")}
       </p>
     </div>
+  );
+}
+
+function BroadcastCelebration({ event }: { event: BroadcastEvent }) {
+  const isWin = event.event_type === "MATCH_FINISHED";
+  const isOneEighty = event.event_type === "ONE_EIGHTY";
+  const title = isWin ? "MATCH VINNARE" : isOneEighty ? "180" : event.event_type === "HIGH_CHECKOUT" ? "HIGH CHECKOUT" : "CHECKOUT";
+  return (
+    <motion.div
+      className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-neutral-950/70"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <motion.div
+        initial={{ scale: 0.72, rotate: -2, opacity: 0 }}
+        animate={{ scale: [0.72, 1.08, 1], rotate: [-2, 1, 0], opacity: 1 }}
+        transition={{ duration: 0.75, ease: "easeOut" }}
+        className={`max-w-[86vw] rounded-[3rem] px-12 py-10 text-center shadow-2xl ${
+          isOneEighty ? "bg-white text-neutral-950" : "bg-emerald-300 text-neutral-950"
+        }`}
+      >
+        <p className="font-mono text-2xl uppercase tracking-[0.35em] opacity-65">{title}</p>
+        <p className="mt-4 font-display text-[clamp(5rem,18vw,16rem)] font-black leading-none tracking-tight">
+          {isOneEighty ? "180" : event.title}
+        </p>
+      </motion.div>
+    </motion.div>
   );
 }
