@@ -714,6 +714,99 @@ Deno.serve(async (req) => {
       return jsonResponse({ match: rematch }, 201);
     }
 
+    if (req.method === 'POST' && path === 'correct-last-turn') {
+      const body = await req.json();
+      const matchId = String(body.match_id || '');
+      const score = Number(body.score);
+      const dartsUsed = Number(body.darts_used || 3);
+      if (!matchId) return errorResponse('Missing match_id');
+      if (!validScore(score)) return errorResponse('Ogiltig score');
+      if (![1, 2, 3].includes(dartsUsed)) return errorResponse('Ogiltigt antal pilar');
+
+      const { data: match, error: matchErr } = await admin
+        .from('score_matches')
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchErr) return errorResponse(matchErr.message);
+      if (!match) return errorResponse('Matchen hittades inte', 404);
+      await assertDeviceOwnsMatch(admin, match, body.device_token);
+
+      const { data: lastTurn, error: lastTurnErr } = await admin
+        .from('score_turns')
+        .select('*')
+        .eq('match_id', matchId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lastTurnErr) return errorResponse(lastTurnErr.message);
+      if (!lastTurn) return errorResponse('Inget att ändra');
+
+      const { error: deleteErr } = await admin.from('score_turns').delete().eq('id', lastTurn.id);
+      if (deleteErr) return errorResponse(deleteErr.message);
+
+      const baseMatch = await recomputeMatch(admin, match);
+      if (baseMatch.status === 'completed') return errorResponse('Matchen är redan avslutad');
+
+      const player = baseMatch.current_player;
+      const activeSlot = currentSlot(baseMatch);
+      const before = activeSlot?.remaining ?? baseMatch.player1_remaining;
+      const after = before - score;
+      const checkoutRule = parseCheckoutRule(baseMatch.checkout_rule);
+      const isBust = score > before || (checkoutRule === 'double_out' && after === 1);
+      const isCheckout = after === 0 && !isBust;
+
+      const { data: turn, error: turnErr } = await admin
+        .from('score_turns')
+        .insert({
+          score_session_id: baseMatch.score_session_id,
+          match_id: baseMatch.id,
+          venue_court_id: baseMatch.venue_court_id,
+          leg_number: baseMatch.current_leg,
+          player_number: player,
+          player_id: player === 1 ? baseMatch.player1_id : baseMatch.player2_id,
+          score,
+          remaining_before: before,
+          remaining_after: isBust ? before : Math.max(after, 0),
+          is_bust: isBust,
+          is_checkout: isCheckout,
+          darts_used: dartsUsed,
+        })
+        .select('*')
+        .single();
+      if (turnErr) return errorResponse(turnErr.message);
+
+      const state = applyTurn({ ...baseMatch }, turn);
+      const { data: updated, error: updateErr } = await admin
+        .from('score_matches')
+        .update({
+          status: state.status,
+          current_leg: state.current_leg,
+          player1_legs: state.player1_legs,
+          player2_legs: state.player2_legs,
+          player1_remaining: state.player1_remaining,
+          player2_remaining: state.player2_remaining,
+          current_player: state.current_player,
+          leg_starting_player: state.leg_starting_player,
+          player_slots: state.player_slots,
+          winner_player_id: state.winner_player_id,
+          winner_name: state.winner_name,
+          completed_at: state.completed_at,
+          last_score: score,
+          last_event_type: state.last_event_type,
+        })
+        .eq('id', baseMatch.id)
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .single();
+      if (updateErr) return errorResponse(updateErr.message);
+
+      const board = updated.venue_courts?.court_number;
+      await createScoreEvent(admin, updated, 'CORRECTION', { score, board, removed_score: lastTurn.score }, 3);
+      if (updated.status === 'completed') await createScoreEvent(admin, updated, 'MATCH_FINISHED', { score, board }, 6);
+
+      return jsonResponse({ match: updated, turn, removed_turn_id: lastTurn.id });
+    }
+
     if (req.method === 'POST' && path === 'undo') {
       const body = await req.json();
       const matchId = String(body.match_id || '');

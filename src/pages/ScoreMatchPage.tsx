@@ -37,12 +37,14 @@ type PlayerSlot = {
 
 type ScoreResponse = {
   match: ScoreMatch;
+  removed_turn_id?: string;
   turn?: {
     id: string;
     score: number;
     is_bust?: boolean;
     is_checkout?: boolean;
     player_number?: number;
+    remaining_before?: number;
     remaining_after?: number;
   };
 };
@@ -54,6 +56,8 @@ type ScoreTurn = {
   is_bust?: boolean;
   is_checkout?: boolean;
   darts_used?: number;
+  remaining_before?: number;
+  remaining_after?: number;
 };
 
 type PlayerStats = {
@@ -76,6 +80,8 @@ export default function ScoreMatchPage() {
   const queryClient = useQueryClient();
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [dismissWinner, setDismissWinner] = useState(false);
 
   const { data, isLoading, isError } = useQuery<{ match: ScoreMatch; turns: ScoreTurn[] }>({
     queryKey: ["score-match", matchId],
@@ -111,8 +117,9 @@ export default function ScoreMatchPage() {
   }, [match]);
   const activePlayer = players.find((player) => player.number === match?.current_player) || players[0];
   const otherPlayers = players.filter((player) => player.number !== activePlayer?.number);
+  const latestTurn = data?.turns?.[0];
   const currentName = activePlayer?.name;
-  const currentRemaining = activePlayer?.remaining;
+  const currentRemaining = correctionOpen && latestTurn ? latestTurn.remaining_before : activePlayer?.remaining;
   const projected = useMemo(() => {
     if (!match || !input) return null;
     const score = Number(input);
@@ -123,6 +130,19 @@ export default function ScoreMatchPage() {
     return after;
   }, [currentRemaining, input, match]);
 
+  const mergeScoreResult = (result: ScoreResponse) => {
+    queryClient.setQueryData(["score-match", matchId], (current: { match: ScoreMatch; turns: ScoreTurn[] } | undefined) => {
+      const currentTurns = current?.turns || [];
+      const turns = result.turn
+        ? [
+            result.turn as ScoreTurn,
+            ...currentTurns.filter((turn) => turn.id !== result.turn?.id && turn.id !== result.removed_turn_id),
+          ]
+        : currentTurns.filter((turn) => turn.id !== result.removed_turn_id);
+      return { match: result.match, turns };
+    });
+  };
+
   const scoreMutation = useMutation({
     mutationFn: (score: number) => apiPost<ScoreResponse>("api-score", "score", {
       match_id: matchId,
@@ -132,16 +152,8 @@ export default function ScoreMatchPage() {
     }),
     onSuccess: (result) => {
       setInput("");
-      queryClient.setQueryData(["score-match", matchId], (current: { match: ScoreMatch; turns: ScoreTurn[] } | undefined) => {
-        const currentTurns = current?.turns || [];
-        const turns = result.turn
-          ? [
-              result.turn as ScoreTurn,
-              ...currentTurns.filter((turn) => turn.id !== result.turn?.id),
-            ]
-          : currentTurns;
-        return { match: result.match, turns };
-      });
+      setDismissWinner(false);
+      mergeScoreResult(result);
       if (result.turn?.is_bust) {
         setNotice({ tone: "warn", text: "BUST - score står kvar, turen går vidare" });
       } else if (result.turn?.is_checkout) {
@@ -154,6 +166,27 @@ export default function ScoreMatchPage() {
       }, 150);
     },
     onError: (error: Error) => toast.error(error.message || "Kunde inte registrera score"),
+  });
+
+  const correctionMutation = useMutation({
+    mutationFn: (score: number) => apiPost<ScoreResponse>("api-score", "correct-last-turn", {
+      match_id: matchId,
+      score,
+      darts_used: 3,
+      device_token: deviceToken || undefined,
+    }),
+    onSuccess: (result) => {
+      setInput("");
+      setCorrectionOpen(false);
+      setDismissWinner(false);
+      mergeScoreResult(result);
+      setNotice({ tone: "ok", text: "Score ändrad" });
+      toast.success("Senaste score ändrad");
+      window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["score-match", matchId] });
+      }, 150);
+    },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte ändra score"),
   });
 
   const undoMutation = useMutation({
@@ -202,7 +235,8 @@ export default function ScoreMatchPage() {
     if (key === "enter") {
       const score = input === "" ? 0 : Number(input);
       if (!Number.isInteger(score)) return;
-      scoreMutation.mutate(score);
+      if (correctionOpen) correctionMutation.mutate(score);
+      else scoreMutation.mutate(score);
       return;
     }
     setNotice(null);
@@ -223,6 +257,8 @@ export default function ScoreMatchPage() {
     .filter((value, index, list) => value > 0 && list.indexOf(value) === index);
   const stats = computeStats(players, data?.turns || []);
   const winnerStats = stats.find((item) => item.player.name === match.winner_name) || stats[0];
+  const showWinner = completed && winnerStats && !correctionOpen && !dismissWinner;
+  const scoreInputDisabled = (ended && !correctionOpen) || scoreMutation.isPending || correctionMutation.isPending;
 
   return (
     <main className="h-[100svh] overflow-hidden bg-neutral-950 text-white">
@@ -316,13 +352,29 @@ export default function ScoreMatchPage() {
                   <p className="font-mono text-[clamp(0.95rem,2.5vh,1.25rem)] text-emerald-300">{currentName} kastar</p>
                 )}
               </div>
+              {latestTurn && (
+                <button
+                  onClick={() => {
+                    setCorrectionOpen(true);
+                    setDismissWinner(true);
+                    setInput(String(latestTurn.score));
+                    setNotice({ tone: "warn", text: `Ändrar senaste: ${latestTurn.score}` });
+                  }}
+                  disabled={correctionMutation.isPending}
+                  className="mt-3 rounded-full bg-white/10 px-4 py-2 font-mono text-xs text-white/70 disabled:opacity-40"
+                >
+                  Ändra senaste score
+                </button>
+              )}
             </div>
           </div>
 
           <aside className="flex min-h-0 flex-col rounded-[1.5rem] border border-white/10 bg-white p-3 text-neutral-950">
             <div className="mb-2 shrink-0 rounded-[1.25rem] bg-neutral-100 p-3">
               <div className="flex items-center justify-between gap-3">
-                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-neutral-400">Score</p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-neutral-400">
+                  {correctionOpen ? "Ändra score" : "Score"}
+                </p>
                 {notice && (
                   <p className={`truncate font-mono text-[10px] uppercase tracking-[0.12em] ${
                     notice.tone === "warn" ? "text-pink-600" : "text-emerald-600"
@@ -337,6 +389,21 @@ export default function ScoreMatchPage() {
                   {projected === null ? "" : projected === 0 ? "UT" : projected}
                 </p>
               </div>
+              {correctionOpen && (
+                <div className="mt-2 flex items-center justify-between gap-2 rounded-xl bg-pink-50 px-3 py-2">
+                  <p className="font-mono text-xs text-pink-700">Ersätter senaste kastet</p>
+                  <button
+                    onClick={() => {
+                      setCorrectionOpen(false);
+                      setInput("");
+                      setNotice(null);
+                    }}
+                    className="font-mono text-xs font-bold text-neutral-500"
+                  >
+                    Avbryt
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="grid flex-1 grid-cols-3 gap-2">
@@ -344,7 +411,7 @@ export default function ScoreMatchPage() {
                 <button
                   key={key}
                   onClick={() => press(key)}
-                  disabled={ended || scoreMutation.isPending}
+                  disabled={scoreInputDisabled}
                   className={`min-h-0 rounded-xl font-display text-[clamp(1.45rem,5vh,2.35rem)] font-black disabled:opacity-30 ${
                     key === "enter" ? "bg-emerald-300 text-neutral-950" : key === "del" ? "bg-neutral-200 text-neutral-500" : "bg-neutral-950 text-white"
                   }`}
@@ -369,10 +436,17 @@ export default function ScoreMatchPage() {
           </aside>
         </section>
       </div>
-      {completed && winnerStats && (
+      {showWinner && (
         <WinnerView
           winner={winnerStats}
           stats={stats}
+          onCorrect={() => {
+            if (!latestTurn) return;
+            setCorrectionOpen(true);
+            setDismissWinner(true);
+            setInput(String(latestTurn.score));
+            setNotice({ tone: "warn", text: `Ändrar senaste: ${latestTurn.score}` });
+          }}
           onRematch={() => rematchMutation.mutate()}
           onNewMatch={() => navigate(deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today")}
           onClose={() => navigate(deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today", { replace: true })}
@@ -446,6 +520,7 @@ function WinnerView({
   onRematch,
   onNewMatch,
   onClose,
+  onCorrect,
   rematchPending,
 }: {
   winner: PlayerStats;
@@ -453,6 +528,7 @@ function WinnerView({
   onRematch: () => void;
   onNewMatch: () => void;
   onClose: () => void;
+  onCorrect: () => void;
   rematchPending: boolean;
 }) {
   return (
@@ -463,9 +539,14 @@ function WinnerView({
             <Trophy className="h-6 w-6 text-emerald-300" />
             <span className="font-mono text-xs uppercase tracking-[0.2em]">Match klar</span>
           </div>
-          <button onClick={onClose} className="rounded-full bg-white/70 px-5 py-3 font-mono text-xs font-bold">
-            Avbryt
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={onCorrect} className="rounded-full bg-neutral-950/10 px-5 py-3 font-mono text-xs font-bold">
+              Ändra score
+            </button>
+            <button onClick={onClose} className="rounded-full bg-white/70 px-5 py-3 font-mono text-xs font-bold">
+              Avbryt
+            </button>
+          </div>
         </header>
 
         <section className="grid min-h-0 flex-1 items-center gap-6 py-6 lg:grid-cols-[1.1fr_0.9fr]">
