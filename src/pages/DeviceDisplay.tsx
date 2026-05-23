@@ -26,6 +26,15 @@ interface DeviceData {
   nextBooking?: { start_time: string; end_time: string } | null;
 }
 
+interface ScoreDeviceState {
+  activeMatch?: {
+    id: string;
+    score_session_id: string;
+    player1_name: string;
+    player2_name: string;
+  } | null;
+}
+
 type WakeLockSentinel = {
   release: () => Promise<void>;
   addEventListener: (type: "release", listener: () => void) => void;
@@ -59,6 +68,14 @@ export default function DeviceDisplay() {
     queryFn: () => apiGet("api-bookings", "display-device", { token }),
     refetchInterval: 10_000,
     staleTime: 5_000,
+  });
+
+  const { data: scoreState } = useQuery<ScoreDeviceState>({
+    queryKey: ["score-device-state", token],
+    enabled: !!token && !!data && isDartDevice(data),
+    queryFn: () => apiGet("api-score", "device-state", { device: token }),
+    refetchInterval: 5_000,
+    staleTime: 2_000,
   });
 
   useEffect(() => {
@@ -123,6 +140,7 @@ export default function DeviceDisplay() {
     : `/display/openplay?v=${venue?.slug || "pickla-arena-sthlm"}`;
   const active = Boolean(data.currentBooking);
   const checkedIn = Boolean(data.currentBooking?.checked_in);
+  const activeScoreMatch = scoreState?.activeMatch || null;
   const displayName = data.device.name || resource?.name || "Pickla";
   const resourceName = resource?.name || null;
   const statusLabel = checkedIn ? "INCHECKAD" : active ? "BOKAD NU" : "LEDIG";
@@ -176,6 +194,28 @@ export default function DeviceDisplay() {
                   : nextText}
               </p>
             </div>
+
+            {isDartDevice(data) && (
+              activeScoreMatch ? (
+                <Link
+                  to={`/score/match/${activeScoreMatch.id}?device=${encodeURIComponent(token)}`}
+                  className="block rounded-[2rem] bg-emerald-300 p-7 text-neutral-950"
+                >
+                  <p className="font-display text-4xl font-black">Fortsätt match</p>
+                  <p className="mt-2 font-mono text-sm text-neutral-700">
+                    {activeScoreMatch.player1_name} vs {activeScoreMatch.player2_name}
+                  </p>
+                </Link>
+              ) : (
+                <Link
+                  to={`/score/start?device=${encodeURIComponent(token)}`}
+                  className="block rounded-[2rem] bg-neutral-950 p-7 text-white"
+                >
+                  <p className="font-display text-4xl font-black">Starta match</p>
+                  <p className="mt-2 font-mono text-sm text-white/55">Walk-in 501 direkt på paddan</p>
+                </Link>
+              )
+            )}
 
             {checkedIn ? (
               <div className="block rounded-[2rem] border border-black/10 bg-white p-7 text-neutral-950">

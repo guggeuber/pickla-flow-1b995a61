@@ -34,6 +34,9 @@ import VenueDisplay from "./pages/VenueDisplay";
 import OpenPlayDisplay from "./pages/OpenPlayDisplay";
 import ResourceCheckinDisplay from "./pages/ResourceCheckinDisplay";
 import DeviceDisplay from "./pages/DeviceDisplay";
+import ScoreStartPage from "./pages/ScoreStartPage";
+import ScoreMatchPage from "./pages/ScoreMatchPage";
+import ScoreBroadcastPage from "./pages/ScoreBroadcastPage";
 import AuthCallback from "./pages/AuthCallback";
 import AuthReset from "./pages/AuthReset";
 import { Loader2 } from "lucide-react";
@@ -104,6 +107,9 @@ const App = () => (
             <Route path="/display/openplay" element={<OpenPlayDisplay />} />
             <Route path="/display/resource/:courtId" element={<ResourceCheckinDisplay />} />
             <Route path="/display/device/:token" element={<DeviceDisplay />} />
+            <Route path="/display/broadcast/:scoreSessionId" element={<ScoreBroadcastPage />} />
+            <Route path="/score/start" element={<ScoreStartPage />} />
+            <Route path="/score/match/:matchId" element={<ScoreMatchPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
