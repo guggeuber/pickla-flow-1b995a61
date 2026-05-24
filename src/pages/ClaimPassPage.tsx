@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useParams, useNavigate } from "react-router-dom";
 import { Loader2, Gift, Mail, Lock, User } from "lucide-react";
@@ -13,8 +13,7 @@ const FONT_MONO = "'Space Mono', monospace";
 
 const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
 
-export const getPendingClaimToken = () => localStorage.getItem(PENDING_CLAIM_KEY);
-export const clearPendingClaimToken = () => localStorage.removeItem(PENDING_CLAIM_KEY);
+const clearPendingClaimToken = () => localStorage.removeItem(PENDING_CLAIM_KEY);
 
 const ClaimPassPage = () => {
   const { token } = useParams<{ token: string }>();
@@ -35,7 +34,7 @@ const ClaimPassPage = () => {
     queryFn: () => apiGet("api-day-passes", "share-info", { token: token! }),
   });
 
-  const handleClaim = async () => {
+  const handleClaim = useCallback(async () => {
     if (!token) return;
     setClaiming(true);
     try {
@@ -47,7 +46,7 @@ const ClaimPassPage = () => {
       toast.error(err.message || "Kunde inte hämta passet");
     }
     setClaiming(false);
-  };
+  }, [navigate, token]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,7 +74,7 @@ const ClaimPassPage = () => {
     if (user && shareInfo?.status === "pending" && !claiming) {
       handleClaim();
     }
-  }, [user, shareInfo]);
+  }, [claiming, handleClaim, shareInfo?.status, user]);
 
   if (isLoading || authLoading) {
     return (
@@ -85,12 +84,12 @@ const ClaimPassPage = () => {
     );
   }
 
-  if (!shareInfo || shareInfo.status === "claimed") {
+  if (!shareInfo || ["claimed", "redeemed"].includes(shareInfo.status)) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: "#1a1e2e" }}>
         <img src={picklaLogo} alt="Pickla" className="h-12 mb-6" style={{ filter: "brightness(0) invert(1)" }} />
         <p className="text-white/60 text-sm text-center" style={{ fontFamily: FONT_MONO }}>
-          {shareInfo?.status === "claimed" ? "Det här passet har redan hämtats." : "Passet hittades inte."}
+          {["claimed", "redeemed"].includes(shareInfo?.status) ? "Det här passet har redan hämtats." : "Passet hittades inte."}
         </p>
         <button onClick={() => navigate("/activity")} className="mt-4 text-sm underline" style={{ color: "#E86C24", fontFamily: FONT_MONO }}>
           Gå till mina aktiviteter
@@ -114,13 +113,15 @@ const ClaimPassPage = () => {
             <Gift className="w-8 h-8" style={{ color: "#E86C24" }} />
           </div>
           <h1 className="text-xl font-black text-white mb-2" style={{ fontFamily: FONT_HEADING }}>
-            {shareInfo.recipient_name ? `${shareInfo.recipient_name}, du har fått ett dagspass!` : "Du har fått ett dagspass!"}
+            {shareInfo.recipient_name ? `${shareInfo.recipient_name}, du har fått ett gästpass!` : "Du har fått ett gästpass!"}
           </h1>
           <p className="text-sm text-white/50 mb-1" style={{ fontFamily: FONT_MONO }}>
             Från {shareInfo.sharer_name}
           </p>
           <p className="text-xs text-white/30" style={{ fontFamily: FONT_MONO }}>
-            Giltigt: {new Date(shareInfo.day_passes?.valid_date).toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" })}
+            {shareInfo.is_voucher
+              ? "Aktiveras för idag när du hämtar passet"
+              : `Giltigt: ${new Date(shareInfo.day_passes?.valid_date).toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" })}`}
           </p>
         </motion.div>
 

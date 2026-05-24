@@ -184,6 +184,7 @@ async function handleCourtBooking(
     .maybeSingle();
   const sharedAccessCode = existingSessionBooking?.access_code ||
     (await generateAccessCode(serviceClient, venue_id, date));
+  let insertedAnyBooking = false;
 
   for (const courtId of courtIds) {
     // Idempotency: skip if already created for this session + court
@@ -225,6 +226,7 @@ async function handleCourtBooking(
     });
 
     if (error) throw new Error(`Failed to insert booking for court ${courtId}: ${error.message}`);
+    insertedAnyBooking = true;
   }
 
   const { data: sessionBookings, error: refsErr } = await serviceClient
@@ -246,6 +248,27 @@ async function handleCourtBooking(
     bookingRefs: (sessionBookings || []).map((b: any) => b.booking_ref).filter(Boolean),
     totalSek,
   });
+
+  const includedCourtHours = Number(meta.included_court_hours || 0);
+  if (insertedAnyBooking && includedCourtHours > 0 && meta.entitlement_period_start && meta.entitlement_period_end) {
+    const { data: usage } = await serviceClient
+      .from('membership_usage')
+      .select('used_value')
+      .eq('user_id', bookingUserId)
+      .eq('venue_id', venue_id)
+      .eq('entitlement_type', 'court_hours_per_week')
+      .eq('period_start', meta.entitlement_period_start)
+      .maybeSingle();
+
+    await serviceClient.from('membership_usage').upsert({
+      user_id: bookingUserId,
+      venue_id,
+      entitlement_type: 'court_hours_per_week',
+      period_start: meta.entitlement_period_start,
+      period_end: meta.entitlement_period_end,
+      used_value: Number(usage?.used_value || 0) + includedCourtHours,
+    }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
+  }
 }
 
 // ── Shared: resolve a real user from metadata + Stripe customer_details ──────

@@ -15,6 +15,15 @@ function nameFromBookingNotes(notes?: string | null) {
   return (notes || '').split(' | ')[0].trim();
 }
 
+function applyPercentDiscount(baseAmount: number, percent: number) {
+  return Math.max(0, Math.round(baseAmount * (1 - (percent / 100)) * 100) / 100);
+}
+
+function parseNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 async function createFreeEntitlementBookingResponse({
   product_type,
   meta,
@@ -59,12 +68,17 @@ async function createFreeEntitlementBookingResponse({
       if (booking) bookings.push(booking);
     }
 
-    const now = DateTime.now().setZone('Europe/Stockholm');
-    const weekStart = now.startOf('week').toISODate()!;
-    const weekEnd   = now.endOf('week').toISODate()!;
+    const quotaDate = meta.entitlement_period_start
+      ? DateTime.fromISO(meta.entitlement_period_start, { zone: 'Europe/Stockholm' })
+      : meta.date
+      ? DateTime.fromISO(meta.date, { zone: 'Europe/Stockholm' })
+      : DateTime.now().setZone('Europe/Stockholm');
+    const weekStart = (meta.entitlement_period_start || quotaDate.startOf('week').toISODate())!;
+    const weekEnd   = (meta.entitlement_period_end || quotaDate.endOf('week').toISODate())!;
     const durationHours = parseFloat(meta.duration_hours || '0');
     const courtHours = durationHours * Math.max(courtIds.length, 1);
-    if (courtHours > 0) {
+    const includedCourtHours = parseNumber(meta.included_court_hours, courtHours);
+    if (includedCourtHours > 0) {
       const { data: currentUsage } = await adminFree
         .from('membership_usage')
         .select('used_value')
@@ -76,7 +90,7 @@ async function createFreeEntitlementBookingResponse({
 
       await adminFree.from('membership_usage').upsert({
         user_id: entitlementUserId, venue_id, entitlement_type: 'court_hours_per_week',
-        period_start: weekStart, period_end: weekEnd, used_value: (currentUsage?.used_value || 0) + courtHours,
+        period_start: weekStart, period_end: weekEnd, used_value: (currentUsage?.used_value || 0) + includedCourtHours,
       }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
     }
 
@@ -132,6 +146,48 @@ async function createFreeEntitlementBookingResponse({
       period_end: meta.entitlement_period_end,
       used_value: 1,
     }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
+
+    return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
+  }
+
+  if (product_type === 'day_pass' && meta.entitlement_type === 'open_play_unlimited') {
+    const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+    const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+    if (activitySessionId) {
+      await adminFree.from('session_registrations').upsert({
+        venue_id,
+        activity_session_id: activitySessionId,
+        session_date: validDate,
+        user_id: entitlementUserId,
+        status: 'confirmed',
+        price_paid_sek: 0,
+        source_type: 'membership',
+        source_id: meta.membership_id || null,
+        metadata: {
+          session_type: meta.session_type || 'open_play',
+          session_name: meta.session_name || null,
+          entitlement_type: 'open_play_unlimited',
+        },
+      }, { onConflict: 'activity_session_id,session_date,user_id' });
+    }
+
+    await adminFree.from('access_entitlements').upsert({
+      venue_id,
+      user_id: entitlementUserId,
+      entitlement_type: 'membership_access',
+      status: 'active',
+      source_type: 'membership',
+      source_id: meta.membership_id || null,
+      activity_session_id: activitySessionId || null,
+      session_date: activitySessionId ? validDate : null,
+      valid_date: validDate,
+      includes_session_types: ['open_play'],
+      metadata: {
+        source: 'open_play_unlimited',
+        session_name: meta.session_name || null,
+        session_type: meta.session_type || 'open_play',
+      },
+    }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
 
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
@@ -332,9 +388,6 @@ Deno.serve(async (req) => {
           .maybeSingle();
         const tierDefaultDiscount = Number(tier?.discount_percent || 0);
 
-        const applyPercentDiscount = (baseAmount: number, percent: number) =>
-          Math.max(0, Math.round(baseAmount * (1 - (percent / 100)) * 100) / 100);
-
         const applyTierPricing = (tierPricing: any, baseAmount: number) => {
           if (!tierPricing) return baseAmount;
 
@@ -385,16 +438,19 @@ Deno.serve(async (req) => {
             finalAmountSek = fallbackTierAmount;
           }
 
-          // Founder: hard cap 4h/week — check usage
+          // Founder-style included court-hours: use included hours first, then bill overage
+          // with the tier price/discount instead of blocking checkout.
           const weekLimit = hasEnt('court_hours_per_week');
           if (weekLimit) {
             let courtIds: string[] = [];
             try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
             const bookingHours = parseFloat(meta.duration_hours || '0') * Math.max(courtIds.length, 1);
             if (bookingHours > 0) {
-              const now = DateTime.now().setZone('Europe/Stockholm');
-              const weekStart = now.startOf('week').toISODate()!;
-              const weekEnd   = now.endOf('week').toISODate()!;
+              const quotaDate = meta.date
+                ? DateTime.fromISO(meta.date, { zone: 'Europe/Stockholm' })
+                : DateTime.now().setZone('Europe/Stockholm');
+              const weekStart = quotaDate.startOf('week').toISODate()!;
+              const weekEnd   = quotaDate.endOf('week').toISODate()!;
 
               const { data: usage } = await adminEnt
                 .from('membership_usage')
@@ -406,14 +462,35 @@ Deno.serve(async (req) => {
                 .maybeSingle();
 
               const usedHours = (usage?.used_value || 0);
-              if (usedHours + bookingHours > weekLimit.value) {
-                return errorResponse(
-                  `Ditt Founder-memberskap inkluderar max ${weekLimit.value}h banbokning/vecka. Du har ${weekLimit.value - usedHours}h kvar denna vecka.`,
-                  403
+              const includedHours = Math.min(Math.max(Number(weekLimit.value) - Number(usedHours), 0), bookingHours);
+              const paidHours = Math.max(bookingHours - includedHours, 0);
+              const basePerCourtHour = bookingHours > 0 ? baseAmountSek / bookingHours : baseAmountSek;
+
+              const tierPaidAmount = () => {
+                const row = (tierPricingRows || []).find((pricing: any) =>
+                  pricing.fixed_price != null || pricing.discount_percent != null
                 );
-              }
-              // Make it free (included in membership)
-              finalAmountSek = 0;
+                if (!row) return null;
+                if (row.fixed_price != null) return Number(row.fixed_price) * paidHours;
+                return applyPercentDiscount(basePerCourtHour * paidHours, Number(row.discount_percent || 0));
+              };
+
+              const discountPaidAmount = courtDiscount
+                ? applyPercentDiscount(basePerCourtHour * paidHours, Number(courtDiscount.value))
+                : fallbackTierAmount != null
+                ? applyPercentDiscount(basePerCourtHour * paidHours, tierDefaultDiscount)
+                : null;
+
+              finalAmountSek = paidHours <= 0
+                ? 0
+                : Math.round((tierPaidAmount() ?? discountPaidAmount ?? (basePerCourtHour * paidHours)) * 100) / 100;
+
+              meta.membership_id = membership.id;
+              meta.included_court_hours = String(includedHours);
+              meta.paid_court_hours = String(paidHours);
+              meta.entitlement_period_start = weekStart;
+              meta.entitlement_period_end = weekEnd;
+              meta.entitlement_type = 'court_hours_per_week';
             }
           }
         }
@@ -421,11 +498,19 @@ Deno.serve(async (req) => {
         if (product_type === 'day_pass') {
           const passDiscount = hasEnt('day_pass_discount_pct');
           const freePass = hasEnt('free_day_pass_monthly');
+          const openPlayUnlimited = hasEnt('open_play_unlimited');
           const tierPricingAmount = bestTierPricingAmount();
           const fallbackTierAmount = tierDiscountAmount();
           let usedFreePass = false;
 
-          if (freePass) {
+          if (openPlayUnlimited && (meta.session_type || 'open_play') === 'open_play') {
+            finalAmountSek = 0;
+            meta.entitlement_type = 'open_play_unlimited';
+            meta.membership_id = membership.id;
+            usedFreePass = true;
+          }
+
+          if (!usedFreePass && freePass) {
             const now = DateTime.now().setZone('Europe/Stockholm');
             const monthStart = now.startOf('month').toISODate()!;
             const monthEnd   = now.endOf('month').toISODate()!;
@@ -499,6 +584,12 @@ Deno.serve(async (req) => {
       billed_amount_sek: String(billedAmountSek       || ''),
       product_key:      String(meta.product_key       || ''),
       product_kind:     String(meta.product_kind      || ''),
+      membership_id:    String(meta.membership_id     || ''),
+      entitlement_type: String(meta.entitlement_type  || ''),
+      entitlement_period_start: String(meta.entitlement_period_start || ''),
+      entitlement_period_end: String(meta.entitlement_period_end || ''),
+      included_court_hours: String(meta.included_court_hours || ''),
+      paid_court_hours: String(meta.paid_court_hours || ''),
       // Membership-specific
       tier_id:          String(meta.tier_id          || ''),
       customer_name:    String(meta.customer_name    || '').slice(0, 200),

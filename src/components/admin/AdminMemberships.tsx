@@ -191,6 +191,10 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
   const [color, setColor] = useState("#E86C24");
   const [monthlyPrice, setMonthlyPrice] = useState("");
   const [expandedTier, setExpandedTier] = useState<string | null>(null);
+  const [assignEmail, setAssignEmail] = useState("");
+  const [assignName, setAssignName] = useState("");
+  const [assignTierId, setAssignTierId] = useState("");
+  const [assignNotes, setAssignNotes] = useState("");
 
   const addTier = useMutation({
     mutationFn: (body: any) => apiPost("api-memberships", "tiers", body),
@@ -219,6 +223,17 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const assignMembership = useMutation({
+    mutationFn: (body: any) => apiPost("api-memberships", "assign-email", body),
+    onSuccess: () => {
+      toast.success("Medlemskap tilldelat");
+      setAssignEmail("");
+      setAssignName("");
+      setAssignNotes("");
+    },
+    onError: (e: any) => toast.error(e.message || "Kunde inte tilldela medlemskap"),
+  });
+
   const handleAdd = () => {
     if (!name.trim()) { toast.error("Ange namn"); return; }
     addTier.mutate({
@@ -229,6 +244,20 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
       discount_percent: 0,
       monthly_price: parseFloat(monthlyPrice) || 0,
       sort_order: (tiers?.length || 0),
+    });
+  };
+
+  const handleAssign = () => {
+    if (!assignEmail.trim() || !assignTierId) {
+      toast.error("Ange email och nivå");
+      return;
+    }
+    assignMembership.mutate({
+      venueId,
+      email: assignEmail.trim(),
+      displayName: assignName.trim() || undefined,
+      tierId: assignTierId,
+      notes: assignNotes.trim() || "Manuellt tilldelat i admin",
     });
   };
 
@@ -353,6 +382,52 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
         {(!tiers || tiers.length === 0) && (
           <p className="text-sm text-muted-foreground text-center py-6">Inga medlemskapsnivåer ännu</p>
         )}
+      </div>
+
+      <div className="glass-card rounded-2xl p-4 space-y-3">
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Tilldela medlemskap</p>
+        <div className="grid grid-cols-1 gap-2">
+          <input
+            placeholder="Kundens e-post"
+            className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+            value={assignEmail}
+            onChange={(e) => setAssignEmail(e.target.value)}
+          />
+          <input
+            placeholder="Namn (valfritt, om kontot saknas)"
+            className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+            value={assignName}
+            onChange={(e) => setAssignName(e.target.value)}
+          />
+          <select
+            value={assignTierId}
+            onChange={(e) => setAssignTierId(e.target.value)}
+            className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+          >
+            <option value="">Välj nivå...</option>
+            {(tiers || []).filter((tier) => tier.is_active).map((tier) => (
+              <option key={tier.id} value={tier.id}>{tier.name}</option>
+            ))}
+          </select>
+          <input
+            placeholder="Anteckning (t.ex. redan betalt Founder)"
+            className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+            value={assignNotes}
+            onChange={(e) => setAssignNotes(e.target.value)}
+          />
+        </div>
+        <button
+          onClick={handleAssign}
+          disabled={assignMembership.isPending}
+          className="w-full flex items-center justify-center gap-2 rounded-xl py-2.5 bg-primary text-primary-foreground font-semibold text-sm disabled:opacity-50"
+        >
+          {assignMembership.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Crown className="w-4 h-4" />}
+          Tilldela
+        </button>
       </div>
     </div>
   );

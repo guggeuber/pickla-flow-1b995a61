@@ -1,6 +1,116 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
+
+function randomVoucherCode() {
+  return `GP-${crypto.randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase()}`;
+}
+
+async function getUserIdFromRequest(req: Request, adminClient: ReturnType<typeof getServiceClient>) {
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  const token = authHeader.slice('Bearer '.length);
+  const { data } = await adminClient.auth.getUser(token);
+  return data.user?.id || null;
+}
+
+async function getActiveMembershipWithBenefits(adminClient: ReturnType<typeof getServiceClient>, userId: string) {
+  const { data: membership } = await adminClient
+    .from('memberships')
+    .select('id, tier_id, venue_id, membership_tiers(id, name, color, membership_entitlements(entitlement_type, value, period, sport_type))')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return membership;
+}
+
+function benefitValue(membership: any, type: string) {
+  const entitlements = membership?.membership_tiers?.membership_entitlements || [];
+  const entitlement = entitlements.find((row: any) => row.entitlement_type === type);
+  return entitlement ? Number(entitlement.value || 0) : 0;
+}
+
+async function ensureMonthlyGuestVouchers(adminClient: ReturnType<typeof getServiceClient>, membership: any, userId: string) {
+  const allowed = Math.max(0, Math.round(benefitValue(membership, 'guest_day_vouchers_monthly')));
+  const now = DateTime.now().setZone('Europe/Stockholm');
+  const periodStart = now.startOf('month').toISODate()!;
+  const periodEnd = now.endOf('month').toISODate()!;
+  if (!membership?.id || !allowed) return { allowed, periodStart, periodEnd, vouchers: [] as any[] };
+
+  const { data: existing } = await adminClient
+    .from('access_vouchers')
+    .select('*')
+    .eq('source_type', 'membership_guest_voucher')
+    .eq('source_id', membership.id)
+    .eq('purchaser_user_id', userId)
+    .eq('metadata->>period_start', periodStart)
+    .order('created_at', { ascending: true });
+
+  const existingSlots = new Set((existing || []).map((voucher: any) => Number(voucher.metadata?.slot || 0)));
+  const inserts = [];
+  for (let slot = 1; slot <= allowed; slot++) {
+    if (existingSlots.has(slot)) continue;
+    inserts.push({
+      venue_id: membership.venue_id,
+      purchaser_user_id: userId,
+      code: randomVoucherCode(),
+      voucher_type: 'day_access',
+      status: 'unused',
+      value_count: 1,
+      expires_at: now.plus({ days: 90 }).toUTC().toISO(),
+      source_type: 'membership_guest_voucher',
+      source_id: membership.id,
+      metadata: {
+        benefit_key: 'founder_guest_day_vouchers',
+        membership_id: membership.id,
+        period_start: periodStart,
+        period_end: periodEnd,
+        slot,
+      },
+    });
+  }
+
+  if (inserts.length) {
+    await adminClient.from('access_vouchers').insert(inserts);
+  }
+
+  const { data: vouchers } = await adminClient
+    .from('access_vouchers')
+    .select('*')
+    .eq('source_type', 'membership_guest_voucher')
+    .eq('source_id', membership.id)
+    .eq('purchaser_user_id', userId)
+    .eq('metadata->>period_start', periodStart)
+    .order('created_at', { ascending: true });
+
+  return { allowed, periodStart, periodEnd, vouchers: vouchers || [] };
+}
+
+function voucherToClient(voucher: any) {
+  return {
+    id: voucher.id,
+    token: voucher.code,
+    code: voucher.code,
+    status: voucher.status,
+    recipient_name: voucher.recipient_name || voucher.metadata?.recipient_name || null,
+    expires_at: voucher.expires_at,
+    created_at: voucher.created_at,
+    claimed_by: voucher.claimed_by_user_id,
+    claimed_at: voucher.claimed_at,
+    redeemed_at: voucher.redeemed_at,
+    share: voucher.status === 'unused' && (voucher.recipient_name || voucher.metadata?.recipient_name)
+      ? {
+        id: voucher.id,
+        token: voucher.code,
+        status: 'pending',
+        recipient_name: voucher.recipient_name || voucher.metadata?.recipient_name,
+      }
+      : null,
+    is_voucher: true,
+  };
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -24,43 +134,90 @@ Deno.serve(async (req) => {
       if (!token) return errorResponse('Missing token');
 
       const adminClient = getServiceClient();
+      const claimUserId = await getUserIdFromRequest(req, adminClient);
+      if (!claimUserId) return errorResponse('Must be logged in to claim', 401);
 
       const { data: share, error: shareErr } = await adminClient
         .from('day_pass_shares')
         .select('*, day_passes(*)')
         .eq('token', token)
         .eq('status', 'pending')
-        .single();
+        .maybeSingle();
 
-      if (shareErr || !share) return errorResponse('Pass not found or already claimed', 404);
+      if (shareErr) return errorResponse(shareErr.message, 500);
 
-      const authHeader = req.headers.get('Authorization');
-      let claimUserId: string | null = null;
+      if (share) {
+        await adminClient.from('day_pass_shares')
+          .update({ status: 'claimed', claimed_by: claimUserId, claimed_at: new Date().toISOString() })
+          .eq('id', share.id);
 
-      if (authHeader?.startsWith('Bearer ')) {
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-        const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-          global: { headers: { Authorization: authHeader } },
-        });
-        const tkn = authHeader.replace('Bearer ', '');
-        const { data: claimsData } = await userClient.auth.getClaims(tkn);
-        if (claimsData?.claims) {
-          claimUserId = claimsData.claims.sub as string;
-        }
+        await adminClient.from('day_passes')
+          .update({ user_id: claimUserId, status: 'active' })
+          .eq('id', share.day_pass_id);
+
+        return jsonResponse({ success: true, dayPassId: share.day_pass_id, legacy: true });
       }
 
-      if (!claimUserId) return errorResponse('Must be logged in to claim', 401);
+      const now = DateTime.now().setZone('Europe/Stockholm');
+      const { data: voucher, error: voucherErr } = await adminClient
+        .from('access_vouchers')
+        .select('*')
+        .eq('code', token)
+        .eq('status', 'unused')
+        .maybeSingle();
 
-      await adminClient.from('day_pass_shares')
-        .update({ status: 'claimed', claimed_by: claimUserId, claimed_at: new Date().toISOString() })
-        .eq('id', share.id);
+      if (voucherErr) return errorResponse(voucherErr.message, 500);
+      if (!voucher) return errorResponse('Pass not found or already claimed', 404);
+      if (voucher.expires_at && DateTime.fromISO(voucher.expires_at, { zone: 'utc' }) < now) {
+        await adminClient.from('access_vouchers').update({ status: 'expired' }).eq('id', voucher.id);
+        return errorResponse('Passet har gått ut', 410);
+      }
 
-      await adminClient.from('day_passes')
-        .update({ user_id: claimUserId, status: 'active' })
-        .eq('id', share.day_pass_id);
+      const { data: alreadyRedeemed } = await adminClient
+        .from('access_entitlements')
+        .select('id')
+        .eq('venue_id', voucher.venue_id)
+        .eq('user_id', claimUserId)
+        .eq('source_type', 'founder_guest_voucher')
+        .eq('entitlement_type', 'day_access')
+        .limit(1)
+        .maybeSingle();
+      if (alreadyRedeemed) {
+        return errorResponse('Du har redan använt ett gratis gästpass på Pickla.', 409);
+      }
 
-      return jsonResponse({ success: true, dayPassId: share.day_pass_id });
+      const validDate = now.toISODate()!;
+      const { data: entitlement, error: entitlementErr } = await adminClient.from('access_entitlements').insert({
+        venue_id: voucher.venue_id,
+        user_id: claimUserId,
+        entitlement_type: 'day_access',
+        status: 'active',
+        source_type: 'founder_guest_voucher',
+        source_id: voucher.id,
+        valid_date: validDate,
+        includes_session_types: ['open_play'],
+        metadata: {
+          voucher_code: voucher.code,
+          voucher_source_type: voucher.source_type,
+          purchaser_user_id: voucher.purchaser_user_id,
+          claimed_as: 'founder_guest_voucher',
+        },
+      }).select('id').single();
+      if (entitlementErr) {
+        if (entitlementErr.code === '23505') {
+          return errorResponse('Du har redan använt ett gratis gästpass på Pickla.', 409);
+        }
+        return errorResponse(entitlementErr.message, 500);
+      }
+
+      await adminClient.from('access_vouchers').update({
+        status: 'redeemed',
+        claimed_by_user_id: claimUserId,
+        claimed_at: now.toUTC().toISO(),
+        redeemed_at: now.toUTC().toISO(),
+      }).eq('id', voucher.id);
+
+      return jsonResponse({ success: true, voucher_id: voucher.id, entitlement_id: entitlement.id, valid_date: validDate });
     }
 
     // ─── PUBLIC: GET /share-info?token=X ───
@@ -73,18 +230,43 @@ Deno.serve(async (req) => {
         .from('day_pass_shares')
         .select('id, status, token, shared_by, recipient_name, day_passes(valid_date, venue_id)')
         .eq('token', token)
-        .single();
+        .maybeSingle();
 
-      if (!share) return errorResponse('Not found', 404);
+      if (share) {
+        const { data: sharerProfile } = await adminClient
+          .from('player_profiles')
+          .select('display_name')
+          .eq('auth_user_id', share.shared_by)
+          .single();
+
+        return jsonResponse({
+          ...share,
+          sharer_name: sharerProfile?.display_name || 'En vän',
+        });
+      }
+
+      const { data: voucher } = await adminClient
+        .from('access_vouchers')
+        .select('id, venue_id, purchaser_user_id, claimed_by_user_id, code, status, voucher_type, expires_at, recipient_name, metadata')
+        .eq('code', token)
+        .maybeSingle();
+
+      if (!voucher) return errorResponse('Not found', 404);
 
       const { data: sharerProfile } = await adminClient
         .from('player_profiles')
         .select('display_name')
-        .eq('auth_user_id', share.shared_by)
+        .eq('auth_user_id', voucher.purchaser_user_id)
         .single();
 
       return jsonResponse({
-        ...share,
+        id: voucher.id,
+        status: voucher.status === 'unused' ? 'pending' : voucher.status,
+        token: voucher.code,
+        recipient_name: voucher.recipient_name || voucher.metadata?.recipient_name || null,
+        is_voucher: true,
+        expires_at: voucher.expires_at,
+        day_passes: { valid_date: null, venue_id: voucher.venue_id },
         sharer_name: sharerProfile?.display_name || 'En vän',
       });
     }
@@ -123,72 +305,31 @@ Deno.serve(async (req) => {
         is_free: (p.price === 0 || p.price === null),
       }));
 
-      // Check membership grant info
-      let allowance = { has_membership: false, passes_allowed: 0, passes_remaining: 0 };
-
-      const { data: membership } = await adminClient
-        .from('memberships')
-        .select('id, tier_id, venue_id')
+      const membership = await getActiveMembershipWithBenefits(adminClient, userId);
+      const hasMembership = !!membership;
+      const openPlayUnlimited = benefitValue(membership, 'open_play_unlimited') > 0;
+      const guestGrant = await ensureMonthlyGuestVouchers(adminClient, membership, userId);
+      const guestVouchers = (guestGrant.vouchers || []).map(voucherToClient);
+      const usableGuestVouchers = guestVouchers.filter((voucher: any) => voucher.status === 'unused');
+      const now = DateTime.now().setZone('Europe/Stockholm');
+      const weekStart = now.startOf('week').toISODate()!;
+      const weekEnd = now.endOf('week').toISODate()!;
+      const courtHoursAllowed = benefitValue(membership, 'court_hours_per_week');
+      const { data: courtUsage } = courtHoursAllowed > 0 ? await adminClient
+        .from('membership_usage')
+        .select('used_value')
         .eq('user_id', userId)
-        .eq('status', 'active')
-        .limit(1)
-        .single();
+        .eq('venue_id', membership.venue_id)
+        .eq('entitlement_type', 'court_hours_per_week')
+        .eq('period_start', weekStart)
+        .maybeSingle() : { data: null };
+      const courtHoursUsed = Number(courtUsage?.used_value || 0);
 
-      if (membership) {
-        const { data: tierPricing } = await adminClient
-          .from('membership_tier_pricing')
-          .select('fixed_price')
-          .eq('tier_id', membership.tier_id)
-          .eq('product_type', 'monthly_passes')
-          .single();
-
-        const passesAllowed = tierPricing?.fixed_price ? Math.round(tierPricing.fixed_price) : 0;
-
-        if (passesAllowed > 0) {
-          const now = new Date();
-          const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-
-          let { data: grant } = await adminClient
-            .from('day_pass_grants')
-            .select('*')
-            .eq('membership_id', membership.id)
-            .eq('month_year', monthYear)
-            .single();
-
-          if (!grant) {
-            // Create grant AND auto-create free passes
-            const { data: newGrant } = await adminClient.from('day_pass_grants').insert({
-              membership_id: membership.id,
-              venue_id: membership.venue_id,
-              month_year: monthYear,
-              passes_allowed: passesAllowed,
-              passes_used: 0,
-            }).select().single();
-            grant = newGrant;
-
-            // Auto-create day passes for this month
-            const today = now.toISOString().slice(0, 10);
-            const passInserts = [];
-            for (let i = 0; i < passesAllowed; i++) {
-              passInserts.push({
-                venue_id: membership.venue_id,
-                user_id: userId,
-                valid_date: today,
-                purchase_date: today,
-                price: 0,
-                status: 'active',
-              });
-            }
-            await adminClient.from('day_passes').insert(passInserts);
-          }
-
-          allowance = {
-            has_membership: true,
-            passes_allowed: passesAllowed,
-            passes_remaining: (grant?.passes_allowed || passesAllowed) - (grant?.passes_used || 0),
-          };
-        }
-      }
+      const allowance = {
+        has_membership: hasMembership,
+        passes_allowed: guestGrant.allowed,
+        passes_remaining: usableGuestVouchers.length,
+      };
 
       // Re-fetch passes after potential grant creation
       const { data: finalPasses } = await adminClient
@@ -207,66 +348,43 @@ Deno.serve(async (req) => {
         is_free: (p.price === 0 || p.price === null),
       }));
 
-      return jsonResponse({ passes: finalEnriched, allowance, shares: shares || [] });
+      return jsonResponse({
+        passes: finalEnriched,
+        allowance,
+        shares: shares || [],
+        court_hours: {
+          allowed: courtHoursAllowed,
+          used: courtHoursUsed,
+          remaining: Math.max(courtHoursAllowed - courtHoursUsed, 0),
+          period_start: weekStart,
+          period_end: weekEnd,
+        },
+        guest_vouchers: {
+          allowed: guestGrant.allowed,
+          issued: guestVouchers.length,
+          remaining: usableGuestVouchers.length,
+          period_start: guestGrant.periodStart,
+          period_end: guestGrant.periodEnd,
+          vouchers: guestVouchers,
+        },
+        open_play_unlimited: openPlayUnlimited,
+      });
     }
 
     // ─── GET /my-allowance (kept for backwards compat) ───
     if (req.method === 'GET' && path === 'my-allowance') {
-      const { data: membership } = await adminClient
-        .from('memberships')
-        .select('id, tier_id, venue_id')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .limit(1)
-        .single();
-
+      const membership = await getActiveMembershipWithBenefits(adminClient, userId);
       if (!membership) return jsonResponse({ has_membership: false, passes_allowed: 0, passes_used: 0, passes_remaining: 0 });
-
-      const { data: tierPricing } = await adminClient
-        .from('membership_tier_pricing')
-        .select('fixed_price')
-        .eq('tier_id', membership.tier_id)
-        .eq('product_type', 'monthly_passes')
-        .single();
-
-      const passesAllowed = tierPricing?.fixed_price ? Math.round(tierPricing.fixed_price) : 0;
-      if (passesAllowed === 0) return jsonResponse({ has_membership: true, passes_allowed: 0, passes_used: 0, passes_remaining: 0 });
-
-      const now = new Date();
-      const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-
-      let { data: grant } = await adminClient
-        .from('day_pass_grants')
-        .select('*')
-        .eq('membership_id', membership.id)
-        .eq('month_year', monthYear)
-        .single();
-
-      if (!grant) {
-        const { data: newGrant } = await adminClient.from('day_pass_grants').insert({
-          membership_id: membership.id,
-          venue_id: membership.venue_id,
-          month_year: monthYear,
-          passes_allowed: passesAllowed,
-          passes_used: 0,
-        }).select().single();
-        grant = newGrant;
-      }
-
-      const { data: shares } = await adminClient
-        .from('day_pass_shares')
-        .select('id, token, status, recipient_email, recipient_name, recipient_phone, claimed_by, created_at')
-        .eq('shared_by', userId)
-        .gte('created_at', monthYear)
-        .order('created_at', { ascending: false });
+      const guestGrant = await ensureMonthlyGuestVouchers(adminClient, membership, userId);
+      const vouchers = (guestGrant.vouchers || []).map(voucherToClient);
+      const remaining = vouchers.filter((voucher: any) => voucher.status === 'unused').length;
 
       return jsonResponse({
         has_membership: true,
-        passes_allowed: grant?.passes_allowed || passesAllowed,
-        passes_used: grant?.passes_used || 0,
-        passes_remaining: (grant?.passes_allowed || passesAllowed) - (grant?.passes_used || 0),
-        grant_id: grant?.id,
-        shares: shares || [],
+        passes_allowed: guestGrant.allowed,
+        passes_used: Math.max(vouchers.length - remaining, 0),
+        passes_remaining: remaining,
+        shares: vouchers,
       });
     }
 
@@ -278,10 +396,38 @@ Deno.serve(async (req) => {
     // ─── POST /share ── share an existing pass ───
     if (req.method === 'POST' && path === 'share') {
       const body = await req.json();
-      const { day_pass_id, recipient_email, recipient_name } = body;
-      if (!day_pass_id) return errorResponse('Missing day_pass_id');
+      const { day_pass_id, voucher_id, recipient_email, recipient_name } = body;
+      if (!day_pass_id && !voucher_id) return errorResponse('Missing day_pass_id or voucher_id');
       const recipientName = String(recipient_name || recipient_email || '').trim();
       if (!recipientName) return errorResponse('Missing recipient_name');
+
+      if (voucher_id) {
+        const { data: voucher, error: voucherErr } = await adminClient
+          .from('access_vouchers')
+          .select('*')
+          .eq('id', voucher_id)
+          .eq('purchaser_user_id', userId)
+          .eq('status', 'unused')
+          .maybeSingle();
+        if (voucherErr) return errorResponse(voucherErr.message, 500);
+        if (!voucher) return errorResponse('Voucher not found', 404);
+
+        const metadata = {
+          ...(voucher.metadata || {}),
+          recipient_name: recipientName,
+          recipient_email: recipient_email || null,
+          shared_at: new Date().toISOString(),
+        };
+
+        const { data: updated, error: updateErr } = await adminClient
+          .from('access_vouchers')
+          .update({ recipient_name: recipientName, metadata })
+          .eq('id', voucher_id)
+          .select('*')
+          .single();
+        if (updateErr) return errorResponse(updateErr.message, 500);
+        return jsonResponse({ token: updated.code, voucher_id: updated.id, share_id: updated.id }, 201);
+      }
 
       // Verify the pass belongs to the user and is active
       const { data: pass, error: passErr } = await adminClient

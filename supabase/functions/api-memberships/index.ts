@@ -203,6 +203,49 @@ Deno.serve(async (req) => {
       return jsonResponse(data, 201);
     }
 
+    // POST /api-memberships/assign-email
+    if (req.method === 'POST' && path === 'assign-email') {
+      const body = await req.json();
+      const { venueId, email, tierId, expiresAt, notes, displayName } = body;
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+      if (!venueId || !normalizedEmail || !tierId) return errorResponse('Missing venueId, email or tierId');
+      if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+
+      const { data: tier } = await admin.from('membership_tiers').select('id, venue_id').eq('id', tierId).single();
+      if (!tier || tier.venue_id !== venueId) return errorResponse('Tier not found for venue', 404);
+
+      let targetUserId = '';
+      const { data: existing } = await admin.auth.admin.getUserByEmail(normalizedEmail);
+      if (existing?.user?.id) {
+        targetUserId = existing.user.id;
+      } else {
+        const { data: created, error: createErr } = await admin.auth.admin.createUser({
+          email: normalizedEmail,
+          email_confirm: true,
+          user_metadata: displayName ? { display_name: displayName } : undefined,
+        });
+        if (createErr || !created?.user?.id) return errorResponse(createErr?.message || 'Could not create user', 500);
+        targetUserId = created.user.id;
+      }
+
+      await admin.from('memberships')
+        .update({ status: 'cancelled' })
+        .eq('user_id', targetUserId).eq('venue_id', venueId).eq('status', 'active');
+
+      const { data, error: iErr } = await admin.from('memberships').insert({
+        user_id: targetUserId,
+        venue_id: venueId,
+        tier_id: tierId,
+        status: 'active',
+        starts_at: new Date().toISOString().slice(0, 10),
+        expires_at: expiresAt || null,
+        notes: notes || null,
+        assigned_by: userId,
+      }).select('*, membership_tiers(id, name, color, discount_percent)').single();
+      if (iErr) return errorResponse(iErr.message);
+      return jsonResponse({ ...data, user_email: normalizedEmail }, 201);
+    }
+
     // PATCH /api-memberships/update
     if (req.method === 'PATCH' && path === 'update') {
       const body = await req.json();
