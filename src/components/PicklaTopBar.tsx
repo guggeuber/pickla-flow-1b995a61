@@ -100,6 +100,7 @@ export function PicklaTopBar({
               <section className="space-y-2">
                 {[
                   [user ? "Min sida" : "Logga in", user ? `/my?v=${slug}` : `/auth?redirect=/my&v=${slug}`],
+                  ...(user ? [["Min statistik", `/stats?v=${slug}`]] : []),
                   ["Boka pickleball", `/book?v=${slug}&sport=pickleball`],
                   ["Boka darts", `/book?v=${slug}&sport=dart`],
                   ["Planera event", `/book/group?v=${slug}`],

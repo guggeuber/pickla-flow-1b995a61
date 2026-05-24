@@ -125,6 +125,37 @@ async function refundMembershipCourtHours(admin: any, rows: any[]) {
   }
 }
 
+async function calculateIncludedCourtHoursFromBookings(
+  admin: any,
+  userId: string,
+  venueId: string,
+  periodStart: string,
+  periodEnd: string,
+  sportType = 'pickleball',
+) {
+  const startUtc = DateTime.fromISO(`${periodStart}T00:00:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+  const endUtc = DateTime.fromISO(`${periodEnd}T23:59:59.999`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+  const { data: rows } = await admin
+    .from('bookings')
+    .select('id, start_time, end_time, total_price, included_court_hours, venue_courts(sport_type)')
+    .eq('user_id', userId)
+    .eq('venue_id', venueId)
+    .neq('status', 'cancelled')
+    .gte('start_time', startUtc)
+    .lte('start_time', endUtc);
+
+  return (rows || []).reduce((sum: number, row: any) => {
+    const rowSport = row.venue_courts?.sport_type || 'pickleball';
+    if (rowSport !== sportType) return sum;
+    const included = parseNumber(row.included_court_hours, 0);
+    if (included > 0) return sum + included;
+
+    // Legacy fallback for free membership bookings created before usage metadata.
+    if (Number(row.total_price || 0) === 0) return sum + bookingDurationHours(row);
+    return sum;
+  }, 0);
+}
+
 async function createFreeEntitlementBookingResponse({
   product_type,
   meta,
@@ -560,16 +591,14 @@ Deno.serve(async (req) => {
               const weekStart = quotaDate.startOf('week').toISODate()!;
               const weekEnd   = quotaDate.endOf('week').toISODate()!;
 
-              const { data: usage } = await adminEnt
-                .from('membership_usage')
-                .select('used_value')
-                .eq('user_id', entitlementUserId)
-                .eq('venue_id', venue_id)
-                .eq('entitlement_type', 'court_hours_per_week')
-                .eq('period_start', weekStart)
-                .maybeSingle();
-
-              const usedHours = (usage?.used_value || 0);
+              const usedHours = await calculateIncludedCourtHoursFromBookings(
+                adminEnt,
+                entitlementUserId,
+                venue_id,
+                weekStart,
+                weekEnd,
+                entitlementSportType || 'pickleball',
+              );
               const includedHours = Math.min(Math.max(Number(weekLimit.value) - Number(usedHours), 0), bookingHours);
               const paidHours = Math.max(bookingHours - includedHours, 0);
               const basePerCourtHour = bookingHours > 0 ? baseAmountSek / bookingHours : baseAmountSek;

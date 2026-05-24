@@ -38,6 +38,7 @@ import ScoreStartPage from "./pages/ScoreStartPage";
 import ScoreJoinPage from "./pages/ScoreJoinPage";
 import ScoreMatchPage from "./pages/ScoreMatchPage";
 import ScoreBroadcastPage from "./pages/ScoreBroadcastPage";
+import StatsPage from "./pages/StatsPage";
 import AuthCallback from "./pages/AuthCallback";
 import AuthReset from "./pages/AuthReset";
 import { Loader2 } from "lucide-react";
@@ -82,6 +83,7 @@ const App = () => (
             <Route path="/today" element={<TodayPage />} />
             <Route path="/activity" element={<Navigate to="/today" replace />} />
             <Route path="/my" element={<MyPage />} />
+            <Route path="/stats" element={<ProtectedRoute><StatsPage /></ProtectedRoute>} />
             <Route path="/community" element={<CommunityPage />} />
             <Route path="/play" element={<PlayPage />} />
             <Route path="/events" element={<EventsListPage />} />

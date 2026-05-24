@@ -32,6 +32,44 @@ function benefitValue(membership: any, type: string) {
   return entitlement ? Number(entitlement.value || 0) : 0;
 }
 
+function bookingDurationHours(row: any) {
+  const start = new Date(row.start_time).getTime();
+  const end = new Date(row.end_time).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return (end - start) / 36e5;
+}
+
+async function calculateIncludedCourtHoursFromBookings(
+  adminClient: ReturnType<typeof getServiceClient>,
+  userId: string,
+  venueId: string,
+  periodStart: string,
+  periodEnd: string,
+  sportType = 'pickleball',
+) {
+  const startUtc = DateTime.fromISO(`${periodStart}T00:00:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+  const endUtc = DateTime.fromISO(`${periodEnd}T23:59:59.999`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+  const { data: rows } = await adminClient
+    .from('bookings')
+    .select('id, start_time, end_time, total_price, included_court_hours, venue_courts(sport_type)')
+    .eq('user_id', userId)
+    .eq('venue_id', venueId)
+    .neq('status', 'cancelled')
+    .gte('start_time', startUtc)
+    .lte('start_time', endUtc);
+
+  return (rows || []).reduce((sum: number, row: any) => {
+    const rowSport = row.venue_courts?.sport_type || 'pickleball';
+    if (rowSport !== sportType) return sum;
+    const included = Number(row.included_court_hours || 0);
+    if (included > 0) return sum + included;
+
+    // Legacy fallback for free membership bookings created before usage metadata.
+    if (Number(row.total_price || 0) === 0) return sum + bookingDurationHours(row);
+    return sum;
+  }, 0);
+}
+
 async function ensureMonthlyGuestVouchers(adminClient: ReturnType<typeof getServiceClient>, membership: any, userId: string) {
   const allowed = Math.max(0, Math.round(benefitValue(membership, 'guest_day_vouchers_monthly')));
   const now = DateTime.now().setZone('Europe/Stockholm');
@@ -315,15 +353,9 @@ Deno.serve(async (req) => {
       const weekStart = now.startOf('week').toISODate()!;
       const weekEnd = now.endOf('week').toISODate()!;
       const courtHoursAllowed = benefitValue(membership, 'court_hours_per_week');
-      const { data: courtUsage } = courtHoursAllowed > 0 ? await adminClient
-        .from('membership_usage')
-        .select('used_value')
-        .eq('user_id', userId)
-        .eq('venue_id', membership.venue_id)
-        .eq('entitlement_type', 'court_hours_per_week')
-        .eq('period_start', weekStart)
-        .maybeSingle() : { data: null };
-      const courtHoursUsed = Number(courtUsage?.used_value || 0);
+      const courtHoursUsed = courtHoursAllowed > 0 && membership?.venue_id
+        ? await calculateIncludedCourtHoursFromBookings(adminClient, userId, membership.venue_id, weekStart, weekEnd)
+        : 0;
 
       const allowance = {
         has_membership: hasMembership,

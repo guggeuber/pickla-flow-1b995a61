@@ -517,7 +517,7 @@ Deno.serve(async (req) => {
       const { data: matches, error: matchErr } = matchIds.length
         ? await client
           .from('score_matches')
-          .select('id, status, winner_player_id, winner_name, game_type, completed_at, started_at, venue_courts(name, court_number)')
+          .select('id, status, winner_player_id, winner_name, game_type, target_score, checkout_rule, best_of_legs, player1_id, player2_id, player1_name, player2_name, player1_legs, player2_legs, player_slots, completed_at, started_at, venue_courts(name, court_number)')
           .in('id', matchIds)
           .order('started_at', { ascending: false })
           .limit(50)
@@ -542,7 +542,35 @@ Deno.serve(async (req) => {
         one_eighties: scoredTurns.filter((score: number) => score === 180).length,
         checkouts: checkouts.length,
         high_checkout: highCheckout,
-        recent_matches: (matches || []).slice(0, 5),
+        recent_matches: (matches || []).slice(0, 10).map((match: any) => {
+          const slots = Array.isArray(match.player_slots) ? match.player_slots : [];
+          const linkedSlot = slots.find((slot: any) => playerIds.includes(slot.id));
+          const playerName = linkedSlot?.name ||
+            (playerIds.includes(match.player1_id) ? match.player1_name : playerIds.includes(match.player2_id) ? match.player2_name : null);
+          const opponentNames = slots.length
+            ? slots.filter((slot: any) => slot.id !== linkedSlot?.id).map((slot: any) => slot.name).filter(Boolean)
+            : [match.player1_name, match.player2_name].filter((name: string) => name && name !== playerName);
+          return {
+            id: match.id,
+            status: match.status,
+            game_type: match.game_type,
+            target_score: match.target_score,
+            checkout_rule: match.checkout_rule,
+            best_of_legs: match.best_of_legs,
+            started_at: match.started_at,
+            completed_at: match.completed_at,
+            winner_player_id: match.winner_player_id,
+            winner_name: match.winner_name,
+            player_name: playerName,
+            opponent_names: opponentNames,
+            player1_name: match.player1_name,
+            player2_name: match.player2_name,
+            player1_legs: match.player1_legs,
+            player2_legs: match.player2_legs,
+            won: playerIds.includes(match.winner_player_id),
+            court: match.venue_courts || null,
+          };
+        }),
       }, 200, 20);
     }
 
