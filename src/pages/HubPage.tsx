@@ -2965,7 +2965,7 @@ const HubPage = () => {
   const directRoomId = roomId || null;
   const bookingRoomRef = bookingRef || searchParams.get("booking") || searchParams.get("room");
   const isDirectChatRoute = !!bookingRef || !!directRoomId;
-  const directChatMode = !!bookingRoomRef || !!directRoomId;
+  const directChatMode = !!bookingRoomRef;
   const { user } = useAuth();
 
   const { data: venue } = useVenue(slug);

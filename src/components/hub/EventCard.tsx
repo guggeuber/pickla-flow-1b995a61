@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Check, Loader2 } from "lucide-react";
+import { ArrowRight, CalendarClock, Check, Loader2, Ticket, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -102,41 +102,75 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
     return (
       <motion.div
         style={{
-          background: HUB_NAVY,
-          borderRadius: 14,
+          background: "#fff",
+          border: "1px solid rgba(17,24,39,0.08)",
+          borderRadius: 22,
           overflow: "hidden",
           marginBottom: 4,
+          boxShadow: "0 14px 34px rgba(17,24,39,0.10)",
         }}
       >
-        <div style={{ padding: "14px" }}>
-          <p style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: "rgba(255,255,255,0.55)", marginBottom: 4 }}>
-            Pinned action · {sessionType}{timeStr ? ` · ${timeStr}` : ""}
-          </p>
-          <p style={{ fontFamily: FONT_HEADING, fontSize: 17, fontWeight: 800, color: "#fff", marginBottom: 6 }}>
-            {programSession.name}
-          </p>
+        <div style={{ padding: 14 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "rgba(22,163,74,0.12)", color: "#15803d", padding: "5px 9px", fontFamily: FONT_HEADING, fontSize: 11, fontWeight: 900, marginBottom: 9 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: "#22c55e" }} />
+                Nästa steg
+              </div>
+              <p style={{ fontFamily: FONT_HEADING, fontSize: 19, lineHeight: 1.05, fontWeight: 900, color: "#111827", margin: 0 }}>
+                {programSession.name}
+              </p>
+            </div>
+            <div style={{ width: 44, height: 44, borderRadius: 16, display: "grid", placeItems: "center", background: "#f5f1f1", color: HUB_NAVY, flexShrink: 0 }}>
+              <Ticket style={{ width: 21, height: 21 }} />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.07)", color: "#475569", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
+              <CalendarClock style={{ width: 14, height: 14 }} />
+              {sessionType}{timeStr ? ` · ${timeStr}` : ""}
+            </span>
+            {programSession.capacity ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.07)", color: "#475569", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
+                <Users style={{ width: 14, height: 14 }} />
+                {programSession.capacity} platser
+              </span>
+            ) : null}
+          </div>
+
           {programSession.description && (
-            <p style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter, sans-serif", marginBottom: 10, lineHeight: 1.4 }}>
+            <p style={{ fontSize: 12, color: "#64748b", fontFamily: "Inter, sans-serif", margin: "12px 0 0", lineHeight: 1.45 }}>
               {String(programSession.description).slice(0, 110)}{String(programSession.description).length > 110 ? "…" : ""}
             </p>
           )}
+
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={() => navigate(`/program/${eventId}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`)}
             style={{
               width: "100%",
-              background: HUB_RED,
+              background: "#111827",
               color: "#fff",
               border: "none",
-              borderRadius: 10,
-              padding: "11px 0",
+              borderRadius: 16,
+              padding: "13px 14px",
               fontFamily: FONT_HEADING,
               fontSize: 13,
-              fontWeight: 700,
+              fontWeight: 900,
               cursor: "pointer",
+              marginTop: 14,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
             }}
           >
-            {programSession.price_sek ? `Anmäl / köp plats · ${programSession.price_sek} kr` : "Anmäl / visa detaljer"}
+            <span>{programSession.price_sek ? "Anmäl / köp plats" : "Anmäl / visa detaljer"}</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8, opacity: 0.9 }}>
+              {programSession.price_sek ? `${programSession.price_sek} kr` : "Öppna"}
+              <ArrowRight style={{ width: 16, height: 16 }} />
+            </span>
           </motion.button>
         </div>
       </motion.div>
