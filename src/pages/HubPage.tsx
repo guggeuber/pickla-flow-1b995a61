@@ -443,17 +443,39 @@ function useFallbackActivitySessionForRoom(room: ChatRoom, venueId: string | und
     enabled: room.room_type === "event" && !!venueId && !!room.title,
     staleTime: 60000,
     queryFn: async () => {
+      const normalize = (value: string) => value
+        .toLowerCase()
+        .replace(/förmiddag/g, "fm")
+        .replace(/eftermiddag/g, "em")
+        .replace(/kväll/g, "kvall")
+        .replace(/[^a-z0-9åäö]/g, "");
+      const title = normalize(room.title || "");
       const { data } = await supabase
         .from("activity_sessions")
-        .select("id")
+        .select("id, name, session_type, start_time")
         .eq("venue_id", venueId!)
         .eq("is_active", true)
         .eq("publish_status", "published")
-        .eq("name", room.title)
         .order("start_time", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      return data as { id: string } | null;
+        .limit(100);
+
+      const sessions = (data || []) as Array<{ id: string; name: string | null; session_type: string | null; start_time: string | null }>;
+      const exact = sessions.find((session) => normalize(session.name || "") === title);
+      const loose = sessions.find((session) => {
+        const name = normalize(session.name || "");
+        return !!name && (name.includes(title) || title.includes(name));
+      });
+      const openPlayHint = title.includes("openplay")
+        ? sessions.find((session) => {
+            if (session.session_type !== "open_play") return false;
+            const name = normalize(session.name || "");
+            if (title.includes("fm")) return name.includes("fm") || String(session.start_time || "").startsWith("10:");
+            if (title.includes("em")) return name.includes("em") || String(session.start_time || "").startsWith("14:");
+            if (title.includes("kvall")) return name.includes("kvall") || String(session.start_time || "").startsWith("17:");
+            return true;
+          })
+        : null;
+      return (exact || loose || openPlayHint || null) as { id: string } | null;
     },
   });
 }

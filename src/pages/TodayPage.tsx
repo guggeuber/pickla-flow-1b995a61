@@ -466,6 +466,14 @@ export default function TodayPage() {
       };
     })
   ), [items, now]);
+  const emptyDayText = (date: DateTime) => {
+    if (!date.hasSame(now, "day")) return "inget schemalagt ännu";
+    if (!status) return "inget mer schemalagt idag";
+    if (status.open) return "inget mer schemalagt idag";
+    if (status.label?.startsWith("Öppnar")) return `Pickla ${status.label.toLowerCase()}`;
+    if (status.label === "Stängt idag") return "Pickla är stängt idag";
+    return "Pickla är stängt för idag";
+  };
 
   return (
     <div className="min-h-[100dvh] pb-10 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
@@ -568,7 +576,7 @@ export default function TodayPage() {
                     </div>
                   ) : (
                     <div className="px-3 py-3 text-[14px]" style={{ background: SOFT, color: MUTED, fontFamily: FONT_MONO }}>
-                      inget schemalagt ännu
+                      {emptyDayText(date)}
                     </div>
                   )}
                 </section>

@@ -43,7 +43,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
         .from("events")
         .select("id, name, display_name, description, logo_url, primary_color, start_date, start_time, entry_fee, entry_fee_type, is_drop_in, max_participants, is_public, planning_status, visibility, customer_name, customer_email, customer_phone, expected_participants, partner_notes, resources")
         .eq("id", eventId)
-        .single();
+        .maybeSingle();
       return data;
     },
   });
@@ -64,6 +64,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
 
   const { data: players = [] } = useQuery<EventPlayer[]>({
     queryKey: ["hub-event-player-list", eventId],
+    enabled: !!event,
     staleTime: 30000,
     queryFn: async () => {
       const { data: playerRows } = await supabase
