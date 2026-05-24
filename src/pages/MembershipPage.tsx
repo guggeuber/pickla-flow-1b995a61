@@ -207,6 +207,23 @@ const MembershipPage = () => {
     }
   }, [profilePhone, formData.phone]);
 
+  useEffect(() => {
+    const resetPendingCheckout = () => setSubmitting(false);
+    const resetWhenVisible = () => {
+      if (document.visibilityState === "visible") setSubmitting(false);
+    };
+
+    window.addEventListener("pageshow", resetPendingCheckout);
+    window.addEventListener("focus", resetPendingCheckout);
+    document.addEventListener("visibilitychange", resetWhenVisible);
+
+    return () => {
+      window.removeEventListener("pageshow", resetPendingCheckout);
+      window.removeEventListener("focus", resetPendingCheckout);
+      document.removeEventListener("visibilitychange", resetWhenVisible);
+    };
+  }, []);
+
   const handleSignupAndRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTierId) return;
