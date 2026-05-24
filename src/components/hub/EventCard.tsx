@@ -55,7 +55,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
     queryFn: async () => {
       const { data } = await supabase
         .from("activity_sessions")
-        .select("id, name, description, session_type, start_time, end_time, capacity, price_sek, venue_id")
+        .select("id, name, session_type, start_time, end_time, capacity, price_sek, venue_id")
         .eq("id", eventId)
         .maybeSingle();
       return data;
@@ -139,12 +139,6 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
               </span>
             ) : null}
           </div>
-
-          {programSession.description && (
-            <p style={{ fontSize: 12, color: "#64748b", fontFamily: "Inter, sans-serif", margin: "12px 0 0", lineHeight: 1.45 }}>
-              {String(programSession.description).slice(0, 110)}{String(programSession.description).length > 110 ? "…" : ""}
-            </p>
-          )}
 
           <motion.button
             whileTap={{ scale: 0.97 }}
