@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { findAuthUserByEmail } from '../_shared/bookings.ts';
 
 async function assertVenueAdmin(admin: ReturnType<typeof getServiceClient>, userId: string, venueId: string): Promise<boolean> {
   const { data: role } = await admin.from('user_roles').select('role').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
@@ -215,9 +216,9 @@ Deno.serve(async (req) => {
       if (!tier || tier.venue_id !== venueId) return errorResponse('Tier not found for venue', 404);
 
       let targetUserId = '';
-      const { data: existing } = await admin.auth.admin.getUserByEmail(normalizedEmail);
-      if (existing?.user?.id) {
-        targetUserId = existing.user.id;
+      const existing = await findAuthUserByEmail(admin, normalizedEmail);
+      if (existing?.id) {
+        targetUserId = existing.id;
       } else {
         const { data: created, error: createErr } = await admin.auth.admin.createUser({
           email: normalizedEmail,

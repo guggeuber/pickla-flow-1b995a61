@@ -65,3 +65,18 @@ export async function getOrCreatePublicBookingUserId(admin: any): Promise<string
   if (error || !data?.user?.id) throw new Error('Kunde inte skapa gästanvändare för bokning');
   return data.user.id;
 }
+
+export async function findAuthUserByEmail(admin: any, email: string): Promise<any | null> {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
+  for (let page = 1; page <= 20; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) throw error;
+    const found = data?.users?.find((user: any) => user.email?.toLowerCase() === normalizedEmail);
+    if (found) return found;
+    if (!data?.users || data.users.length < 200) break;
+  }
+
+  return null;
+}

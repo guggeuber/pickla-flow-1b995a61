@@ -7,7 +7,7 @@
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
-import { generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
+import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -292,8 +292,8 @@ async function resolveUserId(
   const email = session.customer_details?.email || metaEmail;
   if (email) {
     // Try to find existing user
-    const { data: existing } = await serviceClient.auth.admin.getUserByEmail(email);
-    if (existing?.user?.id) return existing.user.id;
+    const existing = await findAuthUserByEmail(serviceClient, email);
+    if (existing?.id) return existing.id;
 
     // Create a new confirmed user — they can set a password later via magic link
     const { data: created, error: createErr } = await serviceClient.auth.admin.createUser({

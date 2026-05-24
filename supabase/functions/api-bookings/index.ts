@@ -1,6 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
-import { generateAccessCode, getOrCreatePublicBookingUserId, stockholmDateRangeUtc } from '../_shared/bookings.ts';
+import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId, stockholmDateRangeUtc } from '../_shared/bookings.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
@@ -1070,9 +1070,9 @@ Deno.serve(async (req) => {
     }
 
     if (!bookingUserId && safeEmail) {
-      const { data: existing } = await admin.auth.admin.getUserByEmail(safeEmail);
-      if (existing?.user?.id) {
-        bookingUserId = existing.user.id;
+      const existing = await findAuthUserByEmail(admin, safeEmail);
+      if (existing?.id) {
+        bookingUserId = existing.id;
       } else {
         const { data: created, error: createErr } = await admin.auth.admin.createUser({
           email: safeEmail,
