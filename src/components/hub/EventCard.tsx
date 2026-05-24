@@ -23,10 +23,11 @@ type EventPlayer = {
 interface EventCardProps {
   eventId: string;
   venueId: string;
+  venueSlug?: string;
   isDropIn?: boolean;
 }
 
-export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
+export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -109,7 +110,7 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
       >
         <div style={{ padding: "14px" }}>
           <p style={{ fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 800, color: "rgba(255,255,255,0.55)", marginBottom: 4 }}>
-            {sessionType}{timeStr ? ` · ${timeStr}` : ""}
+            Pinned action · {sessionType}{timeStr ? ` · ${timeStr}` : ""}
           </p>
           <p style={{ fontFamily: FONT_HEADING, fontSize: 17, fontWeight: 800, color: "#fff", marginBottom: 6 }}>
             {programSession.name}
@@ -121,7 +122,7 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
           )}
           <motion.button
             whileTap={{ scale: 0.97 }}
-            onClick={() => navigate(`/program/${eventId}`)}
+            onClick={() => navigate(`/program/${eventId}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`)}
             style={{
               width: "100%",
               background: HUB_RED,
@@ -135,7 +136,7 @@ export function EventCard({ eventId, venueId, isDropIn }: EventCardProps) {
               cursor: "pointer",
             }}
           >
-            {programSession.price_sek ? `Anmäl · ${programSession.price_sek} kr` : "Anmäl / visa detaljer"}
+            {programSession.price_sek ? `Anmäl / köp plats · ${programSession.price_sek} kr` : "Anmäl / visa detaljer"}
           </motion.button>
         </div>
       </motion.div>

@@ -689,10 +689,11 @@ function useRoomReactions(roomId: string | null) {
 interface ChatRoomProps {
   room: ChatRoom;
   venueId: string;
+  venueSlug?: string;
   onBack: () => void;
 }
 
-function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
+function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -955,6 +956,7 @@ function ChatRoom({ room, venueId, onBack }: ChatRoomProps) {
           <EventCard
             eventId={room.resource_id}
             venueId={venueId}
+            venueSlug={venueSlug}
           />
         </div>
       )}
@@ -3069,6 +3071,7 @@ const HubPage = () => {
           <ChatRoom
             room={activeRoom}
             venueId={activeRoom.venue_id || venueId}
+            venueSlug={slug}
             onBack={isDirectChatRoute ? () => navigate(`/activity?v=${slug}`) : closeRoom}
           />
         </motion.div>

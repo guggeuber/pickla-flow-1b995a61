@@ -26,18 +26,20 @@ export default function BookingConfirmed() {
   const [timedOut, setTimedOut] = useState(false);
 
   const isDayPass = type === "day_pass";
+  const isSessionTicket = type === "session_ticket";
+  const isInstantAccess = isDayPass || isSessionTicket;
 
-  // Day pass: show success immediately, redirect to activities after 3 s
+  // Access/session tickets: show success immediately, then continue to the next app surface.
   useEffect(() => {
-    if (!isDayPass) return;
+    if (!isInstantAccess) return;
     const id = setTimeout(() => navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true }), 1800);
     return () => clearTimeout(id);
-  }, [isDayPass, navigate, next]);
+  }, [isInstantAccess, navigate, next]);
 
   // Poll until the webhook has created the booking (typically < 2 s)
   const { data } = useQuery<BookingBySessionResponse>({
     queryKey:       ["booking-by-session", session],
-    enabled:        !!session && !timedOut && !isDayPass,
+    enabled:        !!session && !timedOut && !isInstantAccess,
     queryFn:        () => apiGet("api-bookings", "by-session", { session }),
     staleTime:      0,
     refetchInterval: (query) => {
@@ -58,13 +60,13 @@ export default function BookingConfirmed() {
 
   // Fallback: give up after TIMEOUT_MS and show a static message
   useEffect(() => {
-    if (!session || isDayPass) return;
+    if (!session || isInstantAccess) return;
     const id = setTimeout(() => setTimedOut(true), TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [session, isDayPass]);
+  }, [session, isInstantAccess]);
 
-  // Day pass success screen — no session required
-  if (isDayPass) {
+  // Access success screen — no polling required.
+  if (isInstantAccess) {
     return (
       <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-6 px-5 text-center">
         <img src={picklaLogo} alt="Pickla" className="h-8 w-auto opacity-20 mb-2" />
@@ -77,7 +79,7 @@ export default function BookingConfirmed() {
             betalning genomförd!
           </h1>
           <p className="text-neutral-400 text-[12px] mt-2" style={{ fontFamily: FONT_MONO }}>
-            ditt dagspass är aktivt — välkommen in!
+            {isSessionTicket ? "din plats är bokad — vi öppnar aktiviteten" : "ditt dagspass är aktivt — välkommen in!"}
           </p>
         </div>
       </div>

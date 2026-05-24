@@ -209,7 +209,7 @@ export default function ProgramSessionPage() {
           user_id: user?.id || "",
           slug: venue.slug || venueSlug,
           redirect_path: roomBackPath,
-          success_path: `/booking/confirmed?type=day_pass&next=${encodeURIComponent(roomBackPath)}`,
+          success_path: `/booking/confirmed?type=session_ticket&next=${encodeURIComponent(roomBackPath)}`,
         },
       });
 
@@ -272,10 +272,10 @@ export default function ProgramSessionPage() {
         <section className="pt-8">
           <div className="mb-4 flex items-center gap-2">
             <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-black" style={{ background: "rgba(232,76,97,0.95)" }}>
-              <Radio className="h-3.5 w-3.5" /> LIVE SESSION
+              <Radio className="h-3.5 w-3.5" /> AKTIVITET
             </span>
             <span className="rounded-full bg-white/12 px-3 py-1.5 text-xs font-bold text-white/80">
-              {activeRegistrations.length} inne
+              {activeRegistrations.length} anmälda
             </span>
           </div>
 
@@ -294,7 +294,7 @@ export default function ProgramSessionPage() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[11px] font-black uppercase tracking-[0.14em]" style={{ color: MUTED, fontFamily: FONT_HEADING }}>
-                Pinned action
+                Anmälan
               </p>
               <h2 className="mt-1 text-2xl font-black leading-tight" style={{ fontFamily: FONT_HEADING }}>
                 {isRegistered ? "Du är inne" : "Ta din plats"}
@@ -323,7 +323,7 @@ export default function ProgramSessionPage() {
           <div className="mt-4 flex items-end justify-between gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.12em]" style={{ color: MUTED }}>Access</p>
-              <p className="mt-1 text-sm font-bold">{product?.name || "Accessbiljett"}</p>
+              <p className="mt-1 text-sm font-bold">{product?.name || "Aktivitetsbiljett"}</p>
               <p className="mt-0.5 text-xs" style={{ color: MUTED }}>{venue?.name || "Pickla"}</p>
             </div>
             <div className="text-right">
@@ -343,7 +343,7 @@ export default function ProgramSessionPage() {
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-sm font-black active:scale-[0.98] disabled:opacity-60"
               style={{ background: GREEN, color: "#fff", fontFamily: FONT_HEADING }}
             >
-              {openingChat ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar room</> : <>Gå till room-chatten <ChevronRight className="h-4 w-4" /></>}
+              {openingChat ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar chat</> : <>Gå till chatten <ChevronRight className="h-4 w-4" /></>}
             </button>
           ) : (
             <button
@@ -378,13 +378,13 @@ export default function ProgramSessionPage() {
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-[22px] border p-4" style={{ borderColor: BORDER, background: "rgba(255,255,255,0.08)" }}>
               <ShieldCheck className="mb-3 h-5 w-5" style={{ color: GREEN }} />
-              <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Access OS</p>
-              <p className="mt-1 text-xs leading-snug text-white/58">Köp, medlemspris och entitlement går genom samma motor.</p>
+              <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Din plats</p>
+              <p className="mt-1 text-xs leading-snug text-white/58">Anmälan kopplas till ditt konto och används vid incheckning.</p>
             </div>
             <div className="rounded-[22px] border p-4" style={{ borderColor: BORDER, background: "rgba(255,255,255,0.08)" }}>
               <Sparkles className="mb-3 h-5 w-5" style={{ color: PINK }} />
-              <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Nästa lager</p>
-              <p className="mt-1 text-xs leading-snug text-white/58">Efter köp kan samma room bära QR, check-in och live status.</p>
+              <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Community</p>
+              <p className="mt-1 text-xs leading-snug text-white/58">Chatten är öppen för frågor, sena platser och uppdateringar.</p>
             </div>
           </div>
         </section>
