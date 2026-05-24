@@ -437,6 +437,25 @@ function useInquiryEventDetails(eventId: string | undefined, enabled: boolean) {
   });
 }
 
+function useFallbackActivitySessionForRoom(room: ChatRoom, venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["hub-room-fallback-activity-session", room.id, room.title, venueId],
+    enabled: room.room_type === "event" && !room.resource_id && !!venueId && !!room.title,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("activity_sessions")
+        .select("id")
+        .eq("venue_id", venueId!)
+        .eq("is_active", true)
+        .eq("name", room.title)
+        .limit(1)
+        .maybeSingle();
+      return data as { id: string } | null;
+    },
+  });
+}
+
 function useWeeklyProgram(venueId: string | undefined) {
   return useQuery({
     queryKey: ["hub-weekly-program", venueId],
@@ -700,6 +719,8 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
   const { messages, loading: msgsLoading } = useRoomMessages(room.id);
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
   const { data: inquiryEvent } = useInquiryEventDetails(room.resource_id, room.room_type === "event" && !!room.resource_id);
+  const { data: fallbackActivitySession } = useFallbackActivitySessionForRoom(room, venueId);
+  const actionResourceId = room.resource_id || fallbackActivitySession?.id;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const reactions = useRoomReactions(room.id);
   const [contextMsg, setContextMsg] = useState<ChatMessage | null>(null);
@@ -944,7 +965,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
       </div>
 
       {/* Pinned action for activity/event chats */}
-      {room.room_type === "event" && room.resource_id && !isInquiryEvent && (
+      {room.room_type === "event" && actionResourceId && !isInquiryEvent && (
         <div
           style={{
             padding: "10px 16px 8px",
@@ -954,7 +975,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
           }}
         >
           <EventCard
-            eventId={room.resource_id}
+            eventId={actionResourceId}
             venueId={venueId}
             venueSlug={venueSlug}
           />
@@ -3034,6 +3055,37 @@ const HubPage = () => {
           <div style={{ width: 60, height: 10, borderRadius: 4, background: HUB_BORDER, marginTop: 6, animation: "pulse 1.5s ease-in-out infinite" }} />
         </div>
         <HubSkeleton />
+      </div>
+    );
+  }
+
+  if (directRoomId) {
+    if (!activeRoom) {
+      return (
+        <div style={{ minHeight: "100dvh", background: HUB_BG }}>
+          <div style={{
+            position: "sticky", top: 0, zIndex: 10, background: HUB_BG,
+            padding: "env(safe-area-inset-top,14px) 20px 14px",
+            borderBottom: `1px solid ${HUB_BORDER}`,
+          }}>
+            <div style={{ width: 120, height: 14, borderRadius: 6, background: HUB_BORDER, animation: "pulse 1.5s ease-in-out infinite" }} />
+            <div style={{ width: 84, height: 10, borderRadius: 4, background: HUB_BORDER, marginTop: 6, animation: "pulse 1.5s ease-in-out infinite" }} />
+          </div>
+          <div style={{ padding: 16 }}>
+            <SkeletonCard />
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ height: "100dvh", background: HUB_BG }}>
+        <ChatRoom
+          room={activeRoom}
+          venueId={activeRoom.venue_id || venueId}
+          venueSlug={slug}
+          onBack={() => navigate(`/activity?v=${slug}`)}
+        />
       </div>
     );
   }
