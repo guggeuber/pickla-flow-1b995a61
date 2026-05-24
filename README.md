@@ -1,73 +1,75 @@
-# Welcome to your Lovable project
+# Pickla
 
-## Project info
+Pickla is a social sports operating system for venue bookings, memberships, events, desk operations, displays, scoring, and player community.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+The canonical agent guide is [AGENTS.md](./AGENTS.md).
 
-## How can I edit this code?
+## Commands
 
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+```bash
+npm run dev          # Start local dev server
+npm run build        # Production build
+npm run test         # Run Vitest once
+npm run lint         # Full ESLint check; currently has legacy repo-wide debt
+npm run prod:check   # Release gate: tests + production build
 ```
 
-**Edit a file directly in GitHub**
+## Stack
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+- React 18 + TypeScript + Vite
+- Tailwind CSS + shadcn/ui + Radix UI
+- TanStack React Query
+- Supabase PostgreSQL/Auth/Realtime/Edge Functions
+- Stripe Checkout/Billing
+- Resend email
 
-**Use GitHub Codespaces**
+## Production Readiness
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+Soft-launch readiness is tracked in [docs/production-readiness.md](./docs/production-readiness.md).
 
-## What technologies are used for this project?
+Core runbooks:
 
-This project is built with:
+- [Launch runbook](./docs/launch-runbook.md)
+- [Stage setup](./docs/staging.md)
+- [Smoke tests](./docs/smoke-tests.md)
+- [Daily operations](./docs/daily-operations-runbook.md)
+- [Data and compliance](./docs/data-and-compliance.md)
+- [Security checklist](./docs/security-checklist.md)
+- [Support runbook](./docs/support-runbook.md)
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+Before a production candidate:
 
-## How can I deploy this project?
+```bash
+npm run prod:check
+```
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+## Deploy
 
-## Can I connect a custom domain to my Lovable project?
+Frontend deploys from Vercel when `main` is pushed.
 
-Yes, you can!
+Supabase migrations are applied manually in the Supabase SQL editor, followed by:
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+```sql
+NOTIFY pgrst, 'reload schema';
+```
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Supabase Edge Functions are deployed manually:
+
+```bash
+supabase functions deploy <function-name> --no-verify-jwt --project-ref cqnjpudmsreubgviqptg
+```
+
+See [docs/launch-runbook.md](./docs/launch-runbook.md) for the full deploy and rollback checklist.
+
+## Environment
+
+Local development requires a `.env` file:
+
+```bash
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_PUBLISHABLE_KEY=...
+VITE_SUPABASE_PROJECT_ID=...
+```
+
+Production and stage must use separate Supabase, Stripe, Resend, and VAPID secrets.
+

@@ -205,6 +205,12 @@ For Edge Functions that need “the venue day”, use `stockholmDateRangeUtc(dat
 - **Lovable**: design, visual changes, UI components
 - **Coding agents (Codex/Claude/etc.)**: logic, Edge Functions, database migrations, and focused UI fixes when needed
 
+**Production readiness:**
+- Soft-launch gates and runbooks live in `docs/production-readiness.md`.
+- Use `npm run prod:check` before release candidates.
+- Stage must use a separate Supabase project and Stripe test mode; do not point Vercel previews at production Supabase for payment/booking tests.
+- Keep the launch checklist, smoke tests, daily operations runbook, data/compliance baseline, and security checklist in `docs/` updated whenever a production-critical flow changes.
+
 **Deploy process:**
 - Frontend: `git push` → Vercel deploys automatically (no Lovable step needed)
 - Edge Functions: `supabase functions deploy --no-verify-jwt --project-ref cqnjpudmsreubgviqptg`

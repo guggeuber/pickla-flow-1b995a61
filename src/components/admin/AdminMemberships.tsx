@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
-import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Plus, Crown, Trash2, ChevronDown, ChevronUp, Tag } from "lucide-react";
+import { Loader2, Plus, Crown, Trash2, ChevronUp, Tag, Save } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -37,6 +36,31 @@ interface MembershipEntitlement {
   sport_type: string | null;
 }
 
+interface AccessProduct {
+  product_key: string;
+  name: string;
+}
+
+interface ProductTypeOption {
+  key: string;
+  label: string;
+}
+
+interface AdminMembership {
+  id: string;
+  user_id: string;
+  venue_id: string;
+  tier_id: string;
+  status: string;
+  starts_at: string;
+  expires_at: string | null;
+  notes: string | null;
+  user_email?: string | null;
+  user_name?: string | null;
+  user_phone?: string | null;
+  membership_tiers?: Pick<MembershipTier, "id" | "name" | "color" | "discount_percent" | "monthly_price"> | null;
+}
+
 const FALLBACK_PRODUCT_TYPES = [
   { key: "court_hourly", label: "Bana per timme" },
   { key: "day_access", label: "Day Pass / dagsmedlemskap" },
@@ -49,13 +73,118 @@ const FALLBACK_PRODUCT_TYPES = [
   { key: "guest_pass", label: "Gästpass" },
 ];
 
+const EditableTierPricingRow = ({
+  pricing,
+  productTypes,
+  onDelete,
+}: {
+  pricing: TierPricing;
+  productTypes: ProductTypeOption[];
+  onDelete: (id: string) => void;
+}) => {
+  const qc = useQueryClient();
+  const [mode, setMode] = useState<"fixed" | "percent">(pricing.fixed_price != null ? "fixed" : "percent");
+  const [value, setValue] = useState(String(pricing.fixed_price ?? pricing.discount_percent ?? 0));
+  const [vat, setVat] = useState(String(pricing.vat_rate ?? 6));
+  const [label, setLabel] = useState(pricing.label || productTypes.find((p) => p.key === pricing.product_type)?.label || pricing.product_type);
+
+  useEffect(() => {
+    setMode(pricing.fixed_price != null ? "fixed" : "percent");
+    setValue(String(pricing.fixed_price ?? pricing.discount_percent ?? 0));
+    setVat(String(pricing.vat_rate ?? 6));
+    setLabel(pricing.label || productTypes.find((p) => p.key === pricing.product_type)?.label || pricing.product_type);
+  }, [pricing, productTypes]);
+
+  const updatePricing = useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiPatch("api-memberships", "tier-pricing", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tier-pricing", pricing.tier_id] });
+      toast.success("Prisregel uppdaterad");
+    },
+    onError: (e: any) => toast.error(e.message || "Kunde inte uppdatera prisregeln"),
+  });
+
+  const handleSave = () => {
+    const parsedValue = Number(value);
+    const parsedVat = Number(vat);
+    if (Number.isNaN(parsedValue) || parsedValue < 0) {
+      toast.error("Ogiltigt pris/rabatt");
+      return;
+    }
+    updatePricing.mutate({
+      id: pricing.id,
+      label: label.trim() || null,
+      fixed_price: mode === "fixed" ? parsedValue : null,
+      discount_percent: mode === "percent" ? parsedValue : null,
+      vat_rate: Number.isNaN(parsedVat) ? 6 : parsedVat,
+    });
+  };
+
+  return (
+    <div className="rounded-xl p-3 space-y-2" style={{ background: "hsl(var(--surface-2))" }}>
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold">{productTypes.find((p) => p.key === pricing.product_type)?.label || pricing.product_type}</p>
+          <p className="text-[10px] text-muted-foreground">{pricing.product_type}</p>
+        </div>
+        <button onClick={() => onDelete(pricing.id)} className="text-muted-foreground/50 hover:text-destructive">
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <input
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder="Visningsnamn"
+        className="w-full rounded-xl px-3 py-2 text-xs outline-none"
+        style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+      />
+      <div className="grid grid-cols-3 gap-2">
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as "fixed" | "percent")}
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+        >
+          <option value="fixed">Fast pris</option>
+          <option value="percent">Rabatt %</option>
+        </select>
+        <input
+          type="number"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+        />
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            value={vat}
+            onChange={(e) => setVat(e.target.value)}
+            className="w-full rounded-xl px-3 py-2 text-xs outline-none"
+            style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+          />
+          <span className="text-[10px] text-muted-foreground">% moms</span>
+        </div>
+      </div>
+      <button
+        onClick={handleSave}
+        disabled={updatePricing.isPending}
+        className="w-full flex items-center justify-center gap-2 rounded-xl py-2 bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50"
+      >
+        {updatePricing.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+        Spara prisregel
+      </button>
+    </div>
+  );
+};
+
 const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: string }) => {
   const qc = useQueryClient();
   const { data: pricing, isLoading } = useQuery<TierPricing[]>({
     queryKey: ["tier-pricing", tier.id],
     queryFn: () => apiGet("api-memberships", "tier-pricing", { tierId: tier.id }),
   });
-  const { data: products } = useQuery<any[]>({
+  const { data: products } = useQuery<AccessProduct[]>({
     queryKey: ["admin-access-products", venueId],
     queryFn: () => apiGet("api-admin", "products", { venueId }),
   });
@@ -114,8 +243,8 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
   // Products already configured
   const productTypes = [
     { key: "court_hourly", label: "Bana per timme" },
-    ...((products || []).map((product: any) => ({ key: product.product_key, label: product.name }))),
-    ...FALLBACK_PRODUCT_TYPES.filter((fallback) => !(products || []).some((product: any) => product.product_key === fallback.key) && fallback.key !== "court_hourly"),
+    ...((products || []).map((product) => ({ key: product.product_key, label: product.name }))),
+    ...FALLBACK_PRODUCT_TYPES.filter((fallback) => !(products || []).some((product) => product.product_key === fallback.key) && fallback.key !== "court_hourly"),
   ];
   const usedProducts = (pricing || []).map(p => p.product_type);
   const availableProducts = productTypes.filter(p => !usedProducts.includes(p.key));
@@ -127,18 +256,7 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
       {isLoading && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
 
       {(pricing || []).map((p) => (
-        <div key={p.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: "hsl(var(--surface-2))" }}>
-          <div>
-            <p className="text-xs font-semibold">{p.label || p.product_type}</p>
-            <p className="text-[10px] text-muted-foreground">
-              {p.fixed_price != null ? `${p.fixed_price} kr` : `${p.discount_percent}% rabatt`}
-              {" · "}{p.vat_rate}% moms
-            </p>
-          </div>
-          <button onClick={() => deletePricing.mutate(p.id)} className="text-muted-foreground/50 hover:text-destructive">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        <EditableTierPricingRow key={p.id} pricing={p} productTypes={productTypes} onDelete={(id) => deletePricing.mutate(id)} />
       ))}
 
       {availableProducts.length > 0 && (
@@ -205,11 +323,6 @@ const MembershipBenefitsEditor = ({ tier }: { tier: MembershipTier }) => {
     queryKey: ["tier-entitlements", tier.id],
     queryFn: () => apiGet("api-memberships", "tier-entitlements", { tierId: tier.id }),
   });
-
-  const getValue = (type: string) => {
-    const row = (entitlements || []).find((item) => item.entitlement_type === type && (item.sport_type || "pickleball") === "pickleball");
-    return Number(row?.value || 0);
-  };
 
   const [courtHours, setCourtHours] = useState("0");
   const [openPlayUnlimited, setOpenPlayUnlimited] = useState(false);
@@ -301,6 +414,235 @@ const MembershipBenefitsEditor = ({ tier }: { tier: MembershipTier }) => {
   );
 };
 
+const TierDetailsEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: string }) => {
+  const qc = useQueryClient();
+  const [name, setName] = useState(tier.name);
+  const [description, setDescription] = useState(tier.description || "");
+  const [color, setColor] = useState(tier.color || "#E86C24");
+  const [monthlyPrice, setMonthlyPrice] = useState(String(tier.monthly_price || 0));
+  const [sortOrder, setSortOrder] = useState(String(tier.sort_order || 0));
+
+  useEffect(() => {
+    setName(tier.name);
+    setDescription(tier.description || "");
+    setColor(tier.color || "#E86C24");
+    setMonthlyPrice(String(tier.monthly_price || 0));
+    setSortOrder(String(tier.sort_order || 0));
+  }, [tier]);
+
+  const updateTierDetails = useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiPatch("api-memberships", "tiers", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["membership-tiers", venueId] });
+      toast.success("Nivå uppdaterad");
+    },
+    onError: (e: any) => toast.error(e.message || "Kunde inte uppdatera nivån"),
+  });
+
+  const handleSave = () => {
+    if (!name.trim()) {
+      toast.error("Namn krävs");
+      return;
+    }
+    updateTierDetails.mutate({
+      tierId: tier.id,
+      name: name.trim(),
+      description: description.trim() || null,
+      color,
+      monthly_price: Number(monthlyPrice || 0),
+      sort_order: Number(sortOrder || 0),
+    });
+  };
+
+  return (
+    <div className="mt-3 space-y-3 border-t border-border pt-3">
+      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Grundinfo</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Namn"
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+        />
+        <input
+          value={monthlyPrice}
+          onChange={(e) => setMonthlyPrice(e.target.value)}
+          type="number"
+          placeholder="Pris/mån"
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+        />
+        <input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Beskrivning"
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            type="color"
+            value={color}
+            onChange={(e) => setColor(e.target.value)}
+            className="h-9 rounded-xl cursor-pointer border-0"
+          />
+          <input
+            type="number"
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value)}
+            placeholder="Sortering"
+            className="rounded-xl px-3 py-2 text-xs outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+          />
+        </div>
+      </div>
+      <button
+        onClick={handleSave}
+        disabled={updateTierDetails.isPending}
+        className="w-full flex items-center justify-center gap-2 rounded-xl py-2 bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50"
+      >
+        {updateTierDetails.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+        Spara grundinfo
+      </button>
+    </div>
+  );
+};
+
+const EditableMembershipRow = ({
+  membership,
+  tiers,
+  venueId,
+}: {
+  membership: AdminMembership;
+  tiers: MembershipTier[];
+  venueId: string;
+}) => {
+  const qc = useQueryClient();
+  const [tierId, setTierId] = useState(membership.tier_id);
+  const [status, setStatus] = useState(membership.status || "active");
+  const [expiresAt, setExpiresAt] = useState(membership.expires_at || "");
+  const [notes, setNotes] = useState(membership.notes || "");
+
+  useEffect(() => {
+    setTierId(membership.tier_id);
+    setStatus(membership.status || "active");
+    setExpiresAt(membership.expires_at || "");
+    setNotes(membership.notes || "");
+  }, [membership]);
+
+  const updateMembership = useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiPatch("api-memberships", "update", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["venue-memberships", venueId] });
+      toast.success("Medlemskap uppdaterat");
+    },
+    onError: (e: any) => toast.error(e.message || "Kunde inte uppdatera medlemskapet"),
+  });
+
+  const handleSave = () => {
+    updateMembership.mutate({
+      membershipId: membership.id,
+      tierId,
+      status,
+      expiresAt: expiresAt || null,
+      notes: notes.trim() || null,
+    });
+  };
+
+  const title = membership.user_name || membership.user_email || membership.user_id.slice(0, 8);
+
+  return (
+    <div className="rounded-2xl p-3 space-y-3" style={{ background: "hsl(var(--surface-2))" }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold truncate">{title}</p>
+          <p className="text-[10px] text-muted-foreground truncate">
+            {[membership.user_email, membership.user_phone].filter(Boolean).join(" · ") || membership.user_id}
+          </p>
+        </div>
+        <span className="text-[10px] px-2 py-1 rounded-full bg-primary/10 text-primary font-semibold">
+          {membership.membership_tiers?.name || "Medlem"}
+        </span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <select
+          value={tierId}
+          onChange={(e) => setTierId(e.target.value)}
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+        >
+          {tiers.filter((tier) => tier.is_assignable !== false).map((tier) => (
+            <option key={tier.id} value={tier.id}>
+              {tier.name}{tier.is_active ? "" : " · dold"}
+            </option>
+          ))}
+        </select>
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+        >
+          <option value="active">Aktiv</option>
+          <option value="cancelled">Avslutad</option>
+          <option value="expired">Utgången</option>
+        </select>
+        <input
+          type="date"
+          value={expiresAt}
+          onChange={(e) => setExpiresAt(e.target.value)}
+          className="rounded-xl px-3 py-2 text-xs outline-none"
+          style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+        />
+      </div>
+      <input
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="Intern anteckning"
+        className="w-full rounded-xl px-3 py-2 text-xs outline-none"
+        style={{ background: "hsl(var(--surface-1))", border: "1px solid hsl(var(--border))" }}
+      />
+      <button
+        onClick={handleSave}
+        disabled={updateMembership.isPending}
+        className="w-full flex items-center justify-center gap-2 rounded-xl py-2 bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50"
+      >
+        {updateMembership.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+        Spara medlemskap
+      </button>
+    </div>
+  );
+};
+
+const ActiveMembershipsManager = ({ venueId, tiers }: { venueId: string; tiers: MembershipTier[] }) => {
+  const { data: memberships, isLoading } = useQuery<AdminMembership[]>({
+    queryKey: ["venue-memberships", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-memberships", "venue", { venueId }),
+  });
+
+  return (
+    <div className="glass-card rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Aktiva medlemskap</p>
+          <p className="text-[10px] text-muted-foreground">Byt nivå, slutdatum, status och interna anteckningar.</p>
+        </div>
+        {isLoading && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
+      </div>
+      <div className="space-y-2">
+        {(memberships || []).map((membership) => (
+          <EditableMembershipRow key={membership.id} membership={membership} tiers={tiers} venueId={venueId} />
+        ))}
+        {!isLoading && (!memberships || memberships.length === 0) && (
+          <p className="text-sm text-muted-foreground text-center py-6">Inga aktiva medlemskap ännu</p>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const AdminMemberships = ({ venueId }: { venueId: string }) => {
   const qc = useQueryClient();
   const { data: tiers, isLoading } = useQuery<MembershipTier[]>({
@@ -351,6 +693,7 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
   const assignMembership = useMutation({
     mutationFn: (body: any) => apiPost("api-memberships", "assign-email", body),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["venue-memberships", venueId] });
       toast.success("Medlemskap tilldelat");
       setAssignEmail("");
       setAssignName("");
@@ -506,6 +849,7 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
                   exit={{ height: 0, opacity: 0 }}
                   className="overflow-hidden"
                 >
+                  <TierDetailsEditor tier={tier} venueId={venueId} />
                   <MembershipBenefitsEditor tier={tier} />
                   <TierPricingEditor tier={tier} venueId={venueId} />
                 </motion.div>
@@ -517,6 +861,8 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
           <p className="text-sm text-muted-foreground text-center py-6">Inga medlemskapsnivåer ännu</p>
         )}
       </div>
+
+      <ActiveMembershipsManager venueId={venueId} tiers={tiers || []} />
 
       <div className="glass-card rounded-2xl p-4 space-y-3">
         <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Tilldela medlemskap</p>

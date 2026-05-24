@@ -213,19 +213,71 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
+    // PATCH /api-memberships/tier-pricing
+    if (req.method === 'PATCH' && path === 'tier-pricing') {
+      const body = await req.json();
+      const { id, product_type, fixed_price, discount_percent, vat_rate, label } = body;
+      if (!id) return errorResponse('Missing id');
+
+      const { data: tp } = await admin.from('membership_tier_pricing').select('tier_id').eq('id', id).single();
+      if (!tp) return errorResponse('Pricing not found', 404);
+      const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tp.tier_id).single();
+      if (!tier) return errorResponse('Tier not found', 404);
+      if (!await assertVenueAdmin(admin, userId, tier.venue_id)) return errorResponse('Forbidden', 403);
+
+      const updates: Record<string, any> = {};
+      if (product_type !== undefined) updates.product_type = product_type;
+      if (fixed_price !== undefined) updates.fixed_price = fixed_price;
+      if (discount_percent !== undefined) updates.discount_percent = discount_percent;
+      if (vat_rate !== undefined) updates.vat_rate = vat_rate;
+      if (label !== undefined) updates.label = label || null;
+
+      const { data, error: uErr } = await admin.from('membership_tier_pricing')
+        .update(updates)
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (uErr) return errorResponse(uErr.message);
+      return jsonResponse(data);
+    }
+
     // ── MEMBERSHIPS (user assignments) ──
 
     // GET /api-memberships/venue?venueId=X
     if (req.method === 'GET' && path === 'venue') {
       const venueId = url.searchParams.get('venueId');
       if (!venueId) return errorResponse('Missing venueId');
+      if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
 
-      const { data, error: qErr } = await client.from('memberships')
-        .select('*, membership_tiers(id, name, color, discount_percent)')
+      const { data, error: qErr } = await admin.from('memberships')
+        .select('*, membership_tiers(id, name, color, discount_percent, monthly_price)')
         .eq('venue_id', venueId).eq('status', 'active')
         .order('created_at', { ascending: false });
       if (qErr) return errorResponse(qErr.message);
-      return jsonResponse(data, 200, 10);
+
+      const userIds = Array.from(new Set((data || []).map((row: any) => row.user_id).filter(Boolean)));
+      const { data: profiles } = userIds.length
+        ? await admin.from('player_profiles').select('auth_user_id, display_name, phone').in('auth_user_id', userIds)
+        : { data: [] };
+      const profileByUserId = new Map((profiles || []).map((profile: any) => [profile.auth_user_id, profile]));
+
+      const authUsers = await Promise.all(userIds.map(async (id) => {
+        const { data: authUser } = await admin.auth.admin.getUserById(id);
+        return authUser?.user || null;
+      }));
+      const emailByUserId = new Map(authUsers.filter(Boolean).map((authUser: any) => [authUser.id, authUser.email]));
+
+      const enriched = (data || []).map((row: any) => {
+        const profile = profileByUserId.get(row.user_id);
+        return {
+          ...row,
+          user_email: emailByUserId.get(row.user_id) || null,
+          user_name: profile?.display_name || null,
+          user_phone: profile?.phone || null,
+        };
+      });
+
+      return jsonResponse(enriched, 200, 10);
     }
 
     // GET /api-memberships/user?userId=X&venueId=Y
