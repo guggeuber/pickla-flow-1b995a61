@@ -185,6 +185,10 @@ async function handleCourtBooking(
   const sharedAccessCode = existingSessionBooking?.access_code ||
     (await generateAccessCode(serviceClient, venue_id, date));
   let insertedAnyBooking = false;
+  const includedCourtHours = Number(meta.included_court_hours || 0);
+  const paidCourtHours = Number(meta.paid_court_hours || 0);
+  const includedHoursPerCourt = courtIds.length > 0 ? includedCourtHours / courtIds.length : 0;
+  const paidHoursPerCourt = courtIds.length > 0 ? paidCourtHours / courtIds.length : 0;
 
   for (const courtId of courtIds) {
     // Idempotency: skip if already created for this session + court
@@ -223,6 +227,12 @@ async function handleCourtBooking(
       access_code:            sharedAccessCode,
       access_code_expires_at: endISO,
       stripe_session_id:      session.id,
+      membership_id:          meta.membership_id || null,
+      included_court_hours:   includedHoursPerCourt,
+      paid_court_hours:       paidHoursPerCourt,
+      membership_usage_entitlement_type: includedHoursPerCourt > 0 ? 'court_hours_per_week' : null,
+      membership_usage_period_start: includedHoursPerCourt > 0 ? meta.entitlement_period_start : null,
+      membership_usage_period_end:   includedHoursPerCourt > 0 ? meta.entitlement_period_end : null,
     });
 
     if (error) throw new Error(`Failed to insert booking for court ${courtId}: ${error.message}`);
@@ -249,7 +259,6 @@ async function handleCourtBooking(
     totalSek,
   });
 
-  const includedCourtHours = Number(meta.included_court_hours || 0);
   if (insertedAnyBooking && includedCourtHours > 0 && meta.entitlement_period_start && meta.entitlement_period_end) {
     const { data: usage } = await serviceClient
       .from('membership_usage')

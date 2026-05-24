@@ -372,6 +372,8 @@ function formatMembershipBenefit(entitlement: any) {
       return `Obegränsad open play${sportLabel}`;
     case "free_day_pass_monthly":
       return `${entitlement.value || 1} gratis dagspass per månad${sportLabel}`;
+    case "guest_day_vouchers_monthly":
+      return `${entitlement.value || 1} gästpass per månad${sportLabel}`;
     case "court_discount_pct":
       return `${entitlement.value || 0}% rabatt på banbokning${sportLabel}`;
     case "day_pass_discount_pct":
@@ -400,12 +402,60 @@ function formatTierPricingBenefit(pricing: any) {
   return label;
 }
 
+function getMembershipBenefitRows(tier: any, benefitsData: any) {
+  const entitlements = (tier?.membership_entitlements || [])
+    .filter((entitlement: any) => Number(entitlement.value || 0) > 0);
+  const rows = [...entitlements];
+  const hasType = (type: string) => rows.some((row: any) => row.entitlement_type === type);
+
+  const courtHours = benefitsData?.court_hours;
+  if (!hasType("court_hours_per_week") && Number(courtHours?.allowed || 0) > 0) {
+    rows.push({
+      entitlement_type: "court_hours_per_week",
+      value: courtHours.allowed,
+      period: "week",
+    });
+  }
+
+  if (!hasType("open_play_unlimited") && benefitsData?.open_play_unlimited) {
+    rows.push({
+      entitlement_type: "open_play_unlimited",
+      value: 1,
+      period: null,
+    });
+  }
+
+  const guestVouchers = benefitsData?.guest_vouchers;
+  if (!hasType("guest_day_vouchers_monthly") && Number(guestVouchers?.allowed || 0) > 0) {
+    rows.push({
+      entitlement_type: "guest_day_vouchers_monthly",
+      value: guestVouchers.allowed,
+      period: "month",
+    });
+  }
+
+  return rows;
+}
+
+function getMembershipShortSummary(tier: any, benefitsData: any) {
+  const rows = getMembershipBenefitRows(tier, benefitsData);
+  const parts: string[] = [];
+  const courtHours = rows.find((row: any) => row.entitlement_type === "court_hours_per_week");
+  const guestVouchers = rows.find((row: any) => row.entitlement_type === "guest_day_vouchers_monthly");
+  if (courtHours) parts.push(`${courtHours.value}h/vecka`);
+  if (rows.some((row: any) => row.entitlement_type === "open_play_unlimited")) parts.push("Open Play ingår");
+  if (guestVouchers) parts.push(`${guestVouchers.value} gästpass/mån`);
+  return parts.join(" · ");
+}
+
 function MembershipDetailsSheet({
   membership,
+  benefitsData,
   open,
   onOpenChange,
 }: {
   membership: any | null;
+  benefitsData?: any;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -414,11 +464,13 @@ function MembershipDetailsSheet({
 
   if (!membership) return null;
 
-  const tier = membership.membership_tiers;
+  const tier = membership.membership_tiers || benefitsData?.membership?.tier;
   const tierPricing = tier?.membership_tier_pricing || [];
-  const entitlements = (tier?.membership_entitlements || []).filter((entitlement: any) => Number(entitlement.value || 0) > 0);
-  const startsAt = membership.starts_at ? new Date(membership.starts_at) : null;
-  const expiresAt = membership.expires_at ? new Date(membership.expires_at) : null;
+  const entitlements = getMembershipBenefitRows(tier, benefitsData);
+  const courtHours = benefitsData?.court_hours;
+  const guestVouchers = benefitsData?.guest_vouchers;
+  const startsAt = (membership.starts_at || benefitsData?.membership?.starts_at) ? new Date(membership.starts_at || benefitsData?.membership?.starts_at) : null;
+  const expiresAt = (membership.expires_at || benefitsData?.membership?.expires_at) ? new Date(membership.expires_at || benefitsData?.membership?.expires_at) : null;
   const nextBillingDate = expiresAt || (startsAt ? new Date(startsAt.getFullYear(), startsAt.getMonth() + 1, startsAt.getDate()) : null);
   const hasMonthlyPrice = Number(tier?.monthly_price || 0) > 0;
   const billingLabel = expiresAt ? "Gäller till" : hasMonthlyPrice ? "Nästa dragning" : "Period";
@@ -471,6 +523,33 @@ function MembershipDetailsSheet({
               </p>
             </div>
           </div>
+
+          {(Number(courtHours?.allowed || 0) > 0 || benefitsData?.open_play_unlimited || Number(guestVouchers?.allowed || 0) > 0) && (
+            <div className="mt-5 rounded-2xl p-3 space-y-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
+              {Number(courtHours?.allowed || 0) > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs" style={{ color: TEXT_SECONDARY }}>Fria ban-timmar denna vecka</p>
+                  <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY }}>
+                    {courtHours.remaining} / {courtHours.allowed}h kvar
+                  </p>
+                </div>
+              )}
+              {benefitsData?.open_play_unlimited && (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs" style={{ color: TEXT_SECONDARY }}>Open Play</p>
+                  <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY }}>Ingår</p>
+                </div>
+              )}
+              {Number(guestVouchers?.allowed || 0) > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs" style={{ color: TEXT_SECONDARY }}>Gästpass denna månad</p>
+                  <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY }}>
+                    {guestVouchers.remaining} / {guestVouchers.allowed} kvar
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mt-5">
             <p className="text-sm font-semibold mb-2" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Förmåner</p>
@@ -817,9 +896,7 @@ function DayPassSection() {
 
   const passes = data?.passes || [];
   const allowance = data?.allowance || { has_membership: false, passes_allowed: 0, passes_remaining: 0 };
-  const courtHours = data?.court_hours || { allowed: 0, used: 0, remaining: 0 };
   const guestVoucherInfo = data?.guest_vouchers || { allowed: 0, issued: 0, remaining: 0, vouchers: [] };
-  const openPlayUnlimited = !!data?.open_play_unlimited;
   const guestVouchers = guestVoucherInfo.vouchers || [];
 
   const activePasses = passes.filter((p: any) => p.status === 'active' && !p.share);
@@ -893,32 +970,22 @@ function DayPassSection() {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <Ticket className="w-4 h-4" style={{ color: BLUE }} />
-          <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Medlemsförmåner & gästpass</span>
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Gästpass & dagspass</span>
           <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>
             {activeCount}
           </span>
         </div>
       </div>
 
-      {/* Member allowance info */}
-      {allowance.has_membership && (allowance.passes_allowed > 0 || courtHours.allowed > 0 || openPlayUnlimited) && (
+      {/* Guest voucher allowance info */}
+      {allowance.has_membership && allowance.passes_allowed > 0 && (
         <div className="rounded-xl px-3 py-2 mb-3 space-y-1.5" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
-          {courtHours.allowed > 0 && (
+          <div className="flex items-center gap-2">
+            <Gift className="w-3.5 h-3.5 shrink-0" style={{ color: GREEN }} />
             <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
-              <span className="font-bold" style={{ color: TEXT_PRIMARY }}>{courtHours.remaining}</span> av {courtHours.allowed} fria ban-timmar kvar denna vecka
+              <span className="font-bold" style={{ color: TEXT_PRIMARY }}>{allowance.passes_remaining}</span> av {allowance.passes_allowed} gästpass kvar denna månad
             </p>
-          )}
-          {openPlayUnlimited && (
-            <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>Open Play ingår i ditt medlemskap</p>
-          )}
-          {allowance.passes_allowed > 0 && (
-            <div className="flex items-center gap-2">
-              <Gift className="w-3.5 h-3.5 shrink-0" style={{ color: GREEN }} />
-              <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
-                <span className="font-bold" style={{ color: TEXT_PRIMARY }}>{allowance.passes_remaining}</span> av {allowance.passes_allowed} gästpass kvar denna månad
-              </p>
-            </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -1274,6 +1341,7 @@ const MyPage = () => {
   const { data: bookings } = useMyBookings();
   const { data: eventRegistrations } = useMyEventRegistrations(profile);
   const { data: activeMembership } = useActiveMembership();
+  const { data: membershipBenefits } = useMyPasses();
   const { data: activityThreads = [] } = useMyActivityThreads();
   const activityThreadIds = activityThreads.map((thread) => thread.room.id);
   const { data: threadPreviews = {} } = useActivityThreadPreviews(activityThreadIds);
@@ -1349,7 +1417,8 @@ const MyPage = () => {
   const visibleThreadPreviews = Object.fromEntries(
     Object.entries(threadPreviews).filter(([roomId]) => visibleThreadRoomIds.includes(roomId))
   );
-  const membershipTier = (activeMembership as any)?.membership_tiers;
+  const membershipTier = (activeMembership as any)?.membership_tiers || (membershipBenefits as any)?.membership?.tier;
+  const membershipSummary = getMembershipShortSummary(membershipTier, membershipBenefits);
   const closeBookingDetails = (open: boolean) => {
     if (open) return;
     setSelectedBooking(null);
@@ -1405,7 +1474,7 @@ const MyPage = () => {
                         {membershipTier?.name || "Medlem"}
                       </p>
                       <p className="text-[11px]" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>
-                        {membershipTier?.description || "Aktivt medlemskap"}
+                        {membershipSummary || membershipTier?.description || "Aktivt medlemskap"}
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 ml-auto shrink-0" style={{ color: TEXT_MUTED }} />
@@ -1679,6 +1748,7 @@ const MyPage = () => {
 
       <MembershipDetailsSheet
         membership={activeMembership}
+        benefitsData={membershipBenefits}
         open={showMembershipDetails}
         onOpenChange={setShowMembershipDetails}
       />

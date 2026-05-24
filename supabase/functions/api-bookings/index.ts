@@ -24,6 +24,107 @@ function parseNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function stockholmWeekForIso(iso: string) {
+  const dt = DateTime.fromISO(iso, { zone: 'utc' }).setZone('Europe/Stockholm');
+  return {
+    start: dt.startOf('week').toISODate()!,
+    end: dt.endOf('week').toISODate()!,
+  };
+}
+
+function bookingDurationHours(row: any) {
+  const start = new Date(row.start_time).getTime();
+  const end = new Date(row.end_time).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return (end - start) / 36e5;
+}
+
+async function refundMembershipCourtHours(admin: any, rows: any[]) {
+  const refunds = new Map<string, {
+    user_id: string;
+    venue_id: string;
+    period_start: string;
+    period_end: string;
+    value: number;
+  }>();
+
+  for (const row of rows) {
+    if (row.status === 'cancelled') continue;
+    const existingIncluded = parseNumber(row.included_court_hours, 0);
+    let refundHours = existingIncluded;
+    let periodStart = row.membership_usage_period_start || null;
+    let periodEnd = row.membership_usage_period_end || null;
+
+    // Legacy fallback for bookings made before usage metadata existed.
+    if (refundHours <= 0 && Number(row.total_price || 0) === 0 && row.user_id && row.venue_id) {
+      const sportType = row.venue_courts?.sport_type || 'pickleball';
+      const { data: membership } = await admin
+        .from('memberships')
+        .select('id, tier_id')
+        .eq('user_id', row.user_id)
+        .eq('venue_id', row.venue_id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (membership?.tier_id) {
+        let entitlementQuery = admin
+          .from('membership_entitlements')
+          .select('id')
+          .eq('tier_id', membership.tier_id)
+          .eq('entitlement_type', 'court_hours_per_week')
+          .limit(1);
+        entitlementQuery = sportType === 'pickleball'
+          ? entitlementQuery.or('sport_type.is.null,sport_type.eq.pickleball')
+          : entitlementQuery.eq('sport_type', sportType);
+        const { data: entitlement } = await entitlementQuery.maybeSingle();
+
+        if (entitlement) refundHours = bookingDurationHours(row);
+      }
+    }
+
+    if (refundHours <= 0) continue;
+    if (!periodStart || !periodEnd) {
+      const week = stockholmWeekForIso(row.start_time);
+      periodStart = week.start;
+      periodEnd = week.end;
+    }
+    const key = `${row.user_id}:${row.venue_id}:${periodStart}`;
+    const current = refunds.get(key) || {
+      user_id: row.user_id,
+      venue_id: row.venue_id,
+      period_start: periodStart,
+      period_end: periodEnd,
+      value: 0,
+    };
+    current.value += refundHours;
+    refunds.set(key, current);
+  }
+
+  for (const refund of refunds.values()) {
+    const { data: usage } = await admin
+      .from('membership_usage')
+      .select('used_value')
+      .eq('user_id', refund.user_id)
+      .eq('venue_id', refund.venue_id)
+      .eq('entitlement_type', 'court_hours_per_week')
+      .eq('period_start', refund.period_start)
+      .maybeSingle();
+
+    if (!usage) continue;
+    await admin.from('membership_usage').update({
+      used_value: Math.max(Number(usage.used_value || 0) - refund.value, 0),
+      period_end: refund.period_end,
+      updated_at: new Date().toISOString(),
+    })
+      .eq('user_id', refund.user_id)
+      .eq('venue_id', refund.venue_id)
+      .eq('entitlement_type', 'court_hours_per_week')
+      .eq('period_start', refund.period_start);
+  }
+}
+
 async function createFreeEntitlementBookingResponse({
   product_type,
   meta,
@@ -48,6 +149,17 @@ async function createFreeEntitlementBookingResponse({
     try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
     const accessCode = await generateAccessCode(adminFree, venue_id, meta.date);
     const bookings = [];
+    const quotaDate = meta.entitlement_period_start
+      ? DateTime.fromISO(meta.entitlement_period_start, { zone: 'Europe/Stockholm' })
+      : meta.date
+      ? DateTime.fromISO(meta.date, { zone: 'Europe/Stockholm' })
+      : DateTime.now().setZone('Europe/Stockholm');
+    const weekStart = (meta.entitlement_period_start || quotaDate.startOf('week').toISODate())!;
+    const weekEnd   = (meta.entitlement_period_end || quotaDate.endOf('week').toISODate())!;
+    const durationHours = parseFloat(meta.duration_hours || '0');
+    const courtHours = durationHours * Math.max(courtIds.length, 1);
+    const includedCourtHours = parseNumber(meta.included_court_hours, courtHours);
+    const includedHoursPerCourt = courtIds.length > 0 ? includedCourtHours / courtIds.length : 0;
 
     for (const courtId of courtIds) {
       const { data: conflicts } = await adminFree.from('bookings')
@@ -63,21 +175,17 @@ async function createFreeEntitlementBookingResponse({
         venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
         start_time: startISO, end_time: endISO, total_price: 0,
         status: 'confirmed', notes, access_code: accessCode, access_code_expires_at: endISO,
+        membership_id: meta.membership_id || null,
+        included_court_hours: includedHoursPerCourt,
+        paid_court_hours: 0,
+        membership_usage_entitlement_type: includedHoursPerCourt > 0 ? 'court_hours_per_week' : null,
+        membership_usage_period_start: includedHoursPerCourt > 0 ? weekStart : null,
+        membership_usage_period_end: includedHoursPerCourt > 0 ? weekEnd : null,
       }).select('booking_ref').single();
       if (bookingErr) return errorResponse(bookingErr.message, 500);
       if (booking) bookings.push(booking);
     }
 
-    const quotaDate = meta.entitlement_period_start
-      ? DateTime.fromISO(meta.entitlement_period_start, { zone: 'Europe/Stockholm' })
-      : meta.date
-      ? DateTime.fromISO(meta.date, { zone: 'Europe/Stockholm' })
-      : DateTime.now().setZone('Europe/Stockholm');
-    const weekStart = (meta.entitlement_period_start || quotaDate.startOf('week').toISODate())!;
-    const weekEnd   = (meta.entitlement_period_end || quotaDate.endOf('week').toISODate())!;
-    const durationHours = parseFloat(meta.duration_hours || '0');
-    const courtHours = durationHours * Math.max(courtIds.length, 1);
-    const includedCourtHours = parseNumber(meta.included_court_hours, courtHours);
     if (includedCourtHours > 0) {
       const { data: currentUsage } = await adminFree
         .from('membership_usage')
@@ -1420,7 +1528,7 @@ Deno.serve(async (req) => {
       const admin = getServiceClient();
       const { data: rows, error: rowsErr } = await admin
         .from('bookings')
-        .select('id, venue_id, user_id, booked_by, status')
+        .select('id, venue_id, user_id, booked_by, status, start_time, end_time, total_price, included_court_hours, membership_usage_period_start, membership_usage_period_end, venue_courts(sport_type)')
         .in('id', ids);
       if (rowsErr) return errorResponse(rowsErr.message, 500);
       if (!rows?.length) return errorResponse('Booking not found', 404);
@@ -1449,6 +1557,8 @@ Deno.serve(async (req) => {
         })();
       }
       if (!userOwnsAll && !staffCanCancel) return errorResponse('Forbidden', 403);
+
+      await refundMembershipCourtHours(admin, rows || []);
 
       const { data, error: cancelErr } = await admin
         .from('bookings')

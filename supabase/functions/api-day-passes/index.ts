@@ -17,7 +17,7 @@ async function getUserIdFromRequest(req: Request, adminClient: ReturnType<typeof
 async function getActiveMembershipWithBenefits(adminClient: ReturnType<typeof getServiceClient>, userId: string) {
   const { data: membership } = await adminClient
     .from('memberships')
-    .select('id, tier_id, venue_id, membership_tiers(id, name, color, membership_entitlements(entitlement_type, value, period, sport_type))')
+    .select('id, tier_id, venue_id, starts_at, expires_at, membership_tiers(id, name, color, description, monthly_price, membership_entitlements(entitlement_type, value, period, sport_type))')
     .eq('user_id', userId)
     .eq('status', 'active')
     .order('created_at', { ascending: false })
@@ -368,6 +368,14 @@ Deno.serve(async (req) => {
           vouchers: guestVouchers,
         },
         open_play_unlimited: openPlayUnlimited,
+        membership: membership ? {
+          id: membership.id,
+          tier_id: membership.tier_id,
+          venue_id: membership.venue_id,
+          starts_at: membership.starts_at,
+          expires_at: membership.expires_at,
+          tier: membership.membership_tiers || null,
+        } : null,
       });
     }
 

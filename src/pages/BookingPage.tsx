@@ -370,25 +370,6 @@ export default function BookingPage() {
       .filter((group) => group.slots.length > 0);
   }, [filteredTimeSlots]);
 
-  // When date changes: auto-select first available slot
-  useEffect(() => {
-    const periodSlots = filteredTimeSlots.filter((slot) => getTimePeriod(slot) === selectedPeriod);
-    setSelectedTime(periodSlots[0] ?? filteredTimeSlots[0] ?? null);
-    setSelectedCourts([]);
-  }, [dateStr, selectedPeriod]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // When slots load or the current time advances past the selected slot: re-validate
-  useEffect(() => {
-    if (filteredTimeSlots.length === 0) {
-      setSelectedTime(null);
-      setSelectedCourts([]);
-      return;
-    }
-    if (!selectedTime || !filteredTimeSlots.includes(selectedTime)) {
-      setSelectedTime(filteredTimeSlots[0]);
-    }
-  }, [filteredTimeSlots]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Check which courts are available for the selected time
   const courtAvailability = useMemo(() => {
     if (!selectedTime) return {};
@@ -432,6 +413,27 @@ export default function BookingPage() {
     return court ? { court, endTime } : null;
   };
 
+  // Keep the main card on a real available recommendation as availability data changes.
+  useEffect(() => {
+    const periodSlots = filteredTimeSlots.filter((slot) => getTimePeriod(slot) === selectedPeriod);
+    const candidateSlots = periodSlots.length ? periodSlots : filteredTimeSlots;
+
+    if (candidateSlots.length === 0) {
+      setSelectedTime(null);
+      setSelectedCourts([]);
+      return;
+    }
+
+    const selectedHasAvailableCourt = selectedTime && getFirstAvailableCourtForSlot(selectedTime);
+    const selectedStillInScope = selectedTime && candidateSlots.includes(selectedTime);
+    if (selectedHasAvailableCourt && selectedStillInScope) return;
+
+    const nextSlot = candidateSlots.find((slot) => getFirstAvailableCourtForSlot(slot)) || candidateSlots[0];
+    const match = getFirstAvailableCourtForSlot(nextSlot);
+    setSelectedTime(nextSlot);
+    setSelectedCourts(match ? [match.court.id] : []);
+  }, [dateStr, selectedPeriod, selectedDuration, sportFilter, filteredTimeSlots, existingBookings, sportCourts]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const selectedCourtObjects = useMemo(
     () => selectedCourts.map((id) => courts.find((court) => court.id === id)).filter(Boolean) as CourtData[],
     [selectedCourts, courts]
@@ -460,7 +462,16 @@ export default function BookingPage() {
   useEffect(() => {
     if (!selectedTime || !firstAvailableCourt || selectedCourts.length > 0) return;
     setSelectedCourts([firstAvailableCourt.id]);
-  }, [selectedTime, firstAvailableCourt?.id, selectedCourts.length]);
+  }, [selectedTime, firstAvailableCourt, selectedCourts.length]);
+
+  useEffect(() => {
+    if (!selectedTime || selectedCourts.length === 0) return;
+    const validSelected = selectedCourts.filter((id) =>
+      courtAvailability[id] !== false && sportCourts.some((court) => court.id === id)
+    );
+    if (validSelected.length === selectedCourts.length) return;
+    setSelectedCourts(validSelected.length ? validSelected : firstAvailableCourt ? [firstAvailableCourt.id] : []);
+  }, [selectedTime, selectedCourts, courtAvailability, sportCourts, firstAvailableCourt]);
 
   const switchSport = (sport: SportFilter) => {
     if (sport === sportFilter) return;

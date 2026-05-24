@@ -339,7 +339,6 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
           .from("bookings")
           .select(select)
           .eq("stripe_session_id", stripeSessionId)
-          .neq("status", "cancelled")
           .order("start_time", { ascending: true });
         if (error) return null;
         return groupBookingRows((data || []) as any[])[0] || null;
@@ -352,8 +351,7 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
           .select(select)
           .eq("user_id", userId!)
           .eq("start_time", directGroup.startTime)
-          .eq("end_time", directGroup.endTime)
-          .neq("status", "cancelled");
+          .eq("end_time", directGroup.endTime);
         if (directGroup.groupToken) {
           query = directGroup.groupToken.startsWith("code:")
             ? query.eq("access_code", directGroup.groupToken.slice("code:".length))
@@ -376,7 +374,6 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
           .from("bookings")
           .select(select)
           .eq("stripe_session_id", (firstBooking as any).stripe_session_id)
-          .neq("status", "cancelled")
           .order("start_time", { ascending: true });
         return groupBookingRows((data || [firstBooking]) as any[])[0] || null;
       }
