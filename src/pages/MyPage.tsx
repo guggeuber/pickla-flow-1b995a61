@@ -416,10 +416,13 @@ function MembershipDetailsSheet({
 
   const tier = membership.membership_tiers;
   const tierPricing = tier?.membership_tier_pricing || [];
-  const entitlements = tierPricing.length > 0 ? [] : (tier?.membership_entitlements || []);
+  const entitlements = (tier?.membership_entitlements || []).filter((entitlement: any) => Number(entitlement.value || 0) > 0);
   const startsAt = membership.starts_at ? new Date(membership.starts_at) : null;
   const expiresAt = membership.expires_at ? new Date(membership.expires_at) : null;
   const nextBillingDate = expiresAt || (startsAt ? new Date(startsAt.getFullYear(), startsAt.getMonth() + 1, startsAt.getDate()) : null);
+  const hasMonthlyPrice = Number(tier?.monthly_price || 0) > 0;
+  const billingLabel = expiresAt ? "Gäller till" : hasMonthlyPrice ? "Nästa dragning" : "Period";
+  const priceLabel = hasMonthlyPrice ? `${Math.round(Number(tier.monthly_price))} kr/mån` : "Betalt / manuellt";
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -458,11 +461,11 @@ function MembershipDetailsSheet({
             <div className="rounded-xl p-3" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
               <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Pris</p>
               <p className="text-sm font-bold mt-1" style={{ color: TEXT_PRIMARY }}>
-                {tier?.monthly_price ? `${Math.round(tier.monthly_price)} kr/mån` : "Ingår"}
+                {priceLabel}
               </p>
             </div>
             <div className="rounded-xl p-3" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
-              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Nästa dragning</p>
+              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{billingLabel}</p>
               <p className="text-sm font-bold mt-1" style={{ color: TEXT_PRIMARY }}>
                 {nextBillingDate ? nextBillingDate.toLocaleDateString("sv-SE", { day: "numeric", month: "short" }) : "Ej satt"}
               </p>
@@ -472,12 +475,7 @@ function MembershipDetailsSheet({
           <div className="mt-5">
             <p className="text-sm font-semibold mb-2" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Förmåner</p>
             <div className="flex flex-col gap-2">
-              {tierPricing.length > 0 ? tierPricing.map((pricing: any, idx: number) => (
-                <div key={`${pricing.product_type}-${idx}`} className="flex items-start gap-2 rounded-xl px-3 py-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
-                  <Check className="w-4 h-4 shrink-0 mt-0.5" style={{ color: GREEN }} />
-                  <p className="text-sm" style={{ color: TEXT_PRIMARY }}>{formatTierPricingBenefit(pricing)}</p>
-                </div>
-              )) : entitlements.length > 0 ? entitlements.map((entitlement: any, idx: number) => (
+              {entitlements.length > 0 ? entitlements.map((entitlement: any, idx: number) => (
                 <div key={`${entitlement.entitlement_type}-${idx}`} className="flex items-start gap-2 rounded-xl px-3 py-2" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}` }}>
                   <Check className="w-4 h-4 shrink-0 mt-0.5" style={{ color: GREEN }} />
                   <p className="text-sm" style={{ color: TEXT_PRIMARY }}>{formatMembershipBenefit(entitlement)}</p>
@@ -486,6 +484,27 @@ function MembershipDetailsSheet({
                 <p className="text-xs" style={{ color: TEXT_MUTED }}>Inga förmåner är konfigurerade ännu.</p>
               )}
             </div>
+          </div>
+
+          {tierPricing.length > 0 && (
+            <div className="mt-5">
+              <p className="text-sm font-semibold mb-2" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Medlemspriser</p>
+              <div className="flex flex-col gap-2">
+                {tierPricing.map((pricing: any, idx: number) => (
+                  <div key={`${pricing.product_type}-${idx}`} className="flex items-start gap-2 rounded-xl px-3 py-2" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
+                    <Check className="w-4 h-4 shrink-0 mt-0.5" style={{ color: BLUE }} />
+                    <p className="text-sm" style={{ color: TEXT_PRIMARY }}>{formatTierPricingBenefit(pricing)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-5 rounded-xl px-3 py-2" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+            <p className="text-[10px] uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Villkor</p>
+            <p className="text-xs leading-relaxed" style={{ color: TEXT_SECONDARY }}>
+              Medlemsförmåner gäller enligt aktuell nivå. Fria timmar och gästpass nollställs per period och outnyttjade gästpass rullar inte vidare om de inte redan skapats.
+            </p>
           </div>
 
           <button
@@ -701,7 +720,8 @@ function BookingDetailsSheet({
     try {
       await apiPost("api-bookings", "cancel", { bookingIds });
       toast.success("Bokningen är avbokad");
-      queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
       onOpenChange(false);
       setConfirmCancel(false);
     } catch (error: any) {
@@ -873,7 +893,7 @@ function DayPassSection() {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <Ticket className="w-4 h-4" style={{ color: BLUE }} />
-          <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina dagspass</span>
+          <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Medlemsförmåner & gästpass</span>
           <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>
             {activeCount}
           </span>
