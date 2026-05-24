@@ -172,7 +172,7 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await client.from('membership_tier_pricing')
         .select('*').eq('tier_id', tierId);
       if (qErr) return errorResponse(qErr.message);
-      return jsonResponse(data, 200, 15);
+      return jsonResponse(data);
     }
 
     // POST /api-memberships/tier-pricing

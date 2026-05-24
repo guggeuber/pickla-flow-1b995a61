@@ -77,9 +77,22 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
 
   const deletePricing = useMutation({
     mutationFn: (id: string) => apiDelete("api-memberships", `tier-pricing?id=${id}`),
+    onMutate: async (id: string) => {
+      const queryKey = ["tier-pricing", tier.id];
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<TierPricing[]>(queryKey);
+      qc.setQueryData<TierPricing[]>(queryKey, (current = []) => current.filter((item) => item.id !== id));
+      return { previous };
+    },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["tier-pricing", tier.id] });
       toast.success("Borttaget");
+    },
+    onError: (e: any, _id, context) => {
+      if (context?.previous) qc.setQueryData(["tier-pricing", tier.id], context.previous);
+      toast.error(e?.message || "Kunde inte ta bort prisregeln");
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["tier-pricing", tier.id] });
     },
   });
 
