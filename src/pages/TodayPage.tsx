@@ -220,6 +220,12 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
       const startUtc = now.startOf("day").toUTC().toISO()!;
       const endUtc = now.plus({ days: DAYS_AHEAD }).startOf("day").toUTC().toISO()!;
+      const isPastOccurrence = (date: DateTime, endTime: string | null | undefined) => {
+        if (!date.hasSame(now, "day") || !endTime) return false;
+        const [hour = 0, minute = 0] = String(endTime).slice(0, 5).split(":").map(Number);
+        const endsAt = date.set({ hour, minute, second: 0, millisecond: 0 });
+        return endsAt <= now;
+      };
 
       const [sessionsRes, eventsRes, bookingsRes] = await Promise.all([
         supabase
@@ -256,7 +262,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
           if (date >= now.startOf("day") && date < now.plus({ days: DAYS_AHEAD }).startOf("day")) {
             const occurrenceDate = date.toISODate();
-            if (occurrenceDate) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+            if (occurrenceDate && !isPastOccurrence(date, session.end_time)) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
           }
           continue;
         }
@@ -264,7 +270,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           const date = now.plus({ days: offset });
           if ((session.recurrence_days || []).includes(date.weekday % 7)) {
             const occurrenceDate = date.toISODate();
-            if (occurrenceDate) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+            if (occurrenceDate && !isPastOccurrence(date, session.end_time)) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
           }
         }
       }

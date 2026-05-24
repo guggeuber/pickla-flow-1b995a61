@@ -440,7 +440,7 @@ function useInquiryEventDetails(eventId: string | undefined, enabled: boolean) {
 function useFallbackActivitySessionForRoom(room: ChatRoom, venueId: string | undefined) {
   return useQuery({
     queryKey: ["hub-room-fallback-activity-session", room.id, room.title, venueId],
-    enabled: room.room_type === "event" && !room.resource_id && !!venueId && !!room.title,
+    enabled: room.room_type === "event" && !!venueId && !!room.title,
     staleTime: 60000,
     queryFn: async () => {
       const { data } = await supabase
@@ -448,7 +448,9 @@ function useFallbackActivitySessionForRoom(room: ChatRoom, venueId: string | und
         .select("id")
         .eq("venue_id", venueId!)
         .eq("is_active", true)
+        .eq("publish_status", "published")
         .eq("name", room.title)
+        .order("start_time", { ascending: true })
         .limit(1)
         .maybeSingle();
       return data as { id: string } | null;
@@ -720,7 +722,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
   const { data: inquiryEvent } = useInquiryEventDetails(room.resource_id, room.room_type === "event" && !!room.resource_id);
   const { data: fallbackActivitySession } = useFallbackActivitySessionForRoom(room, venueId);
-  const actionResourceId = room.resource_id || fallbackActivitySession?.id;
+  const actionResourceId = fallbackActivitySession?.id || room.resource_id;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const reactions = useRoomReactions(room.id);
   const [contextMsg, setContextMsg] = useState<ChatMessage | null>(null);
