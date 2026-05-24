@@ -151,7 +151,7 @@ const CustomersScreen = () => {
   const { data: membershipTiers } = useQuery({
     queryKey: ["membership-tiers", venueId],
     enabled: !!venueId,
-    queryFn: () => apiGet("api-memberships", "tiers", { venueId: venueId! }),
+    queryFn: () => apiGet("api-memberships", "tiers", { venueId: venueId!, includeHidden: "true" }),
   });
 
   const { data: currentMembership } = useQuery({
@@ -359,7 +359,7 @@ const CustomersScreen = () => {
                   <button onClick={() => setShowMembershipModal(false)}><X className="w-5 h-5 text-muted-foreground" /></button>
                 </div>
                 <div className="space-y-2">
-                  {(membershipTiers || []).filter((t: any) => t.is_active).map((mt: any) => (
+                  {(membershipTiers || []).filter((t: any) => t.is_assignable !== false).map((mt: any) => (
                     <motion.button key={mt.id} whileTap={{ scale: 0.97 }} onClick={() => assignMembership.mutate(mt.id)} disabled={assignMembership.isPending} className={`w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all ${memberTier?.id === mt.id ? "ring-2 ring-primary" : ""}`}>
                       <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `${mt.color}20` }}>
                         <Crown className="w-5 h-5" style={{ color: mt.color }} />
@@ -375,7 +375,7 @@ const CustomersScreen = () => {
                       {memberTier?.id === mt.id && <span className="text-[10px] px-2 py-1 rounded-full bg-primary/15 text-primary font-bold">Aktiv</span>}
                     </motion.button>
                   ))}
-                  {(!membershipTiers || membershipTiers.filter((t: any) => t.is_active).length === 0) && (
+                  {(!membershipTiers || membershipTiers.filter((t: any) => t.is_assignable !== false).length === 0) && (
                     <p className="text-sm text-muted-foreground text-center py-4">Inga medlemskapsnivåer skapade.</p>
                   )}
                 </div>

@@ -698,18 +698,16 @@ function BookingDetailsSheet({
   const handleCancel = async () => {
     if (!bookingIds.length) return;
     setCancelling(true);
-    const { error } = await supabase
-      .from("bookings")
-      .update({ status: "cancelled" })
-      .in("id", bookingIds);
-    setCancelling(false);
-    if (error) {
-      toast.error("Kunde inte avboka");
-    } else {
+    try {
+      await apiPost("api-bookings", "cancel", { bookingIds });
       toast.success("Bokningen är avbokad");
       queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
       onOpenChange(false);
       setConfirmCancel(false);
+    } catch (error: any) {
+      toast.error(error?.message || "Kunde inte avboka");
+    } finally {
+      setCancelling(false);
     }
   };
 

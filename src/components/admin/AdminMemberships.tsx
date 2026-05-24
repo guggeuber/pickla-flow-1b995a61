@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,7 @@ interface MembershipTier {
   monthly_price: number;
   sort_order: number;
   is_active: boolean;
+  is_assignable?: boolean;
 }
 
 interface TierPricing {
@@ -25,6 +26,15 @@ interface TierPricing {
   discount_percent: number | null;
   vat_rate: number;
   label: string | null;
+}
+
+interface MembershipEntitlement {
+  id: string;
+  tier_id: string;
+  entitlement_type: string;
+  value: number | null;
+  period: string | null;
+  sport_type: string | null;
 }
 
 const FALLBACK_PRODUCT_TYPES = [
@@ -176,13 +186,115 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
   );
 };
 
+const MembershipBenefitsEditor = ({ tier }: { tier: MembershipTier }) => {
+  const qc = useQueryClient();
+  const { data: entitlements, isLoading } = useQuery<MembershipEntitlement[]>({
+    queryKey: ["tier-entitlements", tier.id],
+    queryFn: () => apiGet("api-memberships", "tier-entitlements", { tierId: tier.id }),
+  });
+
+  const getValue = (type: string) => {
+    const row = (entitlements || []).find((item) => item.entitlement_type === type && (item.sport_type || "pickleball") === "pickleball");
+    return Number(row?.value || 0);
+  };
+
+  const [courtHours, setCourtHours] = useState("0");
+  const [openPlayUnlimited, setOpenPlayUnlimited] = useState(false);
+  const [guestVouchers, setGuestVouchers] = useState("0");
+
+  useEffect(() => {
+    if (!entitlements) return;
+    const valueFor = (type: string) => {
+      const row = entitlements.find((item) => item.entitlement_type === type && (item.sport_type || "pickleball") === "pickleball");
+      return Number(row?.value || 0);
+    };
+    setCourtHours(String(valueFor("court_hours_per_week")));
+    setOpenPlayUnlimited(valueFor("open_play_unlimited") > 0);
+    setGuestVouchers(String(valueFor("guest_day_vouchers_monthly")));
+  }, [entitlements]);
+
+  const saveBenefits = useMutation({
+    mutationFn: (body: any) => apiPatch("api-memberships", "tier-entitlements", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tier-entitlements", tier.id] });
+      toast.success("Förmåner sparade");
+    },
+    onError: (e: any) => toast.error(e.message || "Kunde inte spara förmåner"),
+  });
+
+  const handleSave = () => {
+    saveBenefits.mutate({
+      tierId: tier.id,
+      courtHoursPerWeek: Number(courtHours || 0),
+      openPlayUnlimited,
+      guestDayVouchersMonthly: Number(guestVouchers || 0),
+    });
+  };
+
+  return (
+    <div className="mt-3 space-y-3 border-t border-border pt-3">
+      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Förmåner</p>
+      {isLoading ? (
+        <Loader2 className="w-4 h-4 animate-spin text-primary" />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground">Fria ban-timmar / vecka</span>
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                className="w-full rounded-xl px-3 py-2 text-xs outline-none"
+                style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+                value={courtHours}
+                onChange={(e) => setCourtHours(e.target.value)}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground">Gästpass / månad</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                className="w-full rounded-xl px-3 py-2 text-xs outline-none"
+                style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+                value={guestVouchers}
+                onChange={(e) => setGuestVouchers(e.target.value)}
+              />
+            </label>
+            <label
+              className="flex items-center justify-between gap-3 rounded-xl px-3 py-2"
+              style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+            >
+              <span className="text-xs">Open Play ingår</span>
+              <input
+                type="checkbox"
+                checked={openPlayUnlimited}
+                onChange={(e) => setOpenPlayUnlimited(e.target.checked)}
+              />
+            </label>
+          </div>
+          <button
+            onClick={handleSave}
+            disabled={saveBenefits.isPending}
+            className="w-full rounded-xl py-2 bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50"
+          >
+            {saveBenefits.isPending ? "Sparar..." : "Spara förmåner"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+};
+
 const AdminMemberships = ({ venueId }: { venueId: string }) => {
   const qc = useQueryClient();
   const { data: tiers, isLoading } = useQuery<MembershipTier[]>({
     queryKey: ["membership-tiers", venueId],
     enabled: !!venueId,
     queryFn: async () => {
-      return apiGet("api-memberships", "tiers", { venueId });
+      return apiGet("api-memberships", "tiers", { venueId, includeHidden: "true" });
     },
   });
 
@@ -346,7 +458,15 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
                     tier.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"
                   }`}
                 >
-                  {tier.is_active ? "Aktiv" : "Av"}
+                  {tier.is_active ? "Publik" : "Dold"}
+                </button>
+                <button
+                  onClick={() => updateTier.mutate({ tierId: tier.id, is_assignable: tier.is_assignable === false })}
+                  className={`text-[10px] px-2 py-1 rounded-full font-semibold ${
+                    tier.is_assignable !== false ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {tier.is_assignable !== false ? "Tilldelbar" : "Ej tilldelbar"}
                 </button>
                 <div className="flex gap-1">
                   <button
@@ -373,6 +493,7 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
                   exit={{ height: 0, opacity: 0 }}
                   className="overflow-hidden"
                 >
+                  <MembershipBenefitsEditor tier={tier} />
                   <TierPricingEditor tier={tier} venueId={venueId} />
                 </motion.div>
               )}
@@ -408,8 +529,10 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
             style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
           >
             <option value="">Välj nivå...</option>
-            {(tiers || []).filter((tier) => tier.is_active).map((tier) => (
-              <option key={tier.id} value={tier.id}>{tier.name}</option>
+            {(tiers || []).filter((tier) => tier.is_assignable !== false).map((tier) => (
+              <option key={tier.id} value={tier.id}>
+                {tier.name}{tier.is_active ? "" : " · dold"}
+              </option>
             ))}
           </select>
           <input

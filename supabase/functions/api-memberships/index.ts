@@ -21,11 +21,27 @@ Deno.serve(async (req) => {
     // ── PUBLIC: GET /tiers — membership plans are visible to everyone ──
     if (req.method === 'GET' && path === 'tiers') {
       const venueId = url.searchParams.get('venueId');
+      const includeHidden = url.searchParams.get('includeHidden') === 'true';
       if (!venueId) return errorResponse('Missing venueId');
 
       const serviceClient = getServiceClient();
-      const { data, error: qErr } = await serviceClient.from('membership_tiers')
-        .select('*').eq('venue_id', venueId).order('sort_order');
+      let canSeeHidden = false;
+      if (includeHidden) {
+        const authHeader = req.headers.get('Authorization');
+        if (authHeader?.startsWith('Bearer ')) {
+          const token = authHeader.slice('Bearer '.length);
+          const { data: { user } } = await serviceClient.auth.getUser(token);
+          canSeeHidden = !!user?.id && await assertVenueAdmin(serviceClient, user.id, venueId);
+        }
+      }
+
+      let query = serviceClient.from('membership_tiers')
+        .select('*')
+        .eq('venue_id', venueId)
+        .order('sort_order');
+      if (!canSeeHidden) query = query.eq('is_active', true);
+
+      const { data, error: qErr } = await query;
       if (qErr) return errorResponse(qErr.message);
       return jsonResponse(data, 200, 15);
     }
@@ -89,6 +105,64 @@ Deno.serve(async (req) => {
     }
 
     // ── TIER PRICING ──
+
+    // GET /api-memberships/tier-entitlements?tierId=X
+    if (req.method === 'GET' && path === 'tier-entitlements') {
+      const tierId = url.searchParams.get('tierId');
+      if (!tierId) return errorResponse('Missing tierId');
+
+      const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tierId).single();
+      if (!tier) return errorResponse('Tier not found', 404);
+      if (!await assertVenueAdmin(admin, userId, tier.venue_id)) return errorResponse('Forbidden', 403);
+
+      const { data, error: qErr } = await admin.from('membership_entitlements')
+        .select('*')
+        .eq('tier_id', tierId)
+        .order('entitlement_type');
+      if (qErr) return errorResponse(qErr.message);
+      return jsonResponse(data || [], 200, 15);
+    }
+
+    // PATCH /api-memberships/tier-entitlements
+    if (req.method === 'PATCH' && path === 'tier-entitlements') {
+      const body = await req.json();
+      const { tierId, courtHoursPerWeek, openPlayUnlimited, guestDayVouchersMonthly } = body;
+      if (!tierId) return errorResponse('Missing tierId');
+
+      const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tierId).single();
+      if (!tier) return errorResponse('Tier not found', 404);
+      if (!await assertVenueAdmin(admin, userId, tier.venue_id)) return errorResponse('Forbidden', 403);
+
+      const rows = [
+        {
+          tier_id: tierId,
+          entitlement_type: 'court_hours_per_week',
+          value: Math.max(0, Number(courtHoursPerWeek || 0)),
+          period: 'week',
+          sport_type: 'pickleball',
+        },
+        {
+          tier_id: tierId,
+          entitlement_type: 'open_play_unlimited',
+          value: openPlayUnlimited ? 1 : 0,
+          period: null,
+          sport_type: 'pickleball',
+        },
+        {
+          tier_id: tierId,
+          entitlement_type: 'guest_day_vouchers_monthly',
+          value: Math.max(0, Number(guestDayVouchersMonthly || 0)),
+          period: 'month',
+          sport_type: 'pickleball',
+        },
+      ];
+
+      const { data, error: upsertErr } = await admin.from('membership_entitlements')
+        .upsert(rows, { onConflict: 'tier_id,entitlement_type,sport_type' })
+        .select('*');
+      if (upsertErr) return errorResponse(upsertErr.message);
+      return jsonResponse(data);
+    }
 
     // GET /api-memberships/tier-pricing?tierId=X
     if (req.method === 'GET' && path === 'tier-pricing') {
@@ -186,6 +260,13 @@ Deno.serve(async (req) => {
       if (!venueId || !customerUserId || !tierId) return errorResponse('Missing fields');
       if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
 
+      const { data: assignTier } = await admin.from('membership_tiers')
+        .select('*')
+        .eq('id', tierId)
+        .single();
+      if (!assignTier || assignTier.venue_id !== venueId) return errorResponse('Tier not found for venue', 404);
+      if (assignTier.is_assignable === false) return errorResponse('Tier is not assignable', 403);
+
       await admin.from('memberships')
         .update({ status: 'cancelled' })
         .eq('user_id', customerUserId).eq('venue_id', venueId).eq('status', 'active');
@@ -212,8 +293,10 @@ Deno.serve(async (req) => {
       if (!venueId || !normalizedEmail || !tierId) return errorResponse('Missing venueId, email or tierId');
       if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
 
-      const { data: tier } = await admin.from('membership_tiers').select('id, venue_id').eq('id', tierId).single();
+      const { data: tier } = await admin.from('membership_tiers').select('*').eq('id', tierId).single();
       if (!tier || tier.venue_id !== venueId) return errorResponse('Tier not found for venue', 404);
+      const assignable = (tier as any).is_assignable !== false;
+      if (!assignable) return errorResponse('Tier is not assignable', 403);
 
       let targetUserId = '';
       const existing = await findAuthUserByEmail(admin, normalizedEmail);

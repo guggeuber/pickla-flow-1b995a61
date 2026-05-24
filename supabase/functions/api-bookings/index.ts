@@ -1407,6 +1407,59 @@ Deno.serve(async (req) => {
       return jsonResponse(data);
     }
 
+    // POST /api-bookings/cancel — cancel one booking row or a grouped booking.
+    if (req.method === 'POST' && path === 'cancel') {
+      const body = await req.json();
+      const ids = Array.isArray(body.bookingIds)
+        ? body.bookingIds.filter(Boolean)
+        : body.bookingId
+        ? [body.bookingId]
+        : [];
+      if (!ids.length) return errorResponse('Missing bookingIds');
+
+      const admin = getServiceClient();
+      const { data: rows, error: rowsErr } = await admin
+        .from('bookings')
+        .select('id, venue_id, user_id, booked_by, status')
+        .in('id', ids);
+      if (rowsErr) return errorResponse(rowsErr.message, 500);
+      if (!rows?.length) return errorResponse('Booking not found', 404);
+
+      const requestedIds = new Set(ids.map(String));
+      if (rows.length !== requestedIds.size) return errorResponse('One or more bookings were not found', 404);
+
+      const venueIds = Array.from(new Set(rows.map((row: any) => row.venue_id).filter(Boolean)));
+      const userOwnsAll = rows.every((row: any) => row.user_id === userId || row.booked_by === userId);
+      let staffCanCancel = false;
+      if (!userOwnsAll && venueIds.length === 1) {
+        staffCanCancel = await (async () => {
+          const { data: role } = await admin.from('user_roles')
+            .select('role')
+            .eq('user_id', userId)
+            .eq('role', 'super_admin')
+            .maybeSingle();
+          if (role) return true;
+          const { data: staff } = await admin.from('venue_staff')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('venue_id', venueIds[0])
+            .eq('is_active', true)
+            .maybeSingle();
+          return !!staff;
+        })();
+      }
+      if (!userOwnsAll && !staffCanCancel) return errorResponse('Forbidden', 403);
+
+      const { data, error: cancelErr } = await admin
+        .from('bookings')
+        .update({ status: 'cancelled' })
+        .in('id', ids)
+        .select('id, status, booking_ref');
+      if (cancelErr) return errorResponse(cancelErr.message, 500);
+
+      return jsonResponse({ success: true, cancelled: data || [] });
+    }
+
     return errorResponse('Not found', 404);
   } catch (e) {
     return errorResponse((e as Error).message, 500);
