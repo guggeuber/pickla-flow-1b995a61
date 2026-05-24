@@ -740,7 +740,12 @@ Deno.serve(async (req) => {
       includes_day_access: String(meta.includes_day_access || ''),
     };
 
-    const cancelPath = meta.slug ? `/book?v=${meta.slug}` : isMembership ? '/membership' : '/book';
+    const encodedSlug = meta.slug ? encodeURIComponent(String(meta.slug)) : '';
+    const cancelPath = isMembership
+      ? `/membership${encodedSlug ? `?v=${encodedSlug}` : ''}`
+      : encodedSlug
+      ? `/book?v=${encodedSlug}`
+      : '/book';
     const requestedSuccessPath = safeLocalPath(meta.success_path);
     const successPath = isMembership
       ? '/membership/confirmed'

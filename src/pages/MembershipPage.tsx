@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,41 +15,83 @@ const FONT_MONO = "'Space Mono', monospace";
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.1 } } };
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 260, damping: 24 } } };
 
-function useMembershipTiers() {
+type TierPricing = {
+  product_type: string;
+  fixed_price: number | null;
+  discount_percent?: number | null;
+  label?: string | null;
+};
+
+type TierEntitlement = {
+  entitlement_type: string;
+  value: number;
+  period?: string | null;
+  sport_type?: string | null;
+};
+
+type MembershipTier = {
+  id: string;
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  sort_order?: number | null;
+  discount_percent?: number | null;
+  monthly_price?: number | null;
+  membership_tier_pricing?: TierPricing[] | null;
+  membership_entitlements?: TierEntitlement[] | null;
+};
+
+function useVenue(slug: string) {
   return useQuery({
-    queryKey: ["membership-tiers-full"],
-    staleTime: 60000,
+    queryKey: ["membership-venue", slug],
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
-      const { data: tiers } = await supabase
-        .from("membership_tiers")
-        .select("*")
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true });
-
-      const { data: pricing } = await supabase
-        .from("membership_tier_pricing")
-        .select("tier_id, product_type, fixed_price, discount_percent, label")
-        .in("product_type", ["day_pass", "event_fee", "court_hourly", "guest_pass"]);
-
-      return (tiers || []).map((t: any) => ({
-        ...t,
-        pricing: (pricing || []).filter((p: any) => p.tier_id === t.id),
-      }));
+      const { data, error } = await supabase
+        .from("venues")
+        .select("id, name, slug")
+        .eq("slug", slug)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
     },
   });
 }
 
-function useActiveMembership() {
+function useMembershipTiers(venueId?: string) {
+  return useQuery({
+    queryKey: ["membership-tiers-full", venueId],
+    enabled: !!venueId,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("membership_tiers")
+        .select(`
+          *,
+          membership_tier_pricing(product_type, fixed_price, discount_percent, label),
+          membership_entitlements(entitlement_type, value, period, sport_type)
+        `)
+        .eq("venue_id", venueId!)
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+      return (data || []) as MembershipTier[];
+    },
+  });
+}
+
+function useActiveMembership(venueId?: string) {
   const { user } = useAuth();
   return useQuery({
-    queryKey: ["my-membership", user?.id],
-    enabled: !!user,
+    queryKey: ["my-membership", user?.id, venueId],
+    enabled: !!user && !!venueId,
     staleTime: 30000,
     queryFn: async () => {
       const { data } = await supabase
         .from("memberships")
         .select("id, tier_id, membership_tiers(name)")
         .eq("user_id", user!.id)
+        .eq("venue_id", venueId!)
         .eq("status", "active")
         .limit(1)
         .maybeSingle();
@@ -74,42 +116,83 @@ function usePlayerProfile() {
   });
 }
 
-// Build benefit list from tier data
-function getTierBenefits(tier: any): string[] {
+const formatAmount = (value: number) => {
+  if (Number.isInteger(value)) return String(value);
+  return value.toLocaleString("sv-SE", { maximumFractionDigits: 1 });
+};
+
+// Build benefit list from actual tier configuration, not marketing filler.
+function getTierBenefits(tier: MembershipTier): string[] {
   const benefits: string[] = [];
-  const dayPass = tier.pricing?.find((p: any) => p.product_type === "day_pass");
-  const eventFee = tier.pricing?.find((p: any) => p.product_type === "event_fee");
-  const courtHourly = tier.pricing?.find((p: any) => p.product_type === "court_hourly");
+  const pricing = tier.membership_tier_pricing || [];
+  const entitlements = tier.membership_entitlements || [];
+
+  const courtHours = entitlements.find((e) => e.entitlement_type === "court_hours_per_week");
+  const openPlay = entitlements.find((e) => e.entitlement_type === "open_play_unlimited");
+  const guestVouchers = entitlements.find((e) => e.entitlement_type === "guest_day_vouchers_monthly");
+
+  if (courtHours?.value) {
+    benefits.push(`${formatAmount(courtHours.value)} fria ban-timmar per vecka`);
+  }
+  if (openPlay?.value) {
+    benefits.push("Open Play ingår");
+  }
+  if (guestVouchers?.value) {
+    benefits.push(`${formatAmount(guestVouchers.value)} gästpass per månad`);
+  }
+
+  const dayPass = pricing.find((p) => ["day_pass", "day_access"].includes(p.product_type));
+  const openPlaySlot = pricing.find((p) => p.product_type === "open_play_slot");
+  const training = pricing.find((p) => ["event_fee", "group_training", "group_training_day_access"].includes(p.product_type));
+  const courtHourly = pricing.find((p) => ["court_hourly", "court_booking"].includes(p.product_type));
 
   if (dayPass) {
-    if (dayPass.fixed_price === 0) benefits.push("Gratis dagspass – spela varje dag");
+    if (dayPass.fixed_price === 0) benefits.push("Dagspass ingår");
     else if (dayPass.fixed_price != null) benefits.push(`Dagspass för bara ${Math.round(dayPass.fixed_price)} kr`);
     else if (dayPass.discount_percent) benefits.push(`${dayPass.discount_percent}% rabatt på dagspass`);
   }
-  if (eventFee) {
-    if (eventFee.fixed_price === 0) benefits.push("Gratis deltagande i alla events");
-    else if (eventFee.fixed_price != null) benefits.push(`Events från ${Math.round(eventFee.fixed_price)} kr`);
-    else if (eventFee.discount_percent) benefits.push(`${eventFee.discount_percent}% rabatt på events`);
+  if (openPlaySlot) {
+    if (openPlaySlot.fixed_price === 0) benefits.push("Open Play-pass ingår");
+    else if (openPlaySlot.fixed_price != null) benefits.push(`Open Play från ${Math.round(openPlaySlot.fixed_price)} kr`);
+    else if (openPlaySlot.discount_percent) benefits.push(`${openPlaySlot.discount_percent}% rabatt på Open Play`);
+  }
+  if (training) {
+    if (training.fixed_price === 0) benefits.push("Gruppträning ingår");
+    else if (training.fixed_price != null) benefits.push(`Gruppträning från ${Math.round(training.fixed_price)} kr`);
+    else if (training.discount_percent) benefits.push(`${training.discount_percent}% rabatt på träning/event`);
   }
   if (courtHourly) {
     if (courtHourly.discount_percent) benefits.push(`${courtHourly.discount_percent}% rabatt på banbokning`);
     else if (courtHourly.fixed_price != null) benefits.push(`Boka bana för ${Math.round(courtHourly.fixed_price)} kr/h`);
   }
 
-  // Always add some generic benefits
-  benefits.push("Förtur vid banbokning");
-  benefits.push("Tillgång till medlemsevent & tävlingar");
-  if (benefits.length < 5) benefits.push("Del av Pickla-communityn");
+  return benefits.slice(0, 6);
+}
 
-  return benefits;
+function getTierTerms(tier: MembershipTier): string[] {
+  const monthlyPrice = Number(tier.monthly_price || 0);
+  if (monthlyPrice > 0) {
+    return [
+      "Betalning hanteras säkert via Stripe.",
+      "Förmåner gäller enligt medlemskapets villkor och aktiveras efter genomförd betalning.",
+      "Medlemskapet förnyas månadsvis om inget annat anges i villkoren.",
+    ];
+  }
+  return [
+    "Det här medlemskapet kräver manuell aktivering av Pickla.",
+    "Ingen betalning tas i detta flöde.",
+  ];
 }
 
 const TIER_ICONS = [Star, Zap, Crown];
 const MembershipPage = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user, signUp } = useAuth();
-  const { data: tiers, isLoading } = useMembershipTiers();
-  const { data: activeMembership } = useActiveMembership();
+  const slug = searchParams.get("v") || "pickla-arena-sthlm";
+  const { data: venue, isLoading: isVenueLoading } = useVenue(slug);
+  const { data: tiers, isLoading } = useMembershipTiers(venue?.id);
+  const { data: activeMembership } = useActiveMembership(venue?.id);
   const { data: profile } = usePlayerProfile();
   const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: "", email: "", phone: "", password: "" });
@@ -128,7 +211,7 @@ const MembershipPage = () => {
     e.preventDefault();
     if (!selectedTierId) return;
 
-    const tier = (tiers || []).find((t: any) => t.id === selectedTierId);
+    const tier = (tiers || []).find((t) => t.id === selectedTierId);
     if (!tier) return;
 
     setSubmitting(true);
@@ -170,6 +253,7 @@ const MembershipPage = () => {
           customer_name:  user ? "" : formData.name.trim(),
           customer_email: user ? (user.email || "") : formData.email.trim(),
           customer_phone: formData.phone.trim(),
+          slug,
         },
       });
       window.location.href = result.url;
@@ -202,7 +286,7 @@ const MembershipPage = () => {
             Spela mer. Betala mindre.
           </h1>
           <p className="text-[13px] mt-2 leading-relaxed" style={{ color: "rgba(62,61,57,0.55)", fontFamily: FONT_MONO }}>
-            Bli medlem och få tillgång till förmåner,{"\n"}rabatter och exklusiva events.
+            Medlemskap, fria timmar, Open Play och medlemspriser samlat på ditt konto.
           </p>
         </motion.div>
 
@@ -228,18 +312,21 @@ const MembershipPage = () => {
         )}
 
         {/* Tier cards */}
-        {isLoading ? (
+        {isVenueLoading || isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-5 h-5 animate-spin" style={{ color: "#3E3D39" }} />
           </div>
         ) : (
           <div className="flex flex-col gap-5">
-            {(tiers || []).map((tier: any, idx: number) => {
+            {(tiers || []).map((tier, idx: number) => {
               const isSelected = selectedTierId === tier.id;
               const benefits = getTierBenefits(tier);
+              const terms = getTierTerms(tier);
               const isBestValue = idx === bestValueIndex;
               const TierIcon = TIER_ICONS[Math.min(idx, TIER_ICONS.length - 1)];
               const tierColor = tier.color || "#E86C24";
+              const monthlyPrice = Number(tier.monthly_price || 0);
+              const isPaidTier = monthlyPrice > 0;
 
               return (
                 <motion.div key={tier.id} variants={item} className="relative">
@@ -287,18 +374,26 @@ const MembershipPage = () => {
 
                       {/* Benefits list */}
                       <div className="space-y-2.5 mt-4">
-                        {benefits.map((benefit, i) => (
-                          <div key={i} className="flex items-start gap-2.5">
-                            <Check
-                              className="w-4 h-4 flex-shrink-0 mt-0.5"
-                              style={{ color: tierColor }}
-                              strokeWidth={3}
-                            />
-                            <p className="text-[13px] leading-snug" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
-                              {benefit}
+                        {benefits.length > 0 ? (
+                          benefits.map((benefit, i) => (
+                            <div key={i} className="flex items-start gap-2.5">
+                              <Check
+                                className="w-4 h-4 flex-shrink-0 mt-0.5"
+                                style={{ color: tierColor }}
+                                strokeWidth={3}
+                              />
+                              <p className="text-[13px] leading-snug" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
+                                {benefit}
+                              </p>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-2xl px-4 py-3" style={{ background: "rgba(62,61,57,0.04)" }}>
+                            <p className="text-[12px] leading-relaxed" style={{ color: "rgba(62,61,57,0.58)", fontFamily: FONT_MONO }}>
+                              Pickla uppdaterar förmånerna för detta medlemskap. Kontakta oss om du vill köpa detta idag.
                             </p>
                           </div>
-                        ))}
+                        )}
                       </div>
                     </div>
 
@@ -314,14 +409,21 @@ const MembershipPage = () => {
                             boxShadow: `0 4px 16px ${tierColor}40`,
                           }}
                         >
-                          {tier.monthly_price > 0
-                            ? `${Math.round(tier.monthly_price)} KR/MÅN – KÖP MEDLEMSKAP`
-                            : "KÖP MEDLEMSKAP – GRATIS"}
+                          {isSelected
+                            ? "VALT – FYLL I NEDAN"
+                            : isPaidTier
+                            ? `${Math.round(monthlyPrice)} KR/MÅN – VÄLJ`
+                            : "VÄLJ MEDLEMSKAP"}
                         </button>
 
-                        {tier.monthly_price > 0 && (
+                        {isPaidTier && (
                           <p className="text-[10px] text-center mt-2" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
-                            Ingen bindningstid. Betalning sker via desken.
+                            Betalning sker säkert via Stripe.
+                          </p>
+                        )}
+                        {!isPaidTier && (
+                          <p className="text-[10px] text-center mt-2" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
+                            Aktiveras manuellt av Pickla.
                           </p>
                         )}
                       </div>
@@ -433,15 +535,19 @@ const MembershipPage = () => {
                             {submitting ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : user ? (
-                              "KÖP MEDLEMSKAP"
+                              isPaidTier ? "BETALA MED STRIPE" : "SKICKA INTRESSE"
+                            ) : isPaidTier ? (
+                              "SKAPA KONTO & BETALA"
                             ) : (
-                              "SKAPA KONTO & BLI MEDLEM"
+                              "SKAPA KONTO & SKICKA"
                             )}
                           </button>
 
-                          <p className="text-[10px] text-center" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
-                            Medlemskapet aktiveras av personalen. Betalning sker i desken.
-                          </p>
+                          <div className="rounded-2xl px-4 py-3" style={{ background: "rgba(62,61,57,0.035)" }}>
+                            <p className="text-[10px] leading-relaxed" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
+                              {terms.join(" ")} Genom att fortsätta godkänner du Picklas köp- och medlemsvillkor.
+                            </p>
+                          </div>
                         </form>
                       </motion.div>
                     )}
@@ -456,7 +562,7 @@ const MembershipPage = () => {
         {!user && (
           <motion.div variants={item} className="text-center">
             <button
-              onClick={() => navigate("/auth?redirect=/membership")}
+              onClick={() => navigate(`/auth?redirect=${encodeURIComponent(`/membership?v=${slug}`)}`)}
               className="text-[12px] font-bold underline underline-offset-4"
               style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}
             >
