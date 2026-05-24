@@ -2482,10 +2482,10 @@ function HubList({
                 >
                   Logga in
                 </button>
-                {bookingRoomRef && !String(bookingRoomRef).includes(":") && (
+                {autoOpenBookingRef && !String(autoOpenBookingRef).includes(":") && (
                   <button
                     type="button"
-                    onClick={() => navigate(`/b/${bookingRoomRef}`)}
+                    onClick={() => navigate(`/b/${autoOpenBookingRef}`)}
                     style={{ border: `1px solid ${HUB_BORDER}`, borderRadius: 16, background: HUB_CARD, color: HUB_TEXT, padding: "13px 16px", fontFamily: FONT_HEADING, fontWeight: 900 }}
                   >
                     Visa bokningsbekräftelse
@@ -3006,6 +3006,19 @@ const HubPage = () => {
     supabase.rpc("join_chat_room", { p_room_id: directRoomId }).then(({ data }) => {
       if (data?.[0]) openRoom(data[0] as ChatRoom);
     });
+  }, [directRoomId, user?.id, activeRoom, openRoom]);
+
+  useEffect(() => {
+    if (!directRoomId || user?.id || activeRoom) return;
+    supabase
+      .from("chat_rooms")
+      .select("id, venue_id, room_type, title, subtitle, emoji, resource_id, session_date, updated_at")
+      .eq("id", directRoomId)
+      .eq("is_public", true)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) openRoom(data as ChatRoom);
+      });
   }, [directRoomId, user?.id, activeRoom, openRoom]);
 
   // #8 — skeleton instead of spinner while venue loads
