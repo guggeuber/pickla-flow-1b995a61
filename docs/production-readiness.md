@@ -121,6 +121,7 @@ Pass criteria:
 - Incident severity is classified as P0, P1, P2, or P3 before fixes are made.
 - Every production incident records affected route/function, venue, user/customer, booking/payment ids, containment, fix, and verification.
 - `/ops` is available to admins and stores shared signals/checks/incidents in DB, not browser-only state.
+- Ops Agent automatic checks update health signals for payments, bookings, memberships, check-in, devices, score, and mail.
 - Rollback path is known: revert frontend commit, redeploy previous functions, and apply DB fix-forward if a migration caused issues.
 - Support corrections are done through admin tools or explicit SQL notes, never ad hoc hidden edits.
 - Daily opening and closing checks exist for desk, paddor, Stripe, bookings, and memberships.

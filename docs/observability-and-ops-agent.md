@@ -23,14 +23,33 @@ V1 stores status, checks, and incidents centrally in the database through `api-o
 - `ops_signals`
 - `ops_check_state`
 - `ops_incidents`
+- `ops_agent_runs`
 
 The live health board is currently hybrid:
 
 - numeric venue metrics come from existing admin endpoints such as `api-admin/stats` and `api-admin/history`
 - green/yellow/red operational signals are staff-controlled and stored in `ops_signals`
+- automatic Ops Agent scans also update `ops_signals` with `source='auto'`, notes, JSON details, and `last_auto_checked_at`
 - incident state is shared across staff through `ops_incidents`
 
-The next version should add automatic signal writers from Stripe webhook failures, Supabase Edge Function errors, padda heartbeat, and payment/booking reconciliation jobs.
+The first automatic writer runs inside `api-ops`:
+
+- `GET /api-ops/state` runs the Ops Agent at most once per minute while the ops board is open
+- `POST /api-ops/run-checks` forces a fresh scan from the Ops UI
+- automatic red signals create/update auto incidents with `metadata.agent_key`
+- resolved automatic red signals close their matching auto incident
+
+Current automatic checks:
+
+- paid Stripe booking rows have Pickla receipt snapshots
+- upcoming booking inventory has no same-court overlap and has access codes
+- active memberships are not expired-but-still-active
+- check-ins are not stuck open for more than 8 hours
+- active display devices/paddor have checked in recently
+- score matches are not stuck for more than 6 hours
+- recent event/customer emails have no failed/bounced/error status
+
+The next version should add external signal writers from Stripe webhook delivery APIs, Supabase Edge Function logs, Vercel deploy status, and padda heartbeat escalation when `/ops` is not open.
 
 ## Goals
 

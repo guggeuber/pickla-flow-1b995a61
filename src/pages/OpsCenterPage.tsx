@@ -44,6 +44,9 @@ type OpsSignalRow = {
   signal_key: SignalKey;
   status: OpsColor;
   note?: string | null;
+  source?: "manual" | "auto" | string | null;
+  details?: Record<string, unknown> | null;
+  last_auto_checked_at?: string | null;
 };
 
 type OpsCheckRow = {
@@ -58,6 +61,12 @@ type OpsState = {
   signals: OpsSignalRow[];
   checks: OpsCheckRow[];
   incidents: Incident[];
+  agentRuns?: Array<{
+    id: string;
+    status: "ok" | "warning" | "critical" | "error";
+    summary: Record<string, unknown>;
+    finished_at: string;
+  }>;
 };
 
 const modeLabels: Record<OpsMode, string> = {
@@ -218,6 +227,11 @@ function OpsCenterPage() {
     onSuccess: invalidateOps,
   });
 
+  const runAutoMutation = useMutation({
+    mutationFn: () => apiPost("api-ops", "run-checks", { venueId }),
+    onSuccess: invalidateOps,
+  });
+
   const currentVenue = useMemo(() => (venues || []).find((venue: { id: string }) => venue.id === venueId), [venues, venueId]);
   const signals = useMemo(() => {
     const next = defaultSignals();
@@ -236,6 +250,7 @@ function OpsCenterPage() {
     return grouped;
   }, [opsState?.checks]);
   const incidents = opsState?.incidents || [];
+  const lastAgentRun = opsState?.agentRuns?.[0];
   const overall = deriveOverall(signals, incidents);
   const status = overallCopy(overall);
   const modeChecks = checks[mode] || checklists[mode].map(() => false);
@@ -300,6 +315,14 @@ function OpsCenterPage() {
               {currentVenue?.name || "Venue"}
             </span>
             <button
+              onClick={() => runAutoMutation.mutate()}
+              disabled={runAutoMutation.isPending}
+              className="hidden h-11 items-center justify-center gap-2 rounded-full border border-black/10 bg-slate-950 px-4 text-xs font-black text-white shadow-sm sm:flex"
+            >
+              {runAutoMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Auto-scan
+            </button>
+            <button
               onClick={refreshAll}
               className="flex h-11 w-11 items-center justify-center rounded-full border border-black/10 bg-white shadow-sm"
               aria-label="Uppdatera"
@@ -322,6 +345,11 @@ function OpsCenterPage() {
               <p className="mt-4 font-mono text-xs opacity-60">
                 DB-backed · uppdateras var 15:e sekund · lokal tid {nowStockholm()}
               </p>
+              {lastAgentRun && (
+                <p className="mt-1 font-mono text-xs opacity-60">
+                  Ops Agent: {lastAgentRun.status} · senast {new Date(lastAgentRun.finished_at).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" })}
+                </p>
+              )}
             </div>
             <div className="grid min-w-[260px] grid-cols-2 gap-2">
               <a href="https://playpickla.com" className="rounded-2xl bg-white/70 p-3 text-sm font-bold">
@@ -386,10 +414,30 @@ function OpsCenterPage() {
                         </button>
                       ))}
                     </div>
+                    {opsState?.signals?.find((signal) => signal.signal_key === key)?.note && (
+                      <div className="mt-3 rounded-2xl border border-black/5 bg-white/60 p-2">
+                        <div className="mb-1 flex items-center gap-1">
+                          <span className="rounded-full bg-black px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.16em] text-white">
+                            {opsState.signals.find((signal) => signal.signal_key === key)?.source === "auto" ? "Auto" : "Manual"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-semibold leading-snug opacity-70">
+                          {opsState.signals.find((signal) => signal.signal_key === key)?.note}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
+            <button
+              onClick={() => runAutoMutation.mutate()}
+              disabled={runAutoMutation.isPending}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-4 text-sm font-black text-white sm:hidden"
+            >
+              {runAutoMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Kör auto-scan
+            </button>
           </div>
 
           <div className="rounded-[2rem] border border-black/10 bg-white p-4 shadow-sm">
