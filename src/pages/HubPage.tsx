@@ -1002,6 +1002,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
             eventId={actionResourceId}
             venueId={venueId}
             venueSlug={venueSlug}
+            roomId={room.id}
           />
         </div>
       )}
