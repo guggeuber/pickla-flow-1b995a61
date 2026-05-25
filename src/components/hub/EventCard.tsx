@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, CalendarClock, Check, Loader2, Ticket, Users } from "lucide-react";
+import { ArrowRight, CalendarClock, Check, Loader2, MessageCircle, Ticket, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -55,10 +55,41 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
     queryFn: async () => {
       const { data } = await supabase
         .from("activity_sessions")
-        .select("id, name, session_type, start_time, end_time, capacity, price_sek, venue_id")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, venue_id")
         .eq("id", eventId)
         .maybeSingle();
       return data;
+    },
+  });
+
+  const programOccurrenceDate = (() => {
+    if (!programSession) return null;
+    const now = DateTime.now().setZone("Europe/Stockholm");
+    if ((programSession as any).session_date) return String((programSession as any).session_date);
+    const days = ((programSession as any).recurrence_days || []) as number[];
+    for (let offset = 0; offset < 14; offset++) {
+      const date = now.plus({ days: offset });
+      if (!days.includes(date.weekday % 7)) continue;
+      if (offset === 0 && programSession.end_time) {
+        const [hour = 0, minute = 0] = String(programSession.end_time).slice(0, 5).split(":").map(Number);
+        if (date.set({ hour, minute, second: 0, millisecond: 0 }) <= now) continue;
+      }
+      return date.toISODate();
+    }
+    return now.toISODate();
+  })();
+
+  const { data: programRegistrations = [] } = useQuery({
+    queryKey: ["hub-program-session-registrations", eventId, programOccurrenceDate],
+    enabled: !!programSession?.id && !!programOccurrenceDate,
+    staleTime: 10000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("session_registrations")
+        .select("id, status")
+        .eq("activity_session_id", eventId)
+        .eq("session_date", programOccurrenceDate);
+      return (data || []).filter((row: any) => row.status !== "cancelled");
     },
   });
 
@@ -99,53 +130,73 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
       : programSession.session_type === "group_training"
         ? "Träning"
         : "Aktivitet";
+    const capacity = Number(programSession.capacity || 0);
+    const spotsLeft = capacity ? Math.max(capacity - programRegistrations.length, 0) : null;
+    const isFull = spotsLeft === 0;
+    const programHref = `/program/${eventId}?date=${encodeURIComponent(programOccurrenceDate || "")}${venueSlug ? `&v=${encodeURIComponent(venueSlug)}` : ""}`;
 
     return (
       <motion.div
         style={{
-          background: "#fff",
-          border: "1px solid rgba(17,24,39,0.08)",
-          borderRadius: 22,
+          background: "linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)",
+          border: "1px solid rgba(15,23,42,0.10)",
+          borderRadius: 24,
           overflow: "hidden",
           marginBottom: 4,
-          boxShadow: "0 14px 34px rgba(17,24,39,0.10)",
+          boxShadow: "0 18px 44px rgba(17,24,39,0.13)",
         }}
       >
-        <div style={{ padding: 14 }}>
+        <div style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "rgba(22,163,74,0.12)", color: "#15803d", padding: "5px 9px", fontFamily: FONT_HEADING, fontSize: 11, fontWeight: 900, marginBottom: 9 }}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "rgba(22,163,74,0.12)", color: "#15803d", padding: "5px 9px", fontFamily: FONT_HEADING, fontSize: 11, fontWeight: 900, marginBottom: 10 }}>
                 <span style={{ width: 7, height: 7, borderRadius: 999, background: "#22c55e" }} />
-                Nästa steg
+                Live action
               </div>
-              <p style={{ fontFamily: FONT_HEADING, fontSize: 19, lineHeight: 1.05, fontWeight: 900, color: "#111827", margin: 0 }}>
+              <p style={{ fontFamily: FONT_HEADING, fontSize: 22, lineHeight: 1.02, fontWeight: 950, color: "#0f172a", margin: 0 }}>
                 {programSession.name}
               </p>
             </div>
-            <div style={{ width: 44, height: 44, borderRadius: 16, display: "grid", placeItems: "center", background: "#f5f1f1", color: HUB_NAVY, flexShrink: 0 }}>
+            <div style={{ width: 48, height: 48, borderRadius: 18, display: "grid", placeItems: "center", background: "#0f172a", color: "#fff", flexShrink: 0 }}>
               <Ticket style={{ width: 21, height: 21 }} />
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.07)", color: "#475569", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
               <CalendarClock style={{ width: 14, height: 14 }} />
               {sessionType}{timeStr ? ` · ${timeStr}` : ""}
             </span>
-            {programSession.capacity ? (
+            {capacity ? (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.07)", color: "#475569", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
                 <Users style={{ width: 14, height: 14 }} />
-                {programSession.capacity} platser
+                {spotsLeft === 0 ? "Fullt" : `${spotsLeft} platser kvar`}
               </span>
             ) : null}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.07)", color: "#475569", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
+              <MessageCircle style={{ width: 14, height: 14 }} />
+              {programRegistrations.length} kommer
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", marginTop: 14, borderRadius: 18, background: "#eef2ff", padding: 12 }}>
+            <div>
+              <p style={{ margin: 0, color: "#334155", fontSize: 11, fontFamily: FONT_HEADING, fontWeight: 900, textTransform: "uppercase", letterSpacing: 0.8 }}>Nästa steg</p>
+              <p style={{ margin: "2px 0 0", color: "#0f172a", fontSize: 14, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+                {isFull ? "Skriv i chatten om reservplats" : programSession.price_sek ? "Köp plats och hoppa in i chatten" : "RSVP och hoppa in i chatten"}
+              </p>
+            </div>
+            <span style={{ borderRadius: 999, background: "#fff", color: "#0f172a", padding: "7px 10px", fontFamily: FONT_HEADING, fontSize: 12, fontWeight: 900 }}>
+              {programSession.price_sek ? `${programSession.price_sek} kr` : "0 kr"}
+            </span>
           </div>
 
           <motion.button
             whileTap={{ scale: 0.97 }}
-            onClick={() => navigate(`/program/${eventId}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`)}
+            onClick={() => navigate(programHref)}
             style={{
               width: "100%",
-              background: "#111827",
+              background: isFull ? "#94a3b8" : "#111827",
               color: "#fff",
               border: "none",
               borderRadius: 16,
@@ -159,11 +210,12 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn }: EventCardPr
               alignItems: "center",
               justifyContent: "space-between",
               gap: 12,
+              opacity: isFull ? 0.75 : 1,
             }}
           >
-            <span>{programSession.price_sek ? "Anmäl / köp plats" : "Anmäl / visa detaljer"}</span>
+            <span>{isFull ? "Fullt just nu" : programSession.price_sek ? "Köp plats" : "RSVP"}</span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8, opacity: 0.9 }}>
-              {programSession.price_sek ? `${programSession.price_sek} kr` : "Öppna"}
+              {isFull ? "Chatta" : "Fortsätt"}
               <ArrowRight style={{ width: 16, height: 16 }} />
             </span>
           </motion.button>

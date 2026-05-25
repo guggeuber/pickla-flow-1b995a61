@@ -117,7 +117,6 @@ export default function ProgramSessionPage() {
   const product = data?.product;
   const basePrice = Number(product?.base_price_sek ?? session?.price_sek ?? 0);
   const productKey = session?.product_key || product?.product_key || "day_access";
-  const roomBackPath = `/program/${sessionId}?date=${occurrenceDate || ""}&v=${venue?.slug || venueSlug}`;
 
   const { data: membership } = useQuery({
     queryKey: ["program-membership", user?.id, session?.venue_id],
@@ -169,22 +168,8 @@ export default function ProgramSessionPage() {
     if (!session || !venue || openingChat) return;
     setOpeningChat(true);
     try {
-      const { data: rooms, error } = await supabase.rpc("upsert_resource_chat_room", {
-        p_venue_id: session.venue_id,
-        p_resource_id: session.id,
-        p_room_type: "event",
-        p_title: session.name,
-        p_subtitle: `${dayLabel} · ${startTime}-${endTime}`,
-        p_emoji: "📅",
-        p_is_public: true,
-      });
-      if (error) throw error;
-      const roomId = rooms?.[0]?.id;
-      if (roomId) {
-        navigate(`/chat/${roomId}?v=${venue.slug || venueSlug}`);
-      } else {
-        navigate(`/hub?v=${venue.slug || venueSlug}`);
-      }
+      const { path } = await ensureProgramChatRoom();
+      navigate(path);
     } catch (err: any) {
       toast.error(err.message || "Kunde inte öppna chatten");
     } finally {
@@ -192,10 +177,51 @@ export default function ProgramSessionPage() {
     }
   };
 
+  const ensureProgramChatRoom = async () => {
+    if (!session || !venue) throw new Error("Aktiviteten saknas");
+    const { data: rooms, error } = await supabase.rpc("upsert_resource_chat_room", {
+      p_venue_id: session.venue_id,
+      p_resource_id: session.id,
+      p_room_type: "event",
+      p_title: session.name,
+      p_subtitle: `${dayLabel} · ${startTime}-${endTime}`,
+      p_emoji: "📅",
+      p_is_public: true,
+    });
+    if (error) throw error;
+    const roomId = rooms?.[0]?.id;
+    return {
+      roomId: roomId || "",
+      path: roomId ? `/chat/${roomId}?v=${venue.slug || venueSlug}` : `/hub?v=${venue.slug || venueSlug}`,
+    };
+  };
+
+  const announceJoin = async (roomId: string) => {
+    if (!roomId || !user?.id) return;
+    const { data: profile } = await supabase
+      .from("player_profiles")
+      .select("display_name")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+    const name = profile?.display_name || user.email?.split("@")[0] || "En spelare";
+    await supabase.from("chat_messages").insert({
+      room_id: roomId,
+      user_id: user.id,
+      message_type: "bot",
+      content: `${name} kommer`,
+      metadata: {
+        channel: "activity_registration",
+        activity_session_id: session?.id,
+        session_date: occurrenceDate,
+      },
+    });
+  };
+
   const handleCheckout = async () => {
     if (!session || !venue || submitting) return;
     setSubmitting(true);
     try {
+      const { roomId, path: chatPath } = await ensureProgramChatRoom();
       const result = await apiPost("api-bookings", "create-checkout", {
         product_type: "day_pass",
         amount_sek: session.price_sek ?? basePrice,
@@ -206,17 +232,19 @@ export default function ProgramSessionPage() {
           session_type: session.session_type || product?.session_type || "open_play",
           date: occurrenceDate,
           activity_session_id: session.id,
+          chat_room_id: roomId,
           user_id: user?.id || "",
           slug: venue.slug || venueSlug,
-          redirect_path: roomBackPath,
-          success_path: `/booking/confirmed?type=session_ticket&next=${encodeURIComponent(roomBackPath)}`,
+          redirect_path: chatPath,
+          success_path: `/booking/confirmed?type=session_ticket&next=${encodeURIComponent(chatPath)}`,
         },
       });
 
       if (result.free) {
         toast.success("Klart! Din access är aktiverad.");
         await qc.invalidateQueries({ queryKey: ["program-registrations", session.id, occurrenceDate] });
-        navigate(safePath(result.redirect || roomBackPath));
+        await announceJoin(roomId);
+        navigate(safePath(result.redirect || chatPath));
         return;
       }
 

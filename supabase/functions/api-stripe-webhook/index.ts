@@ -392,6 +392,47 @@ async function handleDayPass(
       },
     }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
   }
+
+  if (activitySessionId && meta.chat_room_id) {
+    await announceActivityRegistration(serviceClient, {
+      roomId: meta.chat_room_id,
+      userId: resolvedUserId,
+      activitySessionId,
+      sessionDate: date,
+      stripeSessionId: session.id,
+    });
+  }
+}
+
+async function announceActivityRegistration(
+  serviceClient: any,
+  params: {
+    roomId: string;
+    userId: string;
+    activitySessionId: string;
+    sessionDate: string;
+    stripeSessionId: string;
+  },
+) {
+  const { data: profile } = await serviceClient
+    .from('player_profiles')
+    .select('display_name')
+    .eq('auth_user_id', params.userId)
+    .maybeSingle();
+
+  const name = profile?.display_name || 'En spelare';
+  await serviceClient.from('chat_messages').insert({
+    room_id: params.roomId,
+    user_id: params.userId,
+    message_type: 'bot',
+    content: `${name} kommer`,
+    metadata: {
+      channel: 'activity_registration',
+      activity_session_id: params.activitySessionId,
+      session_date: params.sessionDate,
+      stripe_session_id: params.stripeSessionId,
+    },
+  });
 }
 
 // ── Membership ────────────────────────────────────────────────────────────────

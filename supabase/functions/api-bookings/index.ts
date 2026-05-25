@@ -735,6 +735,7 @@ Deno.serve(async (req) => {
       // Day-pass-specific
       open_play_session_id: String(meta.open_play_session_id || ''),
       activity_session_id: String(meta.activity_session_id || ''),
+      chat_room_id: String(meta.chat_room_id || ''),
       session_name:     String(meta.session_name     || ''),
       session_type:     String(meta.session_type     || 'open_play'),
       includes_day_access: String(meta.includes_day_access || ''),
