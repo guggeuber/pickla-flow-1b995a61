@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ElementType } from "react";
+import { useMemo, useState, type ElementType } from "react";
 import { Link } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
@@ -22,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useAdminCheck, useAdminHistory, useAdminStats, useAdminVenues } from "@/hooks/useAdmin";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 type OpsMode = "deploy" | "opening" | "closing" | "weekly";
@@ -34,11 +36,29 @@ type Incident = {
   severity: Severity;
   title: string;
   status: "open" | "contained" | "resolved";
-  createdAt: string;
-  owner?: string;
+  created_at: string;
+  owner_name?: string | null;
 };
 
-const STORAGE_KEY = "pickla_ops_center_v1";
+type OpsSignalRow = {
+  signal_key: SignalKey;
+  status: OpsColor;
+  note?: string | null;
+};
+
+type OpsCheckRow = {
+  mode: OpsMode;
+  item_index: number;
+  label: string;
+  is_done: boolean;
+};
+
+type OpsState = {
+  venueId: string;
+  signals: OpsSignalRow[];
+  checks: OpsCheckRow[];
+  incidents: Incident[];
+};
 
 const modeLabels: Record<OpsMode, string> = {
   deploy: "Deploy watch",
@@ -109,26 +129,6 @@ function nowStockholm() {
   }).format(new Date());
 }
 
-function loadLocalState(): {
-  signals: Record<SignalKey, OpsColor>;
-  checks: Partial<Record<OpsMode, boolean[]>>;
-  incidents: Incident[];
-} {
-  if (typeof window === "undefined") return { signals: defaultSignals(), checks: {}, incidents: [] };
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { signals: defaultSignals(), checks: {}, incidents: [] };
-    const parsed = JSON.parse(raw);
-    return {
-      signals: { ...defaultSignals(), ...(parsed.signals || {}) },
-      checks: parsed.checks || {},
-      incidents: parsed.incidents || [],
-    };
-  } catch {
-    return { signals: defaultSignals(), checks: {}, incidents: [] };
-  }
-}
-
 function defaultSignals(): Record<SignalKey, OpsColor> {
   return {
     payments: "green",
@@ -167,31 +167,75 @@ function Metric({ label, value, sub }: { label: string; value: string; sub?: str
 }
 
 function OpsCenterPage() {
+  const queryClient = useQueryClient();
   const { data: adminData, isLoading, isError, refetch: refetchAdmin } = useAdminCheck();
   const { data: venues } = useAdminVenues();
   const venueId = adminData?.venueId;
   const { data: stats, refetch: refetchStats, isFetching: statsFetching } = useAdminStats(venueId);
   const { data: history, refetch: refetchHistory } = useAdminHistory(venueId);
   const [mode, setMode] = useState<OpsMode>("deploy");
-  const [signals, setSignals] = useState<Record<SignalKey, OpsColor>>(defaultSignals);
-  const [checks, setChecks] = useState<Partial<Record<OpsMode, boolean[]>>>({});
-  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [newIncident, setNewIncident] = useState("");
   const [newSeverity, setNewSeverity] = useState<Severity>("P2");
 
-  useEffect(() => {
-    const state = loadLocalState();
-    setSignals(state.signals);
-    setChecks(state.checks);
-    setIncidents(state.incidents);
-  }, []);
+  const { data: opsState, refetch: refetchOps, isFetching: opsFetching } = useQuery({
+    queryKey: ["ops-state", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet<OpsState>("api-ops", "state", { venueId: venueId! }),
+    refetchInterval: 15000,
+  });
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ signals, checks, incidents }));
-  }, [signals, checks, incidents]);
+  const invalidateOps = () => {
+    queryClient.invalidateQueries({ queryKey: ["ops-state", venueId] });
+  };
+
+  const signalMutation = useMutation({
+    mutationFn: (body: { signal_key: SignalKey; status: OpsColor }) =>
+      apiPatch("api-ops", "signal", { ...body, venueId }),
+    onSuccess: invalidateOps,
+  });
+
+  const checkMutation = useMutation({
+    mutationFn: (body: { mode: OpsMode; item_index: number; is_done: boolean }) =>
+      apiPatch("api-ops", "check", { ...body, venueId }),
+    onSuccess: invalidateOps,
+  });
+
+  const addIncidentMutation = useMutation({
+    mutationFn: (body: { severity: Severity; title: string }) =>
+      apiPost("api-ops", "incident", { ...body, venueId }),
+    onSuccess: invalidateOps,
+  });
+
+  const updateIncidentMutation = useMutation({
+    mutationFn: (body: { incident_id: string; status: Incident["status"] }) =>
+      apiPatch("api-ops", "incident", { ...body, venueId }),
+    onSuccess: invalidateOps,
+  });
+
+  const deleteIncidentMutation = useMutation({
+    mutationFn: (incidentId: string) =>
+      apiDelete("api-ops", "incident", { venueId: venueId!, incidentId }),
+    onSuccess: invalidateOps,
+  });
 
   const currentVenue = useMemo(() => (venues || []).find((venue: { id: string }) => venue.id === venueId), [venues, venueId]);
+  const signals = useMemo(() => {
+    const next = defaultSignals();
+    (opsState?.signals || []).forEach((signal) => {
+      next[signal.signal_key] = signal.status;
+    });
+    return next;
+  }, [opsState?.signals]);
+  const checks = useMemo(() => {
+    const grouped: Partial<Record<OpsMode, boolean[]>> = {};
+    (opsState?.checks || []).forEach((check) => {
+      const arr = grouped[check.mode] || checklists[check.mode].map(() => false);
+      arr[check.item_index] = check.is_done;
+      grouped[check.mode] = arr;
+    });
+    return grouped;
+  }, [opsState?.checks]);
+  const incidents = opsState?.incidents || [];
   const overall = deriveOverall(signals, incidents);
   const status = overallCopy(overall);
   const modeChecks = checks[mode] || checklists[mode].map(() => false);
@@ -202,34 +246,22 @@ function OpsCenterPage() {
     refetchAdmin();
     refetchStats();
     refetchHistory();
+    refetchOps();
   };
 
   const toggleCheck = (index: number) => {
-    setChecks((prev) => {
-      const nextForMode = [...(prev[mode] || checklists[mode].map(() => false))];
-      nextForMode[index] = !nextForMode[index];
-      return { ...prev, [mode]: nextForMode };
-    });
+    checkMutation.mutate({ mode, item_index: index, is_done: !modeChecks[index] });
   };
 
   const addIncident = () => {
     if (!newIncident.trim()) return;
-    setIncidents((prev) => [
-      {
-        id: crypto.randomUUID(),
-        severity: newSeverity,
-        title: newIncident.trim(),
-        status: "open",
-        createdAt: nowStockholm(),
-      },
-      ...prev,
-    ]);
+    addIncidentMutation.mutate({ severity: newSeverity, title: newIncident.trim() });
     setNewIncident("");
-    if (newSeverity === "P0") setSignals((prev) => ({ ...prev, deploy: "red" }));
+    if (newSeverity === "P0") signalMutation.mutate({ signal_key: "deploy", status: "red" });
   };
 
   const updateIncidentStatus = (id: string, status: Incident["status"]) => {
-    setIncidents((prev) => prev.map((incident) => incident.id === id ? { ...incident, status } : incident));
+    updateIncidentMutation.mutate({ incident_id: id, status });
   };
 
   if (isLoading) {
@@ -272,7 +304,7 @@ function OpsCenterPage() {
               className="flex h-11 w-11 items-center justify-center rounded-full border border-black/10 bg-white shadow-sm"
               aria-label="Uppdatera"
             >
-              <RefreshCw className={`h-4 w-4 ${statsFetching ? "animate-spin" : ""}`} />
+              <RefreshCw className={`h-4 w-4 ${statsFetching || opsFetching ? "animate-spin" : ""}`} />
             </button>
           </div>
         </div>
@@ -287,7 +319,9 @@ function OpsCenterPage() {
                 <div className="text-7xl font-black leading-none tracking-tight md:text-8xl">{status.title}</div>
                 <div className="max-w-xl text-lg font-semibold leading-snug md:text-xl">{status.body}</div>
               </div>
-              <p className="mt-4 font-mono text-xs opacity-60">Senast uppdaterad lokalt: {nowStockholm()}</p>
+              <p className="mt-4 font-mono text-xs opacity-60">
+                DB-backed · uppdateras var 15:e sekund · lokal tid {nowStockholm()}
+              </p>
             </div>
             <div className="grid min-w-[260px] grid-cols-2 gap-2">
               <a href="https://playpickla.com" className="rounded-2xl bg-white/70 p-3 text-sm font-bold">
@@ -321,7 +355,7 @@ function OpsCenterPage() {
                 <h2 className="text-2xl font-black">Live health board</h2>
               </div>
               <p className="max-w-sm text-xs text-slate-500">
-                V1 är manuell status ovanpå faktiska admin-metrics. Röd/gul/grön sätts av staff eller ops-agenten.
+                Status sparas i DB per venue. Admin-metrics hämtas live, signaler sätts av staff eller ops-agenten.
               </p>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -343,7 +377,7 @@ function OpsCenterPage() {
                       {(["green", "yellow", "red"] as OpsColor[]).map((color) => (
                         <button
                           key={color}
-                          onClick={() => setSignals((prev) => ({ ...prev, [key]: color }))}
+                          onClick={() => signalMutation.mutate({ signal_key: key, status: color })}
                           className={`h-8 rounded-full border text-[10px] font-black uppercase ${
                             signals[key] === color ? "border-black bg-black text-white" : "border-black/10 bg-white/60"
                           }`}
@@ -422,9 +456,10 @@ function OpsCenterPage() {
             />
             <button
               onClick={addIncident}
+              disabled={addIncidentMutation.isPending}
               className="mt-3 flex w-full items-center justify-center gap-2 rounded-full bg-white px-5 py-4 text-sm font-black text-slate-950"
             >
-              <AlertTriangle className="h-4 w-4" />
+              {addIncidentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertTriangle className="h-4 w-4" />}
               Skapa incident
             </button>
             <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-4">
@@ -449,7 +484,7 @@ function OpsCenterPage() {
               {incidents.length === 0 && (
                 <div className="rounded-3xl border border-dashed border-black/10 p-8 text-center">
                   <Sparkles className="mx-auto h-8 w-8 text-emerald-400" />
-                  <p className="mt-2 text-sm font-bold text-slate-500">Inga incidenter loggade i denna browser.</p>
+                  <p className="mt-2 text-sm font-bold text-slate-500">Inga incidenter loggade för denna venue.</p>
                 </div>
               )}
               {incidents.map((incident) => (
@@ -458,10 +493,12 @@ function OpsCenterPage() {
                     <span className={`rounded-full px-3 py-1 text-xs font-black ${severityTone[incident.severity]}`}>{incident.severity}</span>
                     <div className="min-w-0 flex-1">
                       <p className="font-bold text-slate-950">{incident.title}</p>
-                      <p className="mt-1 font-mono text-[11px] text-slate-400">{incident.createdAt} · {incident.status}</p>
+                      <p className="mt-1 font-mono text-[11px] text-slate-400">
+                        {new Date(incident.created_at).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" })} · {incident.status}
+                      </p>
                     </div>
                     <button
-                      onClick={() => setIncidents((prev) => prev.filter((item) => item.id !== incident.id))}
+                      onClick={() => deleteIncidentMutation.mutate(incident.id)}
                       className="rounded-full p-2 text-slate-400 hover:bg-white"
                       aria-label="Ta bort incident"
                     >
@@ -510,8 +547,8 @@ function OpsCenterPage() {
             <div>
               <h2 className="text-xl font-black">V1-gräns</h2>
               <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-500">
-                Den här sidan sparar signaler, checks och incidenter lokalt i browsern. Det räcker för soft-launch-rutin och demo av ops-flödet.
-                Nästa steg är DB-backed `ops_incidents`, `ops_checks` och automatiska signaler från Stripe, Supabase och paddor.
+                Den här sidan sparar signaler, checks och incidenter i DB via `api-ops`, så staff delar samma driftläge.
+                Nästa steg är automatiska signaler från Stripe, Supabase och paddor samt bättre audit log.
               </p>
             </div>
           </div>

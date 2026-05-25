@@ -18,7 +18,19 @@ V1 is protected by normal auth plus admin access and shows:
 - deploy/opening/closing/weekly checklists
 - local incident log with P0-P3 severity
 
-V1 stores status/checks/incidents in browser local storage. This is enough for a soft-launch operating rhythm. The next version should move these records to DB-backed `ops_incidents` and `ops_checks`.
+V1 stores status, checks, and incidents centrally in the database through `api-ops`:
+
+- `ops_signals`
+- `ops_check_state`
+- `ops_incidents`
+
+The live health board is currently hybrid:
+
+- numeric venue metrics come from existing admin endpoints such as `api-admin/stats` and `api-admin/history`
+- green/yellow/red operational signals are staff-controlled and stored in `ops_signals`
+- incident state is shared across staff through `ops_incidents`
+
+The next version should add automatic signal writers from Stripe webhook failures, Supabase Edge Function errors, padda heartbeat, and payment/booking reconciliation jobs.
 
 ## Goals
 
