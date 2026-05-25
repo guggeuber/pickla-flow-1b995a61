@@ -10,6 +10,7 @@ Use this for every production candidate and production deploy.
 
 ```bash
 npm run prod:check
+npm run ops:agent -- --mode=deploy
 ```
 
 `prod:check` runs tests and production build. Full `npm run lint` currently has legacy repo-wide debt, so run targeted lint on touched files until that backlog is cleared.
@@ -61,6 +62,7 @@ After push:
 1. Watch Vercel build.
 2. Open `https://playpickla.com`.
 3. Run the critical smoke set below.
+4. Run the 15-minute Ops Agent watch from [observability-and-ops-agent.md](./observability-and-ops-agent.md).
 
 ## Critical Smoke Set
 
@@ -83,6 +85,22 @@ After push:
 - Confirm receipt total and VAT are correct.
 - Confirm `/my?booking=<ref>` opens the booking detail.
 
+## Post-Deploy Ops Watch
+
+For 15 minutes after deploy:
+
+- Watch Vercel for build/runtime errors.
+- Check Supabase Edge Function logs for changed functions.
+- Check Stripe webhook deliveries and retries.
+- Open a known padda/device route and confirm it renders.
+- Check one changed journey end-to-end.
+- Classify the deploy:
+  - Green: no customer-impacting issue found.
+  - Yellow: issue exists with a safe workaround.
+  - Red: customer-impacting issue without safe workaround. Contain or roll back.
+
+If the deploy is yellow or red, write an incident note using the template in [observability-and-ops-agent.md](./observability-and-ops-agent.md).
+
 ## Rollback
 
 Frontend:
@@ -103,8 +121,12 @@ Database:
 For any production incident, record:
 
 - time detected
+- severity P0-P3
 - user impact
 - affected venue
+- affected route/function
 - affected booking/payment/customer ids
+- containment
 - action taken
+- verification
 - follow-up needed

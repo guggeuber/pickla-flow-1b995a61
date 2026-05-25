@@ -11,6 +11,7 @@ npm run dev          # Start local dev server
 npm run build        # Production build
 npm run test         # Run Vitest once
 npm run lint         # Full ESLint check; currently has legacy repo-wide debt
+npm run ops:agent    # Print production ops/deploy checklist
 npm run prod:check   # Release gate: tests + production build
 ```
 
@@ -33,6 +34,7 @@ Core runbooks:
 - [Stage setup](./docs/staging.md)
 - [Smoke tests](./docs/smoke-tests.md)
 - [Daily operations](./docs/daily-operations-runbook.md)
+- [Observability and Ops Agent](./docs/observability-and-ops-agent.md)
 - [Data and compliance](./docs/data-and-compliance.md)
 - [Security checklist](./docs/security-checklist.md)
 - [Support runbook](./docs/support-runbook.md)
@@ -41,6 +43,7 @@ Before a production candidate:
 
 ```bash
 npm run prod:check
+npm run ops:agent -- --mode=deploy
 ```
 
 ## Deploy
@@ -72,4 +75,3 @@ VITE_SUPABASE_PROJECT_ID=...
 ```
 
 Production and stage must use separate Supabase, Stripe, Resend, and VAPID secrets.
-

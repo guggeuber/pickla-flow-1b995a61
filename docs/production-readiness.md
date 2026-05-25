@@ -117,8 +117,15 @@ Pass criteria:
 - `npm run prod:check` passes before release candidates.
 - Full `npm run lint` is a known pre-existing debt gate; run targeted lint for touched files until the legacy lint backlog is cleaned up.
 - Edge deploy list is written down for every backend change.
-- Stripe webhook failures and Supabase function errors are checked after deploy.
+- Stripe webhook failures and Supabase function errors are checked after deploy using the Ops Agent 15-minute watch.
+- Incident severity is classified as P0, P1, P2, or P3 before fixes are made.
+- Every production incident records affected route/function, venue, user/customer, booking/payment ids, containment, fix, and verification.
 - Rollback path is known: revert frontend commit, redeploy previous functions, and apply DB fix-forward if a migration caused issues.
 - Support corrections are done through admin tools or explicit SQL notes, never ad hoc hidden edits.
+- Daily opening and closing checks exist for desk, paddor, Stripe, bookings, and memberships.
 
-Reference: [launch-runbook.md](./launch-runbook.md)
+References:
+
+- [observability-and-ops-agent.md](./observability-and-ops-agent.md)
+- [launch-runbook.md](./launch-runbook.md)
+- [support-runbook.md](./support-runbook.md)

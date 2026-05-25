@@ -8,6 +8,7 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
+    "ops:agent": "node scripts/ops-agent-check.mjs",
     "preview": "vite preview",
     "prod:check": "npm run test && npm run build",
     "test": "vitest run",
