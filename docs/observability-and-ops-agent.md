@@ -2,6 +2,24 @@
 
 This is Pickla's lightweight operations layer for soft launch. It is not a full monitoring stack yet. It is a clear human and agent routine for catching issues early, especially around payments, bookings, memberships, devices, and staff operations.
 
+## Ops Center
+
+The first operational UI lives at:
+
+```text
+/ops
+```
+
+V1 is protected by normal auth plus admin access and shows:
+
+- overall green/yellow/red production status
+- live admin metrics from existing admin endpoints
+- manual health signals for payments, bookings, memberships, check-in, paddor, score, mail/auth, and deploy
+- deploy/opening/closing/weekly checklists
+- local incident log with P0-P3 severity
+
+V1 stores status/checks/incidents in browser local storage. This is enough for a soft-launch operating rhythm. The next version should move these records to DB-backed `ops_incidents` and `ops_checks`.
+
 ## Goals
 
 - Detect broken customer journeys before customers report them twice.

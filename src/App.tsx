@@ -39,6 +39,7 @@ import ScoreJoinPage from "./pages/ScoreJoinPage";
 import ScoreMatchPage from "./pages/ScoreMatchPage";
 import ScoreBroadcastPage from "./pages/ScoreBroadcastPage";
 import StatsPage from "./pages/StatsPage";
+import OpsCenterPage from "./pages/OpsCenterPage";
 import AuthCallback from "./pages/AuthCallback";
 import AuthReset from "./pages/AuthReset";
 import { Loader2 } from "lucide-react";
@@ -80,6 +81,7 @@ const App = () => (
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/hub" element={<HubPage />} />
             <Route path="/hub/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
+            <Route path="/ops" element={<ProtectedRoute><OpsCenterPage /></ProtectedRoute>} />
             <Route path="/today" element={<TodayPage />} />
             <Route path="/activity" element={<Navigate to="/today" replace />} />
             <Route path="/my" element={<MyPage />} />

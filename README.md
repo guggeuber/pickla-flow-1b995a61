@@ -28,6 +28,8 @@ npm run prod:check   # Release gate: tests + production build
 
 Soft-launch readiness is tracked in [docs/production-readiness.md](./docs/production-readiness.md).
 
+Ops Center lives at `/ops` for admins.
+
 Core runbooks:
 
 - [Launch runbook](./docs/launch-runbook.md)
