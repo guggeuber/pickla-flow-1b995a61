@@ -175,6 +175,11 @@ function Metric({ label, value, sub }: { label: string; value: string; sub?: str
   );
 }
 
+function formatDetails(details?: Record<string, unknown> | null) {
+  if (!details || Object.keys(details).length === 0) return "Inga extra detaljer.";
+  return JSON.stringify(details, null, 2);
+}
+
 function OpsCenterPage() {
   const queryClient = useQueryClient();
   const { data: adminData, isLoading, isError, refetch: refetchAdmin } = useAdminCheck();
@@ -240,6 +245,11 @@ function OpsCenterPage() {
     });
     return next;
   }, [opsState?.signals]);
+  const signalRows = useMemo(() => {
+    const rows = new Map<SignalKey, OpsSignalRow>();
+    (opsState?.signals || []).forEach((signal) => rows.set(signal.signal_key, signal));
+    return rows;
+  }, [opsState?.signals]);
   const checks = useMemo(() => {
     const grouped: Partial<Record<OpsMode, boolean[]>> = {};
     (opsState?.checks || []).forEach((check) => {
@@ -251,6 +261,7 @@ function OpsCenterPage() {
   }, [opsState?.checks]);
   const incidents = opsState?.incidents || [];
   const lastAgentRun = opsState?.agentRuns?.[0];
+  const issueSignals = (opsState?.signals || []).filter((signal) => signal.status !== "green" || signal.note);
   const overall = deriveOverall(signals, incidents);
   const status = overallCopy(overall);
   const modeChecks = checks[mode] || checklists[mode].map(() => false);
@@ -390,6 +401,7 @@ function OpsCenterPage() {
               {(Object.keys(signalLabels) as SignalKey[]).map((key) => {
                 const cfg = signalLabels[key];
                 const Icon = cfg.icon;
+                const signalRow = signalRows.get(key);
                 return (
                   <div key={key} className={`rounded-[1.4rem] border p-3 ${signalTone[signals[key]]}`}>
                     <div className="flex items-start justify-between gap-3">
@@ -414,15 +426,15 @@ function OpsCenterPage() {
                         </button>
                       ))}
                     </div>
-                    {opsState?.signals?.find((signal) => signal.signal_key === key)?.note && (
+                    {signalRow?.note && (
                       <div className="mt-3 rounded-2xl border border-black/5 bg-white/60 p-2">
                         <div className="mb-1 flex items-center gap-1">
                           <span className="rounded-full bg-black px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.16em] text-white">
-                            {opsState.signals.find((signal) => signal.signal_key === key)?.source === "auto" ? "Auto" : "Manual"}
+                            {signalRow.source === "auto" ? "Auto" : "Manual"}
                           </span>
                         </div>
                         <p className="text-[11px] font-semibold leading-snug opacity-70">
-                          {opsState.signals.find((signal) => signal.signal_key === key)?.note}
+                          {signalRow.note}
                         </p>
                       </div>
                     )}
@@ -438,6 +450,41 @@ function OpsCenterPage() {
               {runAutoMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               Kör auto-scan
             </button>
+            <div className="mt-4 rounded-[1.5rem] border border-black/10 bg-[#f7f4ef] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-400">Evidence</p>
+                  <h3 className="text-lg font-black">Auto-logg</h3>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-black">{issueSignals.length} signaler</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {issueSignals.length === 0 && (
+                  <p className="rounded-2xl bg-white p-3 text-sm font-semibold text-slate-500">Inga auto-notes ännu. Kör Auto-scan.</p>
+                )}
+                {issueSignals.map((signal) => {
+                  const cfg = signalLabels[signal.signal_key];
+                  return (
+                    <details key={signal.signal_key} className="rounded-2xl border border-black/10 bg-white p-3">
+                      <summary className="cursor-pointer list-none">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-black">{cfg.label}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">{signal.note || "Ingen note."}</p>
+                          </div>
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${signalTone[signal.status]}`}>
+                            {signal.status}
+                          </span>
+                        </div>
+                      </summary>
+                      <pre className="mt-3 max-h-60 overflow-auto rounded-2xl bg-slate-950 p-3 text-[11px] leading-relaxed text-white">
+                        {formatDetails(signal.details)}
+                      </pre>
+                    </details>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           <div className="rounded-[2rem] border border-black/10 bg-white p-4 shadow-sm">

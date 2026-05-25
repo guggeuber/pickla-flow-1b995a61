@@ -237,7 +237,7 @@ async function getDevicesSignal(admin: any, venueId: string): Promise<AutoSignal
   if (dead.length > 0) {
     return {
       signal_key: 'devices',
-      status: 'red',
+      status: 'yellow',
       note: `${dead.length}/${rows.length} aktiv(a) padda/display verkar offline.`,
       details: { dead_devices: dead.map((device: any) => ({ id: device.id, name: device.name, last_seen_at: device.last_seen_at })).slice(0, 20) },
     };
