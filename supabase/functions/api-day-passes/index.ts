@@ -177,7 +177,7 @@ Deno.serve(async (req) => {
 
       const { data: share, error: shareErr } = await adminClient
         .from('day_pass_shares')
-        .select('*, day_passes(*)')
+        .select('*')
         .eq('token', token)
         .eq('status', 'pending')
         .maybeSingle();
@@ -266,11 +266,17 @@ Deno.serve(async (req) => {
       const adminClient = getServiceClient();
       const { data: share } = await adminClient
         .from('day_pass_shares')
-        .select('id, status, token, shared_by, recipient_name, day_passes(valid_date, venue_id)')
+        .select('id, status, token, shared_by, recipient_name, day_pass_id')
         .eq('token', token)
         .maybeSingle();
 
       if (share) {
+        const { data: dayPass } = await adminClient
+          .from('day_passes')
+          .select('valid_date, venue_id')
+          .eq('id', share.day_pass_id)
+          .maybeSingle();
+
         const { data: sharerProfile } = await adminClient
           .from('player_profiles')
           .select('display_name')
@@ -279,6 +285,7 @@ Deno.serve(async (req) => {
 
         return jsonResponse({
           ...share,
+          day_passes: dayPass || null,
           sharer_name: sharerProfile?.display_name || 'En vän',
         });
       }
