@@ -5,7 +5,7 @@ Stage must be isolated from production. Do not point Vercel previews or local ex
 ## Target Setup
 
 - **Frontend:** `stage.playpickla.com` or a clearly named Vercel preview environment.
-- **Backend:** separate Supabase project.
+- **Backend:** separate Supabase project, current stage ref `nuqozynzdamyuzeusroe`.
 - **Stripe:** test mode keys and test webhook endpoint.
 - **Email:** Resend test domain/sender or clearly labelled stage sender.
 - **Data:** synthetic venue/customer data only.
@@ -15,9 +15,9 @@ Stage must be isolated from production. Do not point Vercel previews or local ex
 Vercel stage should use its own values:
 
 ```bash
-VITE_SUPABASE_URL=https://<stage-project-ref>.supabase.co
+VITE_SUPABASE_URL=https://nuqozynzdamyuzeusroe.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<stage-anon-or-publishable-key>
-VITE_SUPABASE_PROJECT_ID=<stage-project-ref>
+VITE_SUPABASE_PROJECT_ID=nuqozynzdamyuzeusroe
 VITE_GIPHY_API_KEY=<optional-stage-key>
 ```
 
@@ -35,6 +35,7 @@ RESEND_WEBHOOK_SECRET=<stage-resend-webhook-secret>
 ## Stage Bring-up
 
 Production Supabase project ref is `cqnjpudmsreubgviqptg`. Never use that ref for stage commands.
+Current stage Supabase project ref is `nuqozynzdamyuzeusroe`.
 
 1. Create the Supabase stage project and write down its project ref.
 2. Create or configure a Vercel stage project/domain, ideally `stage.playpickla.com`.
@@ -54,13 +55,13 @@ Production Supabase project ref is `cqnjpudmsreubgviqptg`. Never use that ref fo
 11. Deploy all edge functions with `--no-verify-jwt`:
 
 ```bash
-scripts/deploy-stage-functions.sh <stage-project-ref>
+scripts/deploy-stage-functions.sh nuqozynzdamyuzeusroe
 ```
 
 The script refuses to deploy if the ref is the known production ref.
 
 12. Configure Stripe test webhook to:
-   - `https://<stage-project-ref>.supabase.co/functions/v1/api-stripe-webhook`
+   - `https://nuqozynzdamyuzeusroe.supabase.co/functions/v1/api-stripe-webhook`
 13. Configure Resend/test sender if email smoke tests are included.
 
 ## Stage Seed Contents
