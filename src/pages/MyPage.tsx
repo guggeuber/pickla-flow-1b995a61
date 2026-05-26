@@ -585,6 +585,17 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
   const [editPhone, setEditPhone] = useState(profile?.phone || "");
   const [saving, setSaving] = useState(false);
   const queryClient = useQueryClient();
+  const legalName = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ");
+
+  const ProfileField = ({ label, value, mono = false }: { label: string; value?: string | null; mono?: boolean }) => {
+    if (!value) return null;
+    return (
+      <div className="min-w-0">
+        <p className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{label}</p>
+        <p className="truncate text-sm" style={{ fontFamily: mono ? FONT_MONO : FONT_HEADING, color: TEXT_PRIMARY }}>{value}</p>
+      </div>
+    );
+  };
 
   const handleSave = async () => {
     const firstName = editFirstName.trim();
@@ -628,52 +639,58 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
         <div className="flex-1 min-w-0">
           {editing ? (
             <div className="flex flex-col gap-2">
-              <input
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                className="text-sm rounded-lg px-3 py-1.5 outline-none"
-                placeholder="Namn"
-                style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
-              />
+              <label className="flex flex-col gap-1">
+                <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Visningsnamn</span>
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="text-sm rounded-lg px-3 py-1.5 outline-none"
+                  placeholder="Visningsnamn"
+                  style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                />
+              </label>
               <div className="grid grid-cols-2 gap-2">
-                <input
-                  value={editFirstName}
-                  onChange={(e) => setEditFirstName(e.target.value)}
-                  className="text-sm rounded-lg px-3 py-1.5 outline-none min-w-0"
-                  placeholder="Förnamn"
-                  style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
-                />
-                <input
-                  value={editLastName}
-                  onChange={(e) => setEditLastName(e.target.value)}
-                  className="text-sm rounded-lg px-3 py-1.5 outline-none min-w-0"
-                  placeholder="Efternamn"
-                  style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
-                />
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Förnamn</span>
+                  <input
+                    value={editFirstName}
+                    onChange={(e) => setEditFirstName(e.target.value)}
+                    className="text-sm rounded-lg px-3 py-1.5 outline-none min-w-0"
+                    placeholder="Förnamn"
+                    style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                  />
+                </label>
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Efternamn</span>
+                  <input
+                    value={editLastName}
+                    onChange={(e) => setEditLastName(e.target.value)}
+                    className="text-sm rounded-lg px-3 py-1.5 outline-none min-w-0"
+                    placeholder="Efternamn"
+                    style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                  />
+                </label>
               </div>
-              <div className="flex items-center gap-2">
-                <Phone className="w-3.5 h-3.5 shrink-0" style={{ color: TEXT_MUTED }} />
-                <input
-                  value={editPhone}
-                  onChange={(e) => setEditPhone(e.target.value)}
-                  className="text-sm rounded-lg px-3 py-1.5 outline-none flex-1"
-                  placeholder="Telefonnummer"
-                  style={{ fontFamily: FONT_MONO, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
-                />
-              </div>
+              <label className="flex flex-col gap-1">
+                <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Telefon</span>
+                <div className="flex items-center gap-2">
+                  <Phone className="w-3.5 h-3.5 shrink-0" style={{ color: TEXT_MUTED }} />
+                  <input
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    className="text-sm rounded-lg px-3 py-1.5 outline-none flex-1"
+                    placeholder="Telefonnummer"
+                    style={{ fontFamily: FONT_MONO, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                  />
+                </div>
+              </label>
             </div>
           ) : (
-            <div className="min-w-0">
-              <p className="font-semibold truncate" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
-              <p className="text-xs truncate" style={{ color: TEXT_MUTED }}>{user.email}</p>
-              {(profile?.first_name || profile?.last_name) && (
-                <p className="text-xs mt-0.5" style={{ color: TEXT_MUTED }}>
-                  {[profile?.first_name, profile?.last_name].filter(Boolean).join(" ")}
-                </p>
-              )}
-              {profile?.phone && (
-                <p className="text-xs mt-0.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{profile.phone}</p>
-              )}
+            <div className="grid min-w-0 gap-2">
+              <ProfileField label="Visningsnamn" value={displayName} />
+              <ProfileField label="Fullständigt namn" value={legalName} />
+              <ProfileField label="E-post" value={user.email} mono />
+              <ProfileField label="Telefon" value={profile?.phone} mono />
             </div>
           )}
         </div>
