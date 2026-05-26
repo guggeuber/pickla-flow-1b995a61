@@ -179,12 +179,19 @@ Deno.serve(async (req) => {
         .from('day_pass_shares')
         .select('*')
         .eq('token', token)
-        .eq('status', 'pending')
         .maybeSingle();
 
       if (shareErr) return errorResponse(shareErr.message, 500);
 
       if (share) {
+        if (share.status === 'claimed') {
+          if (share.claimed_by === claimUserId) {
+            return jsonResponse({ success: true, dayPassId: share.day_pass_id, legacy: true, already_claimed: true });
+          }
+          return errorResponse('Passet har redan hämtats', 409);
+        }
+        if (share.status !== 'pending') return errorResponse('Passet kan inte hämtas längre', 410);
+
         await adminClient.from('day_pass_shares')
           .update({ status: 'claimed', claimed_by: claimUserId, claimed_at: new Date().toISOString() })
           .eq('id', share.id);
@@ -201,11 +208,34 @@ Deno.serve(async (req) => {
         .from('access_vouchers')
         .select('*')
         .eq('code', token)
-        .eq('status', 'unused')
         .maybeSingle();
 
       if (voucherErr) return errorResponse(voucherErr.message, 500);
-      if (!voucher) return errorResponse('Pass not found or already claimed', 404);
+      if (!voucher) return errorResponse('Pass not found', 404);
+      if (['claimed', 'redeemed'].includes(voucher.status)) {
+        if (voucher.claimed_by_user_id === claimUserId) {
+          const { data: existingEntitlement } = await adminClient
+            .from('access_entitlements')
+            .select('id, valid_date')
+            .eq('source_type', 'founder_guest_voucher')
+            .eq('source_id', voucher.id)
+            .eq('user_id', claimUserId)
+            .eq('entitlement_type', 'day_access')
+            .maybeSingle();
+
+          return jsonResponse({
+            success: true,
+            voucher_id: voucher.id,
+            entitlement_id: existingEntitlement?.id || null,
+            valid_date: existingEntitlement?.valid_date || null,
+            already_claimed: true,
+          });
+        }
+        return errorResponse('Passet har redan hämtats', 409);
+      }
+      if (voucher.status === 'expired') return errorResponse('Passet har gått ut', 410);
+      if (voucher.status === 'revoked') return errorResponse('Passet har dragits tillbaka', 410);
+      if (voucher.status !== 'unused') return errorResponse('Passet kan inte hämtas längre', 410);
       if (voucher.expires_at && DateTime.fromISO(voucher.expires_at, { zone: 'utc' }) < now) {
         await adminClient.from('access_vouchers').update({ status: 'expired' }).eq('id', voucher.id);
         return errorResponse('Passet har gått ut', 410);
@@ -225,6 +255,32 @@ Deno.serve(async (req) => {
       }
 
       const validDate = now.toISODate()!;
+      const claimedAt = now.toUTC().toISO();
+      const { data: claimedVoucher, error: claimErr } = await adminClient
+        .from('access_vouchers')
+        .update({
+          status: 'claimed',
+          claimed_by_user_id: claimUserId,
+          claimed_at: claimedAt,
+        })
+        .eq('id', voucher.id)
+        .eq('status', 'unused')
+        .select('id')
+        .maybeSingle();
+
+      if (claimErr) return errorResponse(claimErr.message, 500);
+      if (!claimedVoucher) {
+        const { data: latestVoucher } = await adminClient
+          .from('access_vouchers')
+          .select('id, status, claimed_by_user_id')
+          .eq('id', voucher.id)
+          .maybeSingle();
+        if (latestVoucher?.claimed_by_user_id === claimUserId) {
+          return jsonResponse({ success: true, voucher_id: voucher.id, entitlement_id: null, valid_date: null, already_claimed: true });
+        }
+        return errorResponse('Passet har redan hämtats', 409);
+      }
+
       const { data: entitlement, error: entitlementErr } = await adminClient.from('access_entitlements').insert({
         venue_id: voucher.venue_id,
         user_id: claimUserId,
@@ -242,6 +298,12 @@ Deno.serve(async (req) => {
         },
       }).select('id').single();
       if (entitlementErr) {
+        await adminClient.from('access_vouchers').update({
+          status: 'unused',
+          claimed_by_user_id: null,
+          claimed_at: null,
+        }).eq('id', voucher.id).eq('status', 'claimed').eq('claimed_by_user_id', claimUserId);
+
         if (entitlementErr.code === '23505') {
           return errorResponse('Du har redan använt ett gratis gästpass på Pickla.', 409);
         }
@@ -250,10 +312,8 @@ Deno.serve(async (req) => {
 
       await adminClient.from('access_vouchers').update({
         status: 'redeemed',
-        claimed_by_user_id: claimUserId,
-        claimed_at: now.toUTC().toISO(),
-        redeemed_at: now.toUTC().toISO(),
-      }).eq('id', voucher.id);
+        redeemed_at: claimedAt,
+      }).eq('id', voucher.id).eq('status', 'claimed').eq('claimed_by_user_id', claimUserId);
 
       return jsonResponse({ success: true, voucher_id: voucher.id, entitlement_id: entitlement.id, valid_date: validDate });
     }
