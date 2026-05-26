@@ -26,9 +26,9 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
       {
         title: "Vem ansvarar för uppgifterna",
         body: [
-          `${PLATFORM_COMPANY} driver Pickla-plattformen och kan hantera gemensamma system, produktutveckling, support och driftstöd för flera anläggningar, driftbolag och framtida franchisetagare.`,
-          `${SOLNA_OPERATOR} är lokalt driftsbolag för Pickla Solna och hanterar den dagliga anläggningsdriften, bokningar, medlemskap, desk, support och kundkontakt för den anläggningen.`,
-          "Vilket bolag som är ansvarigt kan bero på vilken anläggning, produkt eller franchise du använder. Pickla håller kunddata inom de bolag och leverantörer som behöver uppgifterna för att leverera tjänsten.",
+          `${PLATFORM_COMPANY} tillhandahåller Pickla-plattformen.`,
+          `${SOLNA_OPERATOR} ansvarar för den lokala verksamheten på Pickla Solna och hanterar bokningar, medlemskap, desk, support och kundkontakt för den anläggningen.`,
+          "För andra anläggningar kan ett annat lokalt Pickla-bolag eller en lokal partner ansvara för den lokala verksamheten. Pickla håller kunddata inom de bolag och leverantörer som behöver uppgifterna för att leverera tjänsten.",
         ],
       },
       {
@@ -83,8 +83,8 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
         title: "Parter",
         body: [
           `${PLATFORM_COMPANY} tillhandahåller Pickla-plattformen.`,
-          `${SOLNA_OPERATOR} är driftsbolag för Pickla Solna och ansvarar för den lokala anläggningsdriften, om inget annat anges i samband med köp, bokning eller medlemskap.`,
-          "När Pickla används för fler anläggningar, driftbolag eller franchiser kan det lokala driftsbolaget vara avtalspart för den specifika anläggningen medan Pickla Orbit AB tillhandahåller plattformen.",
+          `${SOLNA_OPERATOR} ansvarar för den lokala verksamheten på Pickla Solna, om inget annat anges i samband med köp, bokning eller medlemskap.`,
+          "När Pickla används för fler anläggningar kan ett annat lokalt Pickla-bolag eller en lokal partner vara avtalspart för den specifika anläggningen medan Pickla Orbit AB tillhandahåller plattformen.",
         ],
       },
       {
@@ -144,8 +144,8 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
         title: "Vem driver tjänsten",
         body: [
           `${PLATFORM_COMPANY} tillhandahåller Pickla-plattformen.`,
-          `${SOLNA_OPERATOR} är lokalt driftsbolag för Pickla Solna.`,
-          "Teknisk lagring kan därför användas både för plattformen och för den lokala anläggningsdriften.",
+          `${SOLNA_OPERATOR} ansvarar för den lokala verksamheten på Pickla Solna.`,
+          "Teknisk lagring kan därför användas både för plattformen och för den lokala verksamheten.",
         ],
       },
       {
