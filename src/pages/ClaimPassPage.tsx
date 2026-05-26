@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import { useParams, useNavigate } from "react-router-dom";
 import { Loader2, Gift, Mail, Lock, User } from "lucide-react";
@@ -20,8 +20,10 @@ const ClaimPassPage = () => {
   const navigate = useNavigate();
   const { user, loading: authLoading, signUp, signIn } = useAuth();
   const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
   const [mode, setMode] = useState<"register" | "login">("register");
   const [formData, setFormData] = useState({ name: "", email: "", password: "" });
+  const claimAttempted = useRef(false);
 
   // Persist token so claim survives navigation away
   useEffect(() => {
@@ -36,6 +38,8 @@ const ClaimPassPage = () => {
 
   const handleClaim = useCallback(async () => {
     if (!token) return;
+    claimAttempted.current = true;
+    setClaimError(null);
     setClaiming(true);
     try {
       await apiPost("api-day-passes", "claim", { token });
@@ -43,9 +47,13 @@ const ClaimPassPage = () => {
       toast.success("Dagspass hämtat! Du hittar det under Aktivitet.");
       navigate("/activity");
     } catch (err: any) {
-      toast.error(err.message || "Kunde inte hämta passet");
+      const message = err.message || "Kunde inte hämta passet";
+      setClaimError(message);
+      clearPendingClaimToken();
+      toast.error(message);
+    } finally {
+      setClaiming(false);
     }
-    setClaiming(false);
   }, [navigate, token]);
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -71,7 +79,7 @@ const ClaimPassPage = () => {
   // Auto-claim is handled by AuthProvider via localStorage token
   // Just redirect if user is already logged in and share is being claimed
   useEffect(() => {
-    if (user && shareInfo?.status === "pending" && !claiming) {
+    if (user && shareInfo?.status === "pending" && !claiming && !claimAttempted.current) {
       handleClaim();
     }
   }, [claiming, handleClaim, shareInfo?.status, user]);
@@ -135,6 +143,11 @@ const ClaimPassPage = () => {
             >
               {claiming ? <Loader2 className="w-4 h-4 animate-spin" /> : "HÄMTA DITT PASS"}
             </button>
+            {claimError && (
+              <p className="mt-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-xs leading-relaxed text-white/70" style={{ fontFamily: FONT_MONO }}>
+                {claimError}
+              </p>
+            )}
           </motion.div>
         ) : (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="w-full mt-6">
