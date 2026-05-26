@@ -6,6 +6,16 @@
 - Venue staff access is venue-scoped through `venue_staff`.
 - Temporary staff/admin access has an owner and removal date.
 - Shared tablets should use staff accounts created for that purpose, not personal super admin accounts.
+- Staff should only open customer records for booking, membership, check-in, support, payment correction, or incident handling.
+- Manual customer corrections should be logged with staff member, timestamp, before/after state, and reason.
+
+## Temporary Admin Access
+
+- Define owner, reason, venue/customer scope, and expiry before granting access.
+- Grant the least privilege role that can solve the issue.
+- Record approver, recipient, scope, and expiry.
+- Remove access immediately after the task is complete or at the agreed expiry.
+- Review temporary access after incidents or sensitive support cases.
 
 ## Edge Functions
 
@@ -43,4 +53,5 @@ Never commit `.env` files with real secrets.
 - No admin routes reachable without auth.
 - RLS is enabled on new tables unless they are intentionally service-role only.
 - Realtime publications only include tables intended for live frontend use.
-
+- Public legal pages `/privacy`, `/terms`, and `/cookies` render and are linked from customer flows.
+- New customer data fields are reflected in [data-and-compliance.md](./data-and-compliance.md).

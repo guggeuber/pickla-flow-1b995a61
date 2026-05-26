@@ -2,7 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LogIn, UserPlus, Loader2, Mail, Lock, User, ArrowLeft } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
-import { Navigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
@@ -208,6 +208,22 @@ const Auth = () => {
                 </>
               )}
             </button>
+            {mode === "signup" && (
+              <p
+                className="px-2 text-center text-[10px] leading-relaxed text-neutral-400"
+                style={{ fontFamily: FONT_MONO }}
+              >
+                Genom att skapa konto godkänner du Picklas{" "}
+                <Link to="/terms" className="underline underline-offset-2 hover:text-neutral-600">
+                  villkor
+                </Link>{" "}
+                och{" "}
+                <Link to="/privacy" className="underline underline-offset-2 hover:text-neutral-600">
+                  integritetspolicy
+                </Link>
+                .
+              </p>
+            )}
           </motion.form>
         </AnimatePresence>}
 
@@ -268,6 +284,8 @@ const Auth = () => {
           style={{ fontFamily: FONT_MONO }}
         >
           PICKLA © 2025
+          <span className="mx-2">·</span>
+          <Link to="/privacy" className="hover:text-neutral-500">INTEGRITET</Link>
         </p>
       </motion.div>
     </div>

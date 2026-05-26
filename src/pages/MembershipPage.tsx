@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Loader2, Mail, Lock, User, Phone, Check, Star, Zap, Crown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -642,7 +642,15 @@ const MembershipPage = () => {
 
                           <div className="rounded-2xl px-4 py-3" style={{ background: "rgba(62,61,57,0.035)" }}>
                             <p className="text-[10px] leading-relaxed" style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}>
-                              {terms.join(" ")} Genom att fortsätta godkänner du Picklas köp- och medlemsvillkor.
+                              {terms.join(" ")} Genom att fortsätta godkänner du Picklas{" "}
+                              <Link to="/terms" className="underline underline-offset-2">
+                                köp- och medlemsvillkor
+                              </Link>{" "}
+                              och{" "}
+                              <Link to="/privacy" className="underline underline-offset-2">
+                                integritetspolicy
+                              </Link>
+                              .
                             </p>
                           </div>
                         </form>
@@ -685,6 +693,15 @@ const MembershipPage = () => {
             >
               WhatsApp
             </a>
+          </p>
+          <p className="mt-3 text-[10px]" style={{ color: "rgba(62,61,57,0.4)", fontFamily: FONT_MONO }}>
+            <Link to="/terms" className="underline underline-offset-2">
+              Villkor
+            </Link>
+            <span className="mx-2">·</span>
+            <Link to="/privacy" className="underline underline-offset-2">
+              Integritet
+            </Link>
           </p>
         </motion.div>
       </motion.div>

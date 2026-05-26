@@ -56,6 +56,35 @@ Use [observability-and-ops-agent.md](./observability-and-ops-agent.md) for incid
 
 Follow [data-and-compliance.md](./data-and-compliance.md).
 
+### Customer asks for data export
+
+1. Verify the requester controls the account email or is otherwise clearly authorized.
+2. Export profile, auth email, bookings, receipts, memberships, vouchers, session registrations, event inquiries, customer communications, and relevant chat/support messages.
+3. Include Stripe ids and receipt snapshots only; do not request or store full card data.
+4. Record completion date, staff member, requester email, and export scope.
+
+### Customer asks for deletion
+
+1. Verify the requester controls the account email.
+2. Preserve legally required financial records such as receipts, payments, refunds, disputes, and accounting evidence.
+3. Clear or anonymize non-required profile, phone, avatar/display, support, and communication fields where possible.
+4. Remove push subscriptions and unnecessary access roles.
+5. Record what was preserved and why.
+
+### Customer asks for correction
+
+1. Update profile fields through the customer profile or admin/customer tooling.
+2. For payment mistakes, correct through Stripe refund/payment notes and Pickla receipt/support notes rather than editing payment records directly.
+3. Log before state, after state, reason, staff member, and whether the customer was notified.
+
+### Suspected data incident
+
+1. Treat broad accidental exposure, leaked credentials, wrong customer data, or unauthorized staff access as at least P0/P1 until scoped.
+2. Contain first: revoke tokens, rotate secrets, remove staff access, disable affected device token, or pause the risky function if needed.
+3. Identify affected users, data types, timeline, and processor involvement.
+4. Decide notification/escalation requirement with the operator responsible for Pickla.
+5. Write incident notes and follow-up actions in the ops/observability flow.
+
 ## Support Correction Log
 
 Every manual support correction should include:
@@ -69,4 +98,3 @@ Every manual support correction should include:
 - after state
 - reason
 - whether customer was notified
-

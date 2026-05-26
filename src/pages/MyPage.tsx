@@ -9,7 +9,7 @@ import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
-import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
@@ -1291,6 +1291,23 @@ function SettingsSection() {
             Aktivera notiser
           </button>
         )}
+      </div>
+
+      <div className="mt-2 grid grid-cols-3 gap-2">
+        {[
+          { label: "Integritet", to: "/privacy" },
+          { label: "Villkor", to: "/terms" },
+          { label: "Cookies", to: "/cookies" },
+        ].map((item) => (
+          <Link
+            key={item.to}
+            to={item.to}
+            className="rounded-xl border px-2 py-2 text-center text-[11px] font-semibold"
+            style={{ borderColor: CARD_BORDER, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
+          >
+            {item.label}
+          </Link>
+        ))}
       </div>
 
       <p className="text-xs mt-2 text-right" style={{ color: TEXT_MUTED, fontFamily: FONT_HEADING }}>

@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { DateTime } from "luxon";
@@ -351,6 +351,13 @@ export default function GroupBookingPage() {
           >
             {inquiryMutation.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : "Skicka förfrågan"}
           </button>
+          <p className="mt-3 text-center text-[11px] leading-relaxed text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+            Vi använder dina kontaktuppgifter för att återkomma om förfrågan. Läs mer i vår{" "}
+            <Link to="/privacy" className="underline underline-offset-2">
+              integritetspolicy
+            </Link>
+            .
+          </p>
         </section>
       </form>
     </div>
