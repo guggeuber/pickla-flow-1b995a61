@@ -28,15 +28,16 @@ export default defineConfig(({ mode }) => ({
       manifest: {
         name: "Pickla",
         short_name: "Pickla",
-        description: "Boka banor, köp pass och spela pickleball",
-        theme_color: "#f7f4ee",
-        background_color: "#f7f4ee",
+        description: "Boka, spela och hantera ditt Pickla-konto.",
+        theme_color: "#F8FAFC",
+        background_color: "#F8FAFC",
         display: "standalone",
         display_override: ["standalone"],
+        lang: "sv",
         orientation: "portrait",
         scope: "/",
-        start_url: "/hub",
-        id: "/hub",
+        start_url: "/",
+        id: "/",
         icons: [
           {
             src: "/pwa-192x192.png",
@@ -59,7 +60,12 @@ export default defineConfig(({ mode }) => ({
         ],
         shortcuts: [
           {
-            name: "Boka bana",
+            name: "Idag",
+            url: "/",
+            icons: [{ src: "/pwa-192x192.png", sizes: "192x192" }],
+          },
+          {
+            name: "Boka",
             url: "/book",
             icons: [{ src: "/pwa-192x192.png", sizes: "192x192" }],
           },

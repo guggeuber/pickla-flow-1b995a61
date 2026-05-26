@@ -41,7 +41,7 @@ self.addEventListener('push', (event: PushEvent) => {
   const alert = data.aps?.alert;
   const title: string = alert?.title ?? data.title ?? 'Pickla';
   const body: string  = alert?.body  ?? data.body  ?? '';
-  const url: string   = data.url ?? '/hub';
+  const url: string   = data.url ?? '/';
 
   event.waitUntil(
     self.registration.showNotification(title, {
@@ -56,7 +56,7 @@ self.addEventListener('push', (event: PushEvent) => {
 
 self.addEventListener('notificationclick', (event: NotificationEvent) => {
   event.notification.close();
-  const url: string = (event.notification.data?.url as string) ?? '/hub';
+  const url: string = (event.notification.data?.url as string) ?? '/';
 
   event.waitUntil(
     self.clients
