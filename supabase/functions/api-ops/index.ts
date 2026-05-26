@@ -10,6 +10,17 @@ type AutoSignal = {
   note: string;
   details?: Record<string, unknown>;
 };
+type ClientEventPayload = {
+  venue_id?: string | null;
+  venue_slug?: string | null;
+  event_type?: string;
+  severity?: 'info' | 'warning' | 'error' | 'critical';
+  message?: string;
+  route?: string;
+  fingerprint?: string;
+  metadata?: Record<string, unknown>;
+  user_agent?: string;
+};
 
 const SIGNAL_KEYS: SignalKey[] = ['payments', 'bookings', 'memberships', 'checkin', 'devices', 'score', 'mail', 'deploy'];
 
@@ -59,6 +70,23 @@ function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function truncate(value: string | null | undefined, max = 2000) {
+  if (!value) return value || null;
+  return value.length > max ? `${value.slice(0, max)}...` : value;
+}
+
+function safeSeverity(value: unknown): 'info' | 'warning' | 'error' | 'critical' {
+  return ['info', 'warning', 'error', 'critical'].includes(String(value))
+    ? value as 'info' | 'warning' | 'error' | 'critical'
+    : 'info';
+}
+
+function incidentSeverity(severity: string) {
+  if (severity === 'critical') return 'P1';
+  if (severity === 'error') return 'P2';
+  return 'P3';
+}
+
 function runStatus(results: AutoSignal[]) {
   if (results.some((result) => result.status === 'red')) return 'critical';
   if (results.some((result) => result.status === 'yellow')) return 'warning';
@@ -104,6 +132,28 @@ async function resolveAdminVenue(userId: string, requestedVenueId: string | null
   const { data: staffVenue } = await query.limit(1).maybeSingle();
   if (!staffVenue?.venue_id) return { ok: false, venueId: null };
   return { ok: true, venueId: staffVenue.venue_id };
+}
+
+async function resolveClientVenue(admin: any, payload: ClientEventPayload) {
+  if (payload.venue_id) return payload.venue_id;
+  const slug = payload.venue_slug || 'pickla-arena-sthlm';
+  const { data } = await admin
+    .from('venues')
+    .select('id')
+    .eq('slug', slug)
+    .maybeSingle();
+  return data?.id || null;
+}
+
+async function getOptionalUserId(req: Request) {
+  const authHeader = req.headers.get('Authorization') || '';
+  if (!authHeader.startsWith('Bearer ')) return null;
+  try {
+    const { userId } = await getAuthenticatedClient(req);
+    return userId || null;
+  } catch {
+    return null;
+  }
 }
 
 async function ensureDefaults(venueId: string, userId: string) {
@@ -352,6 +402,29 @@ async function getMailSignal(admin: any, venueId: string): Promise<AutoSignal> {
   return { signal_key: 'mail', status: 'green', note: 'Inga mailfel hittades för nya event.', details: { checked_events: eventIds.length } };
 }
 
+async function getClientErrorsSignal(admin: any, venueId: string): Promise<AutoSignal> {
+  const { data: events, error } = await admin
+    .from('ops_client_events')
+    .select('id, event_type, severity, message, route, fingerprint, created_at, metadata')
+    .eq('venue_id', venueId)
+    .in('severity', ['error', 'critical'])
+    .gt('created_at', hoursAgo(24))
+    .order('created_at', { ascending: false })
+    .limit(30);
+
+  if (error) throw error;
+  const rows = events || [];
+  if (rows.length > 0) {
+    return {
+      signal_key: 'deploy',
+      status: rows.some((row: any) => row.severity === 'critical') ? 'red' : 'yellow',
+      note: `${rows.length} client/runtime/API-fel senaste 24h.`,
+      details: { recent_client_errors: rows.slice(0, 10) },
+    };
+  }
+  return { signal_key: 'deploy', status: 'green', note: 'Inga client/runtime/API-fel rapporterade senaste 24h.', details: {} };
+}
+
 async function writeAutoSignal(admin: any, venueId: string, userId: string | null, signal: AutoSignal) {
   const now = new Date().toISOString();
   const { error } = await admin.from('ops_signals')
@@ -430,6 +503,7 @@ async function runAutoChecks(venueId: string, userId: string | null) {
     getDevicesSignal,
     getScoreSignal,
     getMailSignal,
+    getClientErrorsSignal,
   ];
 
   const results: AutoSignal[] = [];
@@ -465,6 +539,112 @@ async function runAutoChecks(venueId: string, userId: string | null) {
   return { run, results };
 }
 
+async function syncClientIncident(admin: any, venueId: string | null, userId: string | null, event: {
+  event_type: string;
+  severity: 'info' | 'warning' | 'error' | 'critical';
+  message: string;
+  route: string | null;
+  fingerprint: string | null;
+  metadata: Record<string, unknown>;
+}) {
+  if (!venueId || !['error', 'critical'].includes(event.severity)) return;
+
+  const fingerprint = event.fingerprint || `${event.event_type}:${event.route || 'unknown'}:${event.message.slice(0, 100)}`;
+  const agentKey = `client:${fingerprint}`;
+  const { data: existing } = await admin
+    .from('ops_incidents')
+    .select('id, metadata')
+    .eq('venue_id', venueId)
+    .contains('metadata', { agent_key: agentKey })
+    .neq('status', 'resolved')
+    .limit(1)
+    .maybeSingle();
+
+  const title = `${event.event_type}: ${event.message}`.slice(0, 180);
+  const impact = JSON.stringify({
+    route: event.route,
+    fingerprint,
+    metadata: event.metadata,
+  });
+
+  if (existing?.id) {
+    const previousCount = Number(existing.metadata?.count || 1);
+    await admin.from('ops_incidents')
+      .update({
+        title,
+        severity: incidentSeverity(event.severity),
+        status: 'open',
+        affected_route: event.route,
+        impact,
+        metadata: {
+          ...(existing.metadata || {}),
+          agent_key: agentKey,
+          source: 'client',
+          count: previousCount + 1,
+          last_seen_at: new Date().toISOString(),
+        },
+        updated_by: userId,
+      })
+      .eq('id', existing.id);
+    return;
+  }
+
+  await admin.from('ops_incidents').insert({
+    venue_id: venueId,
+    severity: incidentSeverity(event.severity),
+    title,
+    status: 'open',
+    owner_name: 'Ops Agent',
+    affected_route: event.route,
+    impact,
+    metadata: {
+      agent_key: agentKey,
+      source: 'client',
+      fingerprint,
+      count: 1,
+      last_seen_at: new Date().toISOString(),
+    },
+    created_by: userId,
+    updated_by: userId,
+  });
+}
+
+async function ingestClientEvent(req: Request, body: ClientEventPayload) {
+  const admin = getServiceClient();
+  const venueId = await resolveClientVenue(admin, body);
+  const userId = await getOptionalUserId(req);
+  const severity = safeSeverity(body.severity);
+  const event = {
+    venue_id: venueId,
+    user_id: userId,
+    event_type: truncate(body.event_type || 'client_event', 80),
+    severity,
+    message: truncate(body.message || 'Client event', 500) || 'Client event',
+    route: truncate(body.route || null, 500),
+    fingerprint: truncate(body.fingerprint || null, 500),
+    metadata: body.metadata || {},
+    user_agent: truncate(body.user_agent || req.headers.get('user-agent'), 500),
+  };
+
+  const { data, error } = await admin
+    .from('ops_client_events')
+    .insert(event)
+    .select()
+    .single();
+  if (error) throw error;
+
+  await syncClientIncident(admin, venueId, userId, {
+    event_type: event.event_type || 'client_event',
+    severity,
+    message: event.message,
+    route: event.route,
+    fingerprint: event.fingerprint,
+    metadata: event.metadata,
+  });
+
+  return data;
+}
+
 async function maybeRunAutoChecks(venueId: string, userId: string) {
   const admin = getServiceClient();
   try {
@@ -497,15 +677,18 @@ async function getState(venueId: string, userId: string) {
     { data: signals, error: signalsError },
     { data: checks, error: checksError },
     { data: incidents, error: incidentsError },
+    { data: clientEvents, error: clientEventsError },
   ] = await Promise.all([
     admin.from('ops_signals').select('*').eq('venue_id', venueId).order('signal_key'),
     admin.from('ops_check_state').select('*').eq('venue_id', venueId).order('mode').order('item_index'),
     admin.from('ops_incidents').select('*').eq('venue_id', venueId).order('created_at', { ascending: false }).limit(50),
+    admin.from('ops_client_events').select('*').eq('venue_id', venueId).order('created_at', { ascending: false }).limit(30),
   ]);
 
   if (signalsError) throw signalsError;
   if (checksError) throw checksError;
   if (incidentsError) throw incidentsError;
+  if (clientEventsError) console.warn('ops_client_events unavailable in state', clientEventsError.message);
 
   const { data: agentRuns, error: agentRunsError } = await admin
     .from('ops_agent_runs')
@@ -520,6 +703,7 @@ async function getState(venueId: string, userId: string) {
     signals: signals || [],
     checks: checks || [],
     incidents: incidents || [],
+    clientEvents: clientEventsError ? [] : (clientEvents || []),
     agentRuns: agentRunsError ? [] : (agentRuns || []),
   };
 }
@@ -530,12 +714,18 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { userId, error } = await getAuthenticatedClient(req);
-    if (error || !userId) return errorResponse(error || 'Unauthorized', 401);
-
     const url = new URL(req.url);
     const path = url.pathname.split('/').pop() || '';
     const body = ['POST', 'PATCH'].includes(req.method) ? await req.json().catch(() => ({})) : {};
+
+    if (req.method === 'POST' && path === 'client-event') {
+      const data = await ingestClientEvent(req, body);
+      return jsonResponse({ success: true, id: data.id }, 201, 60);
+    }
+
+    const { userId, error } = await getAuthenticatedClient(req);
+    if (error || !userId) return errorResponse(error || 'Unauthorized', 401);
+
     const requestedVenueId = url.searchParams.get('venueId') || body.venueId || null;
     const { ok, venueId } = await resolveAdminVenue(userId, requestedVenueId);
     if (!ok || !venueId) return errorResponse('Forbidden: ops admin only', 403);

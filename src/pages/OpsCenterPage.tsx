@@ -40,6 +40,17 @@ type Incident = {
   owner_name?: string | null;
 };
 
+type ClientEvent = {
+  id: string;
+  event_type: string;
+  severity: "info" | "warning" | "error" | "critical";
+  message: string;
+  route?: string | null;
+  fingerprint?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+};
+
 type OpsSignalRow = {
   signal_key: SignalKey;
   status: OpsColor;
@@ -61,6 +72,7 @@ type OpsState = {
   signals: OpsSignalRow[];
   checks: OpsCheckRow[];
   incidents: Incident[];
+  clientEvents?: ClientEvent[];
   agentRuns?: Array<{
     id: string;
     status: "ok" | "warning" | "critical" | "error";
@@ -260,6 +272,7 @@ function OpsCenterPage() {
     return grouped;
   }, [opsState?.checks]);
   const incidents = opsState?.incidents || [];
+  const clientEvents = opsState?.clientEvents || [];
   const lastAgentRun = opsState?.agentRuns?.[0];
   const issueSignals = (opsState?.signals || []).filter((signal) => signal.status !== "green" || signal.note);
   const overall = deriveOverall(signals, incidents);
@@ -518,6 +531,56 @@ function OpsCenterPage() {
                   {modeChecks[index] ? <CheckCircle2 className="h-5 w-5 text-emerald-500" /> : <Circle className="h-5 w-5 text-slate-300" />}
                   <span className={`text-sm font-semibold ${modeChecks[index] ? "text-slate-400 line-through" : "text-slate-900"}`}>{item}</span>
                 </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-black/10 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-400">Client</p>
+                <h2 className="text-2xl font-black">Browser/API-logg</h2>
+              </div>
+              <div className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-black">
+                {clientEvents.length} senaste
+              </div>
+            </div>
+            <div className="mt-4 space-y-2">
+              {clientEvents.length === 0 && (
+                <div className="rounded-3xl border border-dashed border-black/10 p-6 text-center">
+                  <ShieldCheck className="mx-auto h-7 w-7 text-emerald-400" />
+                  <p className="mt-2 text-sm font-bold text-slate-500">Inga client-fel rapporterade ännu.</p>
+                </div>
+              )}
+              {clientEvents.slice(0, 8).map((event) => (
+                <details key={event.id} className="rounded-3xl border border-black/10 bg-[#f7f4ef] p-4">
+                  <summary className="cursor-pointer list-none">
+                    <div className="flex items-start gap-3">
+                      <span className={`rounded-full px-3 py-1 text-xs font-black ${
+                        event.severity === "critical" || event.severity === "error"
+                          ? "bg-rose-100 text-rose-800"
+                          : event.severity === "warning"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-slate-100 text-slate-600"
+                      }`}>
+                        {event.severity}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-slate-950">{event.message}</p>
+                        <p className="mt-1 truncate font-mono text-[11px] text-slate-400">
+                          {new Date(event.created_at).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" })} · {event.route || event.event_type}
+                        </p>
+                      </div>
+                    </div>
+                  </summary>
+                  <pre className="mt-3 max-h-56 overflow-auto rounded-2xl bg-slate-950 p-3 text-[11px] leading-relaxed text-white">
+                    {formatDetails({
+                      event_type: event.event_type,
+                      fingerprint: event.fingerprint,
+                      metadata: event.metadata || {},
+                    })}
+                  </pre>
+                </details>
               ))}
             </div>
           </div>

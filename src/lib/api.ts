@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { reportApiFailure } from "@/lib/clientObservability";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -29,7 +30,12 @@ function logApiTiming(method: string, url: string, startedAt: number, status?: n
   }
 }
 
-export async function apiGet<T = any>(
+async function readErrorBody(res: Response) {
+  const data = await res.json().catch(() => ({}));
+  return data.error || `API error ${res.status}`;
+}
+
+export async function apiGet<T = unknown>(
   fn: string,
   endpoint: string,
   params?: Record<string, string>
@@ -44,16 +50,24 @@ export async function apiGet<T = any>(
   const res = await fetch(requestUrl, { headers });
   logApiTiming("GET", requestUrl, startedAt, res.status);
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `API error ${res.status}`);
+    const message = await readErrorBody(res);
+    reportApiFailure({
+      method: "GET",
+      fn,
+      endpoint,
+      status: res.status,
+      message,
+      duration_ms: Math.round(performance.now() - startedAt),
+    });
+    throw new Error(message);
   }
   return res.json();
 }
 
-export async function apiPost<T = any>(
+export async function apiPost<T = unknown>(
   fn: string,
   endpoint: string,
-  body: Record<string, any>
+  body: Record<string, unknown>
 ): Promise<T> {
   const headers = await getAuthHeaders();
   const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
@@ -65,16 +79,24 @@ export async function apiPost<T = any>(
   });
   logApiTiming("POST", requestUrl, startedAt, res.status);
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `API error ${res.status}`);
+    const message = await readErrorBody(res);
+    reportApiFailure({
+      method: "POST",
+      fn,
+      endpoint,
+      status: res.status,
+      message,
+      duration_ms: Math.round(performance.now() - startedAt),
+    });
+    throw new Error(message);
   }
   return res.json();
 }
 
-export async function apiPatch<T = any>(
+export async function apiPatch<T = unknown>(
   fn: string,
   endpoint: string,
-  body: Record<string, any>
+  body: Record<string, unknown>
 ): Promise<T> {
   const headers = await getAuthHeaders();
   const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
@@ -86,13 +108,21 @@ export async function apiPatch<T = any>(
   });
   logApiTiming("PATCH", requestUrl, startedAt, res.status);
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `API error ${res.status}`);
+    const message = await readErrorBody(res);
+    reportApiFailure({
+      method: "PATCH",
+      fn,
+      endpoint,
+      status: res.status,
+      message,
+      duration_ms: Math.round(performance.now() - startedAt),
+    });
+    throw new Error(message);
   }
   return res.json();
 }
 
-export async function apiDelete<T = any>(
+export async function apiDelete<T = unknown>(
   fn: string,
   endpoint: string,
   params?: Record<string, string>
@@ -107,8 +137,16 @@ export async function apiDelete<T = any>(
   const res = await fetch(requestUrl, { method: "DELETE", headers });
   logApiTiming("DELETE", requestUrl, startedAt, res.status);
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `API error ${res.status}`);
+    const message = await readErrorBody(res);
+    reportApiFailure({
+      method: "DELETE",
+      fn,
+      endpoint,
+      status: res.status,
+      message,
+      duration_ms: Math.round(performance.now() - startedAt),
+    });
+    throw new Error(message);
   }
   return res.json();
 }
