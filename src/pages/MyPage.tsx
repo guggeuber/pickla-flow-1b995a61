@@ -586,16 +586,7 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
   const [saving, setSaving] = useState(false);
   const queryClient = useQueryClient();
   const legalName = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ");
-
-  const ProfileField = ({ label, value, mono = false }: { label: string; value?: string | null; mono?: boolean }) => {
-    if (!value) return null;
-    return (
-      <div className="min-w-0">
-        <p className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{label}</p>
-        <p className="truncate text-sm" style={{ fontFamily: mono ? FONT_MONO : FONT_HEADING, color: TEXT_PRIMARY }}>{value}</p>
-      </div>
-    );
-  };
+  const showLegalName = legalName && legalName.toLowerCase() !== displayName.toLowerCase();
 
   const handleSave = async () => {
     const firstName = editFirstName.trim();
@@ -640,7 +631,7 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
           {editing ? (
             <div className="flex flex-col gap-2">
               <label className="flex flex-col gap-1">
-                <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Visningsnamn</span>
+                <span className="text-[11px] font-semibold" style={{ color: TEXT_MUTED }}>Visningsnamn</span>
                 <input
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
@@ -651,7 +642,7 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <label className="flex min-w-0 flex-col gap-1">
-                  <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Förnamn</span>
+                  <span className="text-[11px] font-semibold" style={{ color: TEXT_MUTED }}>Förnamn</span>
                   <input
                     value={editFirstName}
                     onChange={(e) => setEditFirstName(e.target.value)}
@@ -661,7 +652,7 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
                   />
                 </label>
                 <label className="flex min-w-0 flex-col gap-1">
-                  <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Efternamn</span>
+                  <span className="text-[11px] font-semibold" style={{ color: TEXT_MUTED }}>Efternamn</span>
                   <input
                     value={editLastName}
                     onChange={(e) => setEditLastName(e.target.value)}
@@ -672,7 +663,7 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
                 </label>
               </div>
               <label className="flex flex-col gap-1">
-                <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Telefon</span>
+                <span className="text-[11px] font-semibold" style={{ color: TEXT_MUTED }}>Telefon</span>
                 <div className="flex items-center gap-2">
                   <Phone className="w-3.5 h-3.5 shrink-0" style={{ color: TEXT_MUTED }} />
                   <input
@@ -686,11 +677,17 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
               </label>
             </div>
           ) : (
-            <div className="grid min-w-0 gap-2">
-              <ProfileField label="Visningsnamn" value={displayName} />
-              <ProfileField label="Fullständigt namn" value={legalName} />
-              <ProfileField label="E-post" value={user.email} mono />
-              <ProfileField label="Telefon" value={profile?.phone} mono />
+            <div className="min-w-0">
+              <p className="truncate text-lg font-semibold leading-tight" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
+              <p className="mt-1 truncate text-xs" style={{ color: TEXT_MUTED }}>{user.email}</p>
+              {profile?.phone && (
+                <p className="mt-0.5 text-xs" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{profile.phone}</p>
+              )}
+              {showLegalName && (
+                <p className="mt-2 inline-flex max-w-full rounded-full px-2.5 py-1 text-[11px] font-semibold" style={{ background: PAGE_BG, color: TEXT_SECONDARY }}>
+                  <span className="truncate">Medlemsnamn: {legalName}</span>
+                </p>
+              )}
             </div>
           )}
         </div>
