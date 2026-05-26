@@ -108,7 +108,7 @@ function usePlayerProfile() {
     queryFn: async () => {
       const { data } = await supabase
         .from("player_profiles")
-        .select("display_name, phone")
+        .select("display_name, first_name, last_name, phone")
         .eq("auth_user_id", user!.id)
         .maybeSingle();
       return data;
@@ -120,6 +120,18 @@ const formatAmount = (value: number) => {
   if (Number.isInteger(value)) return String(value);
   return value.toLocaleString("sv-SE", { maximumFractionDigits: 1 });
 };
+
+function splitName(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || "",
+    lastName: parts.slice(1).join(" "),
+  };
+}
+
+function fullName(firstName: string, lastName: string) {
+  return [firstName, lastName].map((part) => part.trim()).filter(Boolean).join(" ");
+}
 
 // Build benefit list from actual tier configuration, not marketing filler.
 function getTierBenefits(tier: MembershipTier): string[] {
@@ -195,17 +207,29 @@ const MembershipPage = () => {
   const { data: activeMembership } = useActiveMembership(venue?.id);
   const { data: profile } = usePlayerProfile();
   const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
-  const [formData, setFormData] = useState({ name: "", email: "", phone: "", password: "" });
+  const [formData, setFormData] = useState({ firstName: "", lastName: "", email: "", phone: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
 
   const hasMembership = !!activeMembership;
   const profilePhone = profile?.phone || "";
+  const profileFirstName = profile?.first_name || "";
+  const profileLastName = profile?.last_name || "";
 
   useEffect(() => {
     if (profilePhone && !formData.phone) {
       setFormData((current) => ({ ...current, phone: profilePhone }));
     }
   }, [profilePhone, formData.phone]);
+
+  useEffect(() => {
+    if (!user || !profile) return;
+    const fallback = splitName(profile.display_name || "");
+    setFormData((current) => ({
+      ...current,
+      firstName: current.firstName || profileFirstName || fallback.firstName,
+      lastName: current.lastName || profileLastName || fallback.lastName,
+    }));
+  }, [user, profile, profileFirstName, profileLastName]);
 
   useEffect(() => {
     const resetPendingCheckout = () => setSubmitting(false);
@@ -233,6 +257,17 @@ const MembershipPage = () => {
 
     setSubmitting(true);
     try {
+      const firstName = formData.firstName.trim();
+      const lastName = formData.lastName.trim();
+      const phone = formData.phone.trim();
+      const customerName = fullName(firstName, lastName);
+
+      if (!firstName || !lastName || !phone) {
+        toast.error("Ange förnamn, efternamn och telefon för medlemskap");
+        setSubmitting(false);
+        return;
+      }
+
       // For free tiers: skip Stripe, keep manual activation flow
       if (!tier.monthly_price || tier.monthly_price <= 0) {
         toast.success("Tack! Vi kontaktar dig för att aktivera ditt kostnadsfria medlemskap.");
@@ -244,12 +279,12 @@ const MembershipPage = () => {
       // For paid tiers: create account if needed, then redirect to Stripe
       let userId = user?.id || "";
       if (!user) {
-        if (!formData.name.trim() || !formData.email.trim()) {
-          toast.error("Ange namn och e-post");
+        if (!formData.email.trim()) {
+          toast.error("Ange e-post");
           setSubmitting(false);
           return;
         }
-        const { error } = await signUp(formData.email, formData.password, formData.name);
+        const { error } = await signUp(formData.email, formData.password, customerName);
         if (error) {
           toast.error(error.message);
           setSubmitting(false);
@@ -260,6 +295,16 @@ const MembershipPage = () => {
         userId = freshUser?.id || "";
       }
 
+      if (userId) {
+        await supabase.from("player_profiles").upsert({
+          auth_user_id: userId,
+          display_name: profile?.display_name || customerName,
+          first_name: firstName,
+          last_name: lastName,
+          phone,
+        }, { onConflict: "auth_user_id" });
+      }
+
       const result = await apiPost("api-bookings", "create-checkout", {
         product_type: "membership",
         amount_sek: Math.round(tier.monthly_price),
@@ -267,9 +312,11 @@ const MembershipPage = () => {
           tier_id:        tier.id,
           tier_name:      tier.name,
           user_id:        userId,
-          customer_name:  user ? "" : formData.name.trim(),
+          first_name:     firstName,
+          last_name:      lastName,
+          customer_name:  customerName,
           customer_email: user ? (user.email || "") : formData.email.trim(),
-          customer_phone: formData.phone.trim(),
+          customer_phone: phone,
           slug,
         },
       });
@@ -466,40 +513,72 @@ const MembershipPage = () => {
                               <p className="text-[13px] font-medium" style={{ fontFamily: FONT_HEADING, color: "#3E3D39" }}>
                                 Du är inloggad som {user.email}
                               </p>
-                              {profilePhone ? (
-                                <div className="flex items-center gap-2 rounded-2xl bg-neutral-50 border border-neutral-200 px-4 py-3.5">
-                                  <Phone className="w-4 h-4 shrink-0" style={{ color: "rgba(62,61,57,0.35)" }} />
-                                  <span className="text-[13px]" style={{ fontFamily: FONT_MONO, color: "rgba(62,61,57,0.65)" }}>
-                                    {profilePhone}
-                                  </span>
-                                </div>
-                              ) : (
+                              <div className="grid grid-cols-2 gap-2">
                                 <div className="relative">
-                                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
+                                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
                                   <input
-                                    type="tel"
-                                    placeholder="telefonnummer (valfritt)"
-                                    value={formData.phone}
-                                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                                    type="text"
+                                    placeholder="förnamn"
+                                    value={formData.firstName}
+                                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
                                     className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
                                     style={{ fontFamily: FONT_MONO }}
+                                    required
                                   />
                                 </div>
-                              )}
-                            </>
-                          ) : (
-                            <>
+                                <div className="relative">
+                                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
+                                  <input
+                                    type="text"
+                                    placeholder="efternamn"
+                                    value={formData.lastName}
+                                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                                    className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                                    style={{ fontFamily: FONT_MONO }}
+                                    required
+                                  />
+                                </div>
+                              </div>
                               <div className="relative">
-                                <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
+                                <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
                                 <input
-                                  type="text"
-                                  placeholder="ditt namn"
-                                  value={formData.name}
-                                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                  type="tel"
+                                  placeholder="telefonnummer"
+                                  value={formData.phone}
+                                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                                   className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
                                   style={{ fontFamily: FONT_MONO }}
                                   required
                                 />
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="grid grid-cols-2 gap-2">
+                                <div className="relative">
+                                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
+                                  <input
+                                    type="text"
+                                    placeholder="förnamn"
+                                    value={formData.firstName}
+                                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                                    className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                                    style={{ fontFamily: FONT_MONO }}
+                                    required
+                                  />
+                                </div>
+                                <div className="relative">
+                                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
+                                  <input
+                                    type="text"
+                                    placeholder="efternamn"
+                                    value={formData.lastName}
+                                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                                    className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
+                                    style={{ fontFamily: FONT_MONO }}
+                                    required
+                                  />
+                                </div>
                               </div>
                               <div className="relative">
                                 <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "rgba(62,61,57,0.25)" }} />
@@ -522,6 +601,7 @@ const MembershipPage = () => {
                                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                                   className="w-full px-4 py-3.5 pl-11 rounded-2xl bg-neutral-50 border border-neutral-200 text-neutral-900 text-[14px] placeholder:text-neutral-300 focus:outline-none focus:border-neutral-400 transition-colors"
                                   style={{ fontFamily: FONT_MONO }}
+                                  required
                                 />
                               </div>
                               <div className="relative">

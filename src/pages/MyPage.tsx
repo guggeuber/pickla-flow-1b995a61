@@ -580,15 +580,25 @@ function MembershipDetailsSheet({
 function ProfileCard({ profile, user, displayName }: { profile: any; user: any; displayName: string }) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(displayName);
+  const [editFirstName, setEditFirstName] = useState(profile?.first_name || "");
+  const [editLastName, setEditLastName] = useState(profile?.last_name || "");
   const [editPhone, setEditPhone] = useState(profile?.phone || "");
   const [saving, setSaving] = useState(false);
   const queryClient = useQueryClient();
 
   const handleSave = async () => {
+    const firstName = editFirstName.trim();
+    const lastName = editLastName.trim();
+    const nextDisplayName = editName.trim() || [firstName, lastName].filter(Boolean).join(" ");
     setSaving(true);
     const { error } = await supabase
       .from("player_profiles")
-      .update({ display_name: editName.trim(), phone: editPhone.trim() })
+      .update({
+        display_name: nextDisplayName,
+        first_name: firstName || null,
+        last_name: lastName || null,
+        phone: editPhone.trim() || null,
+      })
       .eq("auth_user_id", user.id);
     setSaving(false);
     if (error) {
@@ -625,6 +635,22 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
                 placeholder="Namn"
                 style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
               />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  value={editFirstName}
+                  onChange={(e) => setEditFirstName(e.target.value)}
+                  className="text-sm rounded-lg px-3 py-1.5 outline-none min-w-0"
+                  placeholder="Förnamn"
+                  style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                />
+                <input
+                  value={editLastName}
+                  onChange={(e) => setEditLastName(e.target.value)}
+                  className="text-sm rounded-lg px-3 py-1.5 outline-none min-w-0"
+                  placeholder="Efternamn"
+                  style={{ fontFamily: FONT_HEADING, background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                />
+              </div>
               <div className="flex items-center gap-2">
                 <Phone className="w-3.5 h-3.5 shrink-0" style={{ color: TEXT_MUTED }} />
                 <input
@@ -640,6 +666,11 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
             <div className="min-w-0">
               <p className="font-semibold truncate" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{displayName}</p>
               <p className="text-xs truncate" style={{ color: TEXT_MUTED }}>{user.email}</p>
+              {(profile?.first_name || profile?.last_name) && (
+                <p className="text-xs mt-0.5" style={{ color: TEXT_MUTED }}>
+                  {[profile?.first_name, profile?.last_name].filter(Boolean).join(" ")}
+                </p>
+              )}
               {profile?.phone && (
                 <p className="text-xs mt-0.5" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>{profile.phone}</p>
               )}
@@ -677,7 +708,13 @@ function ProfileCard({ profile, user, displayName }: { profile: any; user: any; 
         ) : (
           <motion.button
             whileTap={{ scale: 0.9 }}
-            onClick={() => { setEditName(displayName); setEditPhone(profile?.phone || ""); setEditing(true); }}
+            onClick={() => {
+              setEditName(displayName);
+              setEditFirstName(profile?.first_name || "");
+              setEditLastName(profile?.last_name || "");
+              setEditPhone(profile?.phone || "");
+              setEditing(true);
+            }}
             className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
             style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}
           >

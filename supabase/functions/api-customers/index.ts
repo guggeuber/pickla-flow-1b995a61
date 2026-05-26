@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
         .order('pickla_rating', { ascending: false }).limit(limit);
 
       if (search) {
-        query = query.or(`display_name.ilike.%${search}%,phone.ilike.%${search}%`);
+        query = query.or(`display_name.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%,phone.ilike.%${search}%`);
       }
 
       const { data, error: qErr } = await query;
@@ -47,11 +47,13 @@ Deno.serve(async (req) => {
     // PATCH /api-customers/update
     if (req.method === 'PATCH' && path === 'update') {
       const body = await req.json();
-      const { id, display_name, phone, bio } = body;
+      const { id, display_name, first_name, last_name, phone, bio } = body;
       if (!id) return errorResponse('Missing id');
 
       const updates: Record<string, any> = {};
       if (display_name !== undefined) updates.display_name = display_name;
+      if (first_name !== undefined) updates.first_name = first_name;
+      if (last_name !== undefined) updates.last_name = last_name;
       if (phone !== undefined) updates.phone = phone;
       if (bio !== undefined) updates.bio = bio;
 
@@ -77,8 +79,12 @@ Deno.serve(async (req) => {
     // POST /api-customers/create — Create a new customer (player_profile) by staff
     if (req.method === 'POST' && path === 'create') {
       const body = await req.json();
-      const { display_name, phone, email, venue_id } = body;
-      if (!display_name) return errorResponse('display_name is required');
+      const { display_name, first_name, last_name, phone, email, venue_id } = body;
+      const firstName = String(first_name || '').trim();
+      const lastName = String(last_name || '').trim();
+      const displayName = String(display_name || [firstName, lastName].filter(Boolean).join(' ')).trim();
+      if (!displayName) return errorResponse('display_name is required');
+      if (!firstName || !lastName || !phone) return errorResponse('Staff-created customers require first_name, last_name and phone');
 
       // Use service role to create profile without requiring auth signup
       const serviceClient = createClient(
@@ -94,18 +100,18 @@ Deno.serve(async (req) => {
           email,
           password: tempPassword,
           email_confirm: true,
-          user_metadata: { display_name },
+          user_metadata: { display_name: displayName },
         });
         if (authErr) return errorResponse(authErr.message);
 
         // Update the auto-created profile with phone
-        if (phone && authUser.user) {
+        if (authUser.user) {
           await serviceClient.from('player_profiles')
-            .update({ phone, display_name })
+            .update({ phone, display_name: displayName, first_name: firstName, last_name: lastName })
             .eq('auth_user_id', authUser.user.id);
         }
 
-        return jsonResponse({ id: authUser.user?.id, display_name, phone, email });
+        return jsonResponse({ id: authUser.user?.id, display_name: displayName, first_name: firstName, last_name: lastName, phone, email });
       }
 
       // No email — create a "guest" profile (no auth user)
@@ -115,7 +121,9 @@ Deno.serve(async (req) => {
       const { data: profile, error: profErr } = await serviceClient.from('player_profiles')
         .insert({
           auth_user_id: guestId,
-          display_name,
+          display_name: displayName,
+          first_name: firstName,
+          last_name: lastName,
           phone: phone || null,
         })
         .select()

@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { findAuthUserByEmail } from '../_shared/bookings.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const STOCKHOLM_ZONE = 'Europe/Stockholm';
@@ -30,10 +31,16 @@ function nameFromBookingNotes(notes?: string | null) {
 async function getProfile(serviceClient: any, userId: string) {
   const { data } = await serviceClient
     .from('player_profiles')
-    .select('id, auth_user_id, display_name, phone, avatar_url')
+    .select('id, auth_user_id, display_name, first_name, last_name, phone, avatar_url')
     .eq('auth_user_id', userId)
     .maybeSingle();
   return data;
+}
+
+function profileName(profile: any) {
+  return [profile?.first_name, profile?.last_name].map((part) => String(part || '').trim()).filter(Boolean).join(' ') ||
+    profile?.display_name ||
+    'Spelare';
 }
 
 async function resolveUserAccess(serviceClient: any, venueId: string, targetUserId: string) {
@@ -398,24 +405,33 @@ Deno.serve(async (req) => {
       // Search player_profiles
       const { data: profiles } = await serviceClient
         .from('player_profiles')
-        .select('id, auth_user_id, display_name, phone, avatar_url')
-        .or(`display_name.ilike.%${query}%,phone.ilike.%${query}%`)
+        .select('id, auth_user_id, display_name, first_name, last_name, phone, avatar_url')
+        .or(`display_name.ilike.%${query}%,first_name.ilike.%${query}%,last_name.ilike.%${query}%,phone.ilike.%${query}%`)
         .limit(10);
 
-      if (!profiles?.length) {
+      let searchProfiles = profiles || [];
+      if (query.includes('@')) {
+        const authUser = await findAuthUserByEmail(serviceClient, query);
+        if (authUser?.id && !searchProfiles.some((profile: any) => profile.auth_user_id === authUser.id)) {
+          const emailProfile = await getProfile(serviceClient, authUser.id);
+          if (emailProfile) searchProfiles = [emailProfile, ...searchProfiles];
+        }
+      }
+
+      if (!searchProfiles.length) {
         return jsonResponse({ results: [] });
       }
 
       const results = [];
 
-      for (const profile of profiles) {
+      for (const profile of searchProfiles.slice(0, 10)) {
         const uid = profile.auth_user_id;
         const access = await resolveUserAccess(serviceClient, venue_id, uid);
 
         results.push({
           profile_id: profile.id,
           user_id: uid,
-          display_name: profile.display_name,
+          display_name: profileName(profile),
           phone: profile.phone,
           avatar_url: profile.avatar_url,
           entitlements: access.entitlements,

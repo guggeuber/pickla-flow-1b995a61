@@ -468,6 +468,37 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (isMembership) {
+      const firstName = String(meta.first_name || '').trim();
+      const lastName = String(meta.last_name || '').trim();
+      const phone = String(meta.customer_phone || '').trim();
+      const customerName = String(meta.customer_name || [firstName, lastName].filter(Boolean).join(' ')).trim();
+
+      if (!firstName || !lastName || !phone) {
+        return errorResponse('Medlemskap kräver förnamn, efternamn och telefon', 400);
+      }
+
+      if (entitlementUserId) {
+        const adminProfile = getServiceClient();
+        const { data: existingProfile } = await adminProfile
+          .from('player_profiles')
+          .select('display_name')
+          .eq('auth_user_id', entitlementUserId)
+          .maybeSingle();
+
+        await adminProfile.from('player_profiles').upsert({
+          auth_user_id: entitlementUserId,
+          display_name: existingProfile?.display_name || customerName,
+          first_name: firstName,
+          last_name: lastName,
+          phone,
+        }, { onConflict: 'auth_user_id' });
+      }
+
+      meta.customer_name = customerName;
+      meta.customer_phone = phone;
+    }
+
     if (entitlementUserId && !isMembership && venue_id) {
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -729,6 +760,8 @@ Deno.serve(async (req) => {
       paid_court_hours: String(meta.paid_court_hours || ''),
       // Membership-specific
       tier_id:          String(meta.tier_id          || ''),
+      first_name:       String(meta.first_name       || '').slice(0, 100),
+      last_name:        String(meta.last_name        || '').slice(0, 100),
       customer_name:    String(meta.customer_name    || '').slice(0, 200),
       customer_email:   String(meta.customer_email   || '').slice(0, 200),
       customer_phone:   String(meta.customer_phone   || '').slice(0, 50),
@@ -1358,7 +1391,7 @@ Deno.serve(async (req) => {
           .gt('price', 0)
           .order('valid_date', { ascending: true }),
         client.from('player_profiles')
-          .select('display_name, phone')
+          .select('display_name, first_name, last_name, phone')
           .eq('auth_user_id', userId)
           .maybeSingle(),
       ]);
@@ -1396,7 +1429,7 @@ Deno.serve(async (req) => {
         issued_at: DateTime.now().toUTC().toISO(),
         user_id: userId,
         customer: {
-          name: profileRes.data?.display_name || null,
+          name: [profileRes.data?.first_name, profileRes.data?.last_name].filter(Boolean).join(' ') || profileRes.data?.display_name || null,
           phone: profileRes.data?.phone || null,
         },
         items,

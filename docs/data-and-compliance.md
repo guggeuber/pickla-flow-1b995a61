@@ -7,9 +7,10 @@ This is not legal advice. It is the lean operating baseline before soft launch.
 Customer account:
 
 - user id
-- name/display name
+- display name
+- first name and last name when needed for membership, staff support, receipts, and desk operations
 - email
-- phone
+- phone when needed for membership, staff support, group/event leads, and desk operations
 - profile/avatar fields if supplied
 - QR/account token identifiers
 
@@ -38,7 +39,7 @@ Communications:
 - event/inquiry internal notes
 - outbound/inbound customer email logs for group inquiries
 
-Do not store full card numbers, CVC, unnecessary identity documents, or sensitive health data.
+Do not store full card numbers, CVC, personal identity numbers, address, birth date, gender, emergency contacts, unnecessary identity documents, or sensitive health data in v1.
 
 ## Processor List
 
@@ -83,4 +84,3 @@ Incident:
 - Staff access routine.
 - Temporary admin access routine.
 - Processor list / data processing overview.
-

@@ -463,6 +463,25 @@ async function handleMembership(
   if (tierErr || !tier) throw new Error(`Membership tier not found: ${tier_id}`);
 
   const resolvedUserId = await resolveUserId(session, user_id, serviceClient);
+  const firstName = String(meta.first_name || '').trim();
+  const lastName = String(meta.last_name || '').trim();
+  const phone = String(meta.customer_phone || '').trim();
+  const customerName = String(meta.customer_name || [firstName, lastName].filter(Boolean).join(' ')).trim();
+  if (firstName && lastName && phone) {
+    const { data: existingProfile } = await serviceClient
+      .from('player_profiles')
+      .select('display_name')
+      .eq('auth_user_id', resolvedUserId)
+      .maybeSingle();
+    await serviceClient.from('player_profiles').upsert({
+      auth_user_id: resolvedUserId,
+      display_name: existingProfile?.display_name || customerName,
+      first_name: firstName,
+      last_name: lastName,
+      phone,
+    }, { onConflict: 'auth_user_id' });
+  }
+
   const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
 
   const { error } = await serviceClient.from('memberships').insert({

@@ -9,6 +9,19 @@ async function assertVenueAdmin(admin: ReturnType<typeof getServiceClient>, user
   return !!staff;
 }
 
+function fullName(firstName?: string | null, lastName?: string | null, fallback?: string | null) {
+  const structured = [firstName, lastName].map((part) => String(part || '').trim()).filter(Boolean).join(' ');
+  return structured || fallback || null;
+}
+
+function splitDisplayName(displayName?: string | null) {
+  const parts = String(displayName || '').trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || '',
+    lastName: parts.slice(1).join(' '),
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -257,7 +270,7 @@ Deno.serve(async (req) => {
 
       const userIds = Array.from(new Set((data || []).map((row: any) => row.user_id).filter(Boolean)));
       const { data: profiles } = userIds.length
-        ? await admin.from('player_profiles').select('auth_user_id, display_name, phone').in('auth_user_id', userIds)
+        ? await admin.from('player_profiles').select('auth_user_id, display_name, first_name, last_name, phone').in('auth_user_id', userIds)
         : { data: [] };
       const profileByUserId = new Map((profiles || []).map((profile: any) => [profile.auth_user_id, profile]));
 
@@ -272,8 +285,12 @@ Deno.serve(async (req) => {
         return {
           ...row,
           user_email: emailByUserId.get(row.user_id) || null,
-          user_name: profile?.display_name || null,
+          user_name: fullName(profile?.first_name, profile?.last_name, profile?.display_name),
+          user_display_name: profile?.display_name || null,
+          user_first_name: profile?.first_name || null,
+          user_last_name: profile?.last_name || null,
           user_phone: profile?.phone || null,
+          user_profile_complete: Boolean(profile?.first_name && profile?.last_name && profile?.phone),
         };
       });
 
@@ -312,6 +329,14 @@ Deno.serve(async (req) => {
       if (!venueId || !customerUserId || !tierId) return errorResponse('Missing fields');
       if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
 
+      const { data: targetProfile } = await admin.from('player_profiles')
+        .select('first_name, last_name, phone')
+        .eq('auth_user_id', customerUserId)
+        .maybeSingle();
+      if (!targetProfile?.first_name || !targetProfile?.last_name || !targetProfile?.phone) {
+        return errorResponse('Medlemskap kräver förnamn, efternamn och telefon på kunden', 400);
+      }
+
       const { data: assignTier } = await admin.from('membership_tiers')
         .select('*')
         .eq('id', tierId)
@@ -340,7 +365,7 @@ Deno.serve(async (req) => {
     // POST /api-memberships/assign-email
     if (req.method === 'POST' && path === 'assign-email') {
       const body = await req.json();
-      const { venueId, email, tierId, expiresAt, notes, displayName } = body;
+      const { venueId, email, tierId, expiresAt, notes, displayName, firstName, lastName, phone } = body;
       const normalizedEmail = String(email || '').trim().toLowerCase();
       if (!venueId || !normalizedEmail || !tierId) return errorResponse('Missing venueId, email or tierId');
       if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
@@ -351,18 +376,45 @@ Deno.serve(async (req) => {
       if (!assignable) return errorResponse('Tier is not assignable', 403);
 
       let targetUserId = '';
+      const parsedName = splitDisplayName(displayName);
+      const nextFirstName = String(firstName || parsedName.firstName || '').trim();
+      const nextLastName = String(lastName || parsedName.lastName || '').trim();
+      const nextPhone = String(phone || '').trim();
       const existing = await findAuthUserByEmail(admin, normalizedEmail);
       if (existing?.id) {
         targetUserId = existing.id;
       } else {
+        if (!nextFirstName || !nextLastName || !nextPhone) {
+          return errorResponse('Medlemskap kräver förnamn, efternamn och telefon på kunden', 400);
+        }
+        const nextDisplayName = String(displayName || fullName(nextFirstName, nextLastName) || '').trim();
         const { data: created, error: createErr } = await admin.auth.admin.createUser({
           email: normalizedEmail,
           email_confirm: true,
-          user_metadata: displayName ? { display_name: displayName } : undefined,
+          user_metadata: nextDisplayName ? { display_name: nextDisplayName } : undefined,
         });
         if (createErr || !created?.user?.id) return errorResponse(createErr?.message || 'Could not create user', 500);
         targetUserId = created.user.id;
       }
+
+      const { data: existingProfile } = await admin.from('player_profiles')
+        .select('display_name, first_name, last_name, phone')
+        .eq('auth_user_id', targetUserId)
+        .maybeSingle();
+      const mergedFirstName = nextFirstName || existingProfile?.first_name || '';
+      const mergedLastName = nextLastName || existingProfile?.last_name || '';
+      const mergedPhone = nextPhone || existingProfile?.phone || '';
+      if (!mergedFirstName || !mergedLastName || !mergedPhone) {
+        return errorResponse('Medlemskap kräver förnamn, efternamn och telefon på kunden', 400);
+      }
+
+      await admin.from('player_profiles').upsert({
+        auth_user_id: targetUserId,
+        display_name: existingProfile?.display_name || String(displayName || fullName(mergedFirstName, mergedLastName) || '').trim(),
+        first_name: mergedFirstName,
+        last_name: mergedLastName,
+        phone: mergedPhone,
+      }, { onConflict: 'auth_user_id' });
 
       await admin.from('memberships')
         .update({ status: 'cancelled' })

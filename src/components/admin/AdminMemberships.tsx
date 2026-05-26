@@ -57,7 +57,11 @@ interface AdminMembership {
   notes: string | null;
   user_email?: string | null;
   user_name?: string | null;
+  user_display_name?: string | null;
+  user_first_name?: string | null;
+  user_last_name?: string | null;
   user_phone?: string | null;
+  user_profile_complete?: boolean;
   membership_tiers?: Pick<MembershipTier, "id" | "name" | "color" | "discount_percent" | "monthly_price"> | null;
 }
 
@@ -560,6 +564,9 @@ const EditableMembershipRow = ({
           <p className="text-[10px] text-muted-foreground truncate">
             {[membership.user_email, membership.user_phone].filter(Boolean).join(" · ") || membership.user_id}
           </p>
+          {!membership.user_profile_complete && (
+            <p className="mt-1 text-[10px] font-semibold text-amber-500">Fullständigt namn eller telefon saknas</p>
+          )}
         </div>
         <span className="text-[10px] px-2 py-1 rounded-full bg-primary/10 text-primary font-semibold">
           {membership.membership_tiers?.name || "Medlem"}
@@ -659,7 +666,9 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
   const [monthlyPrice, setMonthlyPrice] = useState("");
   const [expandedTier, setExpandedTier] = useState<string | null>(null);
   const [assignEmail, setAssignEmail] = useState("");
-  const [assignName, setAssignName] = useState("");
+  const [assignFirstName, setAssignFirstName] = useState("");
+  const [assignLastName, setAssignLastName] = useState("");
+  const [assignPhone, setAssignPhone] = useState("");
   const [assignTierId, setAssignTierId] = useState("");
   const [assignNotes, setAssignNotes] = useState("");
 
@@ -696,7 +705,9 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
       qc.invalidateQueries({ queryKey: ["venue-memberships", venueId] });
       toast.success("Medlemskap tilldelat");
       setAssignEmail("");
-      setAssignName("");
+      setAssignFirstName("");
+      setAssignLastName("");
+      setAssignPhone("");
       setAssignNotes("");
     },
     onError: (e: any) => toast.error(e.message || "Kunde inte tilldela medlemskap"),
@@ -716,14 +727,17 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
   };
 
   const handleAssign = () => {
-    if (!assignEmail.trim() || !assignTierId) {
-      toast.error("Ange email och nivå");
+    if (!assignEmail.trim() || !assignTierId || !assignFirstName.trim() || !assignLastName.trim() || !assignPhone.trim()) {
+      toast.error("Ange e-post, förnamn, efternamn, telefon och nivå");
       return;
     }
     assignMembership.mutate({
       venueId,
       email: assignEmail.trim(),
-      displayName: assignName.trim() || undefined,
+      firstName: assignFirstName.trim(),
+      lastName: assignLastName.trim(),
+      phone: assignPhone.trim(),
+      displayName: `${assignFirstName.trim()} ${assignLastName.trim()}`,
       tierId: assignTierId,
       notes: assignNotes.trim() || "Manuellt tilldelat i admin",
     });
@@ -874,12 +888,28 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
             value={assignEmail}
             onChange={(e) => setAssignEmail(e.target.value)}
           />
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              placeholder="Förnamn"
+              className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
+              style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+              value={assignFirstName}
+              onChange={(e) => setAssignFirstName(e.target.value)}
+            />
+            <input
+              placeholder="Efternamn"
+              className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
+              style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+              value={assignLastName}
+              onChange={(e) => setAssignLastName(e.target.value)}
+            />
+          </div>
           <input
-            placeholder="Namn (valfritt, om kontot saknas)"
+            placeholder="Telefon"
             className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
             style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-            value={assignName}
-            onChange={(e) => setAssignName(e.target.value)}
+            value={assignPhone}
+            onChange={(e) => setAssignPhone(e.target.value)}
           />
           <select
             value={assignTierId}
