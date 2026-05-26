@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { ArrowRight, Loader2, MapPin, MessageCircle, X } from "lucide-react";
+import { ArrowRight, Loader2, MapPin, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
@@ -433,16 +433,6 @@ export default function TodayPage() {
     setActiveGuide(null);
     navigate(href);
   };
-  const openDailyRoom = async () => {
-    if (!venue?.id) return;
-    const { data } = await supabase.rpc("upsert_daily_chat_room", {
-      p_venue_id: venue.id,
-      p_session_date: DateTime.now().setZone("Europe/Stockholm").toISODate(),
-      p_name: "Pickla Idag",
-    });
-    const room = data?.[0];
-    navigate(room?.id ? `/chat/${room.id}?v=${encodeURIComponent(slug)}` : `/hub?v=${encodeURIComponent(slug)}`);
-  };
   const liveHighlightId = items.find((item) => {
     const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
     const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
@@ -537,23 +527,6 @@ export default function TodayPage() {
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={openDailyRoom}
-            className="mt-5 flex w-full items-center gap-4 rounded-[26px] border border-black/10 bg-white p-4 text-left shadow-sm active:scale-[0.99]"
-          >
-            <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-green-100 text-green-600">
-              <MessageCircle className="h-7 w-7" />
-            </span>
-            <span className="min-w-0">
-              <span className="flex items-center gap-2 text-[20px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                Pickla Idag <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
-              </span>
-              <span className="mt-1 block truncate text-[13px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                Öppen kanal · lediga banor & Open Play
-              </span>
-            </span>
-          </button>
         </section>
 
         <section className="mx-auto max-w-md px-5 pt-1">
