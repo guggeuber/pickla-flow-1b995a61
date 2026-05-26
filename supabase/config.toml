@@ -29,3 +29,27 @@ verify_jwt = false
 
 [functions.api-event-templates]
 verify_jwt = false
+
+[functions.api-corporate]
+verify_jwt = false
+
+[functions.api-link-preview]
+verify_jwt = false
+
+[functions.api-memberships]
+verify_jwt = false
+
+[functions.api-notifications]
+verify_jwt = false
+
+[functions.api-ops]
+verify_jwt = false
+
+[functions.api-score]
+verify_jwt = false
+
+[functions.api-stripe]
+verify_jwt = false
+
+[functions.api-stripe-webhook]
+verify_jwt = false
