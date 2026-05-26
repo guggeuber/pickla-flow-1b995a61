@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS public.display_devices (
   venue_id UUID NOT NULL REFERENCES public.venues(id) ON DELETE CASCADE,
   venue_court_id UUID REFERENCES public.venue_courts(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
-  device_token TEXT NOT NULL UNIQUE DEFAULT encode(gen_random_bytes(24), 'hex'),
+  device_token TEXT NOT NULL UNIQUE DEFAULT encode(extensions.gen_random_bytes(24), 'hex'),
   mode TEXT NOT NULL DEFAULT 'resource_home'
     CHECK (mode IN ('resource_home', 'resource_checkin', 'venue_home')),
   is_active BOOLEAN NOT NULL DEFAULT true,
