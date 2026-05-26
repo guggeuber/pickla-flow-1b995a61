@@ -1293,26 +1293,39 @@ function SettingsSection() {
         )}
       </div>
 
-      <div className="mt-2 grid grid-cols-3 gap-2">
+      <p className="text-xs mt-2 text-right" style={{ color: TEXT_MUTED, fontFamily: FONT_HEADING }}>
+        Version {__BUILD_TIME__.replace("T", " ")}
+      </p>
+    </motion.div>
+  );
+}
+
+function LegalLinksSection() {
+  return (
+    <motion.div variants={item}>
+      <div className="flex items-center gap-2 mb-2">
+        <FileText className="w-4 h-4" style={{ color: TEXT_MUTED }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+          Konto & dokument
+        </span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
         {[
           { label: "Integritet", to: "/privacy" },
           { label: "Villkor", to: "/terms" },
           { label: "Cookies", to: "/cookies" },
-        ].map((item) => (
+        ].map((link) => (
           <Link
-            key={item.to}
-            to={item.to}
-            className="rounded-xl border px-2 py-2 text-center text-[11px] font-semibold"
+            key={link.to}
+            to={link.to}
+            className="rounded-xl border px-2 py-2 text-center text-[11px] font-semibold active:scale-[0.98]"
             style={{ borderColor: CARD_BORDER, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
           >
-            {item.label}
+            {link.label}
           </Link>
         ))}
       </div>
-
-      <p className="text-xs mt-2 text-right" style={{ color: TEXT_MUTED, fontFamily: FONT_HEADING }}>
-        Version {__BUILD_TIME__.replace("T", " ")}
-      </p>
     </motion.div>
   );
 }
@@ -1724,6 +1737,8 @@ const MyPage = () => {
 
           {/* Settings: push notifications etc */}
           {!isActivityPage && <SettingsSection />}
+
+          {!isActivityPage && <LegalLinksSection />}
         </motion.div>
       </main>
 
