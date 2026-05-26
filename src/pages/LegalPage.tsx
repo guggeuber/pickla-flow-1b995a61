@@ -13,6 +13,8 @@ type LegalSection = {
 };
 
 const UPDATED_AT = "26 maj 2026";
+const PLATFORM_COMPANY = "Pickla Orbit AB, org.nr 559203-1610";
+const SOLNA_OPERATOR = "Pickla Solna AB, org.nr 556977-4481";
 
 const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: string; sections: LegalSection[] }> = {
   privacy: {
@@ -21,6 +23,14 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
     intro:
       "Pickla samlar in så lite kunddata som möjligt för att kunna hantera bokningar, medlemskap, betalningar och daglig drift.",
     sections: [
+      {
+        title: "Vem ansvarar för uppgifterna",
+        body: [
+          `${PLATFORM_COMPANY} driver Pickla-plattformen och kan hantera gemensamma system, produktutveckling, support och driftstöd för flera anläggningar, driftbolag och framtida franchisetagare.`,
+          `${SOLNA_OPERATOR} är lokalt driftsbolag för Pickla Solna och hanterar den dagliga anläggningsdriften, bokningar, medlemskap, desk, support och kundkontakt för den anläggningen.`,
+          "Vilket bolag som är ansvarigt kan bero på vilken anläggning, produkt eller franchise du använder. Pickla håller kunddata inom de bolag och leverantörer som behöver uppgifterna för att leverera tjänsten.",
+        ],
+      },
       {
         title: "Vilka uppgifter vi behandlar",
         body: [
@@ -69,6 +79,14 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
     intro:
       "De här villkoren beskriver hur bokning, betalning, medlemskap, gästpass och återbetalningar fungerar hos Pickla.",
     sections: [
+      {
+        title: "Parter",
+        body: [
+          `${PLATFORM_COMPANY} tillhandahåller Pickla-plattformen.`,
+          `${SOLNA_OPERATOR} är driftsbolag för Pickla Solna och ansvarar för den lokala anläggningsdriften, om inget annat anges i samband med köp, bokning eller medlemskap.`,
+          "När Pickla används för fler anläggningar, driftbolag eller franchiser kan det lokala driftsbolaget vara avtalspart för den specifika anläggningen medan Pickla Orbit AB tillhandahåller plattformen.",
+        ],
+      },
       {
         title: "Bokningar",
         body: [
@@ -122,6 +140,14 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
     intro:
       "Pickla använder nödvändig lokal lagring för att appen ska fungera. Vi använder ingen marketing-cookie eller tracking-banner i v1.",
     sections: [
+      {
+        title: "Vem driver tjänsten",
+        body: [
+          `${PLATFORM_COMPANY} tillhandahåller Pickla-plattformen.`,
+          `${SOLNA_OPERATOR} är lokalt driftsbolag för Pickla Solna.`,
+          "Teknisk lagring kan därför användas både för plattformen och för den lokala anläggningsdriften.",
+        ],
+      },
       {
         title: "Nödvändig lagring",
         body: [

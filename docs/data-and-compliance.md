@@ -2,6 +2,13 @@
 
 This is not legal advice. It is the lean operating baseline before soft launch.
 
+## Company / Controller Model
+
+- Pickla Orbit AB, org.nr 559203-1610, is the platform company for Pickla. It can provide shared platform, product, support, operations tooling, and processor/vendor management across several operating companies and future franchises.
+- Pickla Solna AB, org.nr 556977-4481, is an operating company for the Solna venue. It handles local venue operations, bookings, memberships, desk, customer contact, and daily support for that venue.
+- The relevant operating company can vary by venue/franchise. Public policy copy should explain that Pickla Orbit provides the platform while the local operating company may be the local contracting/operating party.
+- Customer data should only be shared between Pickla Orbit, the relevant operating company/franchise, and processors where needed to deliver the service, support the customer, handle payments/receipts, or operate the venue.
+
 ## Public Policy Pages
 
 The public v1 policy pages are:
