@@ -8,8 +8,61 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
-import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
+
+
+// Deno-native Stripe webhook signature verification.
+// Do not use the Stripe Node SDK in Supabase Edge Runtime here; it can trigger
+// Deno.core.runMicrotasks()/process.nextTick crashes on subscription events.
+async function verifyStripeSignature(rawBody: string, signatureHeader: string, secret: string): Promise<void> {
+  const parts = signatureHeader.split(',').reduce((acc: Record<string, string[]>, part) => {
+    const [key, value] = part.split('=');
+    if (!key || !value) return acc;
+    acc[key] = acc[key] || [];
+    acc[key].push(value);
+    return acc;
+  }, {});
+
+  const timestamp = parts.t?.[0];
+  const signatures = parts.v1 || [];
+  if (!timestamp || signatures.length === 0) {
+    throw new Error('Invalid Stripe signature header');
+  }
+
+  const timestampSeconds = Number(timestamp);
+  if (!Number.isFinite(timestampSeconds)) {
+    throw new Error('Invalid Stripe signature timestamp');
+  }
+
+  const toleranceSeconds = 300;
+  const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds);
+  if (ageSeconds > toleranceSeconds) {
+    throw new Error('Stripe signature timestamp outside tolerance');
+  }
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signedPayload = `${timestamp}.${rawBody}`;
+  const mac = await crypto.subtle.sign('HMAC', key, encoder.encode(signedPayload));
+  const expected = Array.from(new Uint8Array(mac)).map((b) => b.toString(16).padStart(2, '0')).join('');
+
+  if (!signatures.some((sig) => timingSafeEqual(sig, expected))) {
+    throw new Error('No matching Stripe signature');
+  }
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let out = 0;
+  for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return out === 0;
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -31,17 +84,11 @@ Deno.serve(async (req) => {
   if (!signature) return errorResponse('Missing stripe-signature', 400);
 
   const rawBody = await req.text();
-  const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
 
-  let event: Stripe.Event;
+  let event: any;
   try {
-    event = await stripe.webhooks.constructEventAsync(
-      rawBody,
-      signature,
-      webhookSecret,
-      undefined,
-      Stripe.createSubtleCryptoProvider(),
-    );
+    await verifyStripeSignature(rawBody, signature, webhookSecret);
+    event = JSON.parse(rawBody);
   } catch (err) {
     console.error('Webhook signature verification failed:', err);
     return errorResponse(`Webhook signature error: ${(err as Error).message}`, 400);
@@ -52,7 +99,7 @@ Deno.serve(async (req) => {
     return new Response('ok', { status: 200 });
   }
 
-  const session = event.data.object as Stripe.Checkout.Session;
+  const session = event.data.object;
   const meta = session.metadata || {};
   const { product_type } = meta;
 
@@ -99,7 +146,7 @@ async function createCourtBookingReceipt({
   bookingRefs,
   totalSek,
 }: {
-  session: Stripe.Checkout.Session;
+  session: any;
   meta: Record<string, string>;
   serviceClient: any;
   bookingUserId: string;
@@ -147,7 +194,7 @@ async function createCourtBookingReceipt({
 }
 
 async function handleCourtBooking(
-  session: Stripe.Checkout.Session,
+  session: any,
   meta: Record<string, string>,
   serviceClient: any,
 ): Promise<void> {
@@ -289,7 +336,7 @@ async function handleCourtBooking(
 //   4. Fall back to the shared guest user (no email available)
 
 async function resolveUserId(
-  session: Stripe.Checkout.Session,
+  session: any,
   metaUserId: string,
   serviceClient: any,
   metaEmail = '',
@@ -320,7 +367,7 @@ async function resolveUserId(
 // ── Day pass ─────────────────────────────────────────────────────────────────
 
 async function handleDayPass(
-  session: Stripe.Checkout.Session,
+  session: any,
   meta: Record<string, string>,
   serviceClient: any,
 ): Promise<void> {
@@ -438,23 +485,19 @@ async function announceActivityRegistration(
 // ── Membership ────────────────────────────────────────────────────────────────
 
 async function handleMembership(
-  session: Stripe.Checkout.Session,
+  session: any,
   meta: Record<string, string>,
   serviceClient: any,
 ): Promise<void> {
   const { tier_id, user_id } = meta;
 
   if (!tier_id) throw new Error('Missing tier_id in membership metadata');
+  if (session.payment_status && session.payment_status !== 'paid') {
+    console.log('Ignoring unpaid membership checkout session', session.id, session.payment_status);
+    return;
+  }
 
-  // Idempotency: skip if already created for this session
-  const { data: existing } = await serviceClient
-    .from('memberships')
-    .select('id')
-    .eq('notes', `stripe_session:${session.id}`)
-    .maybeSingle();
-  if (existing) return;
-
-  // Resolve venue_id from the tier
+  // Resolve venue_id from the tier first. Do not trust empty venue_id metadata.
   const { data: tier, error: tierErr } = await serviceClient
     .from('membership_tiers')
     .select('id, venue_id')
@@ -462,27 +505,61 @@ async function handleMembership(
     .maybeSingle();
   if (tierErr || !tier) throw new Error(`Membership tier not found: ${tier_id}`);
 
-  const resolvedUserId = await resolveUserId(session, user_id, serviceClient);
+  const resolvedUserId = await resolveUserId(session, user_id, serviceClient, meta.customer_email);
   const firstName = String(meta.first_name || '').trim();
   const lastName = String(meta.last_name || '').trim();
   const phone = String(meta.customer_phone || '').trim();
   const customerName = String(meta.customer_name || [firstName, lastName].filter(Boolean).join(' ')).trim();
-  if (firstName && lastName && phone) {
-    const { data: existingProfile } = await serviceClient
-      .from('player_profiles')
-      .select('display_name')
-      .eq('auth_user_id', resolvedUserId)
-      .maybeSingle();
-    await serviceClient.from('player_profiles').upsert({
-      auth_user_id: resolvedUserId,
-      display_name: existingProfile?.display_name || customerName,
-      first_name: firstName,
-      last_name: lastName,
-      phone,
-    }, { onConflict: 'auth_user_id' });
-  }
+
+  // Store the live Stripe customer on the profile. This also fixes old test customer ids.
+  const profilePatch: Record<string, unknown> = {
+    auth_user_id: resolvedUserId,
+    stripe_customer_id: session.customer || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (customerName) profilePatch.display_name = customerName;
+  if (firstName) profilePatch.first_name = firstName;
+  if (lastName) profilePatch.last_name = lastName;
+  if (phone) profilePatch.phone = phone;
+
+  const { error: profileErr } = await serviceClient
+    .from('player_profiles')
+    .upsert(profilePatch, { onConflict: 'auth_user_id' });
+  if (profileErr) throw new Error(`Failed to update player profile: ${profileErr.message}`);
 
   const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
+
+  // Reactivate an existing membership row when the user buys again.
+  // This is critical because admin/manual cancellation leaves a cancelled row
+  // for the same user + venue + tier; a new paid Stripe checkout must flip it
+  // back to active instead of silently returning.
+  const { data: existing, error: existingErr } = await serviceClient
+    .from('memberships')
+    .select('id, status')
+    .eq('user_id', resolvedUserId)
+    .eq('venue_id', tier.venue_id)
+    .eq('tier_id', tier_id)
+    .is('expires_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingErr) throw new Error(`Failed to check existing membership: ${existingErr.message}`);
+
+  if (existing) {
+    const { error: updateErr } = await serviceClient
+      .from('memberships')
+      .update({
+        status: 'active',
+        starts_at: today,
+        expires_at: null,
+        assigned_by: resolvedUserId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', existing.id);
+
+    if (updateErr) throw new Error(`Failed to reactivate membership: ${updateErr.message}`);
+    return;
+  }
 
   const { error } = await serviceClient.from('memberships').insert({
     venue_id:    tier.venue_id,
@@ -490,7 +567,8 @@ async function handleMembership(
     tier_id,
     status:      'active',
     starts_at:   today,
-    notes:       `stripe_session:${session.id}`,
+    expires_at:  null,
+    assigned_by: resolvedUserId,
   });
 
   if (error) throw new Error(`Failed to insert membership: ${error.message}`);

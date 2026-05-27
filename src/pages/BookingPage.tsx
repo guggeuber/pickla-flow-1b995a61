@@ -144,6 +144,21 @@ interface CorporateMembership {
   } | null;
 }
 
+interface MemberPassesData {
+  court_hours?: {
+    allowed?: number;
+    used?: number;
+    remaining?: number;
+    period_start?: string;
+    period_end?: string;
+  } | null;
+  membership?: {
+    tier?: {
+      name?: string | null;
+    } | null;
+  } | null;
+}
+
 type BookingMode = "direct" | "stripe";
 
 type DirectBookingRow = {
@@ -298,6 +313,13 @@ export default function BookingPage() {
     enabled: !!user?.id && !!data?.venue?.id,
     staleTime: 30000,
     queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: data!.venue.id }),
+  });
+
+  const { data: memberPasses } = useQuery<MemberPassesData>({
+    queryKey: ["booking-member-passes", user?.id, data?.venue?.id],
+    enabled: !!user?.id && !!data?.venue?.id,
+    staleTime: 10000,
+    queryFn: () => apiGet("api-day-passes", "my-passes", { venueId: data!.venue.id }),
   });
 
   // Resolve price for a court based on pricing rules, selected day + time
@@ -513,6 +535,14 @@ export default function BookingPage() {
   }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, courtPricing, durationHours]);
 
   const hasMemberCourtPrice = totalPrice < baseTotalPrice;
+  const requestedIncludedCourtHours = selectedCourts.length * durationHours;
+  const remainingIncludedCourtHours = Number(memberPasses?.court_hours?.remaining ?? 0);
+  const hasIncludedCourtHours =
+    sportFilter === "pickleball" &&
+    requestedIncludedCourtHours > 0 &&
+    remainingIncludedCourtHours >= requestedIncludedCourtHours;
+  const membershipTierName = memberPasses?.membership?.tier?.name || "medlemskap";
+
   const bookingName = name.trim() || user?.email?.split("@")[0] || "";
   const bookingPhone = phone.trim();
   const bookingEmail = email.trim() || user?.email || "";
@@ -555,7 +585,9 @@ export default function BookingPage() {
       ? "Fyll i uppgifter"
       : contactNeedsProfileSave
         ? "Spara telefonnummer först"
-        : `Boka ${useCorporate ? 0 : totalPrice} kr`;
+        : hasIncludedCourtHours && !useCorporate
+          ? "Boka med fri timme"
+          : `Boka ${useCorporate ? 0 : totalPrice} kr`;
   const isViewingTodayRange = availabilityStartStr === todayStr;
   const todayLuxon = DateTime.now().setZone("Europe/Stockholm").startOf("day");
   const nextWeekDate = todayLuxon.plus({ days: 7 }).toJSDate();
@@ -1068,10 +1100,17 @@ export default function BookingPage() {
                     </div>
                   )}
 
-                  {!useCorporate && hasMemberCourtPrice && (
+                  {!useCorporate && hasIncludedCourtHours ? (
                     <p className="mt-5 text-right text-[11px] text-emerald-600" style={{ fontFamily: FONT_MONO }}>
-                      medlemspris · ord. {baseTotalPrice} kr
+                      Ingår i {membershipTierName} · {remainingIncludedCourtHours}h fria timmar kvar
                     </p>
+                  ) : (
+                    !useCorporate &&
+                    hasMemberCourtPrice && (
+                      <p className="mt-5 text-right text-[11px] text-emerald-600" style={{ fontFamily: FONT_MONO }}>
+                        medlemspris · ord. {baseTotalPrice} kr
+                      </p>
+                    )
                   )}
 
                   <button
@@ -1112,7 +1151,9 @@ export default function BookingPage() {
                   }`}
                   style={{ fontFamily: FONT_MONO }}
                 >
-                  betala i kassan · {hasMemberCourtPrice ? `${totalPrice} kr` : `${baseTotalPrice} kr`}
+                  {hasIncludedCourtHours
+                    ? `betala med fri timme · ${remainingIncludedCourtHours}h kvar`
+                    : `betala i kassan · ${hasMemberCourtPrice ? `${totalPrice} kr` : `${baseTotalPrice} kr`}`}
                 </button>
                 {activePackages.map((pkg) => {
                   const remaining = pkg.total_hours - pkg.used_hours;
