@@ -527,20 +527,54 @@ export default function BookingPage() {
     }, 0);
   }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, durationHours]);
 
-  const totalPrice = useMemo(() => {
-    return selectedCourts.reduce((sum, id) => {
-      const court = courts.find((c) => c.id === id);
-      return sum + (court ? Math.round(getMemberCourtPrice(court) * durationHours) : 0);
-    }, 0);
-  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, courtPricing, durationHours]);
-
-  const hasMemberCourtPrice = totalPrice < baseTotalPrice;
   const requestedIncludedCourtHours = selectedCourts.length * durationHours;
   const remainingIncludedCourtHours = Number(memberPasses?.court_hours?.remaining ?? 0);
-  const hasIncludedCourtHours =
-    sportFilter === "pickleball" &&
-    requestedIncludedCourtHours > 0 &&
-    remainingIncludedCourtHours >= requestedIncludedCourtHours;
+  const includedCourtHoursApplied =
+    sportFilter === "pickleball"
+      ? Math.min(remainingIncludedCourtHours, requestedIncludedCourtHours)
+      : 0;
+  const paidCourtHours = Math.max(0, requestedIncludedCourtHours - includedCourtHoursApplied);
+  const hasAnyIncludedCourtHours = includedCourtHoursApplied > 0;
+  const hasFullyIncludedCourtHours =
+    requestedIncludedCourtHours > 0 && includedCourtHoursApplied >= requestedIncludedCourtHours;
+  const hasPartiallyIncludedCourtHours =
+    hasAnyIncludedCourtHours && !hasFullyIncludedCourtHours;
+
+  const memberCourtLineItems = useMemo(() => {
+    return selectedCourts
+      .map((id) => {
+        const court = courts.find((c) => c.id === id);
+        if (!court) return null;
+        return {
+          hourlyPrice: getMemberCourtPrice(court),
+          hours: durationHours,
+        };
+      })
+      .filter(Boolean) as { hourlyPrice: number; hours: number }[];
+  }, [selectedCourts, courts, pricingRules, selectedTime, selectedDate, courtPricing, durationHours]);
+
+  const memberTotalBeforeIncludedHours = useMemo(() => {
+    return memberCourtLineItems.reduce((sum, item) => sum + Math.round(item.hourlyPrice * item.hours), 0);
+  }, [memberCourtLineItems]);
+
+  const includedCourtHoursValue = useMemo(() => {
+    let hoursToApply = includedCourtHoursApplied;
+    if (hoursToApply <= 0) return 0;
+
+    // Use included hours against the most expensive member-priced court hours first.
+    // Usually all selected courts have the same price, but this keeps mixed-court bookings fair.
+    const sorted = [...memberCourtLineItems].sort((a, b) => b.hourlyPrice - a.hourlyPrice);
+    return sorted.reduce((sum, item) => {
+      if (hoursToApply <= 0) return sum;
+      const applied = Math.min(hoursToApply, item.hours);
+      hoursToApply -= applied;
+      return sum + Math.round(applied * item.hourlyPrice);
+    }, 0);
+  }, [memberCourtLineItems, includedCourtHoursApplied]);
+
+  const totalPrice = Math.max(0, memberTotalBeforeIncludedHours - includedCourtHoursValue);
+
+  const hasMemberCourtPrice = totalPrice < baseTotalPrice;
   const membershipTierName = memberPasses?.membership?.tier?.name || "medlemskap";
 
   const bookingName = name.trim() || user?.email?.split("@")[0] || "";
@@ -585,7 +619,7 @@ export default function BookingPage() {
       ? "Fyll i uppgifter"
       : contactNeedsProfileSave
         ? "Spara telefonnummer först"
-        : hasIncludedCourtHours && !useCorporate
+        : hasFullyIncludedCourtHours && !useCorporate
           ? "Boka med fri timme"
           : `Boka ${useCorporate ? 0 : totalPrice} kr`;
   const isViewingTodayRange = availabilityStartStr === todayStr;
@@ -1100,9 +1134,13 @@ export default function BookingPage() {
                     </div>
                   )}
 
-                  {!useCorporate && hasIncludedCourtHours ? (
+                  {!useCorporate && hasFullyIncludedCourtHours ? (
                     <p className="mt-5 text-right text-[11px] text-emerald-600" style={{ fontFamily: FONT_MONO }}>
                       Ingår i {membershipTierName} · {remainingIncludedCourtHours}h fria timmar kvar
+                    </p>
+                  ) : !useCorporate && hasPartiallyIncludedCourtHours ? (
+                    <p className="mt-5 text-right text-[11px] text-emerald-600" style={{ fontFamily: FONT_MONO }}>
+                      {includedCourtHoursApplied}h ingår · {paidCourtHours}h medlemspris · ord. {baseTotalPrice} kr
                     </p>
                   ) : (
                     !useCorporate &&
@@ -1151,9 +1189,11 @@ export default function BookingPage() {
                   }`}
                   style={{ fontFamily: FONT_MONO }}
                 >
-                  {hasIncludedCourtHours
+                  {hasFullyIncludedCourtHours
                     ? `betala med fri timme · ${remainingIncludedCourtHours}h kvar`
-                    : `betala i kassan · ${hasMemberCourtPrice ? `${totalPrice} kr` : `${baseTotalPrice} kr`}`}
+                    : hasPartiallyIncludedCourtHours
+                      ? `betala i kassan · ${includedCourtHoursApplied}h ingår · ${totalPrice} kr`
+                      : `betala i kassan · ${hasMemberCourtPrice ? `${totalPrice} kr` : `${baseTotalPrice} kr`}`}
                 </button>
                 {activePackages.map((pkg) => {
                   const remaining = pkg.total_hours - pkg.used_hours;
