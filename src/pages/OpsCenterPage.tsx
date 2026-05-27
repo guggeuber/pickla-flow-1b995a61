@@ -26,6 +26,8 @@ import { useAdminCheck, useAdminHistory, useAdminStats, useAdminVenues } from "@
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
+const SUPABASE_PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID || "cqnjpudmsreubgviqptg";
+
 type OpsMode = "deploy" | "opening" | "closing" | "weekly";
 type OpsColor = "green" | "yellow" | "red";
 type Severity = "P0" | "P1" | "P2" | "P3";
@@ -385,7 +387,7 @@ function OpsCenterPage() {
               <a href="https://dashboard.stripe.com/webhooks" className="rounded-2xl bg-white/70 p-3 text-sm font-bold">
                 Stripe <ArrowUpRight className="ml-1 inline h-4 w-4" />
               </a>
-              <a href="https://supabase.com/dashboard/project/cqnjpudmsreubgviqptg/functions" className="rounded-2xl bg-white/70 p-3 text-sm font-bold">
+              <a href={`https://supabase.com/dashboard/project/${SUPABASE_PROJECT_ID}/functions`} className="rounded-2xl bg-white/70 p-3 text-sm font-bold">
                 Supabase <ArrowUpRight className="ml-1 inline h-4 w-4" />
               </a>
             </div>
