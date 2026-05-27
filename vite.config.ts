@@ -1,11 +1,19 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 import { VitePWA } from "vite-plugin-pwa";
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const isStage = env.VITE_SUPABASE_PROJECT_ID === "nuqozynzdamyuzeusroe";
+  const appName = isStage ? "Pickla Stage" : "Pickla";
+  const icon192 = isStage ? "/pwa-stage-192x192.png" : "/pwa-192x192.png";
+  const icon512 = isStage ? "/pwa-stage-512x512.png" : "/pwa-512x512.png";
+  const themeColor = isStage ? "#D9F99D" : "#F8FAFC";
+
+  return {
   server: {
     host: "::",
     port: 8080,
@@ -24,13 +32,19 @@ export default defineConfig(({ mode }) => ({
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
       },
-      includeAssets: ["favicon.ico", "pwa-192x192.png", "pwa-512x512.png"],
+      includeAssets: [
+        "favicon.ico",
+        "pwa-192x192.png",
+        "pwa-512x512.png",
+        "pwa-stage-192x192.png",
+        "pwa-stage-512x512.png",
+      ],
       manifest: {
-        name: "Pickla",
-        short_name: "Pickla",
+        name: appName,
+        short_name: appName,
         description: "Boka, spela och hantera ditt Pickla-konto.",
-        theme_color: "#F8FAFC",
-        background_color: "#F8FAFC",
+        theme_color: themeColor,
+        background_color: themeColor,
         display: "standalone",
         display_override: ["standalone"],
         lang: "sv",
@@ -40,19 +54,19 @@ export default defineConfig(({ mode }) => ({
         id: "/",
         icons: [
           {
-            src: "/pwa-192x192.png",
+            src: icon192,
             sizes: "192x192",
             type: "image/png",
             purpose: "any",
           },
           {
-            src: "/pwa-512x512.png",
+            src: icon512,
             sizes: "512x512",
             type: "image/png",
             purpose: "any",
           },
           {
-            src: "/pwa-512x512.png",
+            src: icon512,
             sizes: "512x512",
             type: "image/png",
             purpose: "maskable",
@@ -62,17 +76,17 @@ export default defineConfig(({ mode }) => ({
           {
             name: "Idag",
             url: "/",
-            icons: [{ src: "/pwa-192x192.png", sizes: "192x192" }],
+            icons: [{ src: icon192, sizes: "192x192" }],
           },
           {
             name: "Boka",
             url: "/book",
-            icons: [{ src: "/pwa-192x192.png", sizes: "192x192" }],
+            icons: [{ src: icon192, sizes: "192x192" }],
           },
           {
             name: "Min profil",
             url: "/my",
-            icons: [{ src: "/pwa-192x192.png", sizes: "192x192" }],
+            icons: [{ src: icon192, sizes: "192x192" }],
           },
         ],
       },
@@ -86,4 +100,5 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-}));
+  };
+});
