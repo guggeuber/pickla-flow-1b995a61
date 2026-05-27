@@ -115,7 +115,7 @@ export default function ProgramSessionPage() {
   const session = data?.session;
   const venue = data?.venue;
   const product = data?.product;
-  const basePrice = Number(product?.base_price_sek ?? session?.price_sek ?? 0);
+  const basePrice = Number(session?.price_sek ?? product?.base_price_sek ?? 0);
   const productKey = session?.product_key || product?.product_key || "day_access";
 
   const { data: membership } = useQuery({
