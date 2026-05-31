@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check, Link2, Minus, Plus, Radio, Trophy, X } from "lucide-react";
+import { ArrowRight, Bot, Check, Link2, Minus, Plus, Radio, Trophy, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -33,6 +33,8 @@ type MatchPlayer = {
   name: string;
   auth_user_id?: string | null;
   linked?: boolean;
+  is_bot?: boolean;
+  bot_level?: BotLevel;
 };
 
 type LinkedPlayer = {
@@ -45,6 +47,17 @@ type LinkedPlayer = {
 type JoinState = {
   players: LinkedPlayer[];
 };
+
+type BotLevel = "rookie" | "social" | "club" | "pro";
+
+const BOT_LEVELS: Array<{ value: BotLevel; label: string; description: string }> = [
+  { value: "rookie", label: "Nybörjare", description: "Snittar runt 30 per runda" },
+  { value: "social", label: "Motionär", description: "Snittar runt 45 per runda" },
+  { value: "club", label: "Klubbspelare", description: "Snittar runt 60 per runda" },
+  { value: "pro", label: "Vass", description: "Snittar runt 80 per runda" },
+];
+
+const botNameForLevel = (level: BotLevel) => `Pickla Bot ${BOT_LEVELS.find((item) => item.value === level)?.label || ""}`.trim();
 
 const createSetupId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -74,6 +87,8 @@ export default function ScoreStartPage() {
   const [gameType, setGameType] = useState<"301" | "501" | "701">("501");
   const [checkoutRule, setCheckoutRule] = useState<"double_out" | "single_out">("double_out");
   const [players, setPlayers] = useState<MatchPlayer[]>([{ name: "" }, { name: "" }]);
+  const [soloMode, setSoloMode] = useState(false);
+  const [botLevel, setBotLevel] = useState<BotLevel>("social");
   const [setupId] = useState(createSetupId);
   const [linkIndex, setLinkIndex] = useState<number | null>(null);
 
@@ -82,6 +97,17 @@ export default function ScoreStartPage() {
     () => players.map((player, index) => player.name.trim() || `Spelare ${index + 1}`),
     [players],
   );
+
+  useEffect(() => {
+    if (!soloMode) return;
+    setPlayers((current) => {
+      const human = current.find((player) => !player.is_bot) || current[0] || { name: "" };
+      return [
+        { ...human, is_bot: false, bot_level: undefined },
+        { name: botNameForLevel(botLevel), is_bot: true, bot_level: botLevel },
+      ];
+    });
+  }, [botLevel, soloMode]);
 
   const { data: joinState } = useQuery<JoinState>({
     queryKey: ["score-join-state", deviceToken, setupId],
@@ -128,6 +154,7 @@ export default function ScoreStartPage() {
       court_ids: activeCourt?.id ? [activeCourt.id] : [],
       player_names: normalizedNames,
       player_users: players.map((player) => player.auth_user_id || null),
+      player_bots: players.map((player) => player.is_bot ? { level: player.bot_level || botLevel } : null),
     }),
     onSuccess: (result: WalkInResult) => {
       const first = result.match || result.matches?.[0];
@@ -142,15 +169,29 @@ export default function ScoreStartPage() {
   });
 
   const updateName = (index: number, value: string) => {
+    if (players[index]?.is_bot) return;
     setPlayers((current) => current.map((player, i) => (i === index ? { ...player, name: value } : player)));
   };
 
   const addPlayer = () => {
+    if (soloMode) return;
     setPlayers((current) => (current.length >= 4 ? current : [...current, { name: "" }]));
   };
 
   const removePlayer = (index: number) => {
+    if (soloMode) return;
     setPlayers((current) => (current.length <= 2 ? current : current.filter((_, i) => i !== index)));
+  };
+
+  const toggleSoloMode = () => {
+    if (soloMode) {
+      setPlayers((current) => current.map((player, index) => (
+        player.is_bot ? { name: index === 1 ? "" : `Spelare ${index + 1}` } : player
+      )));
+      setSoloMode(false);
+      return;
+    }
+    setSoloMode(true);
   };
 
   if (isLoading) {
@@ -255,43 +296,77 @@ export default function ScoreStartPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Spelare</p>
-              <button
-                type="button"
-                onClick={addPlayer}
-                disabled={players.length >= 4}
-                className="inline-flex items-center gap-2 rounded-full bg-neutral-100 px-4 py-2 font-mono text-xs text-neutral-700 disabled:opacity-40"
-              >
-                <Plus className="h-4 w-4" />
-                Lägg till
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleSoloMode}
+                  className={`inline-flex items-center gap-2 rounded-full px-4 py-2 font-mono text-xs ${
+                    soloMode ? "bg-emerald-300 text-neutral-950" : "bg-neutral-100 text-neutral-700"
+                  }`}
+                >
+                  <Bot className="h-4 w-4" />
+                  Mot bot
+                </button>
+                <button
+                  type="button"
+                  onClick={addPlayer}
+                  disabled={players.length >= 4 || soloMode}
+                  className="inline-flex items-center gap-2 rounded-full bg-neutral-100 px-4 py-2 font-mono text-xs text-neutral-700 disabled:opacity-40"
+                >
+                  <Plus className="h-4 w-4" />
+                  Lägg till
+                </button>
+              </div>
             </div>
+            {soloMode && (
+              <div className="grid grid-cols-2 gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-2 sm:grid-cols-4">
+                {BOT_LEVELS.map((level) => (
+                  <button
+                    key={level.value}
+                    type="button"
+                    onClick={() => setBotLevel(level.value)}
+                    className={`rounded-xl p-3 text-left ${
+                      botLevel === level.value ? "bg-neutral-950 text-white" : "bg-white text-neutral-700"
+                    }`}
+                  >
+                    <p className="font-display text-lg font-black leading-none">{level.label}</p>
+                    <p className={`mt-1 font-mono text-[10px] leading-tight ${botLevel === level.value ? "text-white/55" : "text-neutral-400"}`}>
+                      {level.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
             {players.map((player, index) => (
               <div key={index} className="flex items-center gap-3 rounded-2xl border border-black/10 bg-[#faf8f5] p-3">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-950 font-display text-xl font-black text-white">
-                  {player.linked ? <Check className="h-5 w-5 text-emerald-300" /> : index + 1}
+                  {player.is_bot ? <Bot className="h-5 w-5 text-emerald-300" /> : player.linked ? <Check className="h-5 w-5 text-emerald-300" /> : index + 1}
                 </div>
                 <input
                   value={player.name}
                   onChange={(e) => updateName(index, e.target.value)}
                   placeholder={`Spelare ${index + 1}`}
+                  readOnly={player.is_bot}
                   className="h-14 min-w-0 flex-1 rounded-2xl border border-black/10 bg-white px-4 font-mono text-base outline-none focus:border-emerald-300"
                 />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLinkIndex(index);
-                  }}
-                  className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${
-                    player.linked ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-600"
-                  }`}
-                  title="Koppla konto"
-                >
-                  <Link2 className="h-4 w-4" />
-                </button>
+                {!player.is_bot && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLinkIndex(index);
+                    }}
+                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${
+                      player.linked ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-600"
+                    }`}
+                    title="Koppla konto"
+                  >
+                    <Link2 className="h-4 w-4" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => removePlayer(index)}
-                  disabled={players.length <= 2}
+                  disabled={players.length <= 2 || soloMode}
                   className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-neutral-500 disabled:opacity-30"
                 >
                   <Minus className="h-4 w-4" />

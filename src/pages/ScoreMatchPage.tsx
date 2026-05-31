@@ -33,26 +33,23 @@ type PlayerSlot = {
   name: string;
   legs: number;
   remaining: number;
+  is_bot?: boolean;
+  bot_level?: string | null;
 };
 
 type ScoreResponse = {
   match: ScoreMatch;
   removed_turn_id?: string;
-  turn?: {
-    id: string;
-    score: number;
-    is_bust?: boolean;
-    is_checkout?: boolean;
-    player_number?: number;
-    remaining_before?: number;
-    remaining_after?: number;
-  };
+  removed_turn_ids?: string[];
+  turn?: ScoreTurn;
+  bot_turns?: ScoreTurn[];
 };
 
 type ScoreTurn = {
   id: string;
   player_number: number;
   score: number;
+  created_at?: string;
   is_bust?: boolean;
   is_checkout?: boolean;
   darts_used?: number;
@@ -119,8 +116,9 @@ export default function ScoreMatchPage() {
   const activePlayer = players.find((player) => player.number === match?.current_player) || players[0];
   const otherPlayers = players.filter((player) => player.number !== activePlayer?.number);
   const latestTurn = data?.turns?.[0];
+  const latestEditableTurn = data?.turns?.find((turn) => !players.find((player) => player.number === turn.player_number)?.is_bot);
   const currentName = activePlayer?.name;
-  const currentRemaining = correctionOpen && latestTurn ? latestTurn.remaining_before : activePlayer?.remaining;
+  const currentRemaining = correctionOpen && latestEditableTurn ? latestEditableTurn.remaining_before : activePlayer?.remaining;
   const matchEnded = match?.status === "completed" || match?.status === "cancelled";
   const projected = useMemo(() => {
     if (!match || !input) return null;
@@ -144,12 +142,16 @@ export default function ScoreMatchPage() {
   const mergeScoreResult = (result: ScoreResponse) => {
     queryClient.setQueryData(["score-match", matchId], (current: { match: ScoreMatch; turns: ScoreTurn[] } | undefined) => {
       const currentTurns = current?.turns || [];
-      const turns = result.turn
+      const removed = new Set([result.removed_turn_id, ...(result.removed_turn_ids || [])].filter(Boolean));
+      const incoming = ([result.turn, ...(result.bot_turns || [])].filter(Boolean) as ScoreTurn[])
+        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      const incomingIds = new Set(incoming.map((turn) => turn.id));
+      const turns = incoming.length
         ? [
-            result.turn as ScoreTurn,
-            ...currentTurns.filter((turn) => turn.id !== result.turn?.id && turn.id !== result.removed_turn_id),
+            ...incoming,
+            ...currentTurns.filter((turn) => !incomingIds.has(turn.id) && !removed.has(turn.id)),
           ]
-        : currentTurns.filter((turn) => turn.id !== result.removed_turn_id);
+        : currentTurns.filter((turn) => !removed.has(turn.id));
       return { match: result.match, turns };
     });
   };
@@ -367,13 +369,13 @@ export default function ScoreMatchPage() {
                   <p className="font-mono text-[clamp(0.95rem,2.5vh,1.25rem)] text-emerald-300">{currentName} kastar</p>
                 )}
               </div>
-              {latestTurn && (
+              {latestEditableTurn && (
                 <button
                   onClick={() => {
                     setCorrectionOpen(true);
                     setDismissWinner(true);
-                    setInput(String(latestTurn.score));
-                    setNotice({ tone: "warn", text: `Ändrar senaste: ${latestTurn.score}` });
+                    setInput(String(latestEditableTurn.score));
+                    setNotice({ tone: "warn", text: `Ändrar senaste: ${latestEditableTurn.score}` });
                   }}
                   disabled={correctionMutation.isPending}
                   className="mt-3 rounded-full bg-white/10 px-4 py-2 font-mono text-xs text-white/70 disabled:opacity-40"
@@ -464,11 +466,11 @@ export default function ScoreMatchPage() {
           winner={winnerStats}
           stats={stats}
           onCorrect={() => {
-            if (!latestTurn) return;
+            if (!latestEditableTurn) return;
             setCorrectionOpen(true);
             setDismissWinner(true);
-            setInput(String(latestTurn.score));
-            setNotice({ tone: "warn", text: `Ändrar senaste: ${latestTurn.score}` });
+            setInput(String(latestEditableTurn.score));
+            setNotice({ tone: "warn", text: `Ändrar senaste: ${latestEditableTurn.score}` });
           }}
           onRematch={() => rematchMutation.mutate()}
           onNewMatch={() => navigate(deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today")}
