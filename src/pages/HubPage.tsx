@@ -20,7 +20,7 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import {
   getBookingAccessCodes,
   getBookingChatResourceId,
@@ -106,6 +106,13 @@ interface InquiryEventDetails {
   start_date?: string | null;
   start_time?: string | null;
   resources?: string[] | null;
+}
+
+interface PublicActivityPreview {
+  room: ChatRoom;
+  activity_session: any;
+  registrations: { count: number };
+  messages: ChatMessage[];
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -578,6 +585,27 @@ function useRoomMessages(roomId: string | null) {
   return { messages, loading };
 }
 
+function usePublicActivityPreview({
+  roomId,
+  venueSlug,
+  enabled,
+}: {
+  roomId?: string | null;
+  venueSlug: string;
+  enabled: boolean;
+}) {
+  return useQuery({
+    queryKey: ["public-activity-preview", roomId, venueSlug],
+    enabled: enabled && !!roomId,
+    retry: false,
+    staleTime: 10000,
+    queryFn: () => apiGet<PublicActivityPreview>("api-event-public", "activity-preview", {
+      roomId: roomId!,
+      venueSlug,
+    }),
+  });
+}
+
 function useExistingResourceRooms(venueId: string | undefined, resourceIds: string[]) {
   const key = resourceIds.slice().sort().join(",");
   return useQuery({
@@ -743,13 +771,15 @@ interface ChatRoomProps {
   venueId: string;
   venueSlug?: string;
   onBack: () => void;
+  publicActivityPreview?: PublicActivityPreview | null;
 }
 
-function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
+function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: ChatRoomProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { messages, loading: msgsLoading } = useRoomMessages(room.id);
+  const { messages, loading: msgsLoading } = useRoomMessages(publicActivityPreview ? null : room.id);
+  const visibleMessages = publicActivityPreview?.messages || messages;
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
   const { data: inquiryEvent } = useInquiryEventDetails(room.resource_id, room.room_type === "event" && !!room.resource_id);
   const { data: fallbackActivitySession } = useFallbackActivitySessionForRoom(room, venueId);
@@ -861,12 +891,12 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
   };
 
   useEffect(() => {
-    if (!user?.id || !room.id) return;
+    if (!user?.id || !room.id || publicActivityPreview) return;
     supabase.from("chat_participants").upsert(
       { room_id: room.id, user_id: user.id },
       { onConflict: "room_id,user_id", ignoreDuplicates: true }
     );
-  }, [room.id, user?.id]);
+  }, [publicActivityPreview, room.id, user?.id]);
 
   // Scroll to bottom on mount (instant) then on new messages / keyboard
   useEffect(() => {
@@ -875,7 +905,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, botData, keyboardOffset]);
+  }, [visibleMessages, botData, keyboardOffset]);
 
   const sendMessage = async () => {
     if (!input.trim() || !user?.id || sending) return;
@@ -1049,9 +1079,9 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
         )}
 
         {/* User messages — grouped with time separators */}
-        {messages.map((msg, index) => {
-          const prev = index > 0 ? messages[index - 1] : null;
-          const next = messages[index + 1];
+        {visibleMessages.map((msg, index) => {
+          const prev = index > 0 ? visibleMessages[index - 1] : null;
+          const next = visibleMessages[index + 1];
           const gapMinutes = prev
             ? DateTime.fromISO(msg.created_at).diff(DateTime.fromISO(prev.created_at), "minutes").minutes
             : Infinity;
@@ -1060,7 +1090,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
             ? DateTime.fromISO(next.created_at).diff(DateTime.fromISO(msg.created_at), "minutes").minutes
             : Infinity;
           const isLastInGroup = !next; // only the very last message in conversation
-          const replyToMsg = msg.reply_to_id ? messages.find((m) => m.id === msg.reply_to_id) : undefined;
+          const replyToMsg = msg.reply_to_id ? visibleMessages.find((m) => m.id === msg.reply_to_id) : undefined;
           return (
             <span key={msg.id}>
               {showSeparator && <TimeSeparator label={groupTimestampLabel(msg.created_at)} />}
@@ -1094,6 +1124,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
             venueId={venueId}
             venueSlug={venueSlug}
             roomId={room.id}
+            publicActivityPreview={publicActivityPreview}
           />
         </div>
       )}
@@ -1315,13 +1346,13 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
             flexShrink: 0,
             padding: "12px 16px",
             paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
-            borderTop: `1px solid ${HUB_BORDER}`,
+            borderTop: room.room_type === "event" && actionResourceId && !isInquiryEvent ? "none" : `1px solid ${HUB_BORDER}`,
             background: HUB_CARD,
             textAlign: "center",
           }}
         >
           <button
-            onClick={() => navigate("/auth?redirect=/hub")}
+            onClick={() => navigate(`/auth?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`)}
             style={{
               fontFamily: FONT_HEADING,
               fontSize: 13,
@@ -1332,7 +1363,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
               cursor: "pointer",
             }}
           >
-            Logga in för att chatta →
+            Logga in för att skriva →
           </button>
         </div>
       )}
@@ -2488,6 +2519,10 @@ function HubList({
     const isProgramSession = !!event.occurrence_date || !!event.recurrence_days || !!event.activity_series;
     if (authLoading) return;
     if (!user?.id) {
+      if (isProgramSession) {
+        navigate(`/program/${event.id}?date=${encodeURIComponent(event.occurrence_date || "")}&v=${encodeURIComponent(slug)}`);
+        return;
+      }
       const redirect = isProgramSession
         ? `/program/${event.id}?date=${encodeURIComponent(event.occurrence_date || "")}&v=${encodeURIComponent(slug)}`
         : `/hub?v=${encodeURIComponent(slug)}`;
@@ -3047,6 +3082,15 @@ const HubPage = () => {
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [roomOpen, setRoomOpen] = useState(false);
   const dismissingRef = useRef(false);
+  const {
+    data: directPublicPreview,
+    isLoading: directPublicPreviewLoading,
+    isError: directPublicPreviewError,
+  } = usePublicActivityPreview({
+    roomId: directRoomId,
+    venueSlug: slug,
+    enabled: !!directRoomId && !authLoading && !user?.id,
+  });
 
   const openRoom = useCallback((room: ChatRoom) => {
     dismissingRef.current = false;
@@ -3075,11 +3119,12 @@ const HubPage = () => {
   }, [directRoomId, user?.id, activeRoom, openRoom]);
 
   useEffect(() => {
-    if (!directRoomId || authLoading || user?.id || activeRoom) return;
+    if (!directRoomId || authLoading || user?.id || activeRoom || directPublicPreviewLoading) return;
+    if (!directPublicPreviewError) return;
     const redirect = `${window.location.pathname}${window.location.search}`;
     sessionStorage.setItem("pickla_auth_redirect", redirect);
     navigate(`/auth?redirect=${encodeURIComponent(redirect)}`, { replace: true });
-  }, [directRoomId, authLoading, user?.id, activeRoom, navigate]);
+  }, [directPublicPreviewError, directPublicPreviewLoading, directRoomId, authLoading, user?.id, activeRoom, navigate]);
 
   // #8 — skeleton instead of spinner while venue loads
   if (!venueId) {
@@ -3099,6 +3144,20 @@ const HubPage = () => {
   }
 
   if (directRoomId) {
+    if (!user?.id && directPublicPreview?.room) {
+      return (
+        <div style={{ height: "100dvh", background: HUB_BG }}>
+          <ChatRoom
+            room={directPublicPreview.room}
+            venueId={directPublicPreview.room.venue_id || venueId}
+            venueSlug={slug}
+            publicActivityPreview={directPublicPreview}
+            onBack={() => navigate(`/today?v=${slug}`)}
+          />
+        </div>
+      );
+    }
+
     if (!activeRoom) {
       return (
         <div style={{ minHeight: "100dvh", background: HUB_BG }}>

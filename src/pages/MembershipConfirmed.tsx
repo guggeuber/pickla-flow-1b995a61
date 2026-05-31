@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { CheckCircle2 } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -8,6 +8,10 @@ const FONT_MONO    = "'Space Mono', monospace";
 
 export default function MembershipConfirmed() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const rawReturnTo = searchParams.get("returnTo");
+  const returnTo = rawReturnTo && rawReturnTo.startsWith("/") && !rawReturnTo.startsWith("//") ? rawReturnTo : "";
+  const nextPath = returnTo || "/my";
 
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-6 px-5 text-center">
@@ -44,11 +48,11 @@ export default function MembershipConfirmed() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.4 }}
-        onClick={() => navigate("/my")}
+        onClick={() => navigate(nextPath)}
         className="mt-2 px-6 py-2.5 rounded-xl text-[13px] font-bold"
         style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_MONO }}
       >
-        min sida →
+        {returnTo ? "tillbaka till aktiviteten →" : "min sida →"}
       </motion.button>
     </div>
   );

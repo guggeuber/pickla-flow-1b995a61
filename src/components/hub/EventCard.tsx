@@ -28,6 +28,7 @@ interface EventCardProps {
   venueSlug?: string;
   isDropIn?: boolean;
   roomId?: string;
+  publicActivityPreview?: any;
 }
 
 function parseProgramChatResourceId(resourceId: string) {
@@ -36,7 +37,7 @@ function parseProgramChatResourceId(resourceId: string) {
   return { sessionId: match[1], occurrenceDate: match[2] === "next" ? null : match[2] };
 }
 
-export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: EventCardProps) {
+export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publicActivityPreview }: EventCardProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const programResource = parseProgramChatResourceId(eventId);
@@ -65,7 +66,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
 
   const { data: programSession } = useQuery({
     queryKey: ["hub-program-session-detail", eventLookupId],
-    enabled: !event,
+    enabled: !event && !publicActivityPreview?.activity_session,
     staleTime: 60000,
     queryFn: async () => {
       const { data } = await supabase
@@ -76,18 +77,20 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
       return data;
     },
   });
+  const effectiveProgramSession = programSession || publicActivityPreview?.activity_session || null;
 
   const programOccurrenceDate = (() => {
     if (explicitOccurrenceDate) return explicitOccurrenceDate;
-    if (!programSession) return null;
+    if (!effectiveProgramSession) return null;
     const now = DateTime.now().setZone("Europe/Stockholm");
-    if ((programSession as any).session_date) return String((programSession as any).session_date);
-    const days = ((programSession as any).recurrence_days || []) as number[];
+    if ((effectiveProgramSession as any).occurrence_date) return String((effectiveProgramSession as any).occurrence_date);
+    if ((effectiveProgramSession as any).session_date) return String((effectiveProgramSession as any).session_date);
+    const days = ((effectiveProgramSession as any).recurrence_days || []) as number[];
     for (let offset = 0; offset < 14; offset++) {
       const date = now.plus({ days: offset });
       if (!days.includes(date.weekday % 7)) continue;
-      if (offset === 0 && programSession.end_time) {
-        const [hour = 0, minute = 0] = String(programSession.end_time).slice(0, 5).split(":").map(Number);
+      if (offset === 0 && effectiveProgramSession.end_time) {
+        const [hour = 0, minute = 0] = String(effectiveProgramSession.end_time).slice(0, 5).split(":").map(Number);
         if (date.set({ hour, minute, second: 0, millisecond: 0 }) <= now) continue;
       }
       return date.toISODate();
@@ -97,7 +100,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
 
   const { data: programRegistrations = [] } = useQuery({
     queryKey: ["hub-program-session-registrations", eventId, programOccurrenceDate],
-    enabled: !!programSession?.id && !!programOccurrenceDate,
+    enabled: !!effectiveProgramSession?.id && !!programOccurrenceDate && !publicActivityPreview?.registrations,
     staleTime: 10000,
     queryFn: async () => {
       const { data } = await supabase
@@ -110,22 +113,22 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
   });
 
   const { data: membership } = useQuery({
-    queryKey: ["hub-program-membership", user?.id, programSession?.venue_id],
-    enabled: !!user?.id && !!programSession?.venue_id,
+    queryKey: ["hub-program-membership", user?.id, effectiveProgramSession?.venue_id],
+    enabled: !!user?.id && !!effectiveProgramSession?.venue_id,
     staleTime: 30000,
-    queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: programSession!.venue_id }),
+    queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: effectiveProgramSession!.venue_id }),
   });
 
   const { data: dayAccess } = useQuery({
-    queryKey: ["hub-program-day-access", user?.id, programSession?.venue_id, programOccurrenceDate],
-    enabled: !!user?.id && !!programSession?.venue_id && !!programOccurrenceDate,
+    queryKey: ["hub-program-day-access", user?.id, effectiveProgramSession?.venue_id, programOccurrenceDate],
+    enabled: !!user?.id && !!effectiveProgramSession?.venue_id && !!programOccurrenceDate,
     staleTime: 30000,
     queryFn: async () => {
       const { data } = await supabase
         .from("access_entitlements")
         .select("id")
         .eq("user_id", user!.id)
-        .eq("venue_id", programSession!.venue_id)
+        .eq("venue_id", effectiveProgramSession!.venue_id)
         .eq("entitlement_type", "day_access")
         .eq("status", "active")
         .eq("valid_date", programOccurrenceDate)
@@ -162,22 +165,23 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
     },
   });
 
-  if (!event && programSession) {
+  if (!event && effectiveProgramSession) {
     const timeStr = [
-      programSession.start_time ? String(programSession.start_time).slice(0, 5) : null,
-      programSession.end_time ? String(programSession.end_time).slice(0, 5) : null,
+      effectiveProgramSession.start_time ? String(effectiveProgramSession.start_time).slice(0, 5) : null,
+      effectiveProgramSession.end_time ? String(effectiveProgramSession.end_time).slice(0, 5) : null,
     ].filter(Boolean).join("-");
-    const sessionType = programSession.session_type === "open_play"
+    const sessionType = effectiveProgramSession.session_type === "open_play"
       ? "Open Play"
-      : programSession.session_type === "group_training"
+      : effectiveProgramSession.session_type === "group_training"
         ? "Träning"
         : "Aktivitet";
-    const capacity = Number(programSession.capacity || 0);
-    const spotsLeft = capacity ? Math.max(capacity - programRegistrations.length, 0) : null;
+    const capacity = Number(effectiveProgramSession.capacity || 0);
+    const registrationCount = Number(publicActivityPreview?.registrations?.count ?? programRegistrations.length ?? 0);
+    const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
     const isFull = spotsLeft === 0;
     const pricing = activityPriceLabels({
-      basePrice: Number(programSession.price_sek || 165),
-      productKey: (programSession as any).product_key,
+      basePrice: Number(effectiveProgramSession.price_sek || 165),
+      productKey: (effectiveProgramSession as any).product_key,
       membership,
       hasDayAccess: !!dayAccess,
     });
@@ -207,24 +211,24 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
       });
     };
     const handleProgramAction = async () => {
+      if (isFull) return;
       if (!user?.id) {
         navigate(`/auth?redirect=${encodeURIComponent(chatPath)}`);
         return;
       }
-      if (isFull) return;
       if (loading) return;
       setLoading(true);
       try {
         const result = await apiPost("api-bookings", "create-checkout", {
           product_type: "day_pass",
-          amount_sek: programSession.price_sek || 0,
-          venue_id: programSession.venue_id,
+          amount_sek: effectiveProgramSession.price_sek || 0,
+          venue_id: effectiveProgramSession.venue_id,
           metadata: {
             date: programOccurrenceDate,
             activity_session_id: eventLookupId,
             chat_room_id: roomId || "",
-            session_name: programSession.name,
-            session_type: programSession.session_type || "open_play",
+            session_name: effectiveProgramSession.name,
+            session_type: effectiveProgramSession.session_type || "open_play",
             user_id: user.id,
             slug: venueSlug || "",
             redirect_path: chatPath,
@@ -246,7 +250,10 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
     };
     const handleProgramUpsell = (label: string) => {
       if ((label.includes("Access") || label.includes("Unlimited")) && !userHasMembership) {
-        navigate(`/membership${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`);
+        const params = new URLSearchParams();
+        if (venueSlug) params.set("v", venueSlug);
+        params.set("returnTo", chatPath);
+        navigate(`/membership?${params.toString()}`);
         return;
       }
       if (label.includes("Dagsmedlemskap") && !dayAccess) {
@@ -327,7 +334,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
               ) : isFull ? (
                 "Fullt"
               ) : (
-                `Anmäl mig · ${pricing.checkoutLabel}`
+                `${user?.id ? "Anmäl mig" : "Logga in & anmäl"} · ${pricing.checkoutLabel}`
               )}
             </span>
           </span>
@@ -380,14 +387,14 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
             ) : null}
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <MessageCircle style={{ width: 14, height: 14 }} />
-              {programRegistrations.length} kommer
+              {registrationCount} kommer
             </span>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", marginTop: 10 }}>
             <div>
               <p style={{ margin: 0, color: "#0f172a", fontSize: 14, fontFamily: FONT_HEADING, fontWeight: 950 }}>
-                {programSession.name}
+                {effectiveProgramSession.name}
               </p>
               <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
                 {isRegistered ? "Du är anmäld i chatten" : isFull ? "Chatta om reservplats" : "Säkra platsen direkt i chatten"}
@@ -419,7 +426,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
               }}
             >
               {loading ? <Loader2 style={{ width: 15, height: 15 }} className="animate-spin" /> : null}
-              {isRegistered ? "Anmäld" : isFull ? "Reserv" : `Anmäl mig · ${pricing.checkoutLabel}`}
+              {isRegistered ? "Anmäld" : isFull ? "Reserv" : `${user?.id ? "Anmäl mig" : "Logga in & anmäl"} · ${pricing.checkoutLabel}`}
               {!loading && !isRegistered ? <ArrowRight style={{ width: 15, height: 15 }} /> : null}
             </motion.button>
           </div>
@@ -473,7 +480,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
                       </span>
                       {isMembershipUpsell && (
                         <span style={{ display: "block", marginTop: 1, fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 800, color: "#64748b" }}>
-                          Köp medlemskap och boka billigare
+                          {row.label.includes("Access") ? `Köp Access och boka för ${row.value}` : "Köp Unlimited och boka när det ingår"}
                         </span>
                       )}
                       {isDayUpsell && (

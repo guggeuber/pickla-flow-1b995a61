@@ -133,6 +133,12 @@ function fullName(firstName: string, lastName: string) {
   return [firstName, lastName].map((part) => part.trim()).filter(Boolean).join(" ");
 }
 
+function safeReturnTo(value: string | null) {
+  if (!value || !value.startsWith("/")) return "";
+  if (value.startsWith("//")) return "";
+  return value;
+}
+
 // Build benefit list from actual tier configuration, not marketing filler.
 function getTierBenefits(tier: MembershipTier): string[] {
   const benefits: string[] = [];
@@ -202,6 +208,7 @@ const MembershipPage = () => {
   const [searchParams] = useSearchParams();
   const { user, signUp } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
+  const returnTo = safeReturnTo(searchParams.get("returnTo"));
   const { data: venue, isLoading: isVenueLoading } = useVenue(slug);
   const { data: tiers, isLoading } = useMembershipTiers(venue?.id);
   const { data: activeMembership } = useActiveMembership(venue?.id);
@@ -318,6 +325,7 @@ const MembershipPage = () => {
           customer_email: user ? (user.email || "") : formData.email.trim(),
           customer_phone: phone,
           slug,
+          success_path: returnTo ? `/membership/confirmed?returnTo=${encodeURIComponent(returnTo)}` : "",
         },
       });
       window.location.href = result.url;
@@ -667,7 +675,7 @@ const MembershipPage = () => {
         {!user && (
           <motion.div variants={item} className="text-center">
             <button
-              onClick={() => navigate(`/auth?redirect=${encodeURIComponent(`/membership?v=${slug}`)}`)}
+              onClick={() => navigate(`/auth?redirect=${encodeURIComponent(`/membership?v=${slug}${returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ""}`)}`)}
               className="text-[12px] font-bold underline underline-offset-4"
               style={{ color: "rgba(62,61,57,0.5)", fontFamily: FONT_MONO }}
             >

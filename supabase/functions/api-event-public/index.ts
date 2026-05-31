@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
 const RESEND_REPLY_DOMAIN = Deno.env.get('RESEND_INBOUND_DOMAIN') || 'reply.playpickla.com';
@@ -132,6 +133,194 @@ function emailAddressField(value: any) {
   if (value.email && value.name) return `${value.name} <${value.email}>`;
   if (value.email) return String(value.email);
   return String(value);
+}
+
+function activityResourceId(sessionId: string, occurrenceDate: string | null) {
+  return `activity_session:${sessionId}:${occurrenceDate || 'next'}`;
+}
+
+function nextActivityOccurrence(session: any, requestedDate?: string | null) {
+  if (requestedDate) return DateTime.fromISO(requestedDate, { zone: 'Europe/Stockholm' });
+  if (session?.session_date) return DateTime.fromISO(session.session_date, { zone: 'Europe/Stockholm' });
+
+  const now = DateTime.now().setZone('Europe/Stockholm');
+  const recurrenceDays = session?.recurrence_days || [];
+  for (let offset = 0; offset < 14; offset += 1) {
+    const date = now.plus({ days: offset });
+    const jsDow = date.weekday % 7;
+    if (!recurrenceDays.includes(jsDow)) continue;
+    if (offset === 0 && session?.end_time) {
+      const [endHour = 0, endMinute = 0] = String(session.end_time).slice(0, 5).split(':').map(Number);
+      const endAt = date.set({ hour: endHour, minute: endMinute, second: 0, millisecond: 0 });
+      if (now > endAt) continue;
+    }
+    return date;
+  }
+
+  return now;
+}
+
+function publicActivitySubtitle(session: any, occurrence: DateTime) {
+  const startTime = session?.start_time ? String(session.start_time).slice(0, 5) : '';
+  const endTime = session?.end_time ? String(session.end_time).slice(0, 5) : '';
+  const now = DateTime.now().setZone('Europe/Stockholm');
+  const dayLabel = occurrence.hasSame(now, 'day')
+    ? 'Idag'
+    : occurrence.hasSame(now.plus({ days: 1 }), 'day')
+      ? 'Imorgon'
+      : occurrence.toFormat('d MMM', { locale: 'sv' });
+  return [dayLabel, startTime && endTime ? `${startTime}-${endTime}` : startTime].filter(Boolean).join(' · ');
+}
+
+function safePreviewMessage(message: any) {
+  const metadata = message?.metadata || {};
+  if (metadata?.channel === 'email') return null;
+  if (metadata?.type === 'image' || metadata?.type === 'gif') return null;
+  if (!['text', 'bot'].includes(message?.message_type)) return null;
+
+  const content = String(message?.content || '').trim();
+  if (!content) return null;
+  if (/@/.test(content) || /\+?\d[\d\s-]{6,}/.test(content)) return null;
+
+  return {
+    id: message.id,
+    room_id: message.room_id,
+    user_id: null,
+    message_type: message.message_type,
+    content: content.length > 240 ? `${content.slice(0, 240)}...` : content,
+    metadata: {},
+    created_at: message.created_at,
+  };
+}
+
+async function buildActivityPreview(client: any, {
+  roomId,
+  sessionId,
+  date,
+  venueSlug,
+}: {
+  roomId?: string | null;
+  sessionId?: string | null;
+  date?: string | null;
+  venueSlug?: string | null;
+}) {
+  let room: any = null;
+  let resolvedSessionId = sessionId || null;
+  let occurrenceDate = date || null;
+
+  if (roomId) {
+    const { data: roomRow, error: roomErr } = await client.from('chat_rooms')
+      .select('id, venue_id, room_type, title, subtitle, emoji, resource_id, is_public, session_date, updated_at, venues(id, slug, is_public)')
+      .eq('id', roomId)
+      .maybeSingle();
+    if (roomErr || !roomRow) throw new Error('Activity room not found');
+    if (roomRow.room_type !== 'event' || roomRow.is_public !== true || !String(roomRow.resource_id || '').startsWith('activity_session:')) {
+      throw new Error('Activity room not public');
+    }
+    if (roomRow.venues?.is_public !== true) throw new Error('Venue not public');
+    if (venueSlug && roomRow.venues?.slug !== venueSlug) throw new Error('Venue mismatch');
+    room = roomRow;
+
+    const match = String(roomRow.resource_id || '').match(/^activity_session:([^:]+):([^:]+)$/);
+    resolvedSessionId = match?.[1] || null;
+    occurrenceDate = match?.[2] && match[2] !== 'next' ? match[2] : null;
+  }
+
+  if (!resolvedSessionId) throw new Error('Missing sessionId');
+
+  let sessionQuery = client.from('activity_sessions')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, is_active, publish_status, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
+    .eq('id', resolvedSessionId)
+    .maybeSingle();
+  const { data: session, error: sessionErr } = await sessionQuery;
+  if (sessionErr || !session) throw new Error('Activity session not found');
+  if (session.is_active !== true || session.publish_status !== 'published') throw new Error('Activity session is not public');
+  if (session.venues?.is_public !== true) throw new Error('Venue not public');
+  if (venueSlug && session.venues?.slug !== venueSlug) throw new Error('Venue mismatch');
+
+  const occurrence = nextActivityOccurrence(session, occurrenceDate);
+  occurrenceDate = occurrence.toISODate();
+  const resourceId = activityResourceId(session.id, occurrenceDate);
+
+  if (!room) {
+    const { data: existingRoom } = await client.from('chat_rooms')
+      .select('id, venue_id, room_type, title, subtitle, emoji, resource_id, is_public, session_date, updated_at')
+      .eq('resource_id', resourceId)
+      .eq('room_type', 'event')
+      .maybeSingle();
+
+    if (existingRoom?.id) {
+      const subtitle = publicActivitySubtitle(session, occurrence);
+      const { data: updatedRoom } = await client.from('chat_rooms')
+        .update({
+          title: session.name,
+          subtitle,
+          emoji: '📅',
+          is_public: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingRoom.id)
+        .select('id, venue_id, room_type, title, subtitle, emoji, resource_id, is_public, session_date, updated_at')
+        .maybeSingle();
+      room = updatedRoom || existingRoom;
+    } else {
+      const { data: insertedRoom, error: insertErr } = await client.from('chat_rooms')
+        .insert({
+          venue_id: session.venue_id,
+          resource_id: resourceId,
+          room_type: 'event',
+          title: session.name,
+          subtitle: publicActivitySubtitle(session, occurrence),
+          emoji: '📅',
+          is_public: true,
+        })
+        .select('id, venue_id, room_type, title, subtitle, emoji, resource_id, is_public, session_date, updated_at')
+        .maybeSingle();
+      if (insertErr || !insertedRoom?.id) throw new Error('Could not create activity room');
+      room = insertedRoom;
+    }
+  }
+
+  const [{ count }, messagesResult] = await Promise.all([
+    client.from('session_registrations')
+      .select('id', { count: 'exact', head: true })
+      .eq('activity_session_id', session.id)
+      .eq('session_date', occurrenceDate)
+      .neq('status', 'cancelled'),
+    client.from('chat_messages')
+      .select('id, room_id, user_id, message_type, content, metadata, created_at')
+      .eq('room_id', room.id)
+      .in('message_type', ['text', 'bot'])
+      .order('created_at', { ascending: false })
+      .limit(12),
+  ]);
+
+  const messages = (messagesResult.data || [])
+    .map(safePreviewMessage)
+    .filter(Boolean)
+    .reverse()
+    .slice(-6);
+
+  return {
+    room,
+    activity_session: {
+      id: session.id,
+      venue_id: session.venue_id,
+      name: session.name,
+      session_type: session.session_type,
+      session_date: session.session_date,
+      recurrence_days: session.recurrence_days,
+      start_time: session.start_time,
+      end_time: session.end_time,
+      capacity: session.capacity,
+      price_sek: session.price_sek,
+      product_key: session.product_key,
+      occurrence_date: occurrenceDate,
+      activity_series: session.activity_series,
+    },
+    registrations: { count: count || 0 },
+    messages,
+  };
 }
 
 async function sendGroupInquiryEmail({
@@ -462,6 +651,21 @@ Deno.serve(async (req) => {
       });
 
       return jsonResponse({ success: true, communication_id: pendingCommunication.id });
+    }
+
+    // GET /api-event-public/detail?id=X or ?slug=X — public event info
+    if (req.method === 'GET' && path === 'activity-preview') {
+      try {
+        const preview = await buildActivityPreview(client, {
+          roomId: url.searchParams.get('roomId'),
+          sessionId: url.searchParams.get('sessionId'),
+          date: url.searchParams.get('date'),
+          venueSlug: url.searchParams.get('venueSlug') || url.searchParams.get('v'),
+        });
+        return jsonResponse(preview, 200, 5);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Activity preview not found', 404);
+      }
     }
 
     // GET /api-event-public/detail?id=X or ?slug=X — public event info

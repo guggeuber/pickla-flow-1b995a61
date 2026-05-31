@@ -786,7 +786,7 @@ Deno.serve(async (req) => {
       : '/book';
     const requestedSuccessPath = safeLocalPath(meta.success_path);
     const successPath = isMembership
-      ? '/membership/confirmed'
+      ? (requestedSuccessPath || '/membership/confirmed')
       : product_type === 'day_pass'
       ? (requestedSuccessPath || '/booking/confirmed?type=day_pass')
       : '/booking/confirmed';
