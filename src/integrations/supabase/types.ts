@@ -10,10 +10,361 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
+      access_entitlements: {
+        Row: {
+          activity_session_id: string | null
+          created_at: string
+          entitlement_type: string
+          id: string
+          includes_session_types: string[]
+          metadata: Json
+          session_date: string | null
+          source_id: string | null
+          source_type: string | null
+          status: string
+          updated_at: string
+          user_id: string
+          uses_count: number
+          uses_limit: number | null
+          valid_date: string | null
+          valid_from: string | null
+          valid_until: string | null
+          venue_id: string
+        }
+        Insert: {
+          activity_session_id?: string | null
+          created_at?: string
+          entitlement_type: string
+          id?: string
+          includes_session_types?: string[]
+          metadata?: Json
+          session_date?: string | null
+          source_id?: string | null
+          source_type?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+          uses_count?: number
+          uses_limit?: number | null
+          valid_date?: string | null
+          valid_from?: string | null
+          valid_until?: string | null
+          venue_id: string
+        }
+        Update: {
+          activity_session_id?: string | null
+          created_at?: string
+          entitlement_type?: string
+          id?: string
+          includes_session_types?: string[]
+          metadata?: Json
+          session_date?: string | null
+          source_id?: string | null
+          source_type?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+          uses_count?: number
+          uses_limit?: number | null
+          valid_date?: string | null
+          valid_from?: string | null
+          valid_until?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "access_entitlements_activity_session_id_fkey"
+            columns: ["activity_session_id"]
+            isOneToOne: false
+            referencedRelation: "activity_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "access_entitlements_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      access_products: {
+        Row: {
+          base_price_sek: number
+          created_at: string
+          description: string | null
+          grants: Json
+          id: string
+          is_active: boolean
+          name: string
+          product_key: string
+          product_kind: string
+          session_type: string | null
+          sort_order: number
+          updated_at: string
+          vat_rate: number
+          venue_id: string
+        }
+        Insert: {
+          base_price_sek?: number
+          created_at?: string
+          description?: string | null
+          grants?: Json
+          id?: string
+          is_active?: boolean
+          name: string
+          product_key: string
+          product_kind?: string
+          session_type?: string | null
+          sort_order?: number
+          updated_at?: string
+          vat_rate?: number
+          venue_id: string
+        }
+        Update: {
+          base_price_sek?: number
+          created_at?: string
+          description?: string | null
+          grants?: Json
+          id?: string
+          is_active?: boolean
+          name?: string
+          product_key?: string
+          product_kind?: string
+          session_type?: string | null
+          sort_order?: number
+          updated_at?: string
+          vat_rate?: number
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "access_products_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      access_vouchers: {
+        Row: {
+          claimed_at: string | null
+          claimed_by_user_id: string | null
+          code: string
+          created_at: string
+          expires_at: string | null
+          id: string
+          metadata: Json
+          purchaser_user_id: string | null
+          recipient_name: string | null
+          redeemed_at: string | null
+          source_id: string | null
+          source_type: string | null
+          status: string
+          updated_at: string
+          value_count: number
+          venue_id: string
+          voucher_type: string
+        }
+        Insert: {
+          claimed_at?: string | null
+          claimed_by_user_id?: string | null
+          code: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          metadata?: Json
+          purchaser_user_id?: string | null
+          recipient_name?: string | null
+          redeemed_at?: string | null
+          source_id?: string | null
+          source_type?: string | null
+          status?: string
+          updated_at?: string
+          value_count?: number
+          venue_id: string
+          voucher_type?: string
+        }
+        Update: {
+          claimed_at?: string | null
+          claimed_by_user_id?: string | null
+          code?: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          metadata?: Json
+          purchaser_user_id?: string | null
+          recipient_name?: string | null
+          redeemed_at?: string | null
+          source_id?: string | null
+          source_type?: string | null
+          status?: string
+          updated_at?: string
+          value_count?: number
+          venue_id?: string
+          voucher_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "access_vouchers_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      activity_series: {
+        Row: {
+          created_at: string
+          description: string | null
+          end_date: string | null
+          id: string
+          metadata: Json
+          name: string
+          product_key: string | null
+          series_type: string
+          sport_type: string
+          start_date: string | null
+          status: string
+          total_sessions: number | null
+          updated_at: string
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          end_date?: string | null
+          id?: string
+          metadata?: Json
+          name: string
+          product_key?: string | null
+          series_type?: string
+          sport_type?: string
+          start_date?: string | null
+          status?: string
+          total_sessions?: number | null
+          updated_at?: string
+          venue_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          end_date?: string | null
+          id?: string
+          metadata?: Json
+          name?: string
+          product_key?: string | null
+          series_type?: string
+          sport_type?: string
+          start_date?: string | null
+          status?: string
+          total_sessions?: number | null
+          updated_at?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "activity_series_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      activity_sessions: {
+        Row: {
+          access_policy: Json
+          capacity: number | null
+          court_ids: string[]
+          created_at: string
+          end_time: string
+          id: string
+          is_active: boolean
+          metadata: Json
+          name: string
+          price_sek: number
+          product_key: string | null
+          publish_status: string
+          recurrence_days: number[] | null
+          series_id: string | null
+          session_date: string | null
+          session_type: string
+          sort_order: number
+          sport_type: string
+          start_time: string
+          updated_at: string
+          venue_id: string
+        }
+        Insert: {
+          access_policy?: Json
+          capacity?: number | null
+          court_ids?: string[]
+          created_at?: string
+          end_time: string
+          id?: string
+          is_active?: boolean
+          metadata?: Json
+          name: string
+          price_sek?: number
+          product_key?: string | null
+          publish_status?: string
+          recurrence_days?: number[] | null
+          series_id?: string | null
+          session_date?: string | null
+          session_type?: string
+          sort_order?: number
+          sport_type?: string
+          start_time: string
+          updated_at?: string
+          venue_id: string
+        }
+        Update: {
+          access_policy?: Json
+          capacity?: number | null
+          court_ids?: string[]
+          created_at?: string
+          end_time?: string
+          id?: string
+          is_active?: boolean
+          metadata?: Json
+          name?: string
+          price_sek?: number
+          product_key?: string | null
+          publish_status?: string
+          recurrence_days?: number[] | null
+          series_id?: string | null
+          session_date?: string | null
+          session_type?: string
+          sort_order?: number
+          sport_type?: string
+          start_time?: string
+          updated_at?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "activity_sessions_series_id_fkey"
+            columns: ["series_id"]
+            isOneToOne: false
+            referencedRelation: "activity_series"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "activity_sessions_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bookings: {
         Row: {
           access_code: string | null
@@ -25,7 +376,13 @@ export type Database = {
           currency: string | null
           end_time: string
           id: string
+          included_court_hours: number
+          membership_id: string | null
+          membership_usage_entitlement_type: string | null
+          membership_usage_period_end: string | null
+          membership_usage_period_start: string | null
           notes: string | null
+          paid_court_hours: number
           start_time: string
           status: Database["public"]["Enums"]["booking_status"] | null
           stripe_session_id: string | null
@@ -45,7 +402,13 @@ export type Database = {
           currency?: string | null
           end_time: string
           id?: string
+          included_court_hours?: number
+          membership_id?: string | null
+          membership_usage_entitlement_type?: string | null
+          membership_usage_period_end?: string | null
+          membership_usage_period_start?: string | null
           notes?: string | null
+          paid_court_hours?: number
           start_time: string
           status?: Database["public"]["Enums"]["booking_status"] | null
           stripe_session_id?: string | null
@@ -65,7 +428,13 @@ export type Database = {
           currency?: string | null
           end_time?: string
           id?: string
+          included_court_hours?: number
+          membership_id?: string | null
+          membership_usage_entitlement_type?: string | null
+          membership_usage_period_end?: string | null
+          membership_usage_period_start?: string | null
           notes?: string | null
+          paid_court_hours?: number
           start_time?: string
           status?: Database["public"]["Enums"]["booking_status"] | null
           stripe_session_id?: string | null
@@ -84,6 +453,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "bookings_membership_id_fkey"
+            columns: ["membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "bookings_venue_court_id_fkey"
             columns: ["venue_court_id"]
             isOneToOne: false
@@ -99,104 +475,171 @@ export type Database = {
           },
         ]
       }
-      chat_channels: {
+      chat_messages: {
         Row: {
-          channel_type: string
-          created_at: string
-          crew_id: string | null
-          description: string | null
+          content: string | null
+          created_at: string | null
           id: string
-          is_active: boolean
-          name: string
-          sport_type: string | null
-          updated_at: string
-          venue_id: string | null
+          message_type: string
+          metadata: Json | null
+          reply_to_id: string | null
+          room_id: string
+          user_id: string | null
         }
         Insert: {
-          channel_type?: string
-          created_at?: string
-          crew_id?: string | null
-          description?: string | null
+          content?: string | null
+          created_at?: string | null
           id?: string
-          is_active?: boolean
-          name: string
-          sport_type?: string | null
-          updated_at?: string
-          venue_id?: string | null
+          message_type?: string
+          metadata?: Json | null
+          reply_to_id?: string | null
+          room_id: string
+          user_id?: string | null
         }
         Update: {
-          channel_type?: string
-          created_at?: string
-          crew_id?: string | null
-          description?: string | null
+          content?: string | null
+          created_at?: string | null
           id?: string
-          is_active?: boolean
-          name?: string
-          sport_type?: string | null
-          updated_at?: string
-          venue_id?: string | null
+          message_type?: string
+          metadata?: Json | null
+          reply_to_id?: string | null
+          room_id?: string
+          user_id?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "chat_channels_crew_id_fkey"
-            columns: ["crew_id"]
+            foreignKeyName: "chat_messages_reply_to_id_fkey"
+            columns: ["reply_to_id"]
             isOneToOne: false
-            referencedRelation: "crews"
+            referencedRelation: "chat_messages"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "chat_channels_venue_id_fkey"
-            columns: ["venue_id"]
+            foreignKeyName: "chat_messages_room_id_fkey"
+            columns: ["room_id"]
             isOneToOne: false
-            referencedRelation: "venues"
+            referencedRelation: "chat_rooms"
             referencedColumns: ["id"]
           },
         ]
       }
-      chat_messages: {
+      chat_participants: {
         Row: {
-          channel_id: string
-          content: string
-          created_at: string
           id: string
-          message_type: string
-          metadata: Json | null
-          sender_profile_id: string
-          updated_at: string
+          joined_at: string | null
+          room_id: string
+          user_id: string
         }
         Insert: {
-          channel_id: string
-          content: string
-          created_at?: string
           id?: string
-          message_type?: string
-          metadata?: Json | null
-          sender_profile_id: string
-          updated_at?: string
+          joined_at?: string | null
+          room_id: string
+          user_id: string
         }
         Update: {
-          channel_id?: string
-          content?: string
-          created_at?: string
           id?: string
-          message_type?: string
-          metadata?: Json | null
-          sender_profile_id?: string
-          updated_at?: string
+          joined_at?: string | null
+          room_id?: string
+          user_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "chat_messages_channel_id_fkey"
-            columns: ["channel_id"]
+            foreignKeyName: "chat_participants_room_id_fkey"
+            columns: ["room_id"]
             isOneToOne: false
-            referencedRelation: "chat_channels"
+            referencedRelation: "chat_rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      chat_reactions: {
+        Row: {
+          created_at: string | null
+          emoji: string
+          id: string
+          message_id: string
+          room_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          emoji: string
+          id?: string
+          message_id: string
+          room_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          emoji?: string
+          id?: string
+          message_id?: string
+          room_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_reactions_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "chat_messages"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "chat_messages_sender_profile_id_fkey"
-            columns: ["sender_profile_id"]
+            foreignKeyName: "chat_reactions_room_id_fkey"
+            columns: ["room_id"]
             isOneToOne: false
-            referencedRelation: "player_profiles"
+            referencedRelation: "chat_rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      chat_rooms: {
+        Row: {
+          created_at: string | null
+          emoji: string | null
+          id: string
+          is_public: boolean
+          resource_id: string | null
+          room_type: string
+          session_date: string | null
+          subtitle: string | null
+          title: string
+          updated_at: string | null
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          emoji?: string | null
+          id?: string
+          is_public?: boolean
+          resource_id?: string | null
+          room_type: string
+          session_date?: string | null
+          subtitle?: string | null
+          title: string
+          updated_at?: string | null
+          venue_id: string
+        }
+        Update: {
+          created_at?: string | null
+          emoji?: string | null
+          id?: string
+          is_public?: boolean
+          resource_id?: string | null
+          room_type?: string
+          session_date?: string | null
+          subtitle?: string | null
+          title?: string
+          updated_at?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_rooms_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
             referencedColumns: ["id"]
           },
         ]
@@ -965,6 +1408,7 @@ export type Database = {
           day_pass_id: string
           id: string
           recipient_email: string | null
+          recipient_name: string | null
           recipient_phone: string | null
           shared_by: string
           status: string
@@ -977,6 +1421,7 @@ export type Database = {
           day_pass_id: string
           id?: string
           recipient_email?: string | null
+          recipient_name?: string | null
           recipient_phone?: string | null
           shared_by: string
           status?: string
@@ -989,6 +1434,7 @@ export type Database = {
           day_pass_id?: string
           id?: string
           recipient_email?: string | null
+          recipient_name?: string | null
           recipient_phone?: string | null
           shared_by?: string
           status?: string
@@ -1064,6 +1510,66 @@ export type Database = {
           },
         ]
       }
+      display_devices: {
+        Row: {
+          created_at: string
+          device_token: string
+          external_links: Json
+          id: string
+          instructions: string | null
+          is_active: boolean
+          last_seen_at: string | null
+          mode: string
+          name: string
+          updated_at: string
+          venue_court_id: string | null
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string
+          device_token?: string
+          external_links?: Json
+          id?: string
+          instructions?: string | null
+          is_active?: boolean
+          last_seen_at?: string | null
+          mode?: string
+          name: string
+          updated_at?: string
+          venue_court_id?: string | null
+          venue_id: string
+        }
+        Update: {
+          created_at?: string
+          device_token?: string
+          external_links?: Json
+          id?: string
+          instructions?: string | null
+          is_active?: boolean
+          last_seen_at?: string | null
+          mode?: string
+          name?: string
+          updated_at?: string
+          venue_court_id?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "display_devices_venue_court_id_fkey"
+            columns: ["venue_court_id"]
+            isOneToOne: false
+            referencedRelation: "venue_courts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "display_devices_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       event_checkins: {
         Row: {
           checked_in: boolean | null
@@ -1105,6 +1611,84 @@ export type Database = {
             columns: ["player_id"]
             isOneToOne: false
             referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      event_communications: {
+        Row: {
+          body_html: string | null
+          body_text: string | null
+          channel: string
+          created_at: string
+          created_by: string | null
+          direction: string
+          event_id: string
+          from_email: string | null
+          id: string
+          metadata: Json
+          provider: string
+          provider_event_id: string | null
+          provider_message_id: string | null
+          room_id: string | null
+          status: string
+          subject: string | null
+          to_email: string | null
+          updated_at: string
+        }
+        Insert: {
+          body_html?: string | null
+          body_text?: string | null
+          channel?: string
+          created_at?: string
+          created_by?: string | null
+          direction: string
+          event_id: string
+          from_email?: string | null
+          id?: string
+          metadata?: Json
+          provider?: string
+          provider_event_id?: string | null
+          provider_message_id?: string | null
+          room_id?: string | null
+          status?: string
+          subject?: string | null
+          to_email?: string | null
+          updated_at?: string
+        }
+        Update: {
+          body_html?: string | null
+          body_text?: string | null
+          channel?: string
+          created_at?: string
+          created_by?: string | null
+          direction?: string
+          event_id?: string
+          from_email?: string | null
+          id?: string
+          metadata?: Json
+          provider?: string
+          provider_event_id?: string | null
+          provider_message_id?: string | null
+          room_id?: string | null
+          status?: string
+          subject?: string | null
+          to_email?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "event_communications_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "event_communications_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "chat_rooms"
             referencedColumns: ["id"]
           },
         ]
@@ -1335,6 +1919,9 @@ export type Database = {
           category: string
           competition_type: string | null
           created_at: string | null
+          customer_email: string | null
+          customer_name: string | null
+          customer_phone: string | null
           description: string | null
           display_name: string | null
           end_date: string | null
@@ -1342,14 +1929,17 @@ export type Database = {
           entry_fee: number | null
           entry_fee_type: string
           event_type: Database["public"]["Enums"]["event_type"]
+          expected_participants: number | null
           final_generated: boolean | null
           format: Database["public"]["Enums"]["event_format"]
           group_stage_completed: boolean | null
           id: string
+          internal_notes: string | null
           is_drop_in: boolean
           is_public: boolean | null
           logo_url: string | null
           match_duration_default: number | null
+          max_participants: number | null
           name: string
           number_of_courts: number | null
           offer_description: string | null
@@ -1357,10 +1947,14 @@ export type Database = {
           offer_show_on_ticker: boolean | null
           offer_title: string | null
           offer_valid_until: string | null
+          owner_name: string | null
+          partner_notes: string | null
+          planning_status: string
           player_info_general: string | null
           points_to_win: number | null
           primary_color: string | null
           registration_fields: Json
+          resources: string[]
           scoring_format: string | null
           scoring_type: string | null
           secondary_color: string | null
@@ -1368,6 +1962,7 @@ export type Database = {
           show_on_sticker: boolean
           slug: string | null
           sport_type: string
+          staffing: string | null
           start_date: string | null
           start_time: string | null
           status: string | null
@@ -1376,6 +1971,7 @@ export type Database = {
           tournament_complete: boolean | null
           updated_at: string | null
           venue_id: string | null
+          visibility: string
           whatsapp_url: string | null
           win_by_two: boolean | null
           winner_team_id: string | null
@@ -1388,6 +1984,9 @@ export type Database = {
           category?: string
           competition_type?: string | null
           created_at?: string | null
+          customer_email?: string | null
+          customer_name?: string | null
+          customer_phone?: string | null
           description?: string | null
           display_name?: string | null
           end_date?: string | null
@@ -1395,14 +1994,17 @@ export type Database = {
           entry_fee?: number | null
           entry_fee_type?: string
           event_type: Database["public"]["Enums"]["event_type"]
+          expected_participants?: number | null
           final_generated?: boolean | null
           format: Database["public"]["Enums"]["event_format"]
           group_stage_completed?: boolean | null
           id?: string
+          internal_notes?: string | null
           is_drop_in?: boolean
           is_public?: boolean | null
           logo_url?: string | null
           match_duration_default?: number | null
+          max_participants?: number | null
           name: string
           number_of_courts?: number | null
           offer_description?: string | null
@@ -1410,10 +2012,14 @@ export type Database = {
           offer_show_on_ticker?: boolean | null
           offer_title?: string | null
           offer_valid_until?: string | null
+          owner_name?: string | null
+          partner_notes?: string | null
+          planning_status?: string
           player_info_general?: string | null
           points_to_win?: number | null
           primary_color?: string | null
           registration_fields?: Json
+          resources?: string[]
           scoring_format?: string | null
           scoring_type?: string | null
           secondary_color?: string | null
@@ -1421,6 +2027,7 @@ export type Database = {
           show_on_sticker?: boolean
           slug?: string | null
           sport_type?: string
+          staffing?: string | null
           start_date?: string | null
           start_time?: string | null
           status?: string | null
@@ -1429,6 +2036,7 @@ export type Database = {
           tournament_complete?: boolean | null
           updated_at?: string | null
           venue_id?: string | null
+          visibility?: string
           whatsapp_url?: string | null
           win_by_two?: boolean | null
           winner_team_id?: string | null
@@ -1441,6 +2049,9 @@ export type Database = {
           category?: string
           competition_type?: string | null
           created_at?: string | null
+          customer_email?: string | null
+          customer_name?: string | null
+          customer_phone?: string | null
           description?: string | null
           display_name?: string | null
           end_date?: string | null
@@ -1448,14 +2059,17 @@ export type Database = {
           entry_fee?: number | null
           entry_fee_type?: string
           event_type?: Database["public"]["Enums"]["event_type"]
+          expected_participants?: number | null
           final_generated?: boolean | null
           format?: Database["public"]["Enums"]["event_format"]
           group_stage_completed?: boolean | null
           id?: string
+          internal_notes?: string | null
           is_drop_in?: boolean
           is_public?: boolean | null
           logo_url?: string | null
           match_duration_default?: number | null
+          max_participants?: number | null
           name?: string
           number_of_courts?: number | null
           offer_description?: string | null
@@ -1463,10 +2077,14 @@ export type Database = {
           offer_show_on_ticker?: boolean | null
           offer_title?: string | null
           offer_valid_until?: string | null
+          owner_name?: string | null
+          partner_notes?: string | null
+          planning_status?: string
           player_info_general?: string | null
           points_to_win?: number | null
           primary_color?: string | null
           registration_fields?: Json
+          resources?: string[]
           scoring_format?: string | null
           scoring_type?: string | null
           secondary_color?: string | null
@@ -1474,6 +2092,7 @@ export type Database = {
           show_on_sticker?: boolean
           slug?: string | null
           sport_type?: string
+          staffing?: string | null
           start_date?: string | null
           start_time?: string | null
           status?: string | null
@@ -1482,6 +2101,7 @@ export type Database = {
           tournament_complete?: boolean | null
           updated_at?: string | null
           venue_id?: string | null
+          visibility?: string
           whatsapp_url?: string | null
           win_by_two?: boolean | null
           winner_team_id?: string | null
@@ -2006,6 +2626,44 @@ export type Database = {
           },
         ]
       }
+      membership_entitlements: {
+        Row: {
+          created_at: string | null
+          entitlement_type: string
+          id: string
+          period: string | null
+          sport_type: string
+          tier_id: string
+          value: number | null
+        }
+        Insert: {
+          created_at?: string | null
+          entitlement_type: string
+          id?: string
+          period?: string | null
+          sport_type?: string
+          tier_id: string
+          value?: number | null
+        }
+        Update: {
+          created_at?: string | null
+          entitlement_type?: string
+          id?: string
+          period?: string | null
+          sport_type?: string
+          tier_id?: string
+          value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "membership_entitlements_tier_id_fkey"
+            columns: ["tier_id"]
+            isOneToOne: false
+            referencedRelation: "membership_tiers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       membership_tier_pricing: {
         Row: {
           created_at: string | null
@@ -2065,6 +2723,7 @@ export type Database = {
           discount_percent: number | null
           id: string
           is_active: boolean | null
+          is_assignable: boolean
           monthly_price: number | null
           name: string
           sort_order: number | null
@@ -2078,6 +2737,7 @@ export type Database = {
           discount_percent?: number | null
           id?: string
           is_active?: boolean | null
+          is_assignable?: boolean
           monthly_price?: number | null
           name: string
           sort_order?: number | null
@@ -2091,6 +2751,7 @@ export type Database = {
           discount_percent?: number | null
           id?: string
           is_active?: boolean | null
+          is_assignable?: boolean
           monthly_price?: number | null
           name?: string
           sort_order?: number | null
@@ -2100,6 +2761,50 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "membership_tiers_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      membership_usage: {
+        Row: {
+          created_at: string | null
+          entitlement_type: string
+          id: string
+          period_end: string
+          period_start: string
+          updated_at: string | null
+          used_value: number
+          user_id: string
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          entitlement_type: string
+          id?: string
+          period_end: string
+          period_start: string
+          updated_at?: string | null
+          used_value?: number
+          user_id: string
+          venue_id: string
+        }
+        Update: {
+          created_at?: string | null
+          entitlement_type?: string
+          id?: string
+          period_end?: string
+          period_start?: string
+          updated_at?: string | null
+          used_value?: number
+          user_id?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "membership_usage_venue_id_fkey"
             columns: ["venue_id"]
             isOneToOne: false
             referencedRelation: "venues"
@@ -2252,6 +2957,265 @@ export type Database = {
           },
         ]
       }
+      ops_agent_runs: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          finished_at: string
+          id: string
+          started_at: string
+          status: string
+          summary: Json
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          finished_at?: string
+          id?: string
+          started_at?: string
+          status?: string
+          summary?: Json
+          venue_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          finished_at?: string
+          id?: string
+          started_at?: string
+          status?: string
+          summary?: Json
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ops_agent_runs_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ops_check_state: {
+        Row: {
+          created_at: string
+          id: string
+          is_done: boolean
+          item_index: number
+          label: string
+          mode: string
+          updated_at: string
+          updated_by: string | null
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_done?: boolean
+          item_index: number
+          label: string
+          mode: string
+          updated_at?: string
+          updated_by?: string | null
+          venue_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_done?: boolean
+          item_index?: number
+          label?: string
+          mode?: string
+          updated_at?: string
+          updated_by?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ops_check_state_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ops_client_events: {
+        Row: {
+          created_at: string
+          event_type: string
+          fingerprint: string | null
+          id: string
+          message: string
+          metadata: Json
+          route: string | null
+          severity: string
+          user_agent: string | null
+          user_id: string | null
+          venue_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_type: string
+          fingerprint?: string | null
+          id?: string
+          message: string
+          metadata?: Json
+          route?: string | null
+          severity?: string
+          user_agent?: string | null
+          user_id?: string | null
+          venue_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_type?: string
+          fingerprint?: string | null
+          id?: string
+          message?: string
+          metadata?: Json
+          route?: string | null
+          severity?: string
+          user_agent?: string | null
+          user_id?: string | null
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ops_client_events_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ops_incidents: {
+        Row: {
+          affected_ids: string | null
+          affected_route: string | null
+          containment: string | null
+          created_at: string
+          created_by: string | null
+          fix_reference: string | null
+          follow_up: string | null
+          id: string
+          impact: string | null
+          metadata: Json
+          owner_name: string | null
+          resolved_at: string | null
+          severity: string
+          status: string
+          title: string
+          updated_at: string
+          updated_by: string | null
+          venue_id: string
+          verification: string | null
+        }
+        Insert: {
+          affected_ids?: string | null
+          affected_route?: string | null
+          containment?: string | null
+          created_at?: string
+          created_by?: string | null
+          fix_reference?: string | null
+          follow_up?: string | null
+          id?: string
+          impact?: string | null
+          metadata?: Json
+          owner_name?: string | null
+          resolved_at?: string | null
+          severity?: string
+          status?: string
+          title: string
+          updated_at?: string
+          updated_by?: string | null
+          venue_id: string
+          verification?: string | null
+        }
+        Update: {
+          affected_ids?: string | null
+          affected_route?: string | null
+          containment?: string | null
+          created_at?: string
+          created_by?: string | null
+          fix_reference?: string | null
+          follow_up?: string | null
+          id?: string
+          impact?: string | null
+          metadata?: Json
+          owner_name?: string | null
+          resolved_at?: string | null
+          severity?: string
+          status?: string
+          title?: string
+          updated_at?: string
+          updated_by?: string | null
+          venue_id?: string
+          verification?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ops_incidents_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ops_signals: {
+        Row: {
+          created_at: string
+          details: Json
+          id: string
+          last_auto_checked_at: string | null
+          note: string | null
+          signal_key: string
+          source: string
+          status: string
+          updated_at: string
+          updated_by: string | null
+          venue_id: string
+        }
+        Insert: {
+          created_at?: string
+          details?: Json
+          id?: string
+          last_auto_checked_at?: string | null
+          note?: string | null
+          signal_key: string
+          source?: string
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+          venue_id: string
+        }
+        Update: {
+          created_at?: string
+          details?: Json
+          id?: string
+          last_auto_checked_at?: string | null
+          note?: string | null
+          signal_key?: string
+          source?: string
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ops_signals_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       player_profiles: {
         Row: {
           auth_user_id: string
@@ -2259,10 +3223,13 @@ export type Database = {
           bio: string | null
           created_at: string | null
           display_name: string | null
+          first_name: string | null
           id: string
+          last_name: string | null
           phone: string | null
           pickla_rating: number | null
           preferred_venue_id: string | null
+          stripe_customer_id: string | null
           total_matches: number | null
           total_wins: number | null
           updated_at: string | null
@@ -2273,10 +3240,13 @@ export type Database = {
           bio?: string | null
           created_at?: string | null
           display_name?: string | null
+          first_name?: string | null
           id?: string
+          last_name?: string | null
           phone?: string | null
           pickla_rating?: number | null
           preferred_venue_id?: string | null
+          stripe_customer_id?: string | null
           total_matches?: number | null
           total_wins?: number | null
           updated_at?: string | null
@@ -2287,10 +3257,13 @@ export type Database = {
           bio?: string | null
           created_at?: string | null
           display_name?: string | null
+          first_name?: string | null
           id?: string
+          last_name?: string | null
           phone?: string | null
           pickla_rating?: number | null
           preferred_venue_id?: string | null
+          stripe_customer_id?: string | null
           total_matches?: number | null
           total_wins?: number | null
           updated_at?: string | null
@@ -2445,6 +3418,7 @@ export type Database = {
       }
       pricing_rules: {
         Row: {
+          court_type: string | null
           created_at: string | null
           currency: string | null
           days_of_week: number[] | null
@@ -2453,6 +3427,7 @@ export type Database = {
           is_active: boolean | null
           name: string
           price: number
+          sport_type: string | null
           time_from: string | null
           time_to: string | null
           type: string
@@ -2463,6 +3438,7 @@ export type Database = {
           venue_id: string
         }
         Insert: {
+          court_type?: string | null
           created_at?: string | null
           currency?: string | null
           days_of_week?: number[] | null
@@ -2471,6 +3447,7 @@ export type Database = {
           is_active?: boolean | null
           name: string
           price: number
+          sport_type?: string | null
           time_from?: string | null
           time_to?: string | null
           type: string
@@ -2481,6 +3458,7 @@ export type Database = {
           venue_id: string
         }
         Update: {
+          court_type?: string | null
           created_at?: string | null
           currency?: string | null
           days_of_week?: number[] | null
@@ -2489,6 +3467,7 @@ export type Database = {
           is_active?: boolean | null
           name?: string
           price?: number
+          sport_type?: string | null
           time_from?: string | null
           time_to?: string | null
           type?: string
@@ -2504,6 +3483,539 @@ export type Database = {
             columns: ["venue_id"]
             isOneToOne: false
             referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      push_subscriptions: {
+        Row: {
+          auth: string
+          created_at: string | null
+          endpoint: string
+          id: string
+          p256dh: string
+          user_id: string
+          venue_id: string | null
+        }
+        Insert: {
+          auth: string
+          created_at?: string | null
+          endpoint: string
+          id?: string
+          p256dh: string
+          user_id: string
+          venue_id?: string | null
+        }
+        Update: {
+          auth?: string
+          created_at?: string | null
+          endpoint?: string
+          id?: string
+          p256dh?: string
+          user_id?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "push_subscriptions_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      score_events: {
+        Row: {
+          created_at: string
+          event_type: string
+          id: string
+          match_id: string | null
+          message: string | null
+          payload: Json
+          priority: number
+          score_session_id: string
+          title: string
+          venue_court_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_type: string
+          id?: string
+          match_id?: string | null
+          message?: string | null
+          payload?: Json
+          priority?: number
+          score_session_id: string
+          title: string
+          venue_court_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_type?: string
+          id?: string
+          match_id?: string | null
+          message?: string | null
+          payload?: Json
+          priority?: number
+          score_session_id?: string
+          title?: string
+          venue_court_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "score_events_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "score_matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_events_score_session_id_fkey"
+            columns: ["score_session_id"]
+            isOneToOne: false
+            referencedRelation: "score_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_events_venue_court_id_fkey"
+            columns: ["venue_court_id"]
+            isOneToOne: false
+            referencedRelation: "venue_courts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      score_matches: {
+        Row: {
+          best_of_legs: number
+          checkout_rule: string
+          completed_at: string | null
+          created_at: string
+          current_leg: number
+          current_player: number
+          display_device_id: string | null
+          event_id: string | null
+          game_type: string
+          id: string
+          in_rule: string
+          last_event_type: string | null
+          last_score: number | null
+          leg_starting_player: number
+          match_number: number
+          match_type: string
+          metadata: Json
+          player_slots: Json
+          player1_id: string | null
+          player1_legs: number
+          player1_name: string
+          player1_remaining: number
+          player2_id: string | null
+          player2_legs: number
+          player2_name: string
+          player2_remaining: number
+          round_label: string | null
+          score_session_id: string
+          started_at: string | null
+          starting_player: number
+          status: string
+          target_score: number
+          updated_at: string
+          venue_court_id: string | null
+          venue_id: string
+          winner_name: string | null
+          winner_player_id: string | null
+        }
+        Insert: {
+          best_of_legs?: number
+          checkout_rule?: string
+          completed_at?: string | null
+          created_at?: string
+          current_leg?: number
+          current_player?: number
+          display_device_id?: string | null
+          event_id?: string | null
+          game_type?: string
+          id?: string
+          in_rule?: string
+          last_event_type?: string | null
+          last_score?: number | null
+          leg_starting_player?: number
+          match_number?: number
+          match_type?: string
+          metadata?: Json
+          player_slots?: Json
+          player1_id?: string | null
+          player1_legs?: number
+          player1_name: string
+          player1_remaining?: number
+          player2_id?: string | null
+          player2_legs?: number
+          player2_name: string
+          player2_remaining?: number
+          round_label?: string | null
+          score_session_id: string
+          started_at?: string | null
+          starting_player?: number
+          status?: string
+          target_score?: number
+          updated_at?: string
+          venue_court_id?: string | null
+          venue_id: string
+          winner_name?: string | null
+          winner_player_id?: string | null
+        }
+        Update: {
+          best_of_legs?: number
+          checkout_rule?: string
+          completed_at?: string | null
+          created_at?: string
+          current_leg?: number
+          current_player?: number
+          display_device_id?: string | null
+          event_id?: string | null
+          game_type?: string
+          id?: string
+          in_rule?: string
+          last_event_type?: string | null
+          last_score?: number | null
+          leg_starting_player?: number
+          match_number?: number
+          match_type?: string
+          metadata?: Json
+          player_slots?: Json
+          player1_id?: string | null
+          player1_legs?: number
+          player1_name?: string
+          player1_remaining?: number
+          player2_id?: string | null
+          player2_legs?: number
+          player2_name?: string
+          player2_remaining?: number
+          round_label?: string | null
+          score_session_id?: string
+          started_at?: string | null
+          starting_player?: number
+          status?: string
+          target_score?: number
+          updated_at?: string
+          venue_court_id?: string | null
+          venue_id?: string
+          winner_name?: string | null
+          winner_player_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "score_matches_display_device_id_fkey"
+            columns: ["display_device_id"]
+            isOneToOne: false
+            referencedRelation: "display_devices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_matches_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_matches_player1_id_fkey"
+            columns: ["player1_id"]
+            isOneToOne: false
+            referencedRelation: "score_players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_matches_player2_id_fkey"
+            columns: ["player2_id"]
+            isOneToOne: false
+            referencedRelation: "score_players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_matches_score_session_id_fkey"
+            columns: ["score_session_id"]
+            isOneToOne: false
+            referencedRelation: "score_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_matches_venue_court_id_fkey"
+            columns: ["venue_court_id"]
+            isOneToOne: false
+            referencedRelation: "venue_courts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_matches_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_matches_winner_player_id_fkey"
+            columns: ["winner_player_id"]
+            isOneToOne: false
+            referencedRelation: "score_players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      score_player_links: {
+        Row: {
+          auth_user_id: string
+          avatar_url: string | null
+          created_at: string
+          display_device_id: string
+          display_name: string
+          expires_at: string
+          id: string
+          setup_id: string
+          slot_number: number
+          updated_at: string
+          venue_id: string
+        }
+        Insert: {
+          auth_user_id: string
+          avatar_url?: string | null
+          created_at?: string
+          display_device_id: string
+          display_name: string
+          expires_at?: string
+          id?: string
+          setup_id: string
+          slot_number: number
+          updated_at?: string
+          venue_id: string
+        }
+        Update: {
+          auth_user_id?: string
+          avatar_url?: string | null
+          created_at?: string
+          display_device_id?: string
+          display_name?: string
+          expires_at?: string
+          id?: string
+          setup_id?: string
+          slot_number?: number
+          updated_at?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "score_player_links_display_device_id_fkey"
+            columns: ["display_device_id"]
+            isOneToOne: false
+            referencedRelation: "display_devices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_player_links_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      score_players: {
+        Row: {
+          auth_user_id: string | null
+          created_at: string
+          display_name: string
+          id: string
+          score_session_id: string
+          seed: number | null
+        }
+        Insert: {
+          auth_user_id?: string | null
+          created_at?: string
+          display_name: string
+          id?: string
+          score_session_id: string
+          seed?: number | null
+        }
+        Update: {
+          auth_user_id?: string | null
+          created_at?: string
+          display_name?: string
+          id?: string
+          score_session_id?: string
+          seed?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "score_players_score_session_id_fkey"
+            columns: ["score_session_id"]
+            isOneToOne: false
+            referencedRelation: "score_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      score_sessions: {
+        Row: {
+          best_of_legs: number
+          created_at: string
+          created_by: string | null
+          created_from_device_id: string | null
+          ended_at: string | null
+          event_id: string | null
+          game_type: string
+          id: string
+          name: string
+          session_type: string
+          settings: Json
+          sport_type: string
+          started_at: string | null
+          status: string
+          updated_at: string
+          venue_id: string
+        }
+        Insert: {
+          best_of_legs?: number
+          created_at?: string
+          created_by?: string | null
+          created_from_device_id?: string | null
+          ended_at?: string | null
+          event_id?: string | null
+          game_type?: string
+          id?: string
+          name?: string
+          session_type?: string
+          settings?: Json
+          sport_type?: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+          venue_id: string
+        }
+        Update: {
+          best_of_legs?: number
+          created_at?: string
+          created_by?: string | null
+          created_from_device_id?: string | null
+          ended_at?: string | null
+          event_id?: string | null
+          game_type?: string
+          id?: string
+          name?: string
+          session_type?: string
+          settings?: Json
+          sport_type?: string
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "score_sessions_created_from_device_id_fkey"
+            columns: ["created_from_device_id"]
+            isOneToOne: false
+            referencedRelation: "display_devices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_sessions_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_sessions_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      score_turns: {
+        Row: {
+          created_at: string
+          darts_used: number
+          entered_score: number | null
+          id: string
+          in_opened: boolean
+          is_bust: boolean
+          is_checkout: boolean
+          leg_number: number
+          match_id: string
+          player_id: string | null
+          player_number: number
+          remaining_after: number
+          remaining_before: number
+          score: number
+          score_session_id: string
+          venue_court_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          darts_used?: number
+          entered_score?: number | null
+          id?: string
+          in_opened?: boolean
+          is_bust?: boolean
+          is_checkout?: boolean
+          leg_number: number
+          match_id: string
+          player_id?: string | null
+          player_number: number
+          remaining_after: number
+          remaining_before: number
+          score: number
+          score_session_id: string
+          venue_court_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          darts_used?: number
+          entered_score?: number | null
+          id?: string
+          in_opened?: boolean
+          is_bust?: boolean
+          is_checkout?: boolean
+          leg_number?: number
+          match_id?: string
+          player_id?: string | null
+          player_number?: number
+          remaining_after?: number
+          remaining_before?: number
+          score?: number
+          score_session_id?: string
+          venue_court_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "score_turns_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "score_matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_turns_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "score_players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_turns_score_session_id_fkey"
+            columns: ["score_session_id"]
+            isOneToOne: false
+            referencedRelation: "score_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "score_turns_venue_court_id_fkey"
+            columns: ["venue_court_id"]
+            isOneToOne: false
+            referencedRelation: "venue_courts"
             referencedColumns: ["id"]
           },
         ]
@@ -2593,6 +4105,72 @@ export type Database = {
             columns: ["event_id"]
             isOneToOne: false
             referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      session_registrations: {
+        Row: {
+          activity_session_id: string
+          created_at: string
+          id: string
+          metadata: Json
+          price_paid_sek: number
+          registered_at: string
+          session_date: string
+          source_id: string | null
+          source_type: string | null
+          status: string
+          stripe_session_id: string | null
+          updated_at: string
+          user_id: string
+          venue_id: string
+        }
+        Insert: {
+          activity_session_id: string
+          created_at?: string
+          id?: string
+          metadata?: Json
+          price_paid_sek?: number
+          registered_at?: string
+          session_date: string
+          source_id?: string | null
+          source_type?: string | null
+          status?: string
+          stripe_session_id?: string | null
+          updated_at?: string
+          user_id: string
+          venue_id: string
+        }
+        Update: {
+          activity_session_id?: string
+          created_at?: string
+          id?: string
+          metadata?: Json
+          price_paid_sek?: number
+          registered_at?: string
+          session_date?: string
+          source_id?: string | null
+          source_type?: string | null
+          status?: string
+          stripe_session_id?: string | null
+          updated_at?: string
+          user_id?: string
+          venue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "session_registrations_activity_session_id_fkey"
+            columns: ["activity_session_id"]
+            isOneToOne: false
+            referencedRelation: "activity_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "session_registrations_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
             referencedColumns: ["id"]
           },
         ]
@@ -2957,6 +4535,11 @@ export type Database = {
           created_at: string | null
           description: string | null
           email: string | null
+          event_plan_share_token: string | null
+          group_booking_image_url: string | null
+          group_booking_intro: string | null
+          group_booking_notes: string | null
+          group_booking_title: string | null
           id: string
           is_public: boolean | null
           latitude: number | null
@@ -2981,6 +4564,11 @@ export type Database = {
           created_at?: string | null
           description?: string | null
           email?: string | null
+          event_plan_share_token?: string | null
+          group_booking_image_url?: string | null
+          group_booking_intro?: string | null
+          group_booking_notes?: string | null
+          group_booking_title?: string | null
           id?: string
           is_public?: boolean | null
           latitude?: number | null
@@ -3005,6 +4593,11 @@ export type Database = {
           created_at?: string | null
           description?: string | null
           email?: string | null
+          event_plan_share_token?: string | null
+          group_booking_image_url?: string | null
+          group_booking_intro?: string | null
+          group_booking_notes?: string | null
+          group_booking_title?: string | null
           id?: string
           is_public?: boolean | null
           latitude?: number | null
@@ -3049,6 +4642,80 @@ export type Database = {
       is_venue_member: {
         Args: { _user_id: string; _venue_id: string }
         Returns: boolean
+      }
+      join_chat_room: {
+        Args: { p_room_id: string }
+        Returns: {
+          created_at: string | null
+          emoji: string | null
+          id: string
+          is_public: boolean
+          resource_id: string | null
+          room_type: string
+          session_date: string | null
+          subtitle: string | null
+          title: string
+          updated_at: string | null
+          venue_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "chat_rooms"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      upsert_daily_chat_room: {
+        Args: { p_name?: string; p_session_date: string; p_venue_id: string }
+        Returns: {
+          created_at: string | null
+          emoji: string | null
+          id: string
+          is_public: boolean
+          resource_id: string | null
+          room_type: string
+          session_date: string | null
+          subtitle: string | null
+          title: string
+          updated_at: string | null
+          venue_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "chat_rooms"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      upsert_resource_chat_room: {
+        Args: {
+          p_emoji?: string
+          p_is_public?: boolean
+          p_resource_id: string
+          p_room_type: string
+          p_subtitle?: string
+          p_title: string
+          p_venue_id: string
+        }
+        Returns: {
+          created_at: string | null
+          emoji: string | null
+          id: string
+          is_public: boolean
+          resource_id: string | null
+          room_type: string
+          session_date: string | null
+          subtitle: string | null
+          title: string
+          updated_at: string | null
+          venue_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "chat_rooms"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
     }
     Enums: {
