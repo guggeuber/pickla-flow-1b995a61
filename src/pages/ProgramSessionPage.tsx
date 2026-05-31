@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type PointerEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
@@ -28,6 +28,8 @@ const GREEN = "#16a34a";
 const RED = "#e84c61";
 const BORDER = "rgba(15,23,42,0.10)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
+const SHEET_HEIGHT = "68dvh";
+const SHEET_PEEK_PX = 116;
 
 const DAY_NAMES = ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"];
 
@@ -68,6 +70,9 @@ export default function ProgramSessionPage() {
   const { user, loading: authLoading } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [openingChat, setOpeningChat] = useState(false);
+  const [sheetExpanded, setSheetExpanded] = useState(true);
+  const [sheetDragOffset, setSheetDragOffset] = useState<number | null>(null);
+  const sheetDragRef = useRef<{ startY: number; startOffset: number } | null>(null);
 
   const requestedDate = searchParams.get("date");
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -162,6 +167,7 @@ export default function ProgramSessionPage() {
   });
   const memberPrice = pricing.finalPrice;
   const hasDiscount = pricing.hasDiscount;
+  const hasActiveMembership = !!membership?.id;
 
   const activeRegistrations = registrations.filter((r: any) => r.status !== "cancelled");
   const isRegistered = !!user?.id && activeRegistrations.some((r: any) => r.user_id === user.id);
@@ -202,6 +208,57 @@ export default function ProgramSessionPage() {
       value: "Ingår idag",
     },
   ];
+
+  const getCollapsedSheetOffset = () => {
+    if (typeof window === "undefined") return 420;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    return Math.max(Math.round(viewportHeight * 0.68) - SHEET_PEEK_PX, 0);
+  };
+
+  const handleSheetDragStart = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    sheetDragRef.current = {
+      startY: event.clientY,
+      startOffset: sheetExpanded ? 0 : getCollapsedSheetOffset(),
+    };
+    setSheetDragOffset(sheetExpanded ? 0 : getCollapsedSheetOffset());
+  };
+
+  const handleSheetDragMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!sheetDragRef.current) return;
+    const maxOffset = getCollapsedSheetOffset();
+    const nextOffset = Math.min(
+      Math.max(sheetDragRef.current.startOffset + event.clientY - sheetDragRef.current.startY, 0),
+      maxOffset,
+    );
+    setSheetDragOffset(nextOffset);
+  };
+
+  const handleSheetDragEnd = () => {
+    if (!sheetDragRef.current) return;
+    const maxOffset = getCollapsedSheetOffset();
+    const currentOffset = sheetDragOffset ?? (sheetExpanded ? 0 : maxOffset);
+    setSheetExpanded(currentOffset < maxOffset * 0.45);
+    sheetDragRef.current = null;
+    setSheetDragOffset(null);
+  };
+
+  const sheetTransform = sheetDragOffset != null
+    ? `translateY(${sheetDragOffset}px)`
+    : sheetExpanded
+      ? "translateY(0)"
+      : `translateY(calc(${SHEET_HEIGHT} - ${SHEET_PEEK_PX}px))`;
+
+  const handleUpsellClick = (rowKey: string) => {
+    if (rowKey === "access" || rowKey === "unlimited") {
+      navigate(`/membership?v=${venue?.slug || venueSlug}`);
+      return;
+    }
+    if (rowKey === "day") {
+      toast.info("Dagsmedlemskap kommer strax här.");
+    }
+  };
 
   const now = DateTime.now().setZone("Europe/Stockholm");
   const startTime = session?.start_time ? String(session.start_time).slice(0, 5) : "";
@@ -403,16 +460,51 @@ export default function ProgramSessionPage() {
         </section>
 
         <section
-          className="fixed inset-x-0 bottom-0 z-30 mx-auto h-[68dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-[34px] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4"
+          className="fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md overflow-y-auto overscroll-contain rounded-t-[34px] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-0"
           style={{
             background: CARD,
+            height: SHEET_HEIGHT,
             boxShadow: "0 -18px 48px rgba(15,23,42,0.12)",
+            transform: sheetTransform,
+            transition: sheetDragOffset == null ? "transform 280ms cubic-bezier(0.22, 1, 0.36, 1)" : "none",
             WebkitOverflowScrolling: "touch",
           }}
         >
-          <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200" />
+          <div className="sticky top-0 z-10 -mx-4 bg-white px-4 pb-3 pt-4">
+            <div
+              className="mx-auto mb-3 flex h-7 w-24 cursor-grab touch-none items-center justify-center active:cursor-grabbing"
+              onPointerDown={handleSheetDragStart}
+              onPointerMove={handleSheetDragMove}
+              onPointerUp={handleSheetDragEnd}
+              onPointerCancel={handleSheetDragEnd}
+            >
+              <div className="h-1.5 w-14 rounded-full bg-slate-200" />
+            </div>
 
-          <div className="flex items-end justify-between gap-4 px-1 pb-3">
+            {isRegistered ? (
+              <button
+                type="button"
+                onClick={openChat}
+                disabled={openingChat}
+                className="flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
+                style={{ background: GREEN, color: "#fff", fontFamily: FONT_HEADING }}
+              >
+                {openingChat ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar chat</> : <>Gå till chatten <ChevronRight className="h-4 w-4" /></>}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleCheckout}
+                disabled={submitting || spotsLeft === 0}
+                className="flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
+                style={{ background: spotsLeft === 0 ? "#94a3b8" : "#000", color: "#fff", fontFamily: FONT_HEADING }}
+              >
+                {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar anmälan</> : spotsLeft === 0 ? "Fullt" : <>Anmäl mig · {pricing.checkoutLabel}</>}
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-end justify-between gap-4 px-1 pb-3 pt-3">
             <div>
               <h2 className="text-[30px] font-black leading-none text-slate-950" style={{ fontFamily: FONT_HEADING }}>
                 {isRegistered ? "Du är inne" : "Välj access"}
@@ -443,10 +535,15 @@ export default function ProgramSessionPage() {
           <div className="grid gap-2">
             {accessRows.map((row) => {
               const active = selectedAccess === row.key;
+              const isMembershipUpsell = !hasActiveMembership && (row.key === "access" || row.key === "unlimited");
+              const isDayUpsell = !dayAccess && row.key === "day";
+              const isClickableUpsell = isMembershipUpsell || isDayUpsell;
               return (
-                <div
+                <button
                   key={row.key}
-                  className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-[22px] border px-3 py-3"
+                  type="button"
+                  onClick={() => isClickableUpsell && handleUpsellClick(row.key)}
+                  className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-[22px] border px-3 py-3 text-left active:scale-[0.99]"
                   style={{
                     borderColor: active ? "#0f172a" : BORDER,
                     borderWidth: active ? 2 : 1,
@@ -458,13 +555,19 @@ export default function ProgramSessionPage() {
                   </div>
                   <div className="min-w-0">
                     <p className="truncate text-[17px] font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>{row.title}</p>
-                    <p className="truncate text-[13px] font-bold text-slate-500">{row.subtitle}</p>
+                    <p className="truncate text-[13px] font-bold text-slate-500">
+                      {isMembershipUpsell ? "Köp medlemskap och boka billigare" : isDayUpsell ? "Uppgradera till heldag" : row.subtitle}
+                    </p>
                   </div>
                   <div className="text-right">
                     <p className="text-[20px] font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>{row.value}</p>
-                    {row.sale && <p className="text-[13px] font-bold text-slate-400 line-through">{row.sale}</p>}
+                    {isMembershipUpsell ? (
+                      <p className="text-[11px] font-black uppercase tracking-[0.08em] text-emerald-600">Köp</p>
+                    ) : row.sale ? (
+                      <p className="text-[13px] font-bold text-slate-400 line-through">{row.sale}</p>
+                    ) : null}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -490,27 +593,6 @@ export default function ProgramSessionPage() {
             </div>
           </div>
 
-          {isRegistered ? (
-            <button
-              type="button"
-              onClick={openChat}
-              disabled={openingChat}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
-              style={{ background: GREEN, color: "#fff", fontFamily: FONT_HEADING }}
-            >
-              {openingChat ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar chat</> : <>Gå till chatten <ChevronRight className="h-4 w-4" /></>}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleCheckout}
-              disabled={submitting || spotsLeft === 0}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
-              style={{ background: spotsLeft === 0 ? "#94a3b8" : "#000", color: "#fff", fontFamily: FONT_HEADING }}
-            >
-              {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar anmälan</> : spotsLeft === 0 ? "Fullt" : <>Anmäl mig · {pricing.checkoutLabel}</>}
-            </button>
-          )}
         </section>
       </main>
     </div>
