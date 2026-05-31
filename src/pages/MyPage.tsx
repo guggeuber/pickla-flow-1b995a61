@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
@@ -24,6 +24,8 @@ import {
   stripBookingCodesFromText,
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
+
+const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -1124,6 +1126,228 @@ const CARD_BRAND_LABEL: Record<string, string> = {
   discover: "Discover", jcb: "JCB", unionpay: "UnionPay",
 };
 
+type DartRecentMatch = {
+  id: string;
+  target_score?: number;
+  game_type?: string;
+  started_at?: string | null;
+  opponent_names?: string[];
+  won?: boolean;
+  average?: number;
+  high_score?: number;
+  checkout?: number;
+  turns?: number;
+  player1_legs?: number;
+  player2_legs?: number;
+  court?: { name?: string | null } | null;
+};
+
+type DartStats = {
+  matches_played: number;
+  wins: number;
+  average: number;
+  high_score: number;
+  one_eighties: number;
+  checkouts: number;
+  high_checkout: number;
+  last_10_average?: number;
+  current_form?: string[];
+  trend?: Array<{ match_id: string; label: string; date?: string; average: number; high_score: number; checkout: number }>;
+  recent_matches?: DartRecentMatch[];
+};
+
+type DartMatchDetail = {
+  match: DartRecentMatch & { winner_name?: string | null; checkout_rule?: string; in_rule?: string; best_of_legs?: number };
+  player: { number: number; name: string; legs: number };
+  opponents: Array<{ number: number; name: string; legs: number; is_bot?: boolean }>;
+  turns: Array<{
+    id: string;
+    player_number: number;
+    score: number;
+    entered_score?: number;
+    remaining_before: number;
+    remaining_after: number;
+    is_bust?: boolean;
+    is_checkout?: boolean;
+    in_opened?: boolean;
+    leg_number: number;
+  }>;
+  stats: { turns: number; average: number; high_score: number; one_eighties: number; checkouts: number; high_checkout: number };
+  opponent_stats: Array<{ player: { name: string }; turns: number; average: number; high_score: number }>;
+};
+
+function formatDartAverage(value?: number) {
+  return Number(value || 0).toFixed(1);
+}
+
+function DartStatsSection() {
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const { data, isLoading } = useQuery<DartStats>({
+    queryKey: ["my-dart-stats"],
+    queryFn: () => apiGet("api-score", "my-stats"),
+    staleTime: 30000,
+  });
+  const { data: detail, isLoading: detailLoading } = useQuery<DartMatchDetail>({
+    queryKey: ["my-dart-match", selectedMatchId],
+    enabled: !!selectedMatchId,
+    queryFn: () => apiGet("api-score", "my-match", { matchId: selectedMatchId! }),
+  });
+
+  const matches = data?.recent_matches || [];
+  const trend = data?.trend || [];
+  const winRate = data?.matches_played ? Math.round((data.wins / data.matches_played) * 100) : 0;
+
+  return (
+    <motion.div variants={item}>
+      <div className="flex items-center gap-2 mb-2">
+        <Sparkles className="w-4 h-4" style={{ color: BLUE }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Dartstatistik</span>
+      </div>
+      <div className="rounded-2xl overflow-hidden" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 px-4 py-5">
+            <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} />
+            <span className="text-xs" style={{ color: TEXT_MUTED, fontFamily: FONT_MONO }}>hämtar score...</span>
+          </div>
+        ) : !data?.matches_played ? (
+          <div className="px-4 py-5 text-center">
+            <p className="text-xs" style={{ color: TEXT_MUTED }}>Koppla kontot med QR på paddan för att börja samla dartstatistik.</p>
+          </div>
+        ) : (
+          <div className="p-4">
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                ["Matcher", data.matches_played],
+                ["Vinst", `${winRate}%`],
+                ["3-pil", formatDartAverage(data.average)],
+                ["Högsta", data.high_score],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl p-2 text-center" style={{ background: PAGE_BG }}>
+                  <p className="text-lg font-black" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{value}</p>
+                  <p className="text-[9px] uppercase tracking-[0.12em]" style={{ color: TEXT_MUTED }}>{label}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {[
+                ["180", data.one_eighties],
+                ["Checkouts", data.checkouts],
+                ["Högsta ut", data.high_checkout || "-"],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl p-2 text-center" style={{ background: BLUE_LIGHT }}>
+                  <p className="text-base font-black" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{value}</p>
+                  <p className="text-[9px] uppercase tracking-[0.12em]" style={{ color: TEXT_MUTED }}>{label}</p>
+                </div>
+              ))}
+            </div>
+            {trend.length > 1 && (
+              <div className="mt-4 h-36 rounded-xl p-2" style={{ background: PAGE_BG }}>
+                <Suspense fallback={<div className="h-full rounded-xl animate-pulse" style={{ background: CARD_BG }} />}>
+                  <DartStatsChart data={trend} blue={BLUE} green={GREEN} border={CARD_BORDER} />
+                </Suspense>
+              </div>
+            )}
+            <div className="mt-4 flex flex-col gap-2">
+              {matches.slice(0, 6).map((match) => (
+                <button
+                  key={match.id}
+                  onClick={() => setSelectedMatchId(match.id)}
+                  className="rounded-xl p-3 text-left active:scale-[0.98] transition-transform"
+                  style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold truncate" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                        {match.target_score || match.game_type || 501} vs {(match.opponent_names || []).join(", ") || "motståndare"}
+                      </p>
+                      <p className="text-[11px]" style={{ color: TEXT_MUTED }}>
+                        {match.started_at ? new Date(match.started_at).toLocaleDateString("sv-SE", { day: "numeric", month: "short" }) : "Datum saknas"}
+                        {" · "}
+                        {formatDartAverage(match.average)} avg · högsta {match.high_score || 0}
+                      </p>
+                    </div>
+                    <span className="rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: match.won ? GREEN_LIGHT : BLUE_LIGHT, color: match.won ? GREEN : BLUE }}>
+                      {match.won ? "Vinst" : "Match"}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <Drawer open={!!selectedMatchId} onOpenChange={(open) => !open && setSelectedMatchId(null)}>
+        <DrawerContent className="max-h-[90vh]">
+          <div className="mx-auto w-full max-w-md overflow-y-auto px-5 pb-8 pt-4">
+            {detailLoading || !detail ? (
+              <div className="flex items-center justify-center gap-2 py-12">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-sm" style={{ color: TEXT_MUTED }}>hämtar match...</span>
+              </div>
+            ) : (
+              <>
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.16em]" style={{ color: TEXT_MUTED, fontFamily: FONT_MONO }}>Matchdetalj</p>
+                    <h2 className="text-3xl font-black" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                      {detail.match.target_score || detail.match.game_type || 501}
+                    </h2>
+                    <p className="text-xs" style={{ color: TEXT_SECONDARY }}>
+                      Mot {detail.opponents.map((opponent) => opponent.name).join(", ")}
+                    </p>
+                  </div>
+                  <button onClick={() => setSelectedMatchId(null)} className="rounded-full p-2" style={{ background: PAGE_BG }}>
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <StatMini label="3-pil" value={formatDartAverage(detail.stats.average)} />
+                  <StatMini label="Högsta" value={String(detail.stats.high_score)} />
+                  <StatMini label="Checkout" value={detail.stats.high_checkout ? String(detail.stats.high_checkout) : "-"} />
+                </div>
+                <div className="mt-4 rounded-2xl overflow-hidden" style={{ border: `1px solid ${CARD_BORDER}` }}>
+                  {detail.turns.map((turn) => {
+                    const mine = turn.player_number === detail.player.number;
+                    return (
+                      <div key={turn.id} className="grid grid-cols-[44px_1fr_auto] items-center gap-2 px-3 py-2" style={{ borderTop: `1px solid ${CARD_BORDER}`, background: mine ? "#fff" : PAGE_BG }}>
+                        <span className="text-[10px]" style={{ color: TEXT_MUTED }}>L{turn.leg_number}</span>
+                        <div>
+                          <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY }}>
+                            {mine ? detail.player.name : detail.opponents.find((opponent) => opponent.number === turn.player_number)?.name || "Motståndare"}
+                          </p>
+                          <p className="text-[10px]" style={{ color: TEXT_MUTED }}>
+                            {turn.remaining_before} → {turn.remaining_after}
+                            {turn.is_bust ? " · bust" : ""}
+                            {turn.is_checkout ? " · checkout" : ""}
+                            {turn.in_opened ? " · öppnad" : ""}
+                          </p>
+                        </div>
+                        <span className="font-display text-xl font-black" style={{ color: mine ? BLUE : TEXT_PRIMARY }}>
+                          {turn.entered_score ?? turn.score}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </motion.div>
+  );
+}
+
+function StatMini({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl p-3 text-center" style={{ background: PAGE_BG }}>
+      <p className="text-xl font-black" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{value}</p>
+      <p className="text-[9px] uppercase tracking-[0.12em]" style={{ color: TEXT_MUTED }}>{label}</p>
+    </div>
+  );
+}
+
 function WalletSection() {
   const qc = useQueryClient();
   const [addingCard, setAddingCard] = useState(false);
@@ -1704,6 +1928,8 @@ const MyPage = () => {
               </div>
             )}
           </motion.div>
+
+          {!isActivityPage && <DartStatsSection />}
 
           {/* Day passes — directly under bookings */}
           <DayPassSection />

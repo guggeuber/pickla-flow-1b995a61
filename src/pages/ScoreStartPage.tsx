@@ -83,9 +83,12 @@ export default function ScoreStartPage() {
     refetchInterval: 5_000,
   });
 
-  const [bestOfLegs, setBestOfLegs] = useState(1);
-  const [gameType, setGameType] = useState<"301" | "501" | "701">("501");
+  const [matchLengthMode, setMatchLengthMode] = useState<"best_of" | "first_to">("best_of");
+  const [matchLengthValue, setMatchLengthValue] = useState(1);
+  const [targetScore, setTargetScore] = useState(501);
+  const [customTarget, setCustomTarget] = useState("501");
   const [checkoutRule, setCheckoutRule] = useState<"double_out" | "single_out">("double_out");
+  const [inRule, setInRule] = useState<"straight_in" | "double_in">("straight_in");
   const [players, setPlayers] = useState<MatchPlayer[]>([{ name: "" }, { name: "" }]);
   const [soloMode, setSoloMode] = useState(false);
   const [botLevel, setBotLevel] = useState<BotLevel>("social");
@@ -148,9 +151,12 @@ export default function ScoreStartPage() {
   const startMutation = useMutation({
     mutationFn: () => apiPost("api-score", "walk-in", {
       device_token: deviceToken,
-      best_of_legs: bestOfLegs,
-      game_type: gameType,
+      target_score: targetScore,
+      game_type: targetScore === 301 ? "301" : targetScore === 501 ? "501" : "x01",
+      match_length_mode: matchLengthMode,
+      match_length_value: matchLengthValue,
       checkout_rule: checkoutRule,
+      in_rule: inRule,
       court_ids: activeCourt?.id ? [activeCourt.id] : [],
       player_names: normalizedNames,
       player_users: players.map((player) => player.auth_user_id || null),
@@ -240,38 +246,106 @@ export default function ScoreStartPage() {
               <p className="mt-1 font-mono text-sm text-neutral-500">Paddan startar match på sin egen tavla.</p>
             </div>
             <div className="grid grid-cols-3 gap-3">
-              {(["301", "501", "701"] as const).map((game) => (
+              {[301, 501].map((game) => (
                 <button
                   key={game}
-                  onClick={() => setGameType(game)}
+                  onClick={() => {
+                    setTargetScore(game);
+                    setCustomTarget(String(game));
+                  }}
                   className={`rounded-2xl px-4 py-4 font-mono text-sm ${
-                    gameType === game ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+                    targetScore === game ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
                   }`}
                 >
                   {game}
                 </button>
               ))}
+              <label className={`rounded-2xl px-4 py-3 font-mono text-sm ${
+                targetScore !== 301 && targetScore !== 501 ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+              }`}>
+                <span className="block text-[10px] uppercase tracking-[0.12em] opacity-60">Egen</span>
+                <input
+                  value={customTarget}
+                  inputMode="numeric"
+                  onChange={(event) => {
+                    const next = event.target.value.replace(/\D/g, "").slice(0, 4);
+                    setCustomTarget(next);
+                    const parsed = Number(next);
+                    if (Number.isInteger(parsed) && parsed >= 101 && parsed <= 1001) setTargetScore(parsed);
+                  }}
+                  className="mt-1 w-full bg-transparent text-center font-display text-xl font-black outline-none"
+                />
+              </label>
             </div>
           </div>
 
           <div>
             <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Ben</p>
-            <div className="grid grid-cols-3 gap-3">
-              {[1, 3, 5].map((best) => (
+            <div className="mb-3 grid grid-cols-2 gap-3">
+              {[
+                { value: "best_of" as const, label: "Bäst av" },
+                { value: "first_to" as const, label: "Först till" },
+              ].map((option) => (
                 <button
-                  key={best}
-                  onClick={() => setBestOfLegs(best)}
+                  key={option.value}
+                  onClick={() => {
+                    setMatchLengthMode(option.value);
+                    setMatchLengthValue(1);
+                  }}
                   className={`rounded-2xl px-4 py-4 font-mono text-sm ${
-                    bestOfLegs === best ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+                    matchLengthMode === option.value ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
                   }`}
                 >
-                  Först till {Math.floor(best / 2) + 1}
+                  {option.label}
                 </button>
               ))}
+            </div>
+            <div className="flex items-center justify-between rounded-2xl bg-neutral-100 p-3">
+              <button
+                type="button"
+                onClick={() => setMatchLengthValue((value) => Math.max(1, value - (matchLengthMode === "best_of" ? 2 : 1)))}
+                className="h-12 w-12 rounded-full bg-white font-display text-3xl font-black"
+              >
+                -
+              </button>
+              <div className="text-center">
+                <p className="font-display text-4xl font-black">
+                  {matchLengthValue}
+                </p>
+                <p className="font-mono text-xs text-neutral-500">
+                  {matchLengthMode === "best_of" ? "ben totalt" : "ben krävs"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMatchLengthValue((value) => Math.min(matchLengthMode === "best_of" ? 15 : 8, value + (matchLengthMode === "best_of" ? 2 : 1)))}
+                className="h-12 w-12 rounded-full bg-white font-display text-3xl font-black"
+              >
+                +
+              </button>
             </div>
           </div>
 
           <div>
+            <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Ingång</p>
+            <div className="mb-4 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setInRule("straight_in")}
+                className={`rounded-2xl px-4 py-4 font-mono text-sm ${
+                  inRule === "straight_in" ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+                }`}
+              >
+                Rakt in
+              </button>
+              <button
+                onClick={() => setInRule("double_in")}
+                className={`rounded-2xl px-4 py-4 font-mono text-sm ${
+                  inRule === "double_in" ? "bg-neutral-950 text-white" : "bg-neutral-100 text-neutral-500"
+                }`}
+              >
+                Dubbel in
+              </button>
+            </div>
             <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-neutral-400">Utgång</p>
             <div className="grid grid-cols-2 gap-3">
               <button
@@ -381,7 +455,7 @@ export default function ScoreStartPage() {
             className="flex h-16 w-full items-center justify-center gap-3 rounded-full bg-neutral-950 font-display text-2xl font-black text-white disabled:bg-neutral-300"
           >
             <Radio className="h-6 w-6" />
-            Starta {gameType}
+            Starta {targetScore}
           </button>
         </section>
       </div>

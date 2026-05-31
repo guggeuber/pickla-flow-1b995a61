@@ -22,6 +22,8 @@ type ScoreMatch = {
   game_type?: string;
   target_score?: number;
   checkout_rule?: "single_out" | "double_out";
+  in_rule?: "straight_in" | "double_in";
+  metadata?: Record<string, unknown>;
   player_slots?: PlayerSlot[];
   winner_name?: string | null;
   venue_courts?: { name: string; court_number: number } | null;
@@ -33,6 +35,7 @@ type PlayerSlot = {
   name: string;
   legs: number;
   remaining: number;
+  in_open?: boolean;
   is_bot?: boolean;
   bot_level?: string | null;
 };
@@ -49,9 +52,11 @@ type ScoreTurn = {
   id: string;
   player_number: number;
   score: number;
+  entered_score?: number;
   created_at?: string;
   is_bust?: boolean;
   is_checkout?: boolean;
+  in_opened?: boolean;
   darts_used?: number;
   remaining_before?: number;
   remaining_after?: number;
@@ -78,6 +83,7 @@ export default function ScoreMatchPage() {
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [inOpened, setInOpened] = useState(false);
   const [dismissWinner, setDismissWinner] = useState(false);
   const [celebration, setCelebration] = useState<{ tone: "win" | "checkout" | "bust" | "hot"; text: string } | null>(null);
 
@@ -115,24 +121,29 @@ export default function ScoreMatchPage() {
   }, [match]);
   const activePlayer = players.find((player) => player.number === match?.current_player) || players[0];
   const otherPlayers = players.filter((player) => player.number !== activePlayer?.number);
-  const latestTurn = data?.turns?.[0];
   const latestEditableTurn = data?.turns?.find((turn) => !players.find((player) => player.number === turn.player_number)?.is_bot);
   const currentName = activePlayer?.name;
   const currentRemaining = correctionOpen && latestEditableTurn ? latestEditableTurn.remaining_before : activePlayer?.remaining;
   const matchEnded = match?.status === "completed" || match?.status === "cancelled";
+  const needsDoubleIn = match?.in_rule === "double_in" && activePlayer?.in_open !== true && !matchEnded;
   const projected = useMemo(() => {
     if (!match || !input) return null;
     const score = Number(input);
     if (!Number.isInteger(score)) return null;
+    if (needsDoubleIn && !inOpened) return "BUST";
     const after = Number(currentRemaining) - score;
     const doubleOut = match.checkout_rule !== "single_out";
     if (score > Number(currentRemaining) || (doubleOut && after === 1)) return "BUST";
     return after;
-  }, [currentRemaining, input, match]);
+  }, [currentRemaining, inOpened, input, match, needsDoubleIn]);
   const checkoutHint = useMemo(() => {
     if (!match || !currentRemaining || correctionOpen || matchEnded) return null;
     return getCheckoutHint(Number(currentRemaining), match.checkout_rule || "double_out");
   }, [correctionOpen, currentRemaining, match, matchEnded]);
+
+  useEffect(() => {
+    setInOpened(false);
+  }, [activePlayer?.number, matchId]);
 
   const showCelebration = (next: { tone: "win" | "checkout" | "bust" | "hot"; text: string }) => {
     setCelebration(next);
@@ -159,12 +170,15 @@ export default function ScoreMatchPage() {
   const scoreMutation = useMutation({
     mutationFn: (score: number) => apiPost<ScoreResponse>("api-score", "score", {
       match_id: matchId,
+      entered_score: score,
       score,
       darts_used: 3,
+      in_opened: needsDoubleIn && inOpened,
       device_token: deviceToken || undefined,
     }),
     onSuccess: (result) => {
       setInput("");
+      setInOpened(false);
       setDismissWinner(false);
       mergeScoreResult(result);
       if (result.turn?.is_bust) {
@@ -187,12 +201,15 @@ export default function ScoreMatchPage() {
   const correctionMutation = useMutation({
     mutationFn: (score: number) => apiPost<ScoreResponse>("api-score", "correct-last-turn", {
       match_id: matchId,
+      entered_score: score,
       score,
       darts_used: 3,
+      in_opened: needsDoubleIn && inOpened,
       device_token: deviceToken || undefined,
     }),
     onSuccess: (result) => {
       setInput("");
+      setInOpened(false);
       setCorrectionOpen(false);
       setDismissWinner(false);
       mergeScoreResult(result);
@@ -270,8 +287,6 @@ export default function ScoreMatchPage() {
 
   const completed = match.status === "completed";
   const ended = completed || match.status === "cancelled";
-  const quickScores = [26, 41, 45, 60, 81, 85, 100, 140, 180, Number(currentRemaining || 0)]
-    .filter((value, index, list) => value > 0 && list.indexOf(value) === index);
   const stats = computeStats(players, data?.turns || []);
   const winnerStats = stats.find((item) => item.player.name === match.winner_name) || stats[0];
   const showWinner = completed && winnerStats && !correctionOpen && !dismissWinner;
@@ -289,7 +304,7 @@ export default function ScoreMatchPage() {
               {match.venue_courts?.name || "Pickla Score"}
             </p>
             <p className="font-display text-[clamp(1.5rem,4vh,2.3rem)] font-black leading-none">
-              {match.game_type || "501"} · först till {Math.floor(match.best_of_legs / 2) + 1}
+              {match.target_score || match.game_type || "501"} · först till {Math.floor(match.best_of_legs / 2) + 1}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -300,13 +315,6 @@ export default function ScoreMatchPage() {
             >
               <MonitorPlay className="h-5 w-5" />
             </Link>
-            <button
-              onClick={() => undoMutation.mutate()}
-              disabled={undoMutation.isPending || ended}
-              className="rounded-full bg-white/10 p-3 disabled:opacity-30"
-            >
-              <RotateCcw className="h-5 w-5" />
-            </button>
             {!ended && (
               <button
                 onClick={() => {
@@ -355,7 +363,7 @@ export default function ScoreMatchPage() {
                 <div>
                   <p className="font-mono text-xs uppercase tracking-[0.2em] text-white/35">Leg {match.current_leg}</p>
                   <p className="mt-0.5 font-display text-[clamp(1.15rem,3vh,1.8rem)] font-black leading-none">
-                    {match.checkout_rule === "single_out" ? "enkel ut" : "dubbel ut"}
+                    {match.in_rule === "double_in" ? "dubbel in" : "rakt in"} · {match.checkout_rule === "single_out" ? "enkel ut" : "dubbel ut"}
                   </p>
                 </div>
                 {completed ? (
@@ -369,20 +377,6 @@ export default function ScoreMatchPage() {
                   <p className="font-mono text-[clamp(0.95rem,2.5vh,1.25rem)] text-emerald-300">{currentName} kastar</p>
                 )}
               </div>
-              {latestEditableTurn && (
-                <button
-                  onClick={() => {
-                    setCorrectionOpen(true);
-                    setDismissWinner(true);
-                    setInput(String(latestEditableTurn.score));
-                    setNotice({ tone: "warn", text: `Ändrar senaste: ${latestEditableTurn.score}` });
-                  }}
-                  disabled={correctionMutation.isPending}
-                  className="mt-3 rounded-full bg-white/10 px-4 py-2 font-mono text-xs text-white/70 disabled:opacity-40"
-                >
-                  Ändra senaste score
-                </button>
-              )}
             </div>
           </div>
 
@@ -429,6 +423,45 @@ export default function ScoreMatchPage() {
                   </p>
                 </div>
               )}
+              {needsDoubleIn && !correctionOpen && (
+                <button
+                  type="button"
+                  onClick={() => setInOpened((value) => !value)}
+                  className={`mt-2 w-full rounded-xl px-3 py-3 text-left font-display text-lg font-black ${
+                    inOpened ? "bg-emerald-300 text-neutral-950" : "bg-white text-neutral-500"
+                  }`}
+                >
+                  {inOpened ? "Öppnad - räkna score" : "Dubbel in krävs"}
+                  <span className="block font-mono text-[10px] font-normal opacity-60">
+                    Tryck när första pilen sitter i dubbel.
+                  </span>
+                </button>
+              )}
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => undoMutation.mutate()}
+                  disabled={undoMutation.isPending || ended}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-red-500 px-3 py-3 font-display text-base font-black text-white disabled:opacity-30"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Ångra
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!latestEditableTurn) return;
+                    setCorrectionOpen(true);
+                    setDismissWinner(true);
+                    setInput(String(latestEditableTurn.entered_score ?? latestEditableTurn.score));
+                    setNotice({ tone: "warn", text: `Ändrar senaste: ${latestEditableTurn.entered_score ?? latestEditableTurn.score}` });
+                  }}
+                  disabled={!latestEditableTurn || correctionMutation.isPending}
+                  className="rounded-xl bg-neutral-950 px-3 py-3 font-display text-base font-black text-white disabled:opacity-30"
+                >
+                  Ändra
+                </button>
+              </div>
             </div>
 
             <div className="grid flex-1 grid-cols-3 gap-2">
@@ -445,19 +478,6 @@ export default function ScoreMatchPage() {
                 </button>
               ))}
             </div>
-
-            <div className="mt-2 grid shrink-0 grid-cols-5 gap-1.5">
-              {quickScores.map((quick) => (
-                <button
-                  key={quick}
-                  onClick={() => setInput(String(quick))}
-                  disabled={ended}
-                  className="rounded-lg bg-neutral-100 py-2 font-mono text-xs text-neutral-600 disabled:opacity-30"
-                >
-                  {quick}
-                </button>
-              ))}
-            </div>
           </aside>
         </section>
       </div>
@@ -469,8 +489,8 @@ export default function ScoreMatchPage() {
             if (!latestEditableTurn) return;
             setCorrectionOpen(true);
             setDismissWinner(true);
-            setInput(String(latestEditableTurn.score));
-            setNotice({ tone: "warn", text: `Ändrar senaste: ${latestEditableTurn.score}` });
+            setInput(String(latestEditableTurn.entered_score ?? latestEditableTurn.score));
+            setNotice({ tone: "warn", text: `Ändrar senaste: ${latestEditableTurn.entered_score ?? latestEditableTurn.score}` });
           }}
           onRematch={() => rematchMutation.mutate()}
           onNewMatch={() => navigate(deviceToken ? `/score/start?device=${encodeURIComponent(deviceToken)}` : "/today")}

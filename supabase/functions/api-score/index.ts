@@ -11,14 +11,16 @@ type PlayerSlot = {
   name: string;
   legs: number;
   remaining: number;
+  in_open?: boolean;
   is_bot?: boolean;
   bot_level?: BotLevel | null;
 };
 type BotLevel = 'rookie' | 'social' | 'club' | 'pro';
 
 const INVALID_DART_TOTALS = new Set([179, 178, 176, 175, 173, 172, 169]);
-const GAME_TYPES = new Set(['301', '501', '701']);
+const GAME_TYPES = new Set(['301', '501', '701', 'x01']);
 const CHECKOUT_RULES = new Set(['single_out', 'double_out']);
+const IN_RULES = new Set(['straight_in', 'double_in']);
 const BOT_LEVELS: Record<BotLevel, { mean: number; spread: number; checkout: number; bust: number }> = {
   rookie: { mean: 30, spread: 22, checkout: 0.18, bust: 0.28 },
   social: { mean: 45, spread: 24, checkout: 0.28, bust: 0.22 },
@@ -33,7 +35,23 @@ function cleanName(value: unknown, fallback: string) {
 
 function parseBestOf(value: unknown) {
   const best = Number(value || 1);
-  return [1, 3, 5].includes(best) ? best : 1;
+  return Number.isInteger(best) && best >= 1 && best <= 15 && best % 2 === 1 ? best : 1;
+}
+
+function parseTargetScore(value: unknown, fallback = 501) {
+  const target = Number(value || fallback);
+  return Number.isInteger(target) && target >= 101 && target <= 1001 ? target : fallback;
+}
+
+function parseMatchLength(body: any) {
+  const mode = String(body.match_length_mode || 'best_of') === 'first_to' ? 'first_to' : 'best_of';
+  const raw = Number(body.match_length_value || body.best_of_legs || 1);
+  if (mode === 'first_to') {
+    const required = Number.isInteger(raw) ? Math.min(8, Math.max(1, raw)) : 1;
+    return { mode, value: required, bestOfLegs: required * 2 - 1 };
+  }
+  const bestOf = parseBestOf(raw);
+  return { mode, value: bestOf, bestOfLegs: bestOf };
 }
 
 function parseGameType(value: unknown) {
@@ -42,12 +60,18 @@ function parseGameType(value: unknown) {
 }
 
 function targetScore(gameType: string) {
-  return Number(parseGameType(gameType));
+  const parsed = parseGameType(gameType);
+  return parsed === 'x01' ? 501 : Number(parsed);
 }
 
 function parseCheckoutRule(value: unknown) {
   const rule = String(value || 'double_out');
   return CHECKOUT_RULES.has(rule) ? rule : 'double_out';
+}
+
+function parseInRule(value: unknown) {
+  const rule = String(value || 'straight_in');
+  return IN_RULES.has(rule) ? rule : 'straight_in';
 }
 
 function parseBotLevel(value: unknown): BotLevel {
@@ -134,6 +158,7 @@ function slotsFromMatch(match: MatchRow): PlayerSlot[] {
       name: cleanName(slot.name, `Spelare ${index + 1}`),
       legs: Number(slot.legs || 0),
       remaining: Number(slot.remaining ?? match.target_score ?? targetScore(match.game_type)),
+      in_open: slot.in_open === true,
       is_bot: slot.is_bot === true,
       bot_level: slot.is_bot === true ? parseBotLevel(slot.bot_level) : null,
     }));
@@ -146,6 +171,7 @@ function slotsFromMatch(match: MatchRow): PlayerSlot[] {
       name: cleanName(match.player1_name, 'Spelare 1'),
       legs: Number(match.player1_legs || 0),
       remaining: Number(match.player1_remaining ?? match.target_score ?? targetScore(match.game_type)),
+      in_open: true,
     },
     {
       number: 2,
@@ -154,6 +180,7 @@ function slotsFromMatch(match: MatchRow): PlayerSlot[] {
       name: cleanName(match.player2_name, 'Spelare 2'),
       legs: Number(match.player2_legs || 0),
       remaining: Number(match.player2_remaining ?? match.target_score ?? targetScore(match.game_type)),
+      in_open: true,
     },
   ];
 }
@@ -272,13 +299,17 @@ async function createScoreEvent(client: any, match: MatchRow, eventType: string,
   });
 }
 
-async function recordTurn(client: any, match: MatchRow, score: number, dartsUsed: number) {
+async function recordTurn(client: any, match: MatchRow, enteredScore: number, dartsUsed: number, inOpened = false) {
   const player = match.current_player;
   const activeSlot = currentSlot(match);
   const before = activeSlot?.remaining ?? match.player1_remaining;
+  const inRule = parseInRule(match.in_rule);
+  const alreadyOpen = inRule !== 'double_in' || activeSlot?.in_open === true;
+  const opensNow = inRule === 'double_in' && !alreadyOpen && inOpened;
+  const score = alreadyOpen || opensNow ? enteredScore : 0;
   const after = before - score;
   const checkoutRule = parseCheckoutRule(match.checkout_rule);
-  const isBust = score > before || (checkoutRule === 'double_out' && after === 1);
+  const isBust = (!alreadyOpen && !opensNow && inRule === 'double_in') || score > before || (checkoutRule === 'double_out' && after === 1);
   const isCheckout = after === 0 && !isBust;
 
   const { data: turn, error: turnErr } = await client
@@ -291,11 +322,13 @@ async function recordTurn(client: any, match: MatchRow, score: number, dartsUsed
       player_number: player,
       player_id: playerIdForNumber(match, player),
       score,
+      entered_score: enteredScore,
       remaining_before: before,
       remaining_after: isBust ? before : Math.max(after, 0),
       is_bust: isBust,
       is_checkout: isCheckout,
       darts_used: dartsUsed,
+      in_opened: opensNow,
     })
     .select('*')
     .single();
@@ -350,7 +383,7 @@ async function playBotTurns(client: any, match: MatchRow) {
   for (let guard = 0; guard < 8 && current.status === 'in_progress'; guard++) {
     const slot = currentSlot(current);
     if (!slot?.is_bot) break;
-    const result = await recordTurn(client, current, botScore(slot, current), 3);
+    const result = await recordTurn(client, current, botScore(slot, current), 3, true);
     turns.push(result.turn);
     current = result.match;
   }
@@ -367,7 +400,10 @@ function applyTurn(state: MatchRow, turn: TurnRow) {
   const before = slot.remaining;
   const after = before - score;
   const checkoutRule = parseCheckoutRule(state.checkout_rule);
-  const isBust = score > before || (checkoutRule === 'double_out' && after === 1);
+  const inRule = parseInRule(state.in_rule);
+  const isOpeningTurn = inRule === 'double_in' && slot.in_open !== true && turn.in_opened === true;
+  if (isOpeningTurn) slot.in_open = true;
+  const isBust = turn.is_bust === true || score > before || (checkoutRule === 'double_out' && after === 1);
   const isCheckout = after === 0 && !isBust;
 
   if (!isBust) {
@@ -386,6 +422,7 @@ function applyTurn(state: MatchRow, turn: TurnRow) {
       state.current_leg += 1;
       slots.forEach((s) => {
         s.remaining = target;
+        s.in_open = inRule !== 'double_in';
       });
       state.leg_starting_player = nextPlayerNumber(state.leg_starting_player, slots.length);
       state.current_player = state.leg_starting_player;
@@ -419,10 +456,12 @@ async function recomputeMatch(client: any, match: MatchRow) {
     leg_starting_player: match.starting_player || 1,
     target_score: match.target_score || targetScore(match.game_type),
     checkout_rule: match.checkout_rule || 'double_out',
+    in_rule: match.in_rule || 'straight_in',
     player_slots: slotsFromMatch(match).map((slot) => ({
       ...slot,
       legs: 0,
       remaining: match.target_score || targetScore(match.game_type),
+      in_open: parseInRule(match.in_rule) !== 'double_in',
     })),
     winner_player_id: null,
     winner_name: null,
@@ -657,7 +696,7 @@ Deno.serve(async (req) => {
 
       const { data: turns, error: turnErr } = await client
         .from('score_turns')
-        .select('id, match_id, player_id, score, is_bust, is_checkout, darts_used, created_at')
+        .select('id, match_id, player_number, player_id, score, entered_score, remaining_before, remaining_after, is_bust, is_checkout, in_opened, darts_used, created_at, leg_number')
         .in('player_id', playerIds)
         .order('created_at', { ascending: false })
         .limit(5000);
@@ -675,7 +714,7 @@ Deno.serve(async (req) => {
       const { data: matches, error: matchErr } = matchIds.length
         ? await client
           .from('score_matches')
-          .select('id, status, winner_player_id, winner_name, game_type, target_score, checkout_rule, best_of_legs, player1_id, player2_id, player1_name, player2_name, player1_legs, player2_legs, player_slots, completed_at, started_at, venue_courts(name, court_number)')
+          .select('id, status, winner_player_id, winner_name, game_type, target_score, checkout_rule, in_rule, best_of_legs, metadata, player1_id, player2_id, player1_name, player2_name, player1_legs, player2_legs, player_slots, completed_at, started_at, venue_courts(name, court_number)')
           .in('id', matchIds)
           .order('started_at', { ascending: false })
           .limit(50)
@@ -688,6 +727,68 @@ Deno.serve(async (req) => {
       const checkouts = turnRows.filter((turn: any) => turn.is_checkout);
       const highCheckout = checkouts.reduce((high: number, turn: any) => Math.max(high, Number(turn.score || 0)), 0);
       const wins = (matches || []).filter((match: any) => playerIds.includes(match.winner_player_id)).length;
+      const turnsByMatch = new Map<string, any[]>();
+      for (const turn of turnRows) {
+        if (!turnsByMatch.has(turn.match_id)) turnsByMatch.set(turn.match_id, []);
+        turnsByMatch.get(turn.match_id)!.push(turn);
+      }
+      const matchSummaries = (matches || []).map((match: any) => {
+        const matchTurns = turnsByMatch.get(match.id) || [];
+        const scoredInMatch = matchTurns.reduce((sum: number, turn: any) => sum + (turn.is_bust ? 0 : Number(turn.score || 0)), 0);
+        const dartsInMatch = matchTurns.reduce((sum: number, turn: any) => sum + Number(turn.darts_used || 3), 0);
+        const high = matchTurns.reduce((max: number, turn: any) => Math.max(max, turn.is_bust ? 0 : Number(turn.score || 0)), 0);
+        const checkout = matchTurns.filter((turn: any) => turn.is_checkout).reduce((max: number, turn: any) => Math.max(max, Number(turn.score || 0)), 0);
+        const slots = Array.isArray(match.player_slots) ? match.player_slots : [];
+        const linkedSlot = slots.find((slot: any) => playerIds.includes(slot.id));
+        const playerName = linkedSlot?.name ||
+          (playerIds.includes(match.player1_id) ? match.player1_name : playerIds.includes(match.player2_id) ? match.player2_name : null);
+        const opponentNames = slots.length
+          ? slots.filter((slot: any) => slot.id !== linkedSlot?.id).map((slot: any) => slot.name).filter(Boolean)
+          : [match.player1_name, match.player2_name].filter((name: string) => name && name !== playerName);
+        return {
+          id: match.id,
+          status: match.status,
+          game_type: match.game_type,
+          target_score: match.target_score,
+          checkout_rule: match.checkout_rule,
+          in_rule: match.in_rule,
+          best_of_legs: match.best_of_legs,
+          metadata: match.metadata || {},
+          started_at: match.started_at,
+          completed_at: match.completed_at,
+          winner_player_id: match.winner_player_id,
+          winner_name: match.winner_name,
+          player_name: playerName,
+          opponent_names: opponentNames,
+          player1_name: match.player1_name,
+          player2_name: match.player2_name,
+          player1_legs: match.player1_legs,
+          player2_legs: match.player2_legs,
+          won: playerIds.includes(match.winner_player_id),
+          average: matchTurns.length ? scoredInMatch / matchTurns.length : 0,
+          high_score: high,
+          checkout,
+          turns: matchTurns.length,
+          darts: dartsInMatch,
+          scored: scoredInMatch,
+          one_eighties: matchTurns.filter((turn: any) => !turn.is_bust && Number(turn.score) === 180).length,
+          court: match.venue_courts || null,
+        };
+      });
+      const completedSummaries = matchSummaries.filter((match: any) => match.status === 'completed' || match.turns > 0);
+      const trend = completedSummaries
+        .slice()
+        .sort((a: any, b: any) => new Date(a.started_at || 0).getTime() - new Date(b.started_at || 0).getTime())
+        .map((match: any, index: number) => ({
+          match_id: match.id,
+          label: `M${index + 1}`,
+          date: match.started_at,
+          average: Number(match.average.toFixed(1)),
+          high_score: match.high_score,
+          checkout: match.checkout,
+        }));
+      const last10 = completedSummaries.slice(0, 10);
+      const bestMatch = completedSummaries.slice().sort((a: any, b: any) => b.average - a.average)[0] || null;
 
       return jsonResponse({
         matches_played: matchIds.length,
@@ -700,36 +801,86 @@ Deno.serve(async (req) => {
         one_eighties: scoredTurns.filter((score: number) => score === 180).length,
         checkouts: checkouts.length,
         high_checkout: highCheckout,
-        recent_matches: (matches || []).slice(0, 10).map((match: any) => {
-          const slots = Array.isArray(match.player_slots) ? match.player_slots : [];
-          const linkedSlot = slots.find((slot: any) => playerIds.includes(slot.id));
-          const playerName = linkedSlot?.name ||
-            (playerIds.includes(match.player1_id) ? match.player1_name : playerIds.includes(match.player2_id) ? match.player2_name : null);
-          const opponentNames = slots.length
-            ? slots.filter((slot: any) => slot.id !== linkedSlot?.id).map((slot: any) => slot.name).filter(Boolean)
-            : [match.player1_name, match.player2_name].filter((name: string) => name && name !== playerName);
-          return {
-            id: match.id,
-            status: match.status,
-            game_type: match.game_type,
-            target_score: match.target_score,
-            checkout_rule: match.checkout_rule,
-            best_of_legs: match.best_of_legs,
-            started_at: match.started_at,
-            completed_at: match.completed_at,
-            winner_player_id: match.winner_player_id,
-            winner_name: match.winner_name,
-            player_name: playerName,
-            opponent_names: opponentNames,
-            player1_name: match.player1_name,
-            player2_name: match.player2_name,
-            player1_legs: match.player1_legs,
-            player2_legs: match.player2_legs,
-            won: playerIds.includes(match.winner_player_id),
-            court: match.venue_courts || null,
-          };
-        }),
+        trend,
+        last_10_average: last10.length ? last10.reduce((sum: number, match: any) => sum + match.average, 0) / last10.length : 0,
+        current_form: last10.slice(0, 5).map((match: any) => match.won ? 'W' : 'L'),
+        best_match: bestMatch,
+        recent_matches: matchSummaries.slice(0, 10),
       }, 200, 20);
+    }
+
+    if (req.method === 'GET' && path === 'my-match') {
+      const { client, userId, error } = await getAuthenticatedClient(req);
+      if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+      const matchId = url.searchParams.get('matchId');
+      if (!matchId) return errorResponse('Missing matchId');
+
+      const { data: players, error: playerErr } = await client
+        .from('score_players')
+        .select('id, display_name')
+        .eq('auth_user_id', userId);
+      if (playerErr) return errorResponse(playerErr.message);
+      const playerIds = (players || []).map((player: any) => player.id);
+      if (!playerIds.length) return errorResponse('Matchen hittades inte', 404);
+
+      const { data: match, error: matchErr } = await client
+        .from('score_matches')
+        .select('*, venue_courts(id, name, court_number, sport_type)')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchErr) return errorResponse(matchErr.message);
+      if (!match) return errorResponse('Matchen hittades inte', 404);
+
+      const slots = slotsFromMatch(match);
+      const playerSlot = slots.find((slot) => slot.id && playerIds.includes(slot.id));
+      if (!playerSlot) return errorResponse('Forbidden', 403);
+
+      const { data: turns, error: turnErr } = await client
+        .from('score_turns')
+        .select('id, match_id, player_number, player_id, score, entered_score, remaining_before, remaining_after, is_bust, is_checkout, in_opened, darts_used, leg_number, created_at')
+        .eq('match_id', matchId)
+        .order('created_at', { ascending: true });
+      if (turnErr) return errorResponse(turnErr.message);
+
+      const allTurns = turns || [];
+      const playerTurns = allTurns.filter((turn: any) => turn.player_id === playerSlot.id);
+      const scoredTurns = playerTurns.map((turn: any) => turn.is_bust ? 0 : Number(turn.score || 0));
+      const scored = scoredTurns.reduce((sum: number, score: number) => sum + score, 0);
+      const darts = playerTurns.reduce((sum: number, turn: any) => sum + Number(turn.darts_used || 3), 0);
+      const checkoutTurns = playerTurns.filter((turn: any) => turn.is_checkout);
+      const stats = {
+        turns: playerTurns.length,
+        darts,
+        scored,
+        average: playerTurns.length ? scored / playerTurns.length : 0,
+        high_score: scoredTurns.reduce((max: number, score: number) => Math.max(max, score), 0),
+        one_eighties: scoredTurns.filter((score: number) => score === 180).length,
+        checkouts: checkoutTurns.length,
+        high_checkout: checkoutTurns.reduce((max: number, turn: any) => Math.max(max, Number(turn.score || 0)), 0),
+      };
+
+      const opponentStats = slots
+        .filter((slot) => slot.number !== playerSlot.number)
+        .map((slot) => {
+          const slotTurns = allTurns.filter((turn: any) => Number(turn.player_number) === slot.number);
+          const scoredSlotTurns = slotTurns.map((turn: any) => turn.is_bust ? 0 : Number(turn.score || 0));
+          return {
+            player: slot,
+            turns: slotTurns.length,
+            average: slotTurns.length ? scoredSlotTurns.reduce((sum: number, score: number) => sum + score, 0) / slotTurns.length : 0,
+            high_score: scoredSlotTurns.reduce((max: number, score: number) => Math.max(max, score), 0),
+          };
+        });
+
+      return jsonResponse({
+        match,
+        player: playerSlot,
+        opponents: slots.filter((slot) => slot.number !== playerSlot.number),
+        turns: allTurns,
+        player_turns: playerTurns,
+        stats,
+        opponent_stats: opponentStats,
+      }, 200, 10);
     }
 
     if (req.method === 'POST' && path === 'walk-in') {
@@ -745,9 +896,11 @@ Deno.serve(async (req) => {
         : defaultCourtId ? [defaultCourtId] : [];
       const courtIds = body.allow_multi_board === true ? requestedCourtIds : defaultCourtId ? [defaultCourtId] : requestedCourtIds.slice(0, 1);
       if (!courtIds.length) return errorResponse('Ingen darttavla vald');
-      const gameType = parseGameType(body.game_type);
-      const target = targetScore(gameType);
+      const target = parseTargetScore(body.target_score, targetScore(String(body.game_type || '501')));
+      const gameType = target === 301 ? '301' : target === 501 ? '501' : target === 701 ? '701' : 'x01';
       const checkoutRule = parseCheckoutRule(body.checkout_rule);
+      const inRule = parseInRule(body.in_rule);
+      const matchLength = parseMatchLength(body);
       const inputNames = Array.isArray(body.player_names)
         ? body.player_names.map((name: unknown, index: number) => cleanName(name, `Spelare ${index + 1}`)).filter(Boolean).slice(0, 4)
         : [];
@@ -776,11 +929,14 @@ Deno.serve(async (req) => {
           name: body.name ? String(body.name).slice(0, 80) : 'Walk-in darts',
           status: 'live',
           game_type: gameType,
-          best_of_legs: parseBestOf(body.best_of_legs),
+          best_of_legs: matchLength.bestOfLegs,
           settings: {
             checkout_rule: checkoutRule,
-            in_rule: 'straight_in',
+            in_rule: inRule,
             player_count: defaultNames.length,
+            target_score: target,
+            match_length_mode: matchLength.mode,
+            match_length_value: matchLength.value,
           },
           created_from_device_id: device.id,
           started_at: new Date().toISOString(),
@@ -829,6 +985,7 @@ Deno.serve(async (req) => {
             name: normalizedNames[playerIndex],
             legs: 0,
             remaining: target,
+            in_open: inRule !== 'double_in',
             is_bot: !!matchBots[playerIndex],
             bot_level: matchBots[playerIndex] ? parseBotLevel(matchBots[playerIndex]?.level) : null,
           });
@@ -851,8 +1008,8 @@ Deno.serve(async (req) => {
             game_type: gameType,
             target_score: target,
             checkout_rule: checkoutRule,
-            in_rule: 'straight_in',
-            best_of_legs: parseBestOf(body.best_of_legs),
+            in_rule: inRule,
+            best_of_legs: matchLength.bestOfLegs,
             player1_remaining: target,
             player2_remaining: target,
             player_slots: playerSlots,
@@ -862,6 +1019,9 @@ Deno.serve(async (req) => {
               started_from_device_token: token,
               player_count: playerSlots.length,
               checkout_rule: checkoutRule,
+              in_rule: inRule,
+              match_length_mode: matchLength.mode,
+              match_length_value: matchLength.value,
               has_bot: playerSlots.some((slot) => slot.is_bot),
             },
           })
@@ -925,7 +1085,7 @@ Deno.serve(async (req) => {
     if (req.method === 'POST' && path === 'score') {
       const body = await req.json();
       const matchId = String(body.match_id || '');
-      const score = Number(body.score);
+      const score = Number(body.entered_score ?? body.score);
       const dartsUsed = Number(body.darts_used || 3);
       if (!matchId) return errorResponse('Missing match_id');
       if (!validScore(score)) return errorResponse('Ogiltig score');
@@ -933,7 +1093,7 @@ Deno.serve(async (req) => {
 
       const match = await assertDeviceCanScore(admin, matchId, body.device_token);
       if (currentSlot(match)?.is_bot) return errorResponse('Botens tur spelas automatiskt');
-      const result = await recordTurn(admin, match, score, dartsUsed);
+      const result = await recordTurn(admin, match, score, dartsUsed, body.in_opened === true);
       const afterBots = await playBotTurns(admin, result.match);
 
       return jsonResponse({ match: afterBots.match, turn: result.turn, bot_turns: afterBots.bot_turns });
@@ -981,6 +1141,7 @@ Deno.serve(async (req) => {
         ...slot,
         legs: 0,
         remaining: target,
+        in_open: parseInRule(match.in_rule) !== 'double_in',
       }));
 
       const { data: latestMatch } = await admin
@@ -1039,7 +1200,7 @@ Deno.serve(async (req) => {
     if (req.method === 'POST' && path === 'correct-last-turn') {
       const body = await req.json();
       const matchId = String(body.match_id || '');
-      const score = Number(body.score);
+      const score = Number(body.entered_score ?? body.score);
       const dartsUsed = Number(body.darts_used || 3);
       if (!matchId) return errorResponse('Missing match_id');
       if (!validScore(score)) return errorResponse('Ogiltig score');
@@ -1072,7 +1233,7 @@ Deno.serve(async (req) => {
       const baseMatch = await recomputeMatch(admin, match);
       if (baseMatch.status === 'completed') return errorResponse('Matchen är redan avslutad');
 
-      const result = await recordTurn(admin, baseMatch, score, dartsUsed);
+      const result = await recordTurn(admin, baseMatch, score, dartsUsed, body.in_opened === true);
       const afterBots = await playBotTurns(admin, result.match);
       await createScoreEvent(admin, afterBots.match, 'CORRECTION', {
         score,
