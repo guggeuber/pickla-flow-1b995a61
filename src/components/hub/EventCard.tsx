@@ -9,6 +9,7 @@ import { DateTime } from "luxon";
 import { useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
+import { activityPriceLabels } from "@/lib/activityPricing";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -67,7 +68,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
     queryFn: async () => {
       const { data } = await supabase
         .from("activity_sessions")
-        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, venue_id")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id")
         .eq("id", eventLookupId)
         .maybeSingle();
       return data;
@@ -103,6 +104,32 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
         .eq("activity_session_id", eventLookupId)
         .eq("session_date", programOccurrenceDate);
       return (data || []).filter((row: any) => row.status !== "cancelled");
+    },
+  });
+
+  const { data: membership } = useQuery({
+    queryKey: ["hub-program-membership", user?.id, programSession?.venue_id],
+    enabled: !!user?.id && !!programSession?.venue_id,
+    staleTime: 30000,
+    queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: programSession!.venue_id }),
+  });
+
+  const { data: dayAccess } = useQuery({
+    queryKey: ["hub-program-day-access", user?.id, programSession?.venue_id, programOccurrenceDate],
+    enabled: !!user?.id && !!programSession?.venue_id && !!programOccurrenceDate,
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("access_entitlements")
+        .select("id")
+        .eq("user_id", user!.id)
+        .eq("venue_id", programSession!.venue_id)
+        .eq("entitlement_type", "day_access")
+        .eq("status", "active")
+        .eq("valid_date", programOccurrenceDate)
+        .limit(1)
+        .maybeSingle();
+      return data;
     },
   });
 
@@ -146,6 +173,12 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
     const capacity = Number(programSession.capacity || 0);
     const spotsLeft = capacity ? Math.max(capacity - programRegistrations.length, 0) : null;
     const isFull = spotsLeft === 0;
+    const pricing = activityPriceLabels({
+      basePrice: Number(programSession.price_sek || 165),
+      productKey: (programSession as any).product_key,
+      membership,
+      hasDayAccess: !!dayAccess,
+    });
     const chatPath = roomId
       ? `/chat/${roomId}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`
       : `/hub${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`;
@@ -223,7 +256,16 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
           <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
               <Ticket style={{ width: 14, height: 14 }} />
-              {programSession.price_sek ? `${programSession.price_sek} kr` : "Gratis"}
+              {pricing.publicChips[0]}
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+              {pricing.publicChips[1]}
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+              {pricing.includedLabel || "Unlimited ingår"}
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+              Dag ingår
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
               <CalendarClock style={{ width: 14, height: 14 }} />
@@ -272,7 +314,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
               }}
             >
               {loading ? <Loader2 style={{ width: 15, height: 15 }} className="animate-spin" /> : null}
-              {isFull ? "Reserv" : programSession.price_sek ? "Köp plats" : "RSVP"}
+              {isFull ? "Reserv" : `Anmäl · ${pricing.checkoutLabel}`}
               {!loading ? <ArrowRight style={{ width: 15, height: 15 }} /> : null}
             </motion.button>
           </div>

@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { activityPriceLabels, formatSek } from "@/lib/activityPricing";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const BG = "#070b1a";
@@ -33,12 +34,6 @@ const BORDER = "rgba(255,255,255,0.18)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 
 const DAY_NAMES = ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"];
-
-const formatSek = (amount: number) =>
-  `${amount.toLocaleString("sv-SE", {
-    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
-    maximumFractionDigits: 2,
-  })} kr`;
 
 function nextOccurrence(session: any, requestedDate?: string | null) {
   if (requestedDate) return DateTime.fromISO(requestedDate, { zone: "Europe/Stockholm" });
@@ -129,6 +124,25 @@ export default function ProgramSessionPage() {
     queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: session!.venue_id }),
   });
 
+  const { data: dayAccess } = useQuery({
+    queryKey: ["program-day-access", user?.id, session?.venue_id, occurrenceDate],
+    enabled: !!user?.id && !!session?.venue_id && !!occurrenceDate,
+    staleTime: 30000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("access_entitlements")
+        .select("id")
+        .eq("user_id", user!.id)
+        .eq("venue_id", session!.venue_id)
+        .eq("entitlement_type", "day_access")
+        .eq("status", "active")
+        .eq("valid_date", occurrenceDate)
+        .limit(1)
+        .maybeSingle();
+      return data;
+    },
+  });
+
   const { data: registrations = [] } = useQuery({
     queryKey: ["program-registrations", session?.id, occurrenceDate],
     enabled: !!session?.id && !!occurrenceDate,
@@ -144,14 +158,14 @@ export default function ProgramSessionPage() {
     },
   });
 
-  const tierPricing = (membership?.tier_pricing || []).find((p: any) => p.product_type === productKey);
-  const memberPrice = (() => {
-    if (!tierPricing) return basePrice;
-    if (tierPricing.fixed_price != null) return Math.round(Number(tierPricing.fixed_price));
-    if (tierPricing.discount_percent) return Math.round(basePrice * (1 - Number(tierPricing.discount_percent) / 100) * 100) / 100;
-    return basePrice;
-  })();
-  const hasDiscount = memberPrice < basePrice;
+  const pricing = activityPriceLabels({
+    basePrice,
+    productKey,
+    membership,
+    hasDayAccess: !!dayAccess,
+  });
+  const memberPrice = pricing.finalPrice;
+  const hasDiscount = pricing.hasDiscount;
 
   const activeRegistrations = registrations.filter((r: any) => r.status !== "cancelled");
   const isRegistered = !!user?.id && activeRegistrations.some((r: any) => r.user_id === user.id);
@@ -354,6 +368,13 @@ export default function ProgramSessionPage() {
           </div>
 
           <div className="mt-4 rounded-2xl p-3" style={{ background: "#f8fafc", border: "1px solid rgba(15,23,42,0.07)" }}>
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {pricing.publicChips.map((chip) => (
+                <span key={chip} className="rounded-full bg-white px-2 py-1 text-[11px] font-black" style={{ color: chip.includes("ingår") ? GREEN : NAVY }}>
+                  {chip}
+                </span>
+              ))}
+            </div>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-sm font-black">
                 <Users className="h-4 w-4" style={{ color: NAVY }} />
@@ -372,15 +393,24 @@ export default function ProgramSessionPage() {
             <div>
               <p className="text-xs font-black uppercase tracking-[0.12em]" style={{ color: MUTED }}>Access</p>
               <p className="mt-1 text-sm font-bold">{product?.name || "Aktivitetsbiljett"}</p>
-              <p className="mt-0.5 text-xs" style={{ color: MUTED }}>{venue?.name || "Pickla"}</p>
+              <p className="mt-0.5 text-xs" style={{ color: MUTED }}>Dagsmedlemskap 199 kr ger hela dagen</p>
             </div>
             <div className="text-right">
               <p className="text-xs font-black uppercase tracking-[0.12em]" style={{ color: MUTED }}>Pris</p>
               <p className="mt-1 text-2xl font-black" style={{ fontFamily: FONT_HEADING, color: hasDiscount ? GREEN : TEXT }}>
                 {hasDiscount && <span className="mr-2 text-sm line-through" style={{ color: MUTED }}>{formatSek(basePrice)}</span>}
-                {formatSek(memberPrice)}
+                {pricing.includedLabel || formatSek(memberPrice)}
               </p>
             </div>
+          </div>
+
+          <div className="mt-4 grid gap-2">
+            {pricing.detailRows.map((row) => (
+              <div key={row.label} className="flex items-center justify-between gap-3 rounded-2xl px-3 py-2 text-xs font-bold" style={{ background: "#f8fafc", color: TEXT }}>
+                <span style={{ color: MUTED }}>{row.label}</span>
+                <span>{row.value}</span>
+              </div>
+            ))}
           </div>
 
           {isRegistered ? (
@@ -401,7 +431,7 @@ export default function ProgramSessionPage() {
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-sm font-black active:scale-[0.98] disabled:opacity-60"
               style={{ background: spotsLeft === 0 ? "#94a3b8" : NAVY, color: "#fff", fontFamily: FONT_HEADING }}
             >
-              {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar anmälan</> : spotsLeft === 0 ? "Fullt" : <>Anmäl mig · {formatSek(memberPrice)}</>}
+              {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar anmälan</> : spotsLeft === 0 ? "Fullt" : <>Anmäl mig · {pricing.checkoutLabel}</>}
             </button>
           )}
         </section>

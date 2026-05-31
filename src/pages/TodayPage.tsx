@@ -12,6 +12,7 @@ import {
   getBookingCourtLabel,
   groupBookingRows,
 } from "@/lib/bookingGroups";
+import { activityPriceLabels } from "@/lib/activityPricing";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
@@ -36,6 +37,8 @@ type FeedItem = {
   category: string;
   status: string;
   spotsLeft?: number | null;
+  priceChips?: string[];
+  availabilityLabel?: string;
   href: string;
   cta: string;
   chatResourceId?: string;
@@ -55,6 +58,8 @@ type SessionRow = {
   start_time: string;
   end_time: string;
   capacity: number | null;
+  price_sek: number | null;
+  product_key: string | null;
 };
 
 type SessionOccurrence = SessionRow & {
@@ -234,7 +239,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const [sessionsRes, eventsRes, bookingsRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")
@@ -299,6 +304,11 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const sessionItems: FeedItem[] = sessionOccurrences.map((session) => {
         const count = registrationCounts.get(`${session.id}:${session.occurrence_date}`) || 0;
         const capacity = Number(session.capacity || 0);
+        const spotsLeft = capacity ? Math.max(capacity - count, 0) : null;
+        const pricing = activityPriceLabels({
+          basePrice: Number(session.price_sek || 165),
+          productKey: session.product_key,
+        });
         return {
           id: `session:${session.id}:${session.occurrence_date}`,
           kind: "session",
@@ -308,7 +318,9 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           endTime: String(session.end_time).slice(0, 5),
           category: session.session_type === "open_play" ? "Open Play" : session.session_type === "group_training" ? "Träning" : session.session_type || "Pass",
           status: capacity && count >= capacity ? "Full" : "Drop-in",
-          spotsLeft: capacity ? Math.max(capacity - count, 0) : null,
+          spotsLeft,
+          priceChips: pricing.publicChips,
+          availabilityLabel: spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : spotsLeft <= 4 ? `Få platser · ${spotsLeft} kvar` : `${spotsLeft} kvar`,
           href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
           cta: capacity && count >= capacity ? "Visa" : "Anmäl",
           chatResourceId: programChatResourceId(session.id, session.occurrence_date),
@@ -369,9 +381,9 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
   const [opening, setOpening] = useState(false);
   const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
   const isPast = !!end && end < now;
-  const meta = item.spotsLeft != null
-    ? item.spotsLeft === 0 ? "Full" : `${item.spotsLeft} kvar`
-    : item.status;
+  const meta = item.availabilityLabel || (item.spotsLeft != null
+    ? item.spotsLeft === 0 ? "Fullt" : `${item.spotsLeft} kvar`
+    : item.status);
   const openItem = async () => {
     if (item.kind === "booking" || !item.chatResourceId || !venueId) {
       navigate(item.href);
@@ -410,7 +422,7 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
       type="button"
       onClick={openItem}
       disabled={opening}
-      className="grid w-full grid-cols-[64px_1fr_auto] items-center gap-2 px-3 py-3 text-left transition-transform active:scale-[0.99]"
+      className="grid w-full grid-cols-[58px_1fr_auto] items-center gap-2 px-3 py-3 text-left transition-transform active:scale-[0.99]"
       style={{
         background: highlight ? GREEN : SOFT,
         color: TEXT,
@@ -420,7 +432,18 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
       }}
     >
       <span className="text-[15px]">{item.startTime}</span>
-      <span className="min-w-0 truncate text-[15px]">{item.title}</span>
+      <span className="min-w-0">
+        <span className="block truncate text-[15px]">{item.title}</span>
+        {item.priceChips && (
+          <span className="mt-1 flex min-w-0 flex-wrap gap-1">
+            {item.priceChips.map((chip) => (
+              <span key={chip} className="rounded-full bg-white/65 px-1.5 py-0.5 text-[9px] font-bold text-black/55">
+                {chip}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
       <span className="rounded-full bg-white/65 px-2 py-1 text-[10px] font-bold text-black/55">
         {opening ? "Öppnar" : meta}
       </span>
