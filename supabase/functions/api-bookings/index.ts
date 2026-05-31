@@ -416,14 +416,17 @@ Deno.serve(async (req) => {
         .eq('is_active', true)
         .maybeSingle();
 
-      if (product?.base_price_sek != null) {
-        baseAmountSek = Number(product.base_price_sek);
-        finalAmountSek = baseAmountSek;
-        meta.base_amount_sek = String(baseAmountSek);
+      if (product) {
         meta.product_key = product.product_key;
         meta.product_kind = product.product_kind;
         meta.session_type = meta.session_type || product.session_type || 'open_play';
         meta.includes_day_access = product.product_kind === 'day_access' || product.product_kind === 'session_with_day_access' ? 'true' : '';
+
+        if (product.base_price_sek != null) {
+          baseAmountSek = Number(product.base_price_sek);
+          finalAmountSek = baseAmountSek;
+          meta.base_amount_sek = String(baseAmountSek);
+        }
       }
 
       const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
@@ -434,11 +437,12 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (activitySession?.venue_id === venue_id && activitySession.price_sek != null) {
-        if (!product) {
-          baseAmountSek = Number(activitySession.price_sek);
-          finalAmountSek = baseAmountSek;
-          meta.base_amount_sek = String(baseAmountSek);
-        }
+        // A scheduled session is the concrete thing being sold, so its price
+        // must override the reusable product baseline (e.g. Fredagsklubben
+        // can share the day_access product but still cost 99 kr).
+        baseAmountSek = Number(activitySession.price_sek);
+        finalAmountSek = baseAmountSek;
+        meta.base_amount_sek = String(baseAmountSek);
         meta.activity_session_id = activitySessionId;
         meta.session_name = meta.session_name || activitySession.name;
         meta.session_type = activitySession.session_type || 'open_play';
