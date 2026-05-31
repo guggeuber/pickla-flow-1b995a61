@@ -361,7 +361,7 @@ export default function ProgramSessionPage() {
       </header>
 
       <main className="relative mx-auto h-[100dvh] w-full max-w-md overflow-hidden">
-        <section className="absolute inset-0 overflow-hidden px-5 pb-[70dvh] pt-[calc(env(safe-area-inset-top,0px)+92px)]">
+        <section className="absolute inset-0 overflow-hidden px-5 pb-[72dvh] pt-[calc(env(safe-area-inset-top,0px)+88px)]">
           <div className="absolute inset-0 opacity-80" style={{
             background: "radial-gradient(circle at 18% 20%, rgba(22,163,74,0.12), transparent 25%), radial-gradient(circle at 86% 18%, rgba(26,31,58,0.10), transparent 28%), linear-gradient(180deg, #fffaf5 0%, #f3eee8 100%)",
           }} />
@@ -369,7 +369,7 @@ export default function ProgramSessionPage() {
             <p className="text-[11px] font-black uppercase tracking-[0.18em]" style={{ color: MUTED, fontFamily: FONT_HEADING }}>
               {session.activity_series?.name || "Pickla program"}
             </p>
-            <h1 className="mt-2 text-[42px] font-black leading-[0.94] tracking-tight text-slate-950" style={{ fontFamily: FONT_HEADING }}>
+            <h1 className="mt-2 text-[38px] font-black leading-[0.94] tracking-tight text-slate-950" style={{ fontFamily: FONT_HEADING }}>
               {session.name}
             </h1>
             <p className="mt-5 flex items-center gap-2 text-[15px] font-black text-slate-800">
@@ -377,7 +377,7 @@ export default function ProgramSessionPage() {
             </p>
           </div>
 
-          <div className="relative mt-8 grid gap-3">
+          <div className="relative mt-6 grid gap-3">
             <div className="ml-auto max-w-[82%] rounded-[24px] bg-white px-4 py-3 shadow-[0_14px_38px_rgba(15,23,42,0.08)]">
               <p className="text-[12px] font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>Live chat</p>
               <p className="mt-1 text-[13px] leading-snug text-slate-500">Någon söker dubbelpartner till passet.</p>
@@ -403,7 +403,7 @@ export default function ProgramSessionPage() {
         </section>
 
         <section
-          className="fixed inset-x-0 bottom-0 z-30 mx-auto max-h-[64dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-[34px] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4"
+          className="fixed inset-x-0 bottom-0 z-30 mx-auto h-[68dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-[34px] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4"
           style={{
             background: CARD,
             boxShadow: "0 -18px 48px rgba(15,23,42,0.12)",
