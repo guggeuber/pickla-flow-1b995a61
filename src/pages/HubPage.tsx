@@ -145,6 +145,15 @@ function getTodayHoursLabel(openingHours: any[] = []): string {
   return `${formatOpeningTime(today.open_time)}–${formatOpeningTime(today.close_time)}`;
 }
 
+function programChatResourceId(sessionId: string, occurrenceDate?: string | null) {
+  return `activity_session:${sessionId}:${occurrenceDate || "next"}`;
+}
+
+function eventRoomResourceId(event: any) {
+  const isProgramSession = !!event.occurrence_date || !!event.recurrence_days || !!event.activity_series;
+  return isProgramSession ? programChatResourceId(event.id, event.occurrence_date) : event.id;
+}
+
 function getDayLabel(dayOfWeek: number): string {
   return ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"][dayOfWeek] || "";
 }
@@ -744,7 +753,9 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
   const { data: inquiryEvent } = useInquiryEventDetails(room.resource_id, room.room_type === "event" && !!room.resource_id);
   const { data: fallbackActivitySession } = useFallbackActivitySessionForRoom(room, venueId);
-  const actionResourceId = fallbackActivitySession?.id || room.resource_id;
+  const actionResourceId = room.resource_id?.startsWith("activity_session:")
+    ? room.resource_id
+    : fallbackActivitySession?.id || room.resource_id;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const reactions = useRoomReactions(room.id);
   const [contextMsg, setContextMsg] = useState<ChatMessage | null>(null);
@@ -2408,7 +2419,7 @@ function HubList({
   onSelectRoom: (room: ChatRoom) => void;
 }) {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const autoOpenedRef = useRef<string | null>(null);
   const nextSession = botData?.nextSession;
@@ -2423,7 +2434,7 @@ function HubList({
     : "Nästa drop-in kommer snart";
 
   const bookingResourceIds = bookings.map(getBookingChatResourceId).filter(Boolean);
-  const eventResourceIds = events.map((e) => e.id).filter(Boolean);
+  const eventResourceIds = events.map(eventRoomResourceId).filter(Boolean);
   const { data: resourceRoomMap = {} } = useExistingResourceRooms(venueId, [
     ...bookingResourceIds,
     ...eventResourceIds,
@@ -2476,9 +2487,19 @@ function HubList({
 
   const openEventRoom = useCallback(async (event: any) => {
     const isProgramSession = !!event.occurrence_date || !!event.recurrence_days || !!event.activity_series;
+    if (authLoading) return;
+    if (!user?.id) {
+      const redirect = isProgramSession
+        ? `/program/${event.id}?date=${encodeURIComponent(event.occurrence_date || "")}&v=${encodeURIComponent(slug)}`
+        : `/hub?v=${encodeURIComponent(slug)}`;
+      sessionStorage.setItem("pickla_auth_redirect", redirect);
+      navigate(`/auth?redirect=${encodeURIComponent(redirect)}`);
+      return;
+    }
+    const resourceId = eventRoomResourceId(event);
     const { data } = await supabase.rpc("upsert_resource_chat_room", {
       p_venue_id: venueId,
-      p_resource_id: event.id,
+      p_resource_id: resourceId,
       p_room_type: "event",
       p_title: event.display_name || event.name,
       p_subtitle: isProgramSession
@@ -2494,7 +2515,7 @@ function HubList({
     });
 
     if (data?.[0]) onSelectRoom(data[0] as ChatRoom);
-  }, [venueId, onSelectRoom]);
+  }, [authLoading, navigate, onSelectRoom, slug, user?.id, venueId]);
 
   if (directBookingMode) {
     if (!user) {
@@ -2773,7 +2794,7 @@ function HubList({
                   : ev.start_date
                     ? DateTime.fromISO(ev.start_date).toFormat("d MMM", { locale: "sv" })
                   : "Snart";
-                const roomId = resourceRoomMap[ev.id];
+                const roomId = resourceRoomMap[eventRoomResourceId(ev)];
                 const preview = roomId ? previews[roomId] : undefined;
                 const timeLabel = ev.start_time ? `${String(ev.start_time).slice(0, 5)}-${String(ev.end_time || "").slice(0, 5)}` : null;
                 const isProgramSession = !!ev.occurrence_date || !!ev.activity_series;

@@ -29,42 +29,53 @@ interface EventCardProps {
   roomId?: string;
 }
 
+function parseProgramChatResourceId(resourceId: string) {
+  const match = resourceId.match(/^activity_session:([^:]+):([^:]+)$/);
+  if (!match) return null;
+  return { sessionId: match[1], occurrenceDate: match[2] === "next" ? null : match[2] };
+}
+
 export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: EventCardProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const programResource = parseProgramChatResourceId(eventId);
+  const eventLookupId = programResource?.sessionId || eventId;
+  const explicitOccurrenceDate = programResource?.occurrenceDate || null;
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [savedCard, setSavedCard] = useState<{ brand: string; last4: string; id: string } | null>(null);
 
   const { data: event } = useQuery({
-    queryKey: ["hub-event-detail", eventId],
+    queryKey: ["hub-event-detail", eventLookupId],
+    enabled: !programResource,
     staleTime: 60000,
     queryFn: async () => {
       const { data } = await supabase
         .from("events")
         .select("id, name, display_name, description, logo_url, primary_color, start_date, start_time, entry_fee, entry_fee_type, is_drop_in, max_participants, is_public, planning_status, visibility, customer_name, customer_email, customer_phone, expected_participants, partner_notes, resources")
-        .eq("id", eventId)
+        .eq("id", eventLookupId)
         .maybeSingle();
       return data;
     },
   });
 
   const { data: programSession } = useQuery({
-    queryKey: ["hub-program-session-detail", eventId],
+    queryKey: ["hub-program-session-detail", eventLookupId],
     enabled: !event,
     staleTime: 60000,
     queryFn: async () => {
       const { data } = await supabase
         .from("activity_sessions")
         .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, venue_id")
-        .eq("id", eventId)
+        .eq("id", eventLookupId)
         .maybeSingle();
       return data;
     },
   });
 
   const programOccurrenceDate = (() => {
+    if (explicitOccurrenceDate) return explicitOccurrenceDate;
     if (!programSession) return null;
     const now = DateTime.now().setZone("Europe/Stockholm");
     if ((programSession as any).session_date) return String((programSession as any).session_date);
@@ -89,7 +100,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
       const { data } = await supabase
         .from("session_registrations")
         .select("id, status")
-        .eq("activity_session_id", eventId)
+        .eq("activity_session_id", eventLookupId)
         .eq("session_date", programOccurrenceDate);
       return (data || []).filter((row: any) => row.status !== "cancelled");
     },
@@ -153,7 +164,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
         content: `${name} kommer`,
         metadata: {
           channel: "activity_registration",
-          activity_session_id: eventId,
+          activity_session_id: eventLookupId,
           session_date: programOccurrenceDate,
         },
       });
@@ -173,7 +184,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
           venue_id: programSession.venue_id,
           metadata: {
             date: programOccurrenceDate,
-            activity_session_id: eventId,
+            activity_session_id: eventLookupId,
             chat_room_id: roomId || "",
             session_name: programSession.name,
             session_type: programSession.session_type || "open_play",

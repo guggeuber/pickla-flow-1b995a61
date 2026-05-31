@@ -196,6 +196,10 @@ function formatHour(time?: string | null) {
   return time ? String(time).slice(0, 5) : "";
 }
 
+function programChatResourceId(sessionId: string, occurrenceDate: string) {
+  return `activity_session:${sessionId}:${occurrenceDate}`;
+}
+
 function HeroSticker({ guideKey, onClick }: { guideKey: GuideKey; onClick: (key: GuideKey) => void }) {
   const guide = GUIDES[guideKey];
   return (
@@ -307,7 +311,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           spotsLeft: capacity ? Math.max(capacity - count, 0) : null,
           href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
           cta: capacity && count >= capacity ? "Visa" : "Anmäl",
-          chatResourceId: session.id,
+          chatResourceId: programChatResourceId(session.id, session.occurrence_date),
           chatTitle: session.name,
           chatSubtitle: `${session.occurrence_date} · ${String(session.start_time).slice(0, 5)}-${String(session.end_time).slice(0, 5)}`,
           chatEmoji: "📅",

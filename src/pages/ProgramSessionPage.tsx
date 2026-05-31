@@ -65,12 +65,16 @@ function safePath(path: string) {
   return path.startsWith("/") && !path.startsWith("//") ? path : "/hub";
 }
 
+function programChatResourceId(sessionId: string, occurrenceDate: string | null | undefined) {
+  return `activity_session:${sessionId}:${occurrenceDate || "next"}`;
+}
+
 export default function ProgramSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [openingChat, setOpeningChat] = useState(false);
 
@@ -164,8 +168,19 @@ export default function ProgramSessionPage() {
       ? "Imorgon"
       : `${DAY_NAMES[occurrence.weekday % 7]} ${occurrence.toFormat("d MMM", { locale: "sv" })}`;
 
+  const redirectToAuth = () => {
+    const redirect = `${window.location.pathname}${window.location.search}`;
+    sessionStorage.setItem("pickla_auth_redirect", redirect);
+    navigate(`/auth?redirect=${encodeURIComponent(redirect)}`);
+  };
+
   const openChat = async () => {
     if (!session || !venue || openingChat) return;
+    if (authLoading) return;
+    if (!user?.id) {
+      redirectToAuth();
+      return;
+    }
     setOpeningChat(true);
     try {
       const { path } = await ensureProgramChatRoom();
@@ -181,7 +196,7 @@ export default function ProgramSessionPage() {
     if (!session || !venue) throw new Error("Aktiviteten saknas");
     const { data: rooms, error } = await supabase.rpc("upsert_resource_chat_room", {
       p_venue_id: session.venue_id,
-      p_resource_id: session.id,
+      p_resource_id: programChatResourceId(session.id, occurrenceDate),
       p_room_type: "event",
       p_title: session.name,
       p_subtitle: `${dayLabel} · ${startTime}-${endTime}`,
@@ -219,6 +234,11 @@ export default function ProgramSessionPage() {
 
   const handleCheckout = async () => {
     if (!session || !venue || submitting) return;
+    if (authLoading) return;
+    if (!user?.id) {
+      redirectToAuth();
+      return;
+    }
     setSubmitting(true);
     try {
       const { roomId, path: chatPath } = await ensureProgramChatRoom();
