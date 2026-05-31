@@ -1,6 +1,6 @@
 import { useRef, useState, type MouseEvent, type PointerEvent } from "react";
-import { motion } from "framer-motion";
-import { ArrowRight, CalendarClock, Check, Loader2, MessageCircle, Ticket, Users } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowRight, CalendarClock, Check, ChevronDown, Loader2, MessageCircle, Ticket, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
