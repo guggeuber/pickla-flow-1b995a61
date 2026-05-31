@@ -342,7 +342,7 @@ export default function ProgramSessionPage() {
 
   return (
     <div
-      className="min-h-[100dvh]"
+      className="relative h-[100dvh] overflow-hidden"
       style={{
         background: BG,
         color: TEXT,
@@ -350,7 +350,7 @@ export default function ProgramSessionPage() {
         paddingBottom: "env(safe-area-inset-bottom, 0px)",
       }}
     >
-      <header className="fixed left-0 right-0 top-0 z-30 mx-auto flex w-full max-w-md items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)]">
+      <header className="fixed left-0 right-0 top-0 z-40 mx-auto flex w-full max-w-md items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)]">
         <button type="button" onClick={() => navigate(-1)} className="grid h-12 w-12 place-items-center rounded-full bg-white shadow-[0_10px_30px_rgba(15,23,42,0.12)] active:scale-95" aria-label="Tillbaka">
           <ArrowLeft className="h-5 w-5" />
         </button>
@@ -360,8 +360,8 @@ export default function ProgramSessionPage() {
         </button>
       </header>
 
-      <main className="mx-auto min-h-[100dvh] w-full max-w-md">
-        <section className="relative min-h-[48dvh] overflow-hidden px-5 pb-24 pt-[calc(env(safe-area-inset-top,0px)+92px)]">
+      <main className="relative mx-auto h-[100dvh] w-full max-w-md overflow-hidden">
+        <section className="absolute inset-0 overflow-hidden px-5 pb-[70dvh] pt-[calc(env(safe-area-inset-top,0px)+92px)]">
           <div className="absolute inset-0 opacity-80" style={{
             background: "radial-gradient(circle at 18% 20%, rgba(22,163,74,0.12), transparent 25%), radial-gradient(circle at 86% 18%, rgba(26,31,58,0.10), transparent 28%), linear-gradient(180deg, #fffaf5 0%, #f3eee8 100%)",
           }} />
@@ -369,7 +369,7 @@ export default function ProgramSessionPage() {
             <p className="text-[11px] font-black uppercase tracking-[0.18em]" style={{ color: MUTED, fontFamily: FONT_HEADING }}>
               {session.activity_series?.name || "Pickla program"}
             </p>
-            <h1 className="mt-2 text-[48px] font-black leading-[0.92] tracking-tight text-slate-950" style={{ fontFamily: FONT_HEADING }}>
+            <h1 className="mt-2 text-[42px] font-black leading-[0.94] tracking-tight text-slate-950" style={{ fontFamily: FONT_HEADING }}>
               {session.name}
             </h1>
             <p className="mt-5 flex items-center gap-2 text-[15px] font-black text-slate-800">
@@ -402,7 +402,14 @@ export default function ProgramSessionPage() {
           </div>
         </section>
 
-        <section className="-mt-12 rounded-t-[34px] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4" style={{ background: CARD, boxShadow: "0 -18px 48px rgba(15,23,42,0.12)" }}>
+        <section
+          className="fixed inset-x-0 bottom-0 z-30 mx-auto max-h-[64dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-[34px] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4"
+          style={{
+            background: CARD,
+            boxShadow: "0 -18px 48px rgba(15,23,42,0.12)",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
           <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200" />
 
           <div className="flex items-end justify-between gap-4 px-1 pb-3">
