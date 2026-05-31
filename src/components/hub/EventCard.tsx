@@ -273,6 +273,17 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
       if (isRegistered) return;
       handleProgramAction();
     };
+    const handleExpandedPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+      collapsedGestureRef.current = { startY: event.clientY, moved: false, suppressClick: false };
+    };
+    const handleExpandedPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+      const deltaY = event.clientY - collapsedGestureRef.current.startY;
+      if (deltaY > 24) {
+        collapsedGestureRef.current.moved = true;
+        collapsedGestureRef.current.suppressClick = true;
+        setProgramExpanded(false);
+      }
+    };
 
     if (!programExpanded) {
       return (
@@ -286,32 +297,40 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
           style={{
             width: "100%",
             border: "none",
-            borderRadius: "24px 24px 0 0",
+            borderRadius: "20px 20px 0 0",
             background: isRegistered ? "#dcfce7" : isFull ? "#e2e8f0" : "#12e77a",
             color: isRegistered ? "#15803d" : isFull ? "#334155" : "#020617",
-            padding: "18px 18px 20px",
+            padding: "8px 16px 15px",
             fontFamily: FONT_HEADING,
-            fontSize: 22,
+            fontSize: 20,
             fontWeight: 950,
             lineHeight: 1,
             textAlign: "center",
             cursor: isRegistered ? "default" : "pointer",
-            boxShadow: "0 -8px 28px rgba(17,24,39,0.08)",
+            boxShadow: "0 -4px 18px rgba(17,24,39,0.06)",
             touchAction: "pan-y",
           }}
         >
-          {loading ? (
-            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+          <span style={{ display: "grid", justifyItems: "center", gap: 8 }}>
+            <span style={{ display: "grid", justifyItems: "center", gap: 3 }}>
+              <span style={{ width: 38, height: 3, borderRadius: 999, background: "rgba(2,6,23,0.28)" }} />
+              <span style={{ width: 26, height: 3, borderRadius: 999, background: "rgba(2,6,23,0.20)" }} />
+            </span>
+            <span>
+              {loading ? (
+                <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
               <Loader2 style={{ width: 20, height: 20 }} className="animate-spin" />
               Öppnar
+                </span>
+              ) : isRegistered ? (
+                "Anmäld"
+              ) : isFull ? (
+                "Fullt"
+              ) : (
+                `Anmäl mig · ${pricing.checkoutLabel}`
+              )}
             </span>
-          ) : isRegistered ? (
-            "Anmäld"
-          ) : isFull ? (
-            "Fullt"
-          ) : (
-            `Anmäl mig · ${pricing.checkoutLabel}`
-          )}
+          </span>
         </motion.button>
       );
     }
@@ -319,15 +338,22 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
     return (
       <motion.div
         onClick={() => setProgramExpanded((open) => !open)}
+        onPointerDown={handleExpandedPointerDown}
+        onPointerMove={handleExpandedPointerMove}
         style={{
           background: "rgba(255,255,255,0.96)",
           border: "1px solid rgba(15,23,42,0.10)",
-          borderRadius: 24,
+          borderRadius: "22px 22px 0 0",
           overflow: "hidden",
-          boxShadow: "0 -6px 28px rgba(17,24,39,0.10)",
+          boxShadow: "0 -4px 18px rgba(17,24,39,0.08)",
+          touchAction: "pan-y",
         }}
       >
         <div style={{ padding: programExpanded ? 14 : 12 }}>
+          <div style={{ display: "grid", justifyItems: "center", gap: 3, marginBottom: 10 }}>
+            <span style={{ width: 38, height: 3, borderRadius: 999, background: "rgba(15,23,42,0.18)" }} />
+            <span style={{ width: 26, height: 3, borderRadius: 999, background: "rgba(15,23,42,0.12)" }} />
+          </div>
           <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <Ticket style={{ width: 14, height: 14 }} />

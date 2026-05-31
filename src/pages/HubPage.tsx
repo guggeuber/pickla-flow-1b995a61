@@ -1084,9 +1084,8 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
       {room.room_type === "event" && actionResourceId && !isInquiryEvent && (
         <div
           style={{
-            padding: "8px 12px 6px",
-            borderTop: `1px solid ${HUB_BORDER}`,
-            background: HUB_BG,
+            padding: "0 10px",
+            background: "transparent",
             flexShrink: 0,
           }}
         >
@@ -1104,7 +1103,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
         <div
           style={{
             flexShrink: 0,
-            borderTop: `1px solid ${HUB_BORDER}`,
+            borderTop: room.room_type === "event" && actionResourceId && !isInquiryEvent ? "none" : `1px solid ${HUB_BORDER}`,
             background: HUB_CARD,
             paddingBottom: "env(safe-area-inset-bottom, 0px)",
           }}
