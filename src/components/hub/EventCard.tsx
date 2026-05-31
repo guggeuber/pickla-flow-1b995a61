@@ -9,7 +9,7 @@ import { DateTime } from "luxon";
 import { useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
-import { activityPriceLabels } from "@/lib/activityPricing";
+import { activityPriceLabels, hasActiveMembership } from "@/lib/activityPricing";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -45,6 +45,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [programExpanded, setProgramExpanded] = useState(false);
   const [savedCard, setSavedCard] = useState<{ brand: string; last4: string; id: string } | null>(null);
 
   const { data: event } = useQuery({
@@ -100,7 +101,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
     queryFn: async () => {
       const { data } = await supabase
         .from("session_registrations")
-        .select("id, status")
+        .select("id, user_id, status")
         .eq("activity_session_id", eventLookupId)
         .eq("session_date", programOccurrenceDate);
       return (data || []).filter((row: any) => row.status !== "cancelled");
@@ -179,6 +180,8 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
       membership,
       hasDayAccess: !!dayAccess,
     });
+    const userHasMembership = hasActiveMembership(membership);
+    const isRegistered = success || (!!user?.id && programRegistrations.some((row: any) => row.user_id === user.id));
     const chatPath = roomId
       ? `/chat/${roomId}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`
       : `/hub${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`;
@@ -240,44 +243,53 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
         setLoading(false);
       }
     };
+    const handleProgramUpsell = (label: string) => {
+      if ((label.includes("Access") || label.includes("Unlimited")) && !userHasMembership) {
+        navigate(`/membership${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`);
+        return;
+      }
+      if (label.includes("Dagsmedlemskap") && !dayAccess) {
+        toast.info("Dagsmedlemskap kommer strax här.");
+      }
+    };
 
     return (
       <motion.div
+        onClick={() => setProgramExpanded((open) => !open)}
         style={{
           background: "rgba(255,255,255,0.96)",
           border: "1px solid rgba(15,23,42,0.10)",
-          borderRadius: 22,
+          borderRadius: 24,
           overflow: "hidden",
-          marginBottom: 4,
-          boxShadow: "0 10px 30px rgba(17,24,39,0.10)",
+          boxShadow: "0 -6px 28px rgba(17,24,39,0.10)",
         }}
       >
-        <div style={{ padding: 12 }}>
+        <div style={{ padding: programExpanded ? 14 : 12 }}>
           <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <Ticket style={{ width: 14, height: 14 }} />
               {pricing.publicChips[0]}
             </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               {pricing.publicChips[1]}
             </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               {pricing.includedLabel || "Unlimited ingår"}
             </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               Dag ingår
             </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <CalendarClock style={{ width: 14, height: 14 }} />
               {sessionType}{timeStr ? ` · ${timeStr}` : ""}
             </span>
             {capacity ? (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: spotsLeft === 0 ? "#fff1f2" : "#f0fdf4", border: `1px solid ${spotsLeft === 0 ? "rgba(225,29,72,0.14)" : "rgba(34,197,94,0.16)"}`, color: spotsLeft === 0 ? "#be123c" : "#15803d", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: spotsLeft === 0 ? "#fff1f2" : "#f0fdf4", border: `1px solid ${spotsLeft === 0 ? "rgba(225,29,72,0.14)" : "rgba(34,197,94,0.16)"}`, color: spotsLeft === 0 ? "#be123c" : "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
                 <Users style={{ width: 14, height: 14 }} />
                 {spotsLeft === 0 ? "Fullt" : `${spotsLeft} platser kvar`}
               </span>
             ) : null}
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "8px 11px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <MessageCircle style={{ width: 14, height: 14 }} />
               {programRegistrations.length} kommer
             </span>
@@ -289,23 +301,27 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
                 {programSession.name}
               </p>
               <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
-                {isFull ? "Chatta om reservplats" : "Säkra platsen direkt i chatten"}
+                {isRegistered ? "Du är anmäld i chatten" : isFull ? "Chatta om reservplats" : "Säkra platsen direkt i chatten"}
               </p>
             </div>
             <motion.button
               whileTap={{ scale: 0.97 }}
-              onClick={handleProgramAction}
-              disabled={loading}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (isRegistered) return;
+                handleProgramAction();
+              }}
+              disabled={loading || isRegistered}
               style={{
-                background: isFull ? "#e2e8f0" : "#111827",
-                color: isFull ? "#334155" : "#fff",
+                background: isRegistered ? "#dcfce7" : isFull ? "#e2e8f0" : "#111827",
+                color: isRegistered ? "#15803d" : isFull ? "#334155" : "#fff",
                 border: "none",
                 borderRadius: 999,
                 padding: "12px 14px",
                 fontFamily: FONT_HEADING,
                 fontSize: 13,
                 fontWeight: 950,
-                cursor: "pointer",
+                cursor: isRegistered ? "default" : "pointer",
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 8,
@@ -314,10 +330,77 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
               }}
             >
               {loading ? <Loader2 style={{ width: 15, height: 15 }} className="animate-spin" /> : null}
-              {isFull ? "Reserv" : `Anmäl · ${pricing.checkoutLabel}`}
-              {!loading ? <ArrowRight style={{ width: 15, height: 15 }} /> : null}
+              {isRegistered ? "Anmäld" : isFull ? "Reserv" : `Anmäl mig · ${pricing.checkoutLabel}`}
+              {!loading && !isRegistered ? <ArrowRight style={{ width: 15, height: 15 }} /> : null}
             </motion.button>
           </div>
+
+          {programExpanded && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              style={{ marginTop: 12, display: "grid", gap: 8 }}
+            >
+              <div style={{ border: "1px solid rgba(15,23,42,0.08)", borderRadius: 18, background: "#f8fafc", padding: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 900, color: "#0f172a" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <Users style={{ width: 14, height: 14 }} />
+                    {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
+                  </span>
+                  <span style={{ color: spotsLeft === 0 ? "#be123c" : "#16a34a" }}>
+                    {isRegistered ? "Anmäld" : "Live"}
+                  </span>
+                </div>
+              </div>
+
+              {pricing.detailRows.map((row) => {
+                const isMembershipUpsell = !userHasMembership && (row.label.includes("Access") || row.label.includes("Unlimited"));
+                const isDayUpsell = !dayAccess && row.label.includes("Dagsmedlemskap");
+                const clickable = isMembershipUpsell || isDayUpsell;
+                return (
+                  <button
+                    key={row.label}
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (clickable) handleProgramUpsell(row.label);
+                    }}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      alignItems: "center",
+                      gap: 10,
+                      border: "1px solid rgba(15,23,42,0.08)",
+                      background: "#f8fafc",
+                      borderRadius: 18,
+                      padding: "10px 12px",
+                      textAlign: "left",
+                      cursor: clickable ? "pointer" : "default",
+                    }}
+                  >
+                    <span>
+                      <span style={{ display: "block", fontFamily: FONT_HEADING, fontSize: 14, fontWeight: 950, color: "#0f172a" }}>
+                        {row.label}
+                      </span>
+                      {isMembershipUpsell && (
+                        <span style={{ display: "block", marginTop: 1, fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 800, color: "#64748b" }}>
+                          Köp medlemskap och boka billigare
+                        </span>
+                      )}
+                      {isDayUpsell && (
+                        <span style={{ display: "block", marginTop: 1, fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 800, color: "#64748b" }}>
+                          Uppgradera till heldag
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ fontFamily: FONT_HEADING, fontSize: 18, fontWeight: 950, color: "#0f172a" }}>
+                      {row.value}
+                    </span>
+                  </button>
+                );
+              })}
+            </motion.div>
+          )}
         </div>
       </motion.div>
     );

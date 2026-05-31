@@ -999,25 +999,6 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
         )}
       </div>
 
-      {/* Pinned action for activity/event chats */}
-      {room.room_type === "event" && actionResourceId && !isInquiryEvent && (
-        <div
-          style={{
-            padding: "10px 16px 8px",
-            borderBottom: `1px solid ${HUB_BORDER}`,
-            background: HUB_BG,
-            flexShrink: 0,
-          }}
-        >
-          <EventCard
-            eventId={actionResourceId}
-            venueId={venueId}
-            venueSlug={venueSlug}
-            roomId={room.id}
-          />
-        </div>
-      )}
-
       {/* Messages — #1 scroll feel */}
       <div
         style={{
@@ -1098,6 +1079,25 @@ function ChatRoom({ room, venueId, venueSlug, onBack }: ChatRoomProps) {
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Activity action — pinned above the real chat input */}
+      {room.room_type === "event" && actionResourceId && !isInquiryEvent && (
+        <div
+          style={{
+            padding: "8px 12px 6px",
+            borderTop: `1px solid ${HUB_BORDER}`,
+            background: HUB_BG,
+            flexShrink: 0,
+          }}
+        >
+          <EventCard
+            eventId={actionResourceId}
+            venueId={venueId}
+            venueSlug={venueSlug}
+            roomId={room.id}
+          />
+        </div>
+      )}
 
       {/* Input — #3 sticky so it hugs the bottom of the (shrinking) container */}
       {user ? (
