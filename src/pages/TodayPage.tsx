@@ -385,6 +385,11 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
     ? item.spotsLeft === 0 ? "Fullt" : `${item.spotsLeft} kvar`
     : item.status);
   const openItem = async () => {
+    if (item.kind === "session") {
+      navigate(item.href);
+      return;
+    }
+
     if (item.kind === "booking" || !item.chatResourceId || !venueId) {
       navigate(item.href);
       return;
