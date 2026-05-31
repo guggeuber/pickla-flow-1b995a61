@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type PointerEvent } from "react";
+import { useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
@@ -29,7 +29,7 @@ const RED = "#e84c61";
 const BORDER = "rgba(15,23,42,0.10)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const SHEET_HEIGHT = "68dvh";
-const SHEET_PEEK_PX = 116;
+const SHEET_PEEK_PX = 96;
 
 const DAY_NAMES = ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"];
 
@@ -73,6 +73,8 @@ export default function ProgramSessionPage() {
   const [sheetExpanded, setSheetExpanded] = useState(true);
   const [sheetDragOffset, setSheetDragOffset] = useState<number | null>(null);
   const sheetDragRef = useRef<{ startY: number; startOffset: number } | null>(null);
+  const sheetDragMovedRef = useRef(false);
+  const suppressPrimaryClickRef = useRef(false);
 
   const requestedDate = searchParams.get("date");
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -215,9 +217,11 @@ export default function ProgramSessionPage() {
     return Math.max(Math.round(viewportHeight * 0.68) - SHEET_PEEK_PX, 0);
   };
 
-  const handleSheetDragStart = (event: PointerEvent<HTMLDivElement>) => {
+  const handleSheetDragStart = (event: PointerEvent<HTMLElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    sheetDragMovedRef.current = false;
+    suppressPrimaryClickRef.current = false;
     sheetDragRef.current = {
       startY: event.clientY,
       startOffset: sheetExpanded ? 0 : getCollapsedSheetOffset(),
@@ -225,11 +229,13 @@ export default function ProgramSessionPage() {
     setSheetDragOffset(sheetExpanded ? 0 : getCollapsedSheetOffset());
   };
 
-  const handleSheetDragMove = (event: PointerEvent<HTMLDivElement>) => {
+  const handleSheetDragMove = (event: PointerEvent<HTMLElement>) => {
     if (!sheetDragRef.current) return;
+    const deltaY = event.clientY - sheetDragRef.current.startY;
+    if (Math.abs(deltaY) > 8) sheetDragMovedRef.current = true;
     const maxOffset = getCollapsedSheetOffset();
     const nextOffset = Math.min(
-      Math.max(sheetDragRef.current.startOffset + event.clientY - sheetDragRef.current.startY, 0),
+      Math.max(sheetDragRef.current.startOffset + deltaY, 0),
       maxOffset,
     );
     setSheetDragOffset(nextOffset);
@@ -240,6 +246,7 @@ export default function ProgramSessionPage() {
     const maxOffset = getCollapsedSheetOffset();
     const currentOffset = sheetDragOffset ?? (sheetExpanded ? 0 : maxOffset);
     setSheetExpanded(currentOffset < maxOffset * 0.45);
+    suppressPrimaryClickRef.current = sheetDragMovedRef.current;
     sheetDragRef.current = null;
     setSheetDragOffset(null);
   };
@@ -258,6 +265,19 @@ export default function ProgramSessionPage() {
     if (rowKey === "day") {
       toast.info("Dagsmedlemskap kommer strax här.");
     }
+  };
+
+  const handlePrimaryActionClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (suppressPrimaryClickRef.current) {
+      event.preventDefault();
+      suppressPrimaryClickRef.current = false;
+      return;
+    }
+    if (isRegistered) {
+      openChat();
+      return;
+    }
+    handleCheckout();
   };
 
   const now = DateTime.now().setZone("Europe/Stockholm");
@@ -418,7 +438,10 @@ export default function ProgramSessionPage() {
       </header>
 
       <main className="relative mx-auto h-[100dvh] w-full max-w-md overflow-hidden">
-        <section className="absolute inset-0 overflow-hidden px-5 pb-[72dvh] pt-[calc(env(safe-area-inset-top,0px)+88px)]">
+        <section
+          className="absolute inset-0 overflow-hidden px-5 pb-[72dvh] pt-[calc(env(safe-area-inset-top,0px)+88px)]"
+          onClick={openChat}
+        >
           <div className="absolute inset-0 opacity-80" style={{
             background: "radial-gradient(circle at 18% 20%, rgba(22,163,74,0.12), transparent 25%), radial-gradient(circle at 86% 18%, rgba(26,31,58,0.10), transparent 28%), linear-gradient(180deg, #fffaf5 0%, #f3eee8 100%)",
           }} />
@@ -444,7 +467,10 @@ export default function ProgramSessionPage() {
             </div>
             <button
               type="button"
-              onClick={openChat}
+              onClick={(event) => {
+                event.stopPropagation();
+                openChat();
+              }}
               className="ml-auto flex max-w-[86%] items-center gap-3 rounded-[24px] bg-white px-4 py-3 text-left shadow-[0_14px_38px_rgba(15,23,42,0.08)] active:scale-[0.99]"
             >
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-slate-100">
@@ -470,21 +496,23 @@ export default function ProgramSessionPage() {
             WebkitOverflowScrolling: "touch",
           }}
         >
-          <div className="sticky top-0 z-10 -mx-4 bg-white px-4 pb-3 pt-4">
-            <div
-              className="mx-auto mb-3 flex h-7 w-24 cursor-grab touch-none items-center justify-center active:cursor-grabbing"
-              onPointerDown={handleSheetDragStart}
-              onPointerMove={handleSheetDragMove}
-              onPointerUp={handleSheetDragEnd}
-              onPointerCancel={handleSheetDragEnd}
-            >
-              <div className="h-1.5 w-14 rounded-full bg-slate-200" />
-            </div>
+          <div
+            className="sticky top-0 z-10 -mx-4 cursor-grab touch-none bg-white px-4 pb-3 pt-3 active:cursor-grabbing"
+            onPointerDown={handleSheetDragStart}
+            onPointerMove={handleSheetDragMove}
+            onPointerUp={handleSheetDragEnd}
+            onPointerCancel={handleSheetDragEnd}
+          >
+            {sheetExpanded && (
+              <div className="mx-auto mb-3 flex h-7 w-24 items-center justify-center">
+                <div className="h-1.5 w-14 rounded-full bg-slate-200" />
+              </div>
+            )}
 
             {isRegistered ? (
               <button
                 type="button"
-                onClick={openChat}
+                onClick={handlePrimaryActionClick}
                 disabled={openingChat}
                 className="flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
                 style={{ background: GREEN, color: "#fff", fontFamily: FONT_HEADING }}
@@ -494,7 +522,7 @@ export default function ProgramSessionPage() {
             ) : (
               <button
                 type="button"
-                onClick={handleCheckout}
+                onClick={handlePrimaryActionClick}
                 disabled={submitting || spotsLeft === 0}
                 className="flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
                 style={{ background: spotsLeft === 0 ? "#94a3b8" : "#000", color: "#fff", fontFamily: FONT_HEADING }}
