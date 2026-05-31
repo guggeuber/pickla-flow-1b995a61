@@ -9,9 +9,6 @@ import {
   ChevronRight,
   Loader2,
   MessageCircle,
-  Radio,
-  ShieldCheck,
-  Sparkles,
   Ticket,
   Users,
 } from "lucide-react";
@@ -22,15 +19,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { activityPriceLabels, formatSek } from "@/lib/activityPricing";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
-const BG = "#070b1a";
-const CARD = "rgba(255,255,255,0.94)";
+const BG = "#fbf7f2";
+const CARD = "#ffffff";
 const TEXT = "#0f172a";
 const MUTED = "#64748b";
 const NAVY = "#1a1f3a";
 const GREEN = "#16a34a";
 const RED = "#e84c61";
-const PINK = "#e8b4b8";
-const BORDER = "rgba(255,255,255,0.18)";
+const BORDER = "rgba(15,23,42,0.10)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 
 const DAY_NAMES = ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"];
@@ -172,6 +168,40 @@ export default function ProgramSessionPage() {
   const capacity = Number(session?.capacity || 0);
   const spotsLeft = capacity ? Math.max(capacity - activeRegistrations.length, 0) : null;
   const progressPct = capacity ? Math.min(100, Math.round((activeRegistrations.length / capacity) * 100)) : 22;
+  const selectedAccess = pricing.includedLabel?.includes("Unlimited")
+    ? "unlimited"
+    : pricing.includedLabel?.includes("idag")
+      ? "day"
+      : hasDiscount
+        ? "access"
+        : "activity";
+  const accessRows = [
+    {
+      key: "activity",
+      title: "Aktivitetsbiljett",
+      subtitle: "Ett schemalagt pass",
+      value: formatSek(basePrice),
+    },
+    {
+      key: "access",
+      title: "Pickla Access",
+      subtitle: "199 kr/mån · 40% rabatt",
+      value: formatSek(pricing.accessPrice),
+      sale: formatSek(basePrice),
+    },
+    {
+      key: "unlimited",
+      title: "Pickla Unlimited",
+      subtitle: "699 kr/mån · allt Open Play",
+      value: "Ingår",
+    },
+    {
+      key: "day",
+      title: "Dagsmedlemskap",
+      subtitle: "199 kr · full access idag",
+      value: "Ingår idag",
+    },
+  ];
 
   const now = DateTime.now().setZone("Europe/Stockholm");
   const startTime = session?.start_time ? String(session.start_time).slice(0, 5) : "";
@@ -314,103 +344,143 @@ export default function ProgramSessionPage() {
     <div
       className="min-h-[100dvh]"
       style={{
-        background: `linear-gradient(180deg, rgba(7,11,26,0.62) 0%, rgba(7,11,26,0.92) 42%, ${BG} 100%), radial-gradient(circle at 20% 8%, rgba(232,180,184,0.38), transparent 34%), radial-gradient(circle at 86% 22%, rgba(22,163,74,0.18), transparent 30%), ${BG}`,
-        color: "#fff",
+        background: BG,
+        color: TEXT,
         paddingTop: "env(safe-area-inset-top, 0px)",
         paddingBottom: "env(safe-area-inset-bottom, 0px)",
       }}
     >
-      <header className="sticky top-0 z-20 mx-auto flex w-full max-w-md items-center justify-between px-4 pb-3 pt-5 backdrop-blur-xl">
-        <button type="button" onClick={() => navigate(-1)} className="grid h-11 w-11 place-items-center rounded-full bg-white/10 active:scale-95" aria-label="Tillbaka">
+      <header className="fixed left-0 right-0 top-0 z-30 mx-auto flex w-full max-w-md items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)]">
+        <button type="button" onClick={() => navigate(-1)} className="grid h-12 w-12 place-items-center rounded-full bg-white shadow-[0_10px_30px_rgba(15,23,42,0.12)] active:scale-95" aria-label="Tillbaka">
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <img src={picklaLogo} alt="Pickla" className="h-6 w-auto brightness-0 invert" />
-        <button type="button" onClick={openChat} className="grid h-11 w-11 place-items-center rounded-full bg-white/10 active:scale-95" aria-label="Chatta">
+        <img src={picklaLogo} alt="Pickla" className="h-6 w-auto" />
+        <button type="button" onClick={openChat} className="grid h-12 w-12 place-items-center rounded-full bg-white shadow-[0_10px_30px_rgba(15,23,42,0.12)] active:scale-95" aria-label="Chatta">
           {openingChat ? <Loader2 className="h-5 w-5 animate-spin" /> : <MessageCircle className="h-5 w-5" />}
         </button>
       </header>
 
-      <main className="mx-auto flex min-h-[calc(100dvh-72px)] w-full max-w-md flex-col px-4 pb-5">
-        <section className="pt-8">
-          <div className="mb-4 flex items-center gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-black" style={{ background: "rgba(232,76,97,0.95)" }}>
-              <Radio className="h-3.5 w-3.5" /> AKTIVITET
-            </span>
-            <span className="rounded-full bg-white/12 px-3 py-1.5 text-xs font-bold text-white/80">
-              {activeRegistrations.length} anmälda
-            </span>
+      <main className="mx-auto min-h-[100dvh] w-full max-w-md">
+        <section className="relative min-h-[48dvh] overflow-hidden px-5 pb-24 pt-[calc(env(safe-area-inset-top,0px)+92px)]">
+          <div className="absolute inset-0 opacity-80" style={{
+            background: "radial-gradient(circle at 18% 20%, rgba(22,163,74,0.12), transparent 25%), radial-gradient(circle at 86% 18%, rgba(26,31,58,0.10), transparent 28%), linear-gradient(180deg, #fffaf5 0%, #f3eee8 100%)",
+          }} />
+          <div className="relative">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em]" style={{ color: MUTED, fontFamily: FONT_HEADING }}>
+              {session.activity_series?.name || "Pickla program"}
+            </p>
+            <h1 className="mt-2 text-[48px] font-black leading-[0.92] tracking-tight text-slate-950" style={{ fontFamily: FONT_HEADING }}>
+              {session.name}
+            </h1>
+            <p className="mt-5 flex items-center gap-2 text-[15px] font-black text-slate-800">
+              <CalendarDays className="h-4 w-4" /> {dayLabel} · {startTime}-{endTime}
+            </p>
           </div>
 
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-white/62" style={{ fontFamily: FONT_HEADING }}>
-            {session.activity_series?.name || "Pickla program"}
-          </p>
-          <h1 className="mt-2 text-[42px] font-black leading-[0.95] tracking-tight" style={{ fontFamily: FONT_HEADING }}>
-            {session.name}
-          </h1>
-          <p className="mt-4 flex items-center gap-2 text-sm font-bold text-white/78">
-            <CalendarDays className="h-4 w-4" /> {dayLabel} · {startTime}-{endTime}
-          </p>
+          <div className="relative mt-8 grid gap-3">
+            <div className="ml-auto max-w-[82%] rounded-[24px] bg-white px-4 py-3 shadow-[0_14px_38px_rgba(15,23,42,0.08)]">
+              <p className="text-[12px] font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>Live chat</p>
+              <p className="mt-1 text-[13px] leading-snug text-slate-500">Någon söker dubbelpartner till passet.</p>
+            </div>
+            <div className="max-w-[78%] rounded-[24px] bg-slate-950 px-4 py-3 text-white shadow-[0_14px_38px_rgba(15,23,42,0.14)]">
+              <p className="text-[13px] font-bold">{spotsLeft == null ? "Öppet för anmälan" : spotsLeft === 0 ? "Fullt just nu" : `${spotsLeft} platser kvar`}</p>
+            </div>
+            <button
+              type="button"
+              onClick={openChat}
+              className="ml-auto flex max-w-[86%] items-center gap-3 rounded-[24px] bg-white px-4 py-3 text-left shadow-[0_14px_38px_rgba(15,23,42,0.08)] active:scale-[0.99]"
+            >
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-slate-100">
+                <MessageCircle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>Öppna chat</p>
+                <p className="truncate text-sm text-slate-500">Frågor, sena platser och staff updates</p>
+              </div>
+              <ChevronRight className="h-5 w-5 text-slate-400" />
+            </button>
+          </div>
         </section>
 
-        <section className="mt-8 rounded-[28px] p-4 text-left" style={{ background: CARD, color: TEXT, boxShadow: "0 24px 70px rgba(0,0,0,0.26)" }}>
-          <div className="flex items-start justify-between gap-4">
+        <section className="-mt-12 rounded-t-[34px] px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4" style={{ background: CARD, boxShadow: "0 -18px 48px rgba(15,23,42,0.12)" }}>
+          <div className="mx-auto mb-4 h-1.5 w-14 rounded-full bg-slate-200" />
+
+          <div className="flex items-end justify-between gap-4 px-1 pb-3">
             <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.14em]" style={{ color: MUTED, fontFamily: FONT_HEADING }}>
-                Anmälan
-              </p>
-              <h2 className="mt-1 text-2xl font-black leading-tight" style={{ fontFamily: FONT_HEADING }}>
-                {isRegistered ? "Du är inne" : "Ta din plats"}
+              <h2 className="text-[30px] font-black leading-none text-slate-950" style={{ fontFamily: FONT_HEADING }}>
+                {isRegistered ? "Du är inne" : "Välj access"}
               </h2>
+              <p className="mt-2 text-sm font-bold text-slate-500">
+                Aktivitet, dagsmedlemskap eller medlemspris.
+              </p>
             </div>
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl" style={{ background: isRegistered ? "#dcfce7" : "#f1f5f9", color: isRegistered ? GREEN : NAVY }}>
-              {isRegistered ? <CheckCircle2 className="h-6 w-6" /> : <Ticket className="h-6 w-6" />}
+            <div className="text-right">
+              <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Platser</p>
+              <p className="text-lg font-black text-slate-950">{capacity ? `${activeRegistrations.length}/${capacity}` : activeRegistrations.length}</p>
             </div>
           </div>
 
-          <div className="mt-4 rounded-2xl p-3" style={{ background: "#f8fafc", border: "1px solid rgba(15,23,42,0.07)" }}>
-            <div className="mb-3 flex flex-wrap gap-1.5">
-              {pricing.publicChips.map((chip) => (
-                <span key={chip} className="rounded-full bg-white px-2 py-1 text-[11px] font-black" style={{ color: chip.includes("ingår") ? GREEN : NAVY }}>
-                  {chip}
-                </span>
-              ))}
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-sm font-black">
-                <Users className="h-4 w-4" style={{ color: NAVY }} />
-                {capacity ? `${activeRegistrations.length}/${capacity} platser` : `${activeRegistrations.length} anmälda`}
-              </div>
-              <span className="text-xs font-black" style={{ color: spotsLeft === 0 ? RED : GREEN }}>
-                {spotsLeft == null ? "öppet" : spotsLeft === 0 ? "fullt" : `${spotsLeft} kvar`}
+          <div className="mb-4 rounded-[22px] border p-3" style={{ borderColor: BORDER, background: "#f8fafc" }}>
+            <div className="flex items-center justify-between gap-3 text-sm font-black text-slate-950">
+              <span className="flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
               </span>
+              <span style={{ color: spotsLeft === 0 ? RED : GREEN }}>{isRegistered ? "Anmäld" : "Live"}</span>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
               <div className="h-full rounded-full" style={{ width: `${progressPct}%`, background: spotsLeft === 0 ? RED : GREEN }} />
             </div>
           </div>
 
-          <div className="mt-4 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.12em]" style={{ color: MUTED }}>Access</p>
-              <p className="mt-1 text-sm font-bold">{product?.name || "Aktivitetsbiljett"}</p>
-              <p className="mt-0.5 text-xs" style={{ color: MUTED }}>Dagsmedlemskap 199 kr ger hela dagen</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs font-black uppercase tracking-[0.12em]" style={{ color: MUTED }}>Pris</p>
-              <p className="mt-1 text-2xl font-black" style={{ fontFamily: FONT_HEADING, color: hasDiscount ? GREEN : TEXT }}>
-                {hasDiscount && <span className="mr-2 text-sm line-through" style={{ color: MUTED }}>{formatSek(basePrice)}</span>}
-                {pricing.includedLabel || formatSek(memberPrice)}
-              </p>
-            </div>
+          <div className="grid gap-2">
+            {accessRows.map((row) => {
+              const active = selectedAccess === row.key;
+              return (
+                <div
+                  key={row.key}
+                  className="grid grid-cols-[44px_1fr_auto] items-center gap-3 rounded-[22px] border px-3 py-3"
+                  style={{
+                    borderColor: active ? "#0f172a" : BORDER,
+                    borderWidth: active ? 2 : 1,
+                    background: active ? "#fff" : "#f8fafc",
+                  }}
+                >
+                  <div className="grid h-11 w-11 place-items-center rounded-2xl" style={{ background: active ? "#111827" : "#eef2f7", color: active ? "#fff" : NAVY }}>
+                    {active ? <CheckCircle2 className="h-5 w-5" /> : <Ticket className="h-5 w-5" />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-[17px] font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>{row.title}</p>
+                    <p className="truncate text-[13px] font-bold text-slate-500">{row.subtitle}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[20px] font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>{row.value}</p>
+                    {row.sale && <p className="text-[13px] font-bold text-slate-400 line-through">{row.sale}</p>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
-          <div className="mt-4 grid gap-2">
-            {pricing.detailRows.map((row) => (
-              <div key={row.label} className="flex items-center justify-between gap-3 rounded-2xl px-3 py-2 text-xs font-bold" style={{ background: "#f8fafc", color: TEXT }}>
-                <span style={{ color: MUTED }}>{row.label}</span>
-                <span>{row.value}</span>
+          {pricing.includedLabel && (
+            <div className="mt-3 rounded-[20px] bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
+              {pricing.includedLabel} för dig.
+            </div>
+          )}
+
+          <div className="mt-5 rounded-[22px] border px-4 py-3" style={{ borderColor: BORDER }}>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>{product?.name || "Aktivitetsbiljett"}</p>
+                <p className="text-sm font-bold text-slate-500">Dagsmedlemskap 199 kr ger hela dagen</p>
               </div>
-            ))}
+              <div className="text-right">
+                <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Pris</p>
+                <p className="text-2xl font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>
+                  {pricing.includedLabel || formatSek(memberPrice)}
+                </p>
+              </div>
+            </div>
           </div>
 
           {isRegistered ? (
@@ -418,7 +488,7 @@ export default function ProgramSessionPage() {
               type="button"
               onClick={openChat}
               disabled={openingChat}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-sm font-black active:scale-[0.98] disabled:opacity-60"
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
               style={{ background: GREEN, color: "#fff", fontFamily: FONT_HEADING }}
             >
               {openingChat ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar chat</> : <>Gå till chatten <ChevronRight className="h-4 w-4" /></>}
@@ -428,43 +498,12 @@ export default function ProgramSessionPage() {
               type="button"
               onClick={handleCheckout}
               disabled={submitting || spotsLeft === 0}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-sm font-black active:scale-[0.98] disabled:opacity-60"
-              style={{ background: spotsLeft === 0 ? "#94a3b8" : NAVY, color: "#fff", fontFamily: FONT_HEADING }}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-[18px] py-4 text-[17px] font-black active:scale-[0.98] disabled:opacity-60"
+              style={{ background: spotsLeft === 0 ? "#94a3b8" : "#000", color: "#fff", fontFamily: FONT_HEADING }}
             >
               {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Öppnar anmälan</> : spotsLeft === 0 ? "Fullt" : <>Anmäl mig · {pricing.checkoutLabel}</>}
             </button>
           )}
-        </section>
-
-        <section className="mt-4 grid gap-3">
-          <button
-            type="button"
-            onClick={openChat}
-            className="flex w-full items-center gap-3 rounded-[24px] border p-4 text-left active:scale-[0.99]"
-            style={{ borderColor: BORDER, background: "rgba(255,255,255,0.1)" }}
-          >
-            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl" style={{ background: "rgba(255,255,255,0.12)" }}>
-              <MessageCircle className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="font-black" style={{ fontFamily: FONT_HEADING }}>Live chat</p>
-              <p className="truncate text-sm text-white/62">Frågor, spontana lag, sena platser och staff updates.</p>
-            </div>
-            <ChevronRight className="h-5 w-5 text-white/58" />
-          </button>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-[22px] border p-4" style={{ borderColor: BORDER, background: "rgba(255,255,255,0.08)" }}>
-              <ShieldCheck className="mb-3 h-5 w-5" style={{ color: GREEN }} />
-              <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Din plats</p>
-              <p className="mt-1 text-xs leading-snug text-white/58">Anmälan kopplas till ditt konto och används vid incheckning.</p>
-            </div>
-            <div className="rounded-[22px] border p-4" style={{ borderColor: BORDER, background: "rgba(255,255,255,0.08)" }}>
-              <Sparkles className="mb-3 h-5 w-5" style={{ color: PINK }} />
-              <p className="text-sm font-black" style={{ fontFamily: FONT_HEADING }}>Community</p>
-              <p className="mt-1 text-xs leading-snug text-white/58">Chatten är öppen för frågor, sena platser och uppdateringar.</p>
-            </div>
-          </div>
         </section>
       </main>
     </div>
