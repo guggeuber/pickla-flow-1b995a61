@@ -361,6 +361,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
 
 function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now: DateTime; highlight: boolean; venueId?: string; slug: string }) {
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const [opening, setOpening] = useState(false);
   const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
   const isPast = !!end && end < now;
@@ -372,6 +373,16 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
       navigate(item.href);
       return;
     }
+
+    if (!authLoading && !user?.id) {
+      const redirect = item.href || `${window.location.pathname}${window.location.search}`;
+      sessionStorage.setItem("pickla_auth_redirect", redirect);
+      navigate(`/auth?redirect=${encodeURIComponent(redirect)}`);
+      return;
+    }
+
+    if (authLoading) return;
+
     setOpening(true);
     try {
       const { data } = await supabase.rpc("upsert_resource_chat_room", {

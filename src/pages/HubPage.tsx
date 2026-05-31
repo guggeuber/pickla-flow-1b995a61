@@ -3012,7 +3012,7 @@ const HubPage = () => {
   const bookingRoomRef = bookingRef || searchParams.get("booking") || searchParams.get("room");
   const isDirectChatRoute = !!bookingRef || !!directRoomId;
   const directChatMode = !!bookingRoomRef;
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const { data: venue } = useVenue(slug);
   const venueId = venue?.id;
@@ -3055,17 +3055,11 @@ const HubPage = () => {
   }, [directRoomId, user?.id, activeRoom, openRoom]);
 
   useEffect(() => {
-    if (!directRoomId || user?.id || activeRoom) return;
-    supabase
-      .from("chat_rooms")
-      .select("id, venue_id, room_type, title, subtitle, emoji, resource_id, session_date, updated_at")
-      .eq("id", directRoomId)
-      .eq("is_public", true)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) openRoom(data as ChatRoom);
-      });
-  }, [directRoomId, user?.id, activeRoom, openRoom]);
+    if (!directRoomId || authLoading || user?.id || activeRoom) return;
+    const redirect = `${window.location.pathname}${window.location.search}`;
+    sessionStorage.setItem("pickla_auth_redirect", redirect);
+    navigate(`/auth?redirect=${encodeURIComponent(redirect)}`, { replace: true });
+  }, [directRoomId, authLoading, user?.id, activeRoom, navigate]);
 
   // #8 — skeleton instead of spinner while venue loads
   if (!venueId) {
