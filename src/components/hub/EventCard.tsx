@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { motion } from "framer-motion";
 import { ArrowRight, CalendarClock, Check, Loader2, MessageCircle, Ticket, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -46,6 +46,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
   const [success, setSuccess] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [programExpanded, setProgramExpanded] = useState(false);
+  const collapsedGestureRef = useRef({ startY: 0, moved: false, suppressClick: false });
   const [savedCard, setSavedCard] = useState<{ brand: string; last4: string; id: string } | null>(null);
 
   const { data: event } = useQuery({
@@ -252,6 +253,68 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId }: Eve
         toast.info("Dagsmedlemskap kommer strax här.");
       }
     };
+    const handleCollapsedPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
+      collapsedGestureRef.current = { startY: event.clientY, moved: false, suppressClick: false };
+    };
+    const handleCollapsedPointerMove = (event: PointerEvent<HTMLButtonElement>) => {
+      const deltaY = event.clientY - collapsedGestureRef.current.startY;
+      if (deltaY < -24) {
+        collapsedGestureRef.current.moved = true;
+        collapsedGestureRef.current.suppressClick = true;
+        setProgramExpanded(true);
+      }
+    };
+    const handleCollapsedActionClick = (event: MouseEvent<HTMLButtonElement>) => {
+      if (collapsedGestureRef.current.suppressClick) {
+        event.preventDefault();
+        collapsedGestureRef.current.suppressClick = false;
+        return;
+      }
+      if (isRegistered) return;
+      handleProgramAction();
+    };
+
+    if (!programExpanded) {
+      return (
+        <motion.button
+          whileTap={{ scale: isRegistered ? 1 : 0.98 }}
+          type="button"
+          onPointerDown={handleCollapsedPointerDown}
+          onPointerMove={handleCollapsedPointerMove}
+          onClick={handleCollapsedActionClick}
+          disabled={loading || isRegistered}
+          style={{
+            width: "100%",
+            border: "none",
+            borderRadius: "24px 24px 0 0",
+            background: isRegistered ? "#dcfce7" : isFull ? "#e2e8f0" : "#12e77a",
+            color: isRegistered ? "#15803d" : isFull ? "#334155" : "#020617",
+            padding: "18px 18px 20px",
+            fontFamily: FONT_HEADING,
+            fontSize: 22,
+            fontWeight: 950,
+            lineHeight: 1,
+            textAlign: "center",
+            cursor: isRegistered ? "default" : "pointer",
+            boxShadow: "0 -8px 28px rgba(17,24,39,0.08)",
+            touchAction: "pan-y",
+          }}
+        >
+          {loading ? (
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+              <Loader2 style={{ width: 20, height: 20 }} className="animate-spin" />
+              Öppnar
+            </span>
+          ) : isRegistered ? (
+            "Anmäld"
+          ) : isFull ? (
+            "Fullt"
+          ) : (
+            `Anmäl mig · ${pricing.checkoutLabel}`
+          )}
+        </motion.button>
+      );
+    }
 
     return (
       <motion.div
