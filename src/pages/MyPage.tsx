@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText } from "lucide-react";
+import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
@@ -1555,7 +1555,7 @@ function LegalLinksSection() {
 }
 
 const MyPage = () => {
-  const { user, loading } = useAuth();
+  const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1653,6 +1653,10 @@ const MyPage = () => {
       nextParams.delete("booking");
       setSearchParams(nextParams, { replace: true });
     }
+  };
+  const handleSignOut = async () => {
+    await signOut();
+    navigate(`/?v=${encodeURIComponent(venueSlug)}`);
   };
 
   return (
@@ -1963,6 +1967,20 @@ const MyPage = () => {
           {!isActivityPage && <SettingsSection />}
 
           {!isActivityPage && <LegalLinksSection />}
+
+          {!isActivityPage && (
+            <motion.button
+              variants={item}
+              onClick={handleSignOut}
+              className="rounded-2xl p-4 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
+              style={{ background: "#F4F0EE", border: `1.5px solid ${CARD_BORDER}` }}
+            >
+              <span className="text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                Logga ut
+              </span>
+              <LogOut className="w-4 h-4" style={{ color: TEXT_MUTED }} />
+            </motion.button>
+          )}
         </motion.div>
       </main>
 
