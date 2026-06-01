@@ -40,6 +40,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [interestLoading, setInterestLoading] = useState(false);
+  const [queueLoading, setQueueLoading] = useState(false);
   const [joined, setJoined] = useState(false);
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
@@ -181,7 +182,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
   const startSignup = async () => {
     if (isFull) {
-      await toggleInterest();
+      await toggleInterest("primary");
       return;
     }
     if (isRegistered || !session || !occurrenceDate) return;
@@ -236,14 +237,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     }
   };
 
-  const toggleInterest = async () => {
+  const toggleInterest = async (source: "secondary" | "primary" = "secondary") => {
     if (!session || !occurrenceDate) return;
     if (!user?.id) {
       navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
       return;
     }
-    if (interestLoading) return;
-    setInterestLoading(true);
+    if (interestLoading || queueLoading) return;
+    if (source === "primary") setQueueLoading(true);
+    else setInterestLoading(true);
     try {
       const result = await apiPost<any>("api-event-public", "activity-interest", {
         sessionId,
@@ -259,7 +261,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     } catch (err: any) {
       toast.error(err.message || "Kunde inte uppdatera intresse");
     } finally {
-      setInterestLoading(false);
+      if (source === "primary") setQueueLoading(false);
+      else setInterestLoading(false);
     }
   };
 
@@ -480,7 +483,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 <button
                   type="button"
                   onClick={startSignup}
-                  disabled={loading || interestLoading || isRegistered}
+                  disabled={loading || queueLoading || isRegistered}
                   className="flex h-14 items-center justify-center gap-3 rounded-[22px] px-5 text-[17px] font-semibold disabled:opacity-60"
                   style={{
                     background: isRegistered || (isFull && userIsInterested) ? "#dcfce7" : NAVY,
@@ -488,7 +491,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     fontFamily: FONT_HEADING,
                   }}
                 >
-                  {loading || interestLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isRegistered ? <Check className="h-5 w-5" /> : null}
+                  {loading || queueLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isRegistered ? <Check className="h-5 w-5" /> : null}
                   {isRegistered
                     ? "Anmäld"
                     : isFull
@@ -499,7 +502,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   <button
                     type="button"
                     onClick={toggleInterest}
-                    disabled={interestLoading}
+                    disabled={interestLoading || queueLoading}
                     className="flex h-12 min-w-0 items-center justify-center gap-1.5 rounded-2xl bg-slate-100 px-2 text-[13px] font-normal text-slate-950 disabled:opacity-70"
                     style={{ fontFamily: FONT_HEADING }}
                   >
