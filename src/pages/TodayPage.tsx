@@ -13,6 +13,7 @@ import {
   groupBookingRows,
 } from "@/lib/bookingGroups";
 import { activityPriceLabels } from "@/lib/activityPricing";
+import { apiGet } from "@/lib/api";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
@@ -37,6 +38,10 @@ type FeedItem = {
   category: string;
   status: string;
   spotsLeft?: number | null;
+  registrationsCount?: number;
+  interestedCount?: number;
+  userIsInterested?: boolean;
+  socialProofLabel?: string;
   priceChips?: string[];
   activitySession?: {
     id: string;
@@ -85,6 +90,14 @@ type RegistrationRow = {
   activity_session_id: string;
   session_date: string;
   status: string | null;
+};
+
+type ActivitySocialProofRow = {
+  activity_session_id: string;
+  session_date: string;
+  registrations_count: number;
+  interested_count: number;
+  user_is_interested: boolean;
 };
 
 type EventRow = {
@@ -220,6 +233,13 @@ function programChatResourceId(sessionId: string, occurrenceDate: string) {
   return `activity_session:${sessionId}:${occurrenceDate}`;
 }
 
+function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
+  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
+  if (registrationsCount > 0) return `${registrationsCount} kommer`;
+  if (interestedCount > 0) return `${interestedCount} intresserade`;
+  return "";
+}
+
 function HeroSticker({ guideKey, onClick }: { guideKey: GuideKey; onClick: (key: GuideKey) => void }) {
   const guide = GUIDES[guideKey];
   return (
@@ -299,15 +319,25 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         }
       }
 
-      const sessionIds = sessionOccurrences.map((session) => session.id);
-      const registrationsRes = sessionIds.length
-        ? await supabase
-            .from("session_registrations")
-            .select("activity_session_id, session_date, status")
-            .in("activity_session_id", sessionIds)
-            .gte("session_date", startDate)
-            .lte("session_date", endDate)
-        : { data: [] as RegistrationRow[] };
+      const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
+      const [registrationsRes, socialProofRes] = await Promise.all([
+        sessionIds.length
+          ? supabase
+              .from("session_registrations")
+              .select("activity_session_id, session_date, status")
+              .in("activity_session_id", sessionIds)
+              .gte("session_date", startDate)
+              .lte("session_date", endDate)
+          : Promise.resolve({ data: [] as RegistrationRow[] }),
+        sessionIds.length
+          ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
+              venueSlug: slug,
+              sessionIds: sessionIds.join(","),
+              startDate,
+              endDate,
+            }).catch(() => ({ occurrences: [] }))
+          : Promise.resolve({ occurrences: [] }),
+      ]);
 
       const registrationCounts = new Map<string, number>();
       for (const row of registrationsRes.data || []) {
@@ -315,9 +345,15 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         const key = `${row.activity_session_id}:${row.session_date}`;
         registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
       }
+      const socialProofByKey = new Map<string, ActivitySocialProofRow>();
+      for (const row of socialProofRes.occurrences || []) {
+        socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
+      }
 
       const sessionItems: FeedItem[] = sessionOccurrences.map((session) => {
-        const count = registrationCounts.get(`${session.id}:${session.occurrence_date}`) || 0;
+        const socialProof = socialProofByKey.get(`${session.id}:${session.occurrence_date}`);
+        const count = socialProof?.registrations_count ?? registrationCounts.get(`${session.id}:${session.occurrence_date}`) ?? 0;
+        const interestedCount = socialProof?.interested_count ?? 0;
         const capacity = Number(session.capacity || 0);
         const spotsLeft = capacity ? Math.max(capacity - count, 0) : null;
         const pricing = activityPriceLabels({
@@ -334,6 +370,10 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           category: session.session_type === "open_play" ? "Open Play" : session.session_type === "group_training" ? "Träning" : session.session_type || "Pass",
           status: capacity && count >= capacity ? "Full" : "Drop-in",
           spotsLeft,
+          registrationsCount: count,
+          interestedCount,
+          userIsInterested: Boolean(socialProof?.user_is_interested),
+          socialProofLabel: activitySocialProofLabel(count, interestedCount),
           priceChips: pricing.publicChips,
           activitySession: session,
           availabilityLabel: spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : spotsLeft <= 4 ? `Få platser · ${spotsLeft} kvar` : `${spotsLeft} kvar`,
@@ -463,6 +503,11 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
                 {chip}
               </span>
             ))}
+          </span>
+        )}
+        {item.socialProofLabel && (
+          <span className="mt-1 block truncate text-[10px] font-bold text-black/45">
+            {item.socialProofLabel}
           </span>
         )}
       </span>

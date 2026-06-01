@@ -112,8 +112,17 @@ interface PublicActivityPreview {
   room: ChatRoom;
   activity_session: any;
   registrations: { count: number };
+  interests?: { interested_count: number; user_is_interested: boolean };
   messages: ChatMessage[];
 }
+
+type ActivitySocialProofRow = {
+  activity_session_id: string;
+  session_date: string;
+  registrations_count: number;
+  interested_count: number;
+  user_is_interested: boolean;
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function relativeTime(iso: string): string {
@@ -124,6 +133,13 @@ function relativeTime(iso: string): string {
   if (diff.minutes < 60) return `${Math.floor(diff.minutes)}m`;
   if (diff.hours < 24) return dt.toFormat("HH:mm");
   return dt.toFormat("d/M");
+}
+
+function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
+  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
+  if (registrationsCount > 0) return `${registrationsCount} kommer`;
+  if (interestedCount > 0) return `${interestedCount} intresserade`;
+  return "";
 }
 
 function formatSwedishTime(timeStr: string): string {
@@ -496,9 +512,9 @@ function useFallbackActivitySessionForRoom(room: ChatRoom, venueId: string | und
   });
 }
 
-function useWeeklyProgram(venueId: string | undefined) {
+function useWeeklyProgram(venueId: string | undefined, venueSlug: string) {
   return useQuery({
-    queryKey: ["hub-weekly-program", venueId],
+    queryKey: ["hub-weekly-program", venueId, venueSlug],
     enabled: !!venueId,
     staleTime: 300000,
     queryFn: async () => {
@@ -513,6 +529,8 @@ function useWeeklyProgram(venueId: string | undefined) {
       if (error) return [];
 
       const now = DateTime.now().setZone("Europe/Stockholm");
+      const startDate = now.toISODate()!;
+      const endDate = now.plus({ days: 6 }).toISODate()!;
       const items: any[] = [];
 
       for (const session of data || []) {
@@ -535,13 +553,35 @@ function useWeeklyProgram(venueId: string | undefined) {
         }
       }
 
-      return items
+      const sortedItems = items
         .sort((a, b) => {
           const aTime = `${a.occurrence_date}T${String(a.start_time).slice(0, 5)}`;
           const bTime = `${b.occurrence_date}T${String(b.start_time).slice(0, 5)}`;
           return aTime.localeCompare(bTime);
         })
         .slice(0, 8);
+      const sessionIds = [...new Set(sortedItems.map((item) => item.id).filter(Boolean))];
+      const socialProof = sessionIds.length
+        ? await apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
+            venueSlug,
+            sessionIds: sessionIds.join(","),
+            startDate,
+            endDate,
+          }).catch(() => ({ occurrences: [] }))
+        : { occurrences: [] };
+      const proofByKey = new Map<string, ActivitySocialProofRow>();
+      for (const row of socialProof.occurrences || []) {
+        proofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
+      }
+      return sortedItems.map((item) => {
+        const proof = proofByKey.get(`${item.id}:${item.occurrence_date}`);
+        return {
+          ...item,
+          registrations_count: proof?.registrations_count ?? 0,
+          interested_count: proof?.interested_count ?? 0,
+          user_is_interested: Boolean(proof?.user_is_interested),
+        };
+      });
     },
   });
 }
@@ -2833,6 +2873,9 @@ function HubList({
                 const timeLabel = ev.start_time ? `${String(ev.start_time).slice(0, 5)}-${String(ev.end_time || "").slice(0, 5)}` : null;
                 const isProgramSession = !!ev.occurrence_date || !!ev.activity_series;
                 const programUrl = `/program/${ev.id}?date=${encodeURIComponent(ev.occurrence_date || "")}&v=${encodeURIComponent(slug)}`;
+                const socialProof = isProgramSession
+                  ? activitySocialProofLabel(Number(ev.registrations_count || 0), Number(ev.interested_count || 0))
+                  : "";
                 return (
                   <motion.div
                     key={ev.id}
@@ -2863,6 +2906,11 @@ function HubList({
                         ? `${preview.senderName || "Någon"}: ${preview.lastMessage}`
                         : [timeLabel, ev.price_sek ? `${ev.price_sek} kr` : null, isProgramSession ? "Schema & anmälan" : "Öppen eventkanal"].filter(Boolean).join(" · ")}
                     </p>
+                    {socialProof && (
+                      <p style={{ fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: HUB_MUTED, margin: "4px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {socialProof}
+                      </p>
+                    )}
                     <div style={{ display: "flex", gap: 8, marginTop: 13 }}>
                       <button
                         type="button"
@@ -3077,7 +3125,7 @@ const HubPage = () => {
   const { data: botData } = useDailyBotData(venueId);
   const { data: bookings = [] } = useBookingRooms(venueId, user?.id);
   const { data: events = [] } = useEventRooms(venueId);
-  const { data: weeklyProgram = [] } = useWeeklyProgram(venueId);
+  const { data: weeklyProgram = [] } = useWeeklyProgram(venueId, slug);
 
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [roomOpen, setRoomOpen] = useState(false);

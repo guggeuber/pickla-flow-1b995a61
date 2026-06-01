@@ -37,6 +37,13 @@ function parseProgramChatResourceId(resourceId: string) {
   return { sessionId: match[1], occurrenceDate: match[2] === "next" ? null : match[2] };
 }
 
+function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
+  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
+  if (registrationsCount > 0) return `${registrationsCount} kommer`;
+  if (interestedCount > 0) return `${interestedCount} intresserade`;
+  return "";
+}
+
 export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publicActivityPreview }: EventCardProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -112,6 +119,27 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     },
   });
 
+  const { data: programSocialProof } = useQuery({
+    queryKey: ["hub-program-social-proof", eventLookupId, programOccurrenceDate, venueSlug],
+    enabled: !!effectiveProgramSession?.id && !!programOccurrenceDate && !!venueSlug && !publicActivityPreview?.interests,
+    staleTime: 10000,
+    queryFn: async () => {
+      const result = await apiGet<{ occurrences: Array<{
+        activity_session_id: string;
+        session_date: string;
+        registrations_count: number;
+        interested_count: number;
+        user_is_interested: boolean;
+      }> }>("api-event-public", "activity-social-proof", {
+        venueSlug,
+        sessionIds: eventLookupId,
+        startDate: programOccurrenceDate,
+        endDate: programOccurrenceDate,
+      });
+      return result.occurrences?.[0] || null;
+    },
+  });
+
   const { data: membership } = useQuery({
     queryKey: ["hub-program-membership", user?.id, effectiveProgramSession?.venue_id],
     enabled: !!user?.id && !!effectiveProgramSession?.venue_id,
@@ -177,6 +205,8 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
         : "Aktivitet";
     const capacity = Number(effectiveProgramSession.capacity || 0);
     const registrationCount = Number(publicActivityPreview?.registrations?.count ?? programRegistrations.length ?? 0);
+    const interestedCount = Number(publicActivityPreview?.interests?.interested_count ?? programSocialProof?.interested_count ?? 0);
+    const socialProof = activitySocialProofLabel(registrationCount, interestedCount);
     const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
     const isFull = spotsLeft === 0;
     const pricing = activityPriceLabels({
@@ -385,10 +415,12 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
                 {spotsLeft === 0 ? "Fullt" : `${spotsLeft} platser kvar`}
               </span>
             ) : null}
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-              <MessageCircle style={{ width: 14, height: 14 }} />
-              {registrationCount} kommer
-            </span>
+            {socialProof && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
+                <MessageCircle style={{ width: 14, height: 14 }} />
+                {socialProof}
+              </span>
+            )}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", marginTop: 10 }}>
@@ -399,6 +431,11 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
               <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
                 {isRegistered ? "Du är anmäld i chatten" : isFull ? "Chatta om reservplats" : "Säkra platsen direkt i chatten"}
               </p>
+              {socialProof && (
+                <p style={{ margin: "3px 0 0", color: "#94a3b8", fontSize: 11, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
+                  {socialProof}
+                </p>
+              )}
             </div>
             <motion.button
               whileTap={{ scale: 0.97 }}

@@ -362,6 +362,95 @@ async function activityInterestState(client: any, {
   };
 }
 
+async function activitySocialProof(client: any, {
+  venueSlug,
+  sessionIds,
+  startDate,
+  endDate,
+  userId,
+}: {
+  venueSlug?: string | null;
+  sessionIds: string[];
+  startDate: string;
+  endDate: string;
+  userId?: string | null;
+}) {
+  const cleanSessionIds = [...new Set(sessionIds.filter(Boolean))];
+  if (!venueSlug) throw new Error('Missing venueSlug');
+  if (!startDate || !endDate) throw new Error('Missing date range');
+  if (!cleanSessionIds.length) return { occurrences: [] };
+
+  const { data: venue, error: venueErr } = await client.from('venues')
+    .select('id, slug, is_public')
+    .eq('slug', venueSlug)
+    .maybeSingle();
+  if (venueErr || !venue?.id || venue.is_public !== true) throw new Error('Venue not public');
+
+  const { data: sessions, error: sessionsErr } = await client.from('activity_sessions')
+    .select('id')
+    .eq('venue_id', venue.id)
+    .eq('is_active', true)
+    .eq('publish_status', 'published')
+    .in('id', cleanSessionIds);
+  if (sessionsErr) throw sessionsErr;
+
+  const allowedIds = new Set((sessions || []).map((session: any) => session.id));
+  if (!allowedIds.size) return { occurrences: [] };
+  const allowedSessionIds = cleanSessionIds.filter((id) => allowedIds.has(id));
+
+  const [registrationsResult, interestsResult] = await Promise.all([
+    client.from('session_registrations')
+      .select('activity_session_id, session_date, status, user_id')
+      .in('activity_session_id', allowedSessionIds)
+      .gte('session_date', startDate)
+      .lte('session_date', endDate),
+    client.from('activity_session_interests')
+      .select('activity_session_id, session_date, status, user_id')
+      .in('activity_session_id', allowedSessionIds)
+      .gte('session_date', startDate)
+      .lte('session_date', endDate)
+      .eq('status', 'interested'),
+  ]);
+
+  if (registrationsResult.error) throw registrationsResult.error;
+  if (interestsResult.error) throw interestsResult.error;
+
+  const byKey = new Map<string, {
+    activity_session_id: string;
+    session_date: string;
+    registrations_count: number;
+    interested_count: number;
+    user_is_interested: boolean;
+  }>();
+  const getRow = (activitySessionId: string, sessionDate: string) => {
+    const key = `${activitySessionId}:${sessionDate}`;
+    const existing = byKey.get(key);
+    if (existing) return existing;
+    const row = {
+      activity_session_id: activitySessionId,
+      session_date: sessionDate,
+      registrations_count: 0,
+      interested_count: 0,
+      user_is_interested: false,
+    };
+    byKey.set(key, row);
+    return row;
+  };
+
+  for (const row of registrationsResult.data || []) {
+    if (row.status === 'cancelled') continue;
+    getRow(row.activity_session_id, row.session_date).registrations_count += 1;
+  }
+
+  for (const row of interestsResult.data || []) {
+    const proof = getRow(row.activity_session_id, row.session_date);
+    proof.interested_count += 1;
+    if (userId && row.user_id === userId) proof.user_is_interested = true;
+  }
+
+  return { occurrences: Array.from(byKey.values()) };
+}
+
 async function sendGroupInquiryEmail({
   to,
   eventId,
@@ -711,6 +800,27 @@ Deno.serve(async (req) => {
         return jsonResponse(preview, 200, 5);
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Activity preview not found', 404);
+      }
+    }
+
+    // GET /api-event-public/activity-social-proof — public aggregated counts per activity occurrence
+    if (req.method === 'GET' && path === 'activity-social-proof') {
+      try {
+        const userId = await getOptionalUserId(req);
+        const sessionIds = (url.searchParams.get('sessionIds') || '')
+          .split(',')
+          .map((id) => id.trim())
+          .filter(Boolean);
+        const result = await activitySocialProof(client, {
+          venueSlug: url.searchParams.get('venueSlug') || url.searchParams.get('v'),
+          sessionIds,
+          startDate: String(url.searchParams.get('startDate') || ''),
+          endDate: String(url.searchParams.get('endDate') || ''),
+          userId,
+        });
+        return jsonResponse(result, 200, 5);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Could not load activity social proof', 404);
       }
     }
 

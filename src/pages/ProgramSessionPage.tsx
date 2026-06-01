@@ -31,6 +31,13 @@ function sessionTypeLabel(type?: string | null) {
   return type || "Aktivitet";
 }
 
+function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
+  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
+  if (registrationsCount > 0) return `${registrationsCount} kommer`;
+  if (interestedCount > 0) return `${interestedCount} intresserade`;
+  return "";
+}
+
 export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnly?: boolean }) {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
@@ -132,6 +139,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const isRegistered = joined || (!!user?.id && registrations.some((row: any) => row.user_id === user.id));
   const interestedCount = optimisticInterest?.count ?? Number(data?.interests?.interested_count || 0);
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
+  const socialProofLabel = activitySocialProofLabel(registrationCount, interestedCount);
   const userHasMembership = hasActiveMembership(membership);
   const pricing = activityPriceLabels({
     basePrice: Number(session?.price_sek || 165),
@@ -393,6 +401,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   <p className="mt-1.5 text-[13px] font-normal text-neutral-500">
                     {dateLabel} · {timeLabel}
                   </p>
+                  {socialProofLabel && (
+                    <p className="mt-1 text-[12px] font-normal text-neutral-400">
+                      {socialProofLabel}
+                    </p>
+                  )}
                 </div>
                 <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
                   <Ticket className="h-6 w-6 text-neutral-950" />
@@ -426,7 +439,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   </span>
                 </div>
                 <p className="mt-1.5 text-[12px] font-normal text-neutral-400">
-                  {registrationCount} kommer{interestedCount > 0 ? ` · ${interestedCount} intresserade` : ""}
+                  {socialProofLabel || "Inga anmälda ännu"}
                 </p>
                 {capacity ? (
                   <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-100">
