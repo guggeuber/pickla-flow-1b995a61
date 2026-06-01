@@ -19,6 +19,13 @@ function eventReplyAddress(eventId: string) {
   return `event-${eventId}@${RESEND_REPLY_DOMAIN}`;
 }
 
+async function getOptionalUserId(req: Request) {
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  const { userId } = await getAuthenticatedClient(req);
+  return userId || null;
+}
+
 function formatSubject(base: string, eventId: string) {
   const token = `[Pickla ${eventId}]`;
   return base.includes(token) ? base : `${base} ${token}`;
@@ -320,6 +327,38 @@ async function buildActivityPreview(client: any, {
     },
     registrations: { count: count || 0 },
     messages,
+  };
+}
+
+async function activityInterestState(client: any, {
+  activitySessionId,
+  sessionDate,
+  userId,
+}: {
+  activitySessionId: string;
+  sessionDate: string;
+  userId?: string | null;
+}) {
+  const [{ count }, ownResult] = await Promise.all([
+    client.from('activity_session_interests')
+      .select('id', { count: 'exact', head: true })
+      .eq('activity_session_id', activitySessionId)
+      .eq('session_date', sessionDate)
+      .eq('status', 'interested'),
+    userId
+      ? client.from('activity_session_interests')
+          .select('id')
+          .eq('activity_session_id', activitySessionId)
+          .eq('session_date', sessionDate)
+          .eq('user_id', userId)
+          .eq('status', 'interested')
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  return {
+    interested_count: count || 0,
+    user_is_interested: Boolean((ownResult as any)?.data?.id),
   };
 }
 
@@ -656,16 +695,108 @@ Deno.serve(async (req) => {
     // GET /api-event-public/detail?id=X or ?slug=X — public event info
     if (req.method === 'GET' && path === 'activity-preview') {
       try {
+        const userId = await getOptionalUserId(req);
         const preview = await buildActivityPreview(client, {
           roomId: url.searchParams.get('roomId'),
           sessionId: url.searchParams.get('sessionId'),
           date: url.searchParams.get('date'),
           venueSlug: url.searchParams.get('venueSlug') || url.searchParams.get('v'),
         });
+        const interests = await activityInterestState(client, {
+          activitySessionId: preview.activity_session.id,
+          sessionDate: preview.activity_session.occurrence_date,
+          userId,
+        });
+        preview.interests = interests;
         return jsonResponse(preview, 200, 5);
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Activity preview not found', 404);
       }
+    }
+
+    // POST /api-event-public/activity-interest — toggle interest for a public activity occurrence
+    if (req.method === 'POST' && path === 'activity-interest') {
+      const { userId, error: authError } = await getAuthenticatedClient(req);
+      if (authError || !userId) return errorResponse(authError || 'Unauthorized', 401);
+
+      const body = await req.json();
+      const sessionId = String(body.sessionId || body.activity_session_id || '').trim();
+      const sessionDate = String(body.date || body.session_date || '').trim();
+      const venueSlug = String(body.venueSlug || body.v || '').trim();
+      if (!sessionId) return errorResponse('Missing sessionId');
+      if (!sessionDate) return errorResponse('Missing session_date');
+
+      let preview: any;
+      try {
+        preview = await buildActivityPreview(client, {
+          sessionId,
+          date: sessionDate,
+          venueSlug,
+        });
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Activity session not found', 404);
+      }
+
+      const activitySessionId = preview.activity_session.id;
+      const occurrenceDate = preview.activity_session.occurrence_date;
+      const venueId = preview.activity_session.venue_id;
+
+      const { data: existing } = await client.from('activity_session_interests')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('activity_session_id', activitySessionId)
+        .eq('session_date', occurrenceDate)
+        .maybeSingle();
+
+      let interested = false;
+      if (existing?.id) {
+        await client.from('activity_session_interests')
+          .delete()
+          .eq('id', existing.id)
+          .eq('user_id', userId);
+      } else {
+        const { error: insertErr } = await client.from('activity_session_interests')
+          .insert({
+            user_id: userId,
+            activity_session_id: activitySessionId,
+            session_date: occurrenceDate,
+            venue_id: venueId,
+            status: 'interested',
+          });
+        if (insertErr && insertErr.code !== '23505') return errorResponse(insertErr.message, 500);
+        interested = true;
+
+        if (preview.room?.id) {
+          const { data: profile } = await client.from('player_profiles')
+            .select('display_name, first_name')
+            .eq('auth_user_id', userId)
+            .maybeSingle();
+          const name = profile?.display_name || profile?.first_name || 'En spelare';
+          await client.from('chat_messages').insert({
+            room_id: preview.room.id,
+            user_id: userId,
+            message_type: 'bot',
+            content: `${name} är intresserad`,
+            metadata: {
+              type: 'interest',
+              activity_session_id: activitySessionId,
+              session_date: occurrenceDate,
+            },
+          });
+        }
+      }
+
+      const state = await activityInterestState(client, {
+        activitySessionId,
+        sessionDate: occurrenceDate,
+        userId,
+      });
+
+      return jsonResponse({
+        success: true,
+        interested,
+        ...state,
+      });
     }
 
     // GET /api-event-public/detail?id=X or ?slug=X — public event info

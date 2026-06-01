@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Ticket, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, Star, Ticket, Users } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
@@ -39,7 +39,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [interestLoading, setInterestLoading] = useState(false);
   const [joined, setJoined] = useState(false);
+  const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
   const programPath = `/program/${sessionId || ""}?${new URLSearchParams({
@@ -127,6 +129,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
   const isRegistered = joined || (!!user?.id && registrations.some((row: any) => row.user_id === user.id));
+  const interestedCount = optimisticInterest?.count ?? Number(data?.interests?.interested_count || 0);
+  const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const userHasMembership = hasActiveMembership(membership);
   const pricing = activityPriceLabels({
     basePrice: Number(session?.price_sek || 165),
@@ -176,7 +180,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   };
 
   const startSignup = async () => {
-    if (isFull || isRegistered || !session || !occurrenceDate) return;
+    if (isFull) {
+      await toggleInterest();
+      return;
+    }
+    if (isRegistered || !session || !occurrenceDate) return;
     if (!user?.id) {
       navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
       return;
@@ -225,6 +233,60 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     }
     if (label.includes("Dagsmedlemskap") && !dayAccess) {
       toast.info("Dagsmedlemskap kommer strax här.");
+    }
+  };
+
+  const toggleInterest = async () => {
+    if (!session || !occurrenceDate) return;
+    if (!user?.id) {
+      navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
+      return;
+    }
+    if (interestLoading) return;
+    setInterestLoading(true);
+    try {
+      const result = await apiPost<any>("api-event-public", "activity-interest", {
+        sessionId,
+        date: occurrenceDate,
+        venueSlug,
+      });
+      setOptimisticInterest({
+        count: Number(result.interested_count || 0),
+        mine: Boolean(result.user_is_interested),
+      });
+      toast.success(result.user_is_interested ? "Du är markerad som intresserad" : "Intresse borttaget");
+      queryClient.invalidateQueries({ queryKey: ["program-session-entry", sessionId, requestedDate, venueSlug] });
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte uppdatera intresse");
+    } finally {
+      setInterestLoading(false);
+    }
+  };
+
+  const shareActivity = async () => {
+    if (!session || !occurrenceDate) return;
+    const sharePath = `/program/${session.id}?date=${encodeURIComponent(occurrenceDate)}&v=${encodeURIComponent(venueSlug)}`;
+    const shareUrl = `${window.location.origin}${sharePath}`;
+    const shareText = `Jag funderar på ${session.name} ${dateLabel} ${timeLabel} på Pickla. Häng på?`;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: session.name,
+          text: shareText,
+          url: shareUrl,
+        });
+        return;
+      }
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success("Länk kopierad");
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        toast.success("Länk kopierad");
+      } catch {
+        toast.error("Kunde inte dela länken");
+      }
     }
   };
 
@@ -360,8 +422,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     {isRegistered ? "Anmäld" : "Live"}
                   </span>
                 </div>
+                <p className="mt-1.5 text-[12px] font-normal text-neutral-400">
+                  {registrationCount} kommer{interestedCount > 0 ? ` · ${interestedCount} intresserade` : ""}
+                </p>
                 {capacity ? (
-                  <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-200">
+                  <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-100">
                     <div
                       className="h-full rounded-full"
                       style={{
@@ -415,31 +480,52 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 <button
                   type="button"
                   onClick={startSignup}
-                  disabled={loading || isRegistered || isFull}
+                  disabled={loading || interestLoading || isRegistered}
                   className="flex h-14 items-center justify-center gap-3 rounded-[22px] px-5 text-[17px] font-semibold disabled:opacity-60"
                   style={{
-                    background: isRegistered ? "#dcfce7" : isFull ? "#e2e8f0" : NAVY,
-                    color: isRegistered ? "#15803d" : isFull ? "#334155" : "white",
+                    background: isRegistered || (isFull && userIsInterested) ? "#dcfce7" : NAVY,
+                    color: isRegistered || (isFull && userIsInterested) ? "#15803d" : "white",
                     fontFamily: FONT_HEADING,
                   }}
                 >
-                  {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : isRegistered ? <Check className="h-5 w-5" /> : null}
+                  {loading || interestLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isRegistered ? <Check className="h-5 w-5" /> : null}
                   {isRegistered
                     ? "Anmäld"
                     : isFull
-                      ? "Fullt"
+                      ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
                       : `${user?.id ? "Anmäl" : "Logga in & anmäl"} · ${pricing.checkoutLabel}`}
                 </button>
-                <button
-                  type="button"
-                  onClick={openChat}
-                  disabled={!room?.id}
-                  className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-100 px-5 text-[16px] font-normal text-slate-950 disabled:opacity-70"
-                  style={{ fontFamily: FONT_HEADING }}
-                >
-                  {previewLoading && !room?.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <MessageCircle className="h-5 w-5" />}
-                  {previewLoading && !room?.id ? "Laddar chat" : "Öppna chat"}
-                </button>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={toggleInterest}
+                    disabled={interestLoading}
+                    className="flex h-12 min-w-0 items-center justify-center gap-1.5 rounded-2xl bg-slate-100 px-2 text-[13px] font-normal text-slate-950 disabled:opacity-70"
+                    style={{ fontFamily: FONT_HEADING }}
+                  >
+                    {interestLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : userIsInterested ? <Check className="h-4 w-4" /> : <Star className="h-4 w-4" />}
+                    <span className="truncate">{userIsInterested ? "Intresserad" : "Intresserad"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openChat}
+                    disabled={!room?.id}
+                    className="flex h-12 min-w-0 items-center justify-center gap-1.5 rounded-2xl bg-slate-100 px-2 text-[13px] font-normal text-slate-950 disabled:opacity-70"
+                    style={{ fontFamily: FONT_HEADING }}
+                  >
+                    {previewLoading && !room?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+                    <span className="truncate">Lobbyn</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={shareActivity}
+                    className="flex h-12 min-w-0 items-center justify-center gap-1.5 rounded-2xl bg-slate-100 px-2 text-[13px] font-normal text-slate-950"
+                    style={{ fontFamily: FONT_HEADING }}
+                  >
+                    <Share2 className="h-4 w-4" />
+                    <span className="truncate">Dela</span>
+                  </button>
+                </div>
               </div>
             </div>
           </DrawerContent>
