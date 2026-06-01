@@ -1929,8 +1929,6 @@ const MyPage = () => {
             )}
           </motion.div>
 
-          {!isActivityPage && <DartStatsSection />}
-
           {/* Day passes — directly under bookings */}
           <DayPassSection />
 
