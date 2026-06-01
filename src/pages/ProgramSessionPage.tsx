@@ -305,29 +305,30 @@ export default function ProgramSessionPage() {
       {session && (
         <Drawer open onOpenChange={closeDrawer} shouldScaleBackground={false}>
           <DrawerContent className="z-[60] max-h-[88vh] rounded-t-[30px] border-0 bg-white px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-2 text-slate-950">
-            <div className="mx-auto flex w-full max-w-md flex-col gap-4 overflow-y-auto pb-2">
+            <div className="mx-auto flex w-full max-w-md flex-col gap-3 overflow-y-auto pb-2">
               <div className="flex items-start justify-between gap-4 pt-2">
                 <div className="min-w-0">
-                  <p className="text-[12px] font-black uppercase tracking-[0.22em]" style={{ color: MUTED }}>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.22em]" style={{ color: MUTED }}>
                     {sessionTypeLabel(session.session_type)}
                   </p>
-                  <h2 className="mt-1 text-[34px] font-black leading-none tracking-tight" style={{ fontFamily: FONT_HEADING }}>
+                  <h2 className="mt-1 text-[30px] font-bold leading-[1.02] tracking-tight" style={{ fontFamily: FONT_HEADING }}>
                     {session.name}
                   </h2>
-                  <p className="mt-2 text-[15px] font-bold" style={{ color: MUTED }}>
+                  <p className="mt-2 text-[14px] font-medium" style={{ color: MUTED }}>
                     {dateLabel} · {timeLabel}
                   </p>
                 </div>
-                <div className="grid h-16 w-16 shrink-0 place-items-center rounded-3xl" style={{ background: "#eef2ff" }}>
-                  <Ticket className="h-8 w-8" />
+                <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl" style={{ background: "#f1f5f9" }}>
+                  <Ticket className="h-7 w-7" />
                 </div>
               </div>
 
-              <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+              <div className="-mx-5 overflow-x-auto px-5 pb-1 pt-1" style={{ scrollbarWidth: "none" }}>
+                <div className="flex w-max gap-2">
                 {pricing.publicChips.map((chip) => (
                   <span
                     key={chip}
-                    className="shrink-0 rounded-full px-3 py-2 text-[13px] font-black"
+                    className="shrink-0 rounded-full px-3 py-2 text-[12px] font-semibold"
                     style={{
                       background: chip.includes("ingår") ? "#ecfdf5" : SOFT,
                       color: chip.includes("ingår") ? GREEN : "#334155",
@@ -337,15 +338,16 @@ export default function ProgramSessionPage() {
                     {chip}
                   </span>
                 ))}
+                </div>
               </div>
 
-              <div className="rounded-[22px] p-4" style={{ background: SOFT, border: `1px solid ${BORDER}` }}>
+              <div className="rounded-[20px] p-4" style={{ background: SOFT, border: `1px solid ${BORDER}` }}>
                 <div className="flex items-center justify-between gap-4">
-                  <span className="inline-flex items-center gap-2 text-[17px] font-black">
+                  <span className="inline-flex items-center gap-2 text-[16px] font-semibold">
                     <Users className="h-5 w-5" />
                     {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
                   </span>
-                  <span className="text-[15px] font-black" style={{ color: isFull ? "#be123c" : GREEN }}>
+                  <span className="text-[14px] font-semibold" style={{ color: isFull ? "#be123c" : GREEN }}>
                     {isRegistered ? "Anmäld" : "Live"}
                   </span>
                 </div>
@@ -362,7 +364,7 @@ export default function ProgramSessionPage() {
                 ) : null}
               </div>
 
-              <div className="grid gap-3">
+              <div className="grid gap-2.5">
                 {pricing.detailRows.map((row) => {
                   const isMembershipUpsell = !userHasMembership && (row.label.includes("Access") || row.label.includes("Unlimited"));
                   const isDayUpsell = !dayAccess && row.label.includes("Dagsmedlemskap");
@@ -372,28 +374,28 @@ export default function ProgramSessionPage() {
                       key={row.label}
                       type="button"
                       onClick={() => clickable && openUpsell(row.label)}
-                      className="grid grid-cols-[1fr_auto] items-center gap-4 rounded-[22px] p-4 text-left"
+                      className="grid grid-cols-[1fr_auto] items-center gap-4 rounded-[20px] p-4 text-left"
                       style={{
                         background: SOFT,
                         border: `1.5px solid ${clickable ? "rgba(15,23,42,0.20)" : BORDER}`,
                       }}
                     >
                       <span>
-                        <span className="block text-[19px] font-black" style={{ fontFamily: FONT_HEADING }}>
+                        <span className="block text-[18px] font-semibold" style={{ fontFamily: FONT_HEADING }}>
                           {row.label}
                         </span>
                         {isMembershipUpsell && (
-                          <span className="mt-1 block text-[13px] font-bold" style={{ color: MUTED }}>
+                          <span className="mt-1 block text-[13px] font-medium" style={{ color: MUTED }}>
                             {row.label.includes("Access") ? `Köp Access och boka för ${row.value}` : "Köp Unlimited och boka när det ingår"}
                           </span>
                         )}
                         {isDayUpsell && (
-                          <span className="mt-1 block text-[13px] font-bold" style={{ color: MUTED }}>
+                          <span className="mt-1 block text-[13px] font-medium" style={{ color: MUTED }}>
                             Uppgradera till heldag
                           </span>
                         )}
                       </span>
-                      <span className="text-[24px] font-black" style={{ fontFamily: FONT_HEADING }}>
+                      <span className="text-[23px] font-bold" style={{ fontFamily: FONT_HEADING }}>
                         {row.value}
                       </span>
                     </button>
@@ -406,7 +408,7 @@ export default function ProgramSessionPage() {
                   type="button"
                   onClick={startSignup}
                   disabled={loading || isRegistered || isFull}
-                  className="flex h-16 items-center justify-center gap-3 rounded-[24px] px-5 text-[19px] font-black disabled:opacity-60"
+                  className="flex h-16 items-center justify-center gap-3 rounded-[24px] px-5 text-[19px] font-bold disabled:opacity-60"
                   style={{
                     background: isRegistered ? "#dcfce7" : isFull ? "#e2e8f0" : NAVY,
                     color: isRegistered ? "#15803d" : isFull ? "#334155" : "white",
@@ -424,7 +426,7 @@ export default function ProgramSessionPage() {
                   type="button"
                   onClick={openChat}
                   disabled={!room?.id}
-                  className="flex h-14 items-center justify-center gap-2 rounded-[22px] bg-slate-100 px-5 text-[16px] font-black text-slate-950 disabled:opacity-70"
+                  className="flex h-14 items-center justify-center gap-2 rounded-[22px] bg-slate-100 px-5 text-[16px] font-semibold text-slate-950 disabled:opacity-70"
                   style={{ fontFamily: FONT_HEADING }}
                 >
                   {previewLoading && !room?.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <MessageCircle className="h-5 w-5" />}
