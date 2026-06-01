@@ -46,7 +46,22 @@ export default function ProgramSessionPage() {
   }).toString()}`;
   const todayPath = `/today?v=${encodeURIComponent(venueSlug)}`;
 
-  const { data, isLoading, error } = useQuery({
+  const { data: directSession, isLoading: sessionLoading } = useQuery({
+    queryKey: ["program-session-direct", sessionId],
+    enabled: !!sessionId,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data: row, error: sessionError } = await supabase
+        .from("activity_sessions")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id")
+        .eq("id", sessionId!)
+        .maybeSingle();
+      if (sessionError) throw sessionError;
+      return row;
+    },
+  });
+
+  const { data, isLoading: previewLoading, error } = useQuery({
     queryKey: ["program-session-entry", sessionId, requestedDate, venueSlug],
     enabled: !!sessionId,
     staleTime: 15000,
@@ -57,10 +72,11 @@ export default function ProgramSessionPage() {
     }),
   });
 
-  const session = data?.activity_session;
+  const session = data?.activity_session || directSession;
   const room = data?.room;
   const occurrenceDate = data?.occurrence_date || requestedDate || session?.session_date || null;
   const venueId = session?.venue_id || data?.venue?.id;
+  const isLoading = sessionLoading && previewLoading;
 
   const { data: membership } = useQuery({
     queryKey: ["program-membership", user?.id, venueId],
@@ -128,7 +144,7 @@ export default function ProgramSessionPage() {
 
   const openChat = () => {
     if (!room?.id) {
-      toast.error("Chatten är inte redo än");
+      toast.info("Chatten laddar strax");
       return;
     }
     navigate(`/chat/${room.id}?v=${encodeURIComponent(venueSlug)}`);
@@ -244,7 +260,7 @@ export default function ProgramSessionPage() {
             <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
             <p className="text-lg font-black" style={{ fontFamily: FONT_HEADING }}>Hämtar aktiviteten</p>
           </div>
-        ) : error || !session ? (
+        ) : error && !session ? (
           <div className="grid gap-4 rounded-[28px] bg-white p-7 text-center shadow-sm" style={{ border: `1px solid ${BORDER}` }}>
             <p className="text-xl font-black" style={{ fontFamily: FONT_HEADING }}>Aktiviteten hittades inte</p>
             <p className="text-sm font-bold" style={{ color: MUTED }}>Gå tillbaka till Pickla Idag och välj ett annat pass.</p>
@@ -287,8 +303,8 @@ export default function ProgramSessionPage() {
       </main>
 
       {session && (
-        <Drawer open onOpenChange={closeDrawer}>
-          <DrawerContent className="max-h-[88vh] rounded-t-[30px] border-0 bg-white px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-2">
+        <Drawer open onOpenChange={closeDrawer} shouldScaleBackground={false}>
+          <DrawerContent className="z-[60] max-h-[88vh] rounded-t-[30px] border-0 bg-white px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-2 text-slate-950">
             <div className="mx-auto flex w-full max-w-md flex-col gap-4 overflow-y-auto pb-2">
               <div className="flex items-start justify-between gap-4 pt-2">
                 <div className="min-w-0">
@@ -408,11 +424,11 @@ export default function ProgramSessionPage() {
                   type="button"
                   onClick={openChat}
                   disabled={!room?.id}
-                  className="flex h-14 items-center justify-center gap-2 rounded-[22px] bg-slate-100 px-5 text-[16px] font-black text-slate-950 disabled:opacity-50"
+                  className="flex h-14 items-center justify-center gap-2 rounded-[22px] bg-slate-100 px-5 text-[16px] font-black text-slate-950 disabled:opacity-70"
                   style={{ fontFamily: FONT_HEADING }}
                 >
-                  <MessageCircle className="h-5 w-5" />
-                  Öppna chat
+                  {previewLoading && !room?.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <MessageCircle className="h-5 w-5" />}
+                  {previewLoading && !room?.id ? "Laddar chat" : "Öppna chat"}
                 </button>
               </div>
             </div>
