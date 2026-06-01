@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { ArrowRight, Loader2, MapPin, X } from "lucide-react";
@@ -377,6 +377,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
 
 function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now: DateTime; highlight: boolean; venueId?: string; slug: string }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, loading: authLoading } = useAuth();
   const [opening, setOpening] = useState(false);
   const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
@@ -386,7 +387,7 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
     : item.status);
   const openItem = async () => {
     if (item.kind === "session") {
-      navigate(item.href);
+      navigate(item.href, { state: { backgroundLocation: location } });
       return;
     }
 

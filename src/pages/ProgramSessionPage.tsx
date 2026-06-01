@@ -30,7 +30,7 @@ function sessionTypeLabel(type?: string | null) {
   return type || "Aktivitet";
 }
 
-export default function ProgramSessionPage() {
+export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnly?: boolean }) {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -225,14 +225,19 @@ export default function ProgramSessionPage() {
   };
 
   const closeDrawer = (open: boolean) => {
-    if (!open) navigate(todayPath);
+    if (!open) {
+      if (overlayOnly) navigate(-1);
+      else navigate(todayPath);
+    }
   };
 
   return (
     <div
-      className="min-h-[100dvh] px-5 pb-8 pt-[calc(env(safe-area-inset-top,0px)+22px)]"
+      className={overlayOnly ? "contents" : "min-h-[100dvh] px-5 pb-8 pt-[calc(env(safe-area-inset-top,0px)+22px)]"}
       style={{ background: BG, color: TEXT }}
     >
+      {!overlayOnly && (
+      <>
       <div className="mx-auto flex max-w-md items-center justify-between">
         <button
           type="button"
@@ -301,6 +306,8 @@ export default function ProgramSessionPage() {
           </section>
         )}
       </main>
+      </>
+      )}
 
       {session && (
         <Drawer open onOpenChange={closeDrawer} shouldScaleBackground={false}>
