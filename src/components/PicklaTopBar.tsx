@@ -165,6 +165,23 @@ export function PicklaTopBar({
 
               {user && (
                 <section className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => go(`/stats?v=${slug}`)}
+                    className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-left text-neutral-950"
+                    style={{ fontFamily: FONT_HEADING }}
+                  >
+                    <span className="flex items-center gap-3">
+                      <BarChart3 className="h-5 w-5 text-neutral-500" />
+                      Min statistik
+                    </span>
+                    <ArrowRight className="h-4 w-4 text-neutral-400" />
+                  </button>
+                </section>
+              )}
+
+              {user && (
+                <section className="space-y-2">
                   <p className="px-1 text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
                     mina senaste bokningar
                   </p>
@@ -200,23 +217,6 @@ export function PicklaTopBar({
                   )}
                 </section>
               )}
-
-              <section className="space-y-2">
-                {user && (
-                  <button
-                    type="button"
-                    onClick={() => go(`/stats?v=${slug}`)}
-                    className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-left text-neutral-950"
-                    style={{ fontFamily: FONT_HEADING }}
-                  >
-                    <span className="flex items-center gap-3">
-                      <BarChart3 className="h-5 w-5 text-neutral-500" />
-                      Min statistik
-                    </span>
-                    <ArrowRight className="h-4 w-4 text-neutral-400" />
-                  </button>
-                )}
-              </section>
             </div>
 
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white to-white/70 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
