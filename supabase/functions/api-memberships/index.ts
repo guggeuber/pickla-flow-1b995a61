@@ -313,13 +313,28 @@ Deno.serve(async (req) => {
 
       // Also fetch tier pricing if membership exists
       let tierPricing: any[] = [];
+      let tierEntitlements: any[] = [];
       if (membership?.tier_id) {
         const { data: tp } = await client.from('membership_tier_pricing')
           .select('*').eq('tier_id', membership.tier_id);
         tierPricing = tp || [];
+
+        const { data: entitlements } = await client.from('membership_entitlements')
+          .select('entitlement_type, value, period, sport_type')
+          .eq('tier_id', membership.tier_id);
+        tierEntitlements = entitlements || [];
       }
 
-      return jsonResponse({ ...membership, tier_pricing: tierPricing }, 200, 10);
+      const tier = membership?.membership_tiers
+        ? { ...membership.membership_tiers, membership_entitlements: tierEntitlements }
+        : membership?.membership_tiers;
+
+      return jsonResponse({
+        ...membership,
+        membership_tiers: tier,
+        tier_pricing: tierPricing,
+        tier_entitlements: tierEntitlements,
+      }, 200, 10);
     }
 
     // POST /api-memberships/assign

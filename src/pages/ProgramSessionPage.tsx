@@ -144,6 +144,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const pricing = activityPriceLabels({
     basePrice: Number(session?.price_sek || 165),
     productKey: session?.product_key,
+    sessionType: session?.session_type,
     membership,
     hasDayAccess: !!dayAccess,
   });

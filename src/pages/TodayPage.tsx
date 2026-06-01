@@ -359,6 +359,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         const pricing = activityPriceLabels({
           basePrice: Number(session.price_sek || 165),
           productKey: session.product_key,
+          sessionType: session.session_type,
         });
         return {
           id: `session:${session.id}:${session.occurrence_date}`,

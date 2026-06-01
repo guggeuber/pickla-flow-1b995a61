@@ -212,6 +212,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const pricing = activityPriceLabels({
       basePrice: Number(effectiveProgramSession.price_sek || 165),
       productKey: (effectiveProgramSession as any).product_key,
+      sessionType: effectiveProgramSession.session_type,
       membership,
       hasDayAccess: !!dayAccess,
     });

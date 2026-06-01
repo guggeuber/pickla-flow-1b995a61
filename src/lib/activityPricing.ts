@@ -5,13 +5,22 @@ export type MembershipPricingRow = {
   label?: string | null;
 };
 
+export type MembershipEntitlementRow = {
+  entitlement_type?: string | null;
+  value?: number | string | null;
+  sport_type?: string | null;
+  period?: string | null;
+};
+
 export type MembershipLike = {
   id?: string | null;
   tier_id?: string | null;
   tier_pricing?: MembershipPricingRow[] | null;
+  tier_entitlements?: MembershipEntitlementRow[] | null;
   membership_tiers?: {
     name?: string | null;
     monthly_price?: number | null;
+    membership_entitlements?: MembershipEntitlementRow[] | null;
   } | null;
 } | null | undefined;
 
@@ -33,6 +42,36 @@ export function isUnlimitedMembership(membership: MembershipLike) {
   return /unlimited/i.test(name);
 }
 
+function tierEntitlements(membership: MembershipLike) {
+  return [
+    ...(membership?.tier_entitlements || []),
+    ...(membership?.membership_tiers?.membership_entitlements || []),
+  ];
+}
+
+function hasPositiveEntitlement(membership: MembershipLike, entitlementType: string) {
+  return tierEntitlements(membership).some((row) => {
+    if (row.entitlement_type !== entitlementType) return false;
+    return Number(row.value ?? 1) > 0;
+  });
+}
+
+function isOpenPlayActivity(productKey?: string | null, sessionType?: string | null) {
+  return productKey === "open_play_slot" || sessionType === "open_play";
+}
+
+export function hasIncludedActivityAccess(
+  membership: MembershipLike,
+  productKey?: string | null,
+  sessionType?: string | null
+) {
+  if (isUnlimitedMembership(membership)) return true;
+  if (isOpenPlayActivity(productKey, sessionType)) {
+    return hasPositiveEntitlement(membership, "open_play_unlimited");
+  }
+  return false;
+}
+
 export function hasActiveMembership(membership: MembershipLike) {
   return Boolean(membership?.id || membership?.tier_id);
 }
@@ -49,20 +88,22 @@ export function accessPriceForActivity(basePrice: number, productKey?: string | 
 export function activityPriceLabels({
   basePrice,
   productKey,
+  sessionType,
   membership,
   hasDayAccess,
 }: {
   basePrice: number;
   productKey?: string | null;
+  sessionType?: string | null;
   membership?: MembershipLike;
   hasDayAccess?: boolean;
 }) {
   const safeBasePrice = Math.max(0, Math.round(Number(basePrice || 0)));
   const activeMembership = hasActiveMembership(membership);
   const accessPrice = accessPriceForActivity(safeBasePrice, productKey, membership);
-  const unlimited = isUnlimitedMembership(membership);
-  const finalPrice = hasDayAccess || unlimited ? 0 : activeMembership ? Math.min(safeBasePrice, accessPrice) : safeBasePrice;
-  const includedLabel = hasDayAccess ? "Ingår idag" : unlimited ? "Unlimited ingår" : null;
+  const includedByMembership = hasIncludedActivityAccess(membership, productKey, sessionType);
+  const finalPrice = hasDayAccess || includedByMembership ? 0 : activeMembership ? Math.min(safeBasePrice, accessPrice) : safeBasePrice;
+  const includedLabel = hasDayAccess ? "Ingår idag" : includedByMembership ? "Ingår" : null;
 
   return {
     basePrice: safeBasePrice,
