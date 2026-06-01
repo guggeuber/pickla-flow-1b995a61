@@ -1,9 +1,9 @@
-import { ArrowRight, BarChart3, Calendar, LogIn, Menu, Plus, UserCircle, X } from "lucide-react";
+import { ArrowRight, BarChart3, Calendar, LogIn, Menu, Plus, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { supabase } from "@/integrations/supabase/client";
 import {
   getBookingChatResourceId,
@@ -36,7 +36,7 @@ function useRecentBookings(userId?: string) {
         .eq("user_id", userId!)
         .in("status", ["confirmed", "pending"])
         .order("start_time", { ascending: false })
-        .limit(12);
+        .limit(30);
       if (error) throw error;
       return groupBookingRows(data || []);
     },
@@ -61,7 +61,7 @@ export function PicklaTopBar({
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const { data: recentBookings = [] } = useRecentBookings(user?.id);
-  const visibleBookings = useMemo(() => recentBookings.slice(0, 4), [recentBookings]);
+  const visibleBookings = useMemo(() => recentBookings, [recentBookings]);
 
   const go = (href: string) => {
     setOpen(false);
@@ -109,10 +109,27 @@ export function PicklaTopBar({
         </div>
       </header>
 
-      <Drawer open={open} onOpenChange={setOpen}>
-        <DrawerContent className="max-h-[88vh] rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+22px)] pt-5">
-          <div className="mx-auto flex w-full max-w-md flex-col">
-            <div className="mb-6 flex items-center justify-between">
+      <AnimatePresence>
+        {open && (
+          <div className="fixed inset-0 z-[80]">
+            <motion.button
+              type="button"
+              aria-label="Stäng meny"
+              className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setOpen(false)}
+            />
+
+            <motion.aside
+              className="absolute bottom-0 left-0 top-0 flex w-[min(86vw,390px)] flex-col overflow-hidden bg-white shadow-2xl"
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ type: "spring", damping: 32, stiffness: 360 }}
+            >
+              <div className="flex items-center justify-between px-5 pb-4 pt-[calc(env(safe-area-inset-top,0px)+22px)]">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
                   meny
@@ -126,7 +143,7 @@ export function PicklaTopBar({
               </button>
             </div>
 
-            <div className="space-y-7 overflow-y-auto pb-4">
+            <div className="flex-1 space-y-7 overflow-y-auto px-5 pb-32">
               <section className="space-y-2">
                 {[
                   ["Boka pickleball", `/book?v=${slug}&sport=pickleball`],
@@ -185,18 +202,6 @@ export function PicklaTopBar({
               )}
 
               <section className="space-y-2">
-                <button
-                  type="button"
-                  onClick={() => go(user ? `/my?v=${slug}` : `/auth?redirect=/my&v=${slug}`)}
-                  className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-left text-neutral-950"
-                  style={{ fontFamily: FONT_HEADING }}
-                >
-                  <span className="flex items-center gap-3">
-                    {user ? <UserCircle className="h-5 w-5 text-neutral-500" /> : <LogIn className="h-5 w-5 text-neutral-500" />}
-                    {user ? "Min sida" : "Logga in"}
-                  </span>
-                  <ArrowRight className="h-4 w-4 text-neutral-400" />
-                </button>
                 {user && (
                   <button
                     type="button"
@@ -212,51 +217,38 @@ export function PicklaTopBar({
                   </button>
                 )}
               </section>
-
-              {showVenue && (
-                <section>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpen(false);
-                      onVenueClick?.();
-                    }}
-                    className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-[#fffaf7] px-4 py-4 text-left"
-                  >
-                    <span className="text-[14px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                      {venueName}
-                    </span>
-                    <ArrowRight className="h-4 w-4 text-neutral-400" />
-                  </button>
-                </section>
-              )}
-
-              {user && (
-                <section className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => go(`/my?v=${slug}`)}
-                    className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fffaf7] px-4 py-3 text-left"
-                  >
-                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-neutral-950 text-sm font-black text-white" style={{ fontFamily: FONT_HEADING }}>
-                      {(user.email || "P").slice(0, 1).toUpperCase()}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[15px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                        Min sida
-                      </span>
-                      <span className="block truncate text-[12px] text-neutral-500">
-                        {user.email}
-                      </span>
-                    </span>
-                    <ArrowRight className="h-4 w-4 text-neutral-400" />
-                  </button>
-                </section>
-              )}
             </div>
-          </div>
-        </DrawerContent>
-      </Drawer>
+
+            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white to-white/70 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
+              <button
+                type="button"
+                onClick={() => go(user ? `/my?v=${slug}` : `/auth?redirect=/my&v=${slug}`)}
+                className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fffaf7] px-4 py-3 text-left shadow-sm"
+              >
+                {user ? (
+                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-neutral-950 text-sm font-black text-white" style={{ fontFamily: FONT_HEADING }}>
+                    {(user.email || "P").slice(0, 1).toUpperCase()}
+                  </span>
+                ) : (
+                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-neutral-950 text-white">
+                    <LogIn className="h-5 w-5" />
+                  </span>
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                    {user ? "Min sida" : "Logga in"}
+                  </span>
+                  <span className="block truncate text-[12px] text-neutral-500">
+                    {user ? user.email : "Fortsätt till ditt konto"}
+                  </span>
+                </span>
+                <ArrowRight className="h-4 w-4 text-neutral-400" />
+              </button>
+            </div>
+          </motion.aside>
+        </div>
+        )}
+      </AnimatePresence>
     </>
   );
 }
