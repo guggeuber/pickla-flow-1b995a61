@@ -38,6 +38,20 @@ type FeedItem = {
   status: string;
   spotsLeft?: number | null;
   priceChips?: string[];
+  activitySession?: {
+    id: string;
+    name: string;
+    session_type: string | null;
+    session_date: string | null;
+    recurrence_days: number[] | null;
+    start_time: string;
+    end_time: string;
+    capacity: number | null;
+    price_sek: number | null;
+    product_key: string | null;
+    venue_id?: string;
+    occurrence_date?: string;
+  };
   availabilityLabel?: string;
   href: string;
   cta: string;
@@ -60,6 +74,7 @@ type SessionRow = {
   capacity: number | null;
   price_sek: number | null;
   product_key: string | null;
+  venue_id: string;
 };
 
 type SessionOccurrence = SessionRow & {
@@ -239,7 +254,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const [sessionsRes, eventsRes, bookingsRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")
@@ -320,6 +335,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           status: capacity && count >= capacity ? "Full" : "Drop-in",
           spotsLeft,
           priceChips: pricing.publicChips,
+          activitySession: session,
           availabilityLabel: spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : spotsLeft <= 4 ? `Få platser · ${spotsLeft} kvar` : `${spotsLeft} kvar`,
           href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
           cta: capacity && count >= capacity ? "Visa" : "Anmäl",
@@ -387,7 +403,7 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
     : item.status);
   const openItem = async () => {
     if (item.kind === "session") {
-      navigate(item.href, { state: { backgroundLocation: location } });
+      navigate(item.href, { state: { backgroundLocation: location, activitySession: item.activitySession } });
       return;
     }
 
