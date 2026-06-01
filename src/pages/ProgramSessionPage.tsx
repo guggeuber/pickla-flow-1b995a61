@@ -315,30 +315,30 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
       {session && (
         <Drawer open onOpenChange={closeDrawer} shouldScaleBackground={false}>
-          <DrawerContent className="z-[60] max-h-[88vh] overflow-hidden rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+22px)] pt-5 text-neutral-950">
-            <div className="mx-auto flex w-full max-w-md min-w-0 flex-col gap-4 overflow-y-auto overflow-x-hidden pb-2">
+          <DrawerContent className="z-[60] max-h-[88vh] overflow-hidden rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] pt-5 text-neutral-950">
+            <div className="mx-auto flex w-full max-w-md min-w-0 flex-col gap-3 overflow-hidden pb-1">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: "'Space Mono', monospace" }}>
                     {sessionTypeLabel(session.session_type)}
                   </p>
-                  <h2 className="mt-1 text-[28px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                  <h2 className="mt-1 text-[25px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
                     {session.name}
                   </h2>
-                  <p className="mt-2 text-[14px] font-normal text-neutral-500">
+                  <p className="mt-1.5 text-[13px] font-normal text-neutral-500">
                     {dateLabel} · {timeLabel}
                   </p>
                 </div>
-                <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
-                  <Ticket className="h-7 w-7 text-neutral-950" />
+                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
+                  <Ticket className="h-6 w-6 text-neutral-950" />
                 </div>
               </div>
 
-              <div className="flex min-w-0 flex-wrap gap-2">
+              <div className="flex min-w-0 flex-wrap gap-1.5">
                 {pricing.publicChips.map((chip) => (
                   <span
                     key={chip}
-                    className="rounded-full px-3 py-2 text-[12px] font-semibold"
+                    className="rounded-full px-2.5 py-1.5 text-[11px] font-semibold"
                     style={{
                       background: chip.includes("ingår") ? "#ecfdf5" : SOFT,
                       color: chip.includes("ingår") ? GREEN : "#334155",
@@ -350,18 +350,18 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 ))}
               </div>
 
-              <div className="rounded-2xl bg-white px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
+              <div className="rounded-2xl bg-white px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
                 <div className="flex items-center justify-between gap-4">
-                  <span className="inline-flex items-center gap-2 text-[16px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                    <Users className="h-5 w-5" />
+                  <span className="inline-flex items-center gap-2 text-[15px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                    <Users className="h-4 w-4" />
                     {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
                   </span>
-                  <span className="text-[14px] font-semibold" style={{ color: isFull ? "#be123c" : "#16a34a" }}>
+                  <span className="text-[13px] font-semibold" style={{ color: isFull ? "#be123c" : "#16a34a" }}>
                     {isRegistered ? "Anmäld" : "Live"}
                   </span>
                 </div>
                 {capacity ? (
-                  <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-200">
+                  <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-200">
                     <div
                       className="h-full rounded-full"
                       style={{
@@ -383,27 +383,27 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       key={row.label}
                       type="button"
                       onClick={() => clickable && openUpsell(row.label)}
-                      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-2xl bg-white px-4 py-4 text-left"
+                      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-2xl bg-white px-4 py-3.5 text-left"
                       style={{
                         border: `1px solid ${MENU_BORDER}`,
                       }}
                     >
                       <span className="min-w-0">
-                        <span className="block truncate text-[18px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                        <span className="block truncate text-[16px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
                           {row.label}
                         </span>
                         {isMembershipUpsell && (
-                          <span className="mt-1 block truncate text-[13px] font-normal text-neutral-500">
+                          <span className="mt-0.5 block truncate text-[12px] font-normal text-neutral-500">
                             {row.label.includes("Access") ? `Köp Access och boka för ${row.value}` : "Köp Unlimited och boka när det ingår"}
                           </span>
                         )}
                         {isDayUpsell && (
-                          <span className="mt-1 block truncate text-[13px] font-normal text-neutral-500">
+                          <span className="mt-0.5 block truncate text-[12px] font-normal text-neutral-500">
                             Uppgradera till heldag
                           </span>
                         )}
                       </span>
-                      <span className="shrink-0 text-[22px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                      <span className="shrink-0 text-[18px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
                         {row.value}
                       </span>
                     </button>
@@ -411,12 +411,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 })}
               </div>
 
-              <div className="grid gap-3 pt-1">
+              <div className="grid gap-2 pt-0.5">
                 <button
                   type="button"
                   onClick={startSignup}
                   disabled={loading || isRegistered || isFull}
-                  className="flex h-16 items-center justify-center gap-3 rounded-[24px] px-5 text-[19px] font-bold disabled:opacity-60"
+                  className="flex h-14 items-center justify-center gap-3 rounded-[22px] px-5 text-[17px] font-semibold disabled:opacity-60"
                   style={{
                     background: isRegistered ? "#dcfce7" : isFull ? "#e2e8f0" : NAVY,
                     color: isRegistered ? "#15803d" : isFull ? "#334155" : "white",
@@ -434,7 +434,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   type="button"
                   onClick={openChat}
                   disabled={!room?.id}
-                  className="flex h-14 items-center justify-center gap-2 rounded-[22px] bg-slate-100 px-5 text-[16px] font-semibold text-slate-950 disabled:opacity-70"
+                  className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-100 px-5 text-[16px] font-normal text-slate-950 disabled:opacity-70"
                   style={{ fontFamily: FONT_HEADING }}
                 >
                   {previewLoading && !room?.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <MessageCircle className="h-5 w-5" />}
