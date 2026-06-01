@@ -24,6 +24,16 @@ function parseNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
+  const vatAmount = Math.round(totalIncVat * vatRate / (100 + vatRate) * 100) / 100;
+  return {
+    totalIncVat: Math.round(totalIncVat * 100) / 100,
+    vatAmount,
+    totalExVat: Math.round(Math.max(totalIncVat - vatAmount, 0) * 100) / 100,
+    vatRate,
+  };
+}
+
 function stockholmWeekForIso(iso: string) {
   const dt = DateTime.fromISO(iso, { zone: 'utc' }).setZone('Europe/Stockholm');
   return {
@@ -804,6 +814,7 @@ Deno.serve(async (req) => {
             currency: 'sek',
             product_data: { name: productName },
             unit_amount: Math.round(billedAmountSek * 100),
+            tax_behavior: 'inclusive',
             recurring: { interval: 'month' },
           },
           quantity: 1,
@@ -824,6 +835,7 @@ Deno.serve(async (req) => {
             currency: 'sek',
             product_data: { name: productName },
             unit_amount: Math.round(billedAmountSek * 100),
+            tax_behavior: 'inclusive',
           },
           quantity: 1,
         }],
@@ -1071,17 +1083,29 @@ Deno.serve(async (req) => {
     }
 
     const vatRate = Number(receipt?.vat_rate || 6);
-    const fallbackVatAmount = Math.round(totalPrice * vatRate / (100 + vatRate));
+    const fallbackVat = vatPartsFromIncludedTotal(totalPrice, vatRate);
     const receiptView = {
       receipt_number: receipt?.receipt_number || booking.booking_ref,
       booking_refs: receipt?.booking_refs || bookingRefs,
       stripe_session_id: receipt?.stripe_session_id || booking.stripe_session_id || null,
+      stripe_payment_intent_id: receipt?.stripe_payment_intent_id || null,
+      stripe_customer_id: receipt?.stripe_customer_id || null,
+      stripe_subscription_id: receipt?.stripe_subscription_id || null,
       customer_name: receipt?.customer_name || (booking.notes || '').split(' | ')[0] || null,
       customer_email: receipt?.customer_email || (booking.notes || '').split(' | ')[2] || null,
       customer_phone: receipt?.customer_phone || (booking.notes || '').split(' | ')[1] || null,
+      personal_identity_number: receipt?.personal_identity_number || null,
+      employer_note: receipt?.employer_note || null,
+      wellness_requested: Boolean(receipt?.wellness_requested),
+      product_description: receipt?.product_description || 'Banbokning',
+      purchase_type: receipt?.purchase_type || 'booking',
+      payment_method: receipt?.payment_method || (booking.stripe_session_id ? 'Kort via Stripe' : 'Pickla'),
       total_inc_vat: receipt?.total_inc_vat ?? totalPrice,
-      total_ex_vat: receipt?.total_ex_vat ?? Math.max(totalPrice - fallbackVatAmount, 0),
-      vat_amount: receipt?.vat_amount ?? fallbackVatAmount,
+      total_ex_vat: receipt?.total_ex_vat ?? Math.round(fallbackVat.totalExVat),
+      vat_amount: receipt?.vat_amount ?? Math.round(fallbackVat.vatAmount),
+      total_inc_vat_sek: Number(receipt?.total_inc_vat_sek ?? totalPrice),
+      total_ex_vat_sek: Number(receipt?.total_ex_vat_sek ?? fallbackVat.totalExVat),
+      vat_amount_sek: Number(receipt?.vat_amount_sek ?? fallbackVat.vatAmount),
       vat_rate: vatRate,
       currency: receipt?.currency || 'SEK',
       payment_provider: receipt?.payment_provider || (booking.stripe_session_id ? 'stripe' : 'pickla'),
@@ -1376,57 +1400,50 @@ Deno.serve(async (req) => {
         : DateTime.now().setZone('Europe/Stockholm').year;
       const start = DateTime.fromObject({ year, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
       const end = DateTime.fromObject({ year: year + 1, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+      const admin = getServiceClient();
 
-      const [bookingRes, passRes, profileRes] = await Promise.all([
-        client.from('bookings')
-          .select('id, booking_ref, start_time, end_time, total_price, venue_id, venue_courts(name, sport_type), venues(name, address, city)')
+      const [receiptRes, profileRes, wellnessProfileRes] = await Promise.all([
+        admin.from('booking_receipts')
+          .select('id, receipt_number, booking_refs, purchase_type, product_description, customer_name, customer_email, customer_phone, total_inc_vat, total_inc_vat_sek, total_ex_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, stripe_session_id')
           .eq('user_id', userId)
-          .in('status', ['confirmed', 'completed'])
-          .gte('start_time', start)
-          .lt('start_time', end)
-          .gt('total_price', 0)
-          .order('start_time', { ascending: true }),
-        client.from('day_passes')
-          .select('id, valid_date, price, venue_id, venues(name, address, city)')
-          .eq('user_id', userId)
-          .eq('status', 'active')
-          .gte('valid_date', `${year}-01-01`)
-          .lte('valid_date', `${year}-12-31`)
-          .gt('price', 0)
-          .order('valid_date', { ascending: true }),
+          .eq('payment_status', 'paid')
+          .gte('issued_at', start)
+          .lt('issued_at', end)
+          .gt('total_inc_vat', 0)
+          .order('issued_at', { ascending: true }),
         client.from('player_profiles')
           .select('display_name, first_name, last_name, phone')
           .eq('auth_user_id', userId)
           .maybeSingle(),
+        client.from('wellness_receipt_profiles')
+          .select('personal_identity_number, employer_note')
+          .eq('auth_user_id', userId)
+          .maybeSingle(),
       ]);
 
-      if (bookingRes.error) return errorResponse(bookingRes.error.message);
-      if (passRes.error) return errorResponse(passRes.error.message);
+      if (receiptRes.error) return errorResponse(receiptRes.error.message);
 
-      const bookingItems = (bookingRes.data || []).map((b: any) => ({
-        id: b.id,
-        type: 'Banbokning',
-        date: DateTime.fromISO(b.start_time, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate(),
-        label: [b.venue_courts?.name || 'Bana', b.venues?.name].filter(Boolean).join(' · '),
-        reference: b.booking_ref,
-        amount: Number(b.total_price || 0),
-        venue: b.venues || null,
+      const typeLabel = (type: string | null | undefined) => {
+        if (type === 'booking') return 'Banbokning';
+        if (type === 'activity_session') return 'Aktivitet';
+        if (type === 'day_pass') return 'Dagsmedlemskap';
+        if (type === 'membership') return 'Medlemskap';
+        return 'Friskvård';
+      };
+      const items = (receiptRes.data || []).map((receipt: any) => ({
+        id: receipt.id,
+        type: typeLabel(receipt.purchase_type),
+        date: DateTime.fromISO(receipt.issued_at, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate(),
+        label: receipt.product_description || typeLabel(receipt.purchase_type),
+        reference: receipt.receipt_number,
+        amount: Number(receipt.total_inc_vat_sek ?? receipt.total_inc_vat ?? 0),
+        vat_amount: Number(receipt.vat_amount_sek ?? 0),
+        payment_method: receipt.payment_method || 'Kort via Stripe',
+        stripe_session_id: receipt.stripe_session_id || null,
       }));
-
-      const passItems = (passRes.data || []).map((p: any) => ({
-        id: p.id,
-        type: 'Dagspass',
-        date: p.valid_date,
-        label: p.venues?.name || 'Pickla',
-        reference: p.id,
-        amount: Number(p.price || 0),
-        venue: p.venues || null,
-      }));
-
-      const items = [...bookingItems, ...passItems].sort((a, b) => String(a.date).localeCompare(String(b.date)));
       const total = items.reduce((sum, item) => sum + item.amount, 0);
       const vatRate = 6;
-      const vatAmount = Math.round(total * vatRate / (100 + vatRate));
+      const vat = vatPartsFromIncludedTotal(total, vatRate);
 
       return jsonResponse({
         year,
@@ -1435,14 +1452,32 @@ Deno.serve(async (req) => {
         customer: {
           name: [profileRes.data?.first_name, profileRes.data?.last_name].filter(Boolean).join(' ') || profileRes.data?.display_name || null,
           phone: profileRes.data?.phone || null,
+          personal_identity_number: wellnessProfileRes.data?.personal_identity_number || null,
+          employer_note: wellnessProfileRes.data?.employer_note || null,
         },
         items,
-        total_inc_vat: total,
-        total_ex_vat: Math.max(total - vatAmount, 0),
-        vat_amount: vatAmount,
+        total_inc_vat: vat.totalIncVat,
+        total_ex_vat: vat.totalExVat,
+        vat_amount: vat.vatAmount,
         vat_rate: vatRate,
         currency: 'SEK',
       }, 200, 0);
+    }
+
+    // POST /api-bookings/wellness-profile — stores sensitive wellness receipt fields for current user only
+    if (req.method === 'POST' && path === 'wellness-profile') {
+      const body = await req.json();
+      const personalIdentityNumber = String(body.personal_identity_number || '').trim().slice(0, 20);
+      const employerNote = String(body.employer_note || '').trim().slice(0, 200);
+
+      const { error: upsertErr } = await client.from('wellness_receipt_profiles').upsert({
+        auth_user_id: userId,
+        personal_identity_number: personalIdentityNumber || null,
+        employer_note: employerNote || null,
+      }, { onConflict: 'auth_user_id' });
+
+      if (upsertErr) return errorResponse(upsertErr.message, 500);
+      return jsonResponse({ success: true }, 200, 0);
     }
 
     // GET /api-bookings/venue?venueId=X&date=YYYY-MM-DD

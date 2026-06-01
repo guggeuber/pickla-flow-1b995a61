@@ -129,13 +129,92 @@ Deno.serve(async (req) => {
 // ── Court booking ─────────────────────────────────────────────────────────────
 
 function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
-  const vatAmount = Math.round(totalIncVat * vatRate / (100 + vatRate));
+  const vatAmount = Math.round(totalIncVat * vatRate / (100 + vatRate) * 100) / 100;
   return {
     totalIncVat,
     vatRate,
     vatAmount,
-    totalExVat: Math.max(totalIncVat - vatAmount, 0),
+    totalExVat: Math.round(Math.max(totalIncVat - vatAmount, 0) * 100) / 100,
   };
+}
+
+function receiptPaymentMethod(session: any) {
+  const types = Array.isArray(session.payment_method_types) ? session.payment_method_types : [];
+  if (types.includes('card')) return 'Kort via Stripe';
+  return types.length ? `${types.join(', ')} via Stripe` : 'Stripe';
+}
+
+async function createPurchaseReceipt({
+  session,
+  meta,
+  serviceClient,
+  userId,
+  bookingRefs = [],
+  totalSek,
+  purchaseType,
+  productDescription,
+}: {
+  session: any;
+  meta: Record<string, string>;
+  serviceClient: any;
+  userId: string;
+  bookingRefs?: string[];
+  totalSek: number;
+  purchaseType: string;
+  productDescription: string;
+}) {
+  if (totalSek <= 0) return;
+
+  const { data: existing } = await serviceClient
+    .from('booking_receipts')
+    .select('id')
+    .eq('stripe_session_id', session.id)
+    .maybeSingle();
+  if (existing) return;
+
+  const vat = vatPartsFromIncludedTotal(totalSek, 6);
+  const customerName = meta.customer_name || meta.name || session.customer_details?.name || null;
+  const customerEmail = session.customer_details?.email || meta.customer_email || null;
+  const customerPhone = meta.customer_phone || meta.phone || session.customer_details?.phone || null;
+
+  const { error } = await serviceClient.from('booking_receipts').insert({
+    booking_refs: bookingRefs,
+    stripe_session_id: session.id,
+    stripe_payment_intent_id: session.payment_intent || null,
+    stripe_customer_id: session.customer || null,
+    stripe_subscription_id: session.subscription || null,
+    venue_id: meta.venue_id || null,
+    user_id: userId,
+    customer_name: customerName,
+    customer_email: customerEmail,
+    customer_phone: customerPhone,
+    purchase_type: purchaseType,
+    product_description: productDescription,
+    payment_method: receiptPaymentMethod(session),
+    total_inc_vat: Math.round(vat.totalIncVat),
+    total_ex_vat: Math.round(vat.totalExVat),
+    vat_amount: Math.round(vat.vatAmount),
+    total_inc_vat_sek: vat.totalIncVat,
+    total_ex_vat_sek: vat.totalExVat,
+    vat_amount_sek: vat.vatAmount,
+    vat_rate: vat.vatRate,
+    currency: (session.currency || 'sek').toUpperCase(),
+    payment_provider: 'stripe',
+    payment_status: session.payment_status || 'paid',
+    metadata: {
+      product_type: meta.product_type || purchaseType,
+      product_key: meta.product_key || null,
+      date: meta.date || null,
+      start_time: meta.start_time || null,
+      end_time: meta.end_time || null,
+      activity_session_id: meta.activity_session_id || meta.open_play_session_id || null,
+      tier_id: meta.tier_id || null,
+    },
+  });
+
+  if (error) {
+    console.error('Failed to create receipt:', error.message);
+  }
 }
 
 async function createCourtBookingReceipt({
@@ -153,44 +232,16 @@ async function createCourtBookingReceipt({
   bookingRefs: string[];
   totalSek: number;
 }) {
-  if (!bookingRefs.length || totalSek <= 0) return;
-
-  const { data: existing } = await serviceClient
-    .from('booking_receipts')
-    .select('id')
-    .eq('stripe_session_id', session.id)
-    .maybeSingle();
-  if (existing) return;
-
-  const vat = vatPartsFromIncludedTotal(totalSek, 6);
-  const { error } = await serviceClient.from('booking_receipts').insert({
-    booking_refs: bookingRefs,
-    stripe_session_id: session.id,
-    venue_id: meta.venue_id,
-    user_id: bookingUserId,
-    customer_name: meta.name || session.customer_details?.name || null,
-    customer_email: session.customer_details?.email || null,
-    customer_phone: meta.phone || session.customer_details?.phone || null,
-    total_inc_vat: vat.totalIncVat,
-    total_ex_vat: vat.totalExVat,
-    vat_amount: vat.vatAmount,
-    vat_rate: vat.vatRate,
-    currency: (session.currency || 'sek').toUpperCase(),
-    payment_provider: 'stripe',
-    payment_status: session.payment_status || 'paid',
-    metadata: {
-      product_type: meta.product_type || 'court_booking',
-      court_ids: meta.court_ids || '[]',
-      date: meta.date || null,
-      start_time: meta.start_time || null,
-      end_time: meta.end_time || null,
-    },
+  await createPurchaseReceipt({
+    session,
+    meta,
+    serviceClient,
+    userId: bookingUserId,
+    bookingRefs,
+    totalSek,
+    purchaseType: 'booking',
+    productDescription: `Banbokning${meta.date ? ` ${meta.date}` : ''}${meta.start_time ? ` ${meta.start_time}-${meta.end_time || ''}` : ''}`,
   });
-
-  if (error) {
-    // Never fail a paid booking because the v1 receipt snapshot is not migrated yet.
-    console.error('Failed to create booking receipt:', error.message);
-  }
 }
 
 async function handleCourtBooking(
@@ -385,6 +436,7 @@ async function handleDayPass(
 
   const resolvedUserId = await resolveUserId(session, user_id, serviceClient);
   const priceSek = Math.round((session.amount_total || 0) / 100);
+  const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
 
   const { data: dayPass, error } = await serviceClient.from('day_passes').insert({
     venue_id,
@@ -396,6 +448,16 @@ async function handleDayPass(
   }).select('id').single();
 
   if (error) throw new Error(`Failed to insert day_pass: ${error.message}`);
+
+  await createPurchaseReceipt({
+    session,
+    meta: { ...meta, venue_id },
+    serviceClient,
+    userId: resolvedUserId,
+    totalSek: paidSek,
+    purchaseType: activity_session_id || open_play_session_id ? 'activity_session' : 'day_pass',
+    productDescription: meta.session_name || (activity_session_id || open_play_session_id ? 'Aktivitetsbiljett' : 'Dagsmedlemskap'),
+  });
 
   const activitySessionId = activity_session_id || open_play_session_id || null;
   const kind = session_type || 'open_play';
@@ -528,6 +590,7 @@ async function handleMembership(
   if (profileErr) throw new Error(`Failed to update player profile: ${profileErr.message}`);
 
   const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
+  const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
 
   // Reactivate an existing membership row when the user buys again.
   // This is critical because admin/manual cancellation leaves a cancelled row
@@ -558,6 +621,15 @@ async function handleMembership(
       .eq('id', existing.id);
 
     if (updateErr) throw new Error(`Failed to reactivate membership: ${updateErr.message}`);
+    await createPurchaseReceipt({
+      session,
+      meta: { ...meta, venue_id: tier.venue_id },
+      serviceClient,
+      userId: resolvedUserId,
+      totalSek: paidSek,
+      purchaseType: 'membership',
+      productDescription: meta.tier_name ? `Medlemskap · ${meta.tier_name}` : 'Medlemskap',
+    });
     return;
   }
 
@@ -572,4 +644,14 @@ async function handleMembership(
   });
 
   if (error) throw new Error(`Failed to insert membership: ${error.message}`);
+
+  await createPurchaseReceipt({
+    session,
+    meta: { ...meta, venue_id: tier.venue_id },
+    serviceClient,
+    userId: resolvedUserId,
+    totalSek: paidSek,
+    purchaseType: 'membership',
+    productDescription: meta.tier_name ? `Medlemskap · ${meta.tier_name}` : 'Medlemskap',
+  });
 }
