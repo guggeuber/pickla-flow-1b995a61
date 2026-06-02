@@ -94,7 +94,7 @@ export default function GroupBookingPage() {
     : "Datum flexibelt";
 
   const inquiryMutation = useMutation({
-    mutationFn: () => apiPost("event-intake-agent", "intake", {
+    mutationFn: () => apiPost("api-event-public", "group-inquiry", {
       slug,
       eventType,
       participants,
