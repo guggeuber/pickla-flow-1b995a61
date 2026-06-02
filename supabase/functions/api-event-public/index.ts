@@ -615,25 +615,33 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (eventErr || !eventRow) return errorResponse('Event not found', 404);
 
+      const { data: eventLead } = await client.from('event_leads')
+        .select('id, venue_id, status, contact_name, email')
+        .eq('event_id', eventId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
       const { data: room } = await client.from('chat_rooms')
         .select('id')
         .eq('resource_id', eventId)
         .eq('room_type', 'event')
         .maybeSingle();
-      if (!room?.id) return errorResponse('Event room not found', 404);
 
       const textBody = String(email?.text || stripHtml(email?.html) || '').trim();
       const content = textBody.length > 4000 ? `${textBody.slice(0, 4000)}...` : textBody;
+      const fromEmail = emailAddressField(email?.from || event?.data?.from) || null;
+      const subject = email?.subject || event?.data?.subject || null;
 
       const { data: communication, error: commErr } = await client.from('event_communications')
         .insert({
           event_id: eventId,
-          room_id: room.id,
+          room_id: room?.id || null,
           direction: 'inbound',
           channel: 'email',
-          from_email: emailAddressField(email?.from || event?.data?.from) || null,
+          from_email: fromEmail,
           to_email: Array.isArray(email?.to) ? email.to.map(emailAddressField).filter(Boolean).join(', ') : null,
-          subject: email?.subject || event?.data?.subject || null,
+          subject,
           body_text: textBody || null,
           body_html: email?.html || null,
           provider: 'resend',
@@ -644,6 +652,7 @@ Deno.serve(async (req) => {
             message_id: email?.message_id || event?.data?.message_id || null,
             cc: email?.cc || [],
             attachments: email?.attachments || [],
+            event_lead_id: eventLead?.id || null,
           },
         })
         .select('id')
@@ -654,22 +663,44 @@ Deno.serve(async (req) => {
         return errorResponse(commErr.message, 500);
       }
 
-      await client.from('chat_messages').insert({
-        room_id: room.id,
-        user_id: null,
-        message_type: 'text',
-        content: content || '(tomt mailsvar)',
-        metadata: {
-          channel: 'email',
-          direction: 'inbound',
-          communication_id: communication.id,
-          event_id: eventId,
-          from: emailAddressField(email?.from || event?.data?.from) || null,
-          subject: email?.subject || event?.data?.subject || null,
-        },
-      });
+      if (eventLead?.id) {
+        if (!['booking_confirmed', 'lost', 'won'].includes(eventLead.status)) {
+          await client.from('event_leads').update({ status: 'customer_replied' }).eq('id', eventLead.id);
+        }
+        await client.from('event_lead_activities').insert({
+          venue_id: eventLead.venue_id || eventRow.venue_id,
+          event_lead_id: eventLead.id,
+          activity_type: 'customer_reply_received',
+          title: 'Customer replied',
+          body: content || subject || 'Kunden svarade på mail.',
+          metadata: {
+            event_id: eventId,
+            communication_id: communication.id,
+            from: fromEmail,
+            subject,
+          },
+        });
+      }
 
-      return jsonResponse({ success: true, communication_id: communication.id });
+      if (room?.id) {
+        await client.from('chat_messages').insert({
+          room_id: room.id,
+          user_id: null,
+          message_type: 'text',
+          content: content || '(tomt mailsvar)',
+          metadata: {
+            channel: 'email',
+            direction: 'inbound',
+            communication_id: communication.id,
+            event_id: eventId,
+            event_lead_id: eventLead?.id || null,
+            from: fromEmail,
+            subject,
+          },
+        });
+      }
+
+      return jsonResponse({ success: true, communication_id: communication.id, event_lead_id: eventLead?.id || null, mirrored_to_chat: !!room?.id });
     }
 
     // POST /api-event-public/customer-message — staff email response from inquiry room

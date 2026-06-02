@@ -177,18 +177,22 @@ Deno.serve(async (req) => {
       const { data, error: uErr } = await admin.from('event_leads').update(updates).eq('id', body.leadId).select('*').single();
       if (uErr) return errorResponse(uErr.message);
 
-      if (body.status === 'won' && leadRow.event_id) {
-        await admin.from('events').update({ planning_status: 'booked' }).eq('id', leadRow.event_id);
-      }
       if (body.status === 'lost' && leadRow.event_id) {
         await admin.from('events').update({ planning_status: 'cancelled' }).eq('id', leadRow.event_id);
       }
-      if (body.status === 'won' || body.status === 'lost') {
+      if (body.status === 'ready_to_book' && leadRow.event_id) {
+        await admin.from('events').update({ planning_status: 'tentative' }).eq('id', leadRow.event_id);
+      }
+      if (body.status === 'won' || body.status === 'lost' || body.status === 'ready_to_book') {
         await admin.from('event_lead_activities').insert(leadActivity({
           lead: data,
           type: body.status,
-          title: body.status === 'won' ? 'Won' : 'Lost',
-          body: body.status === 'won' ? 'Lead markerades som vunnen.' : 'Lead markerades som förlorad.',
+          title: body.status === 'won' ? 'Won' : body.status === 'ready_to_book' ? 'Ready to book' : 'Lost',
+          body: body.status === 'won'
+            ? 'Lead markerades som vunnen utan att boka eventet.'
+            : body.status === 'ready_to_book'
+              ? 'Leadet är redo för resurskontroll och bindande bokning.'
+              : 'Lead markerades som förlorad.',
           actorUserId: userId,
         }));
       }
