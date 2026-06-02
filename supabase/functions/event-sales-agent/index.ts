@@ -294,20 +294,27 @@ async function applyOfferResourcePlan(admin: any, lead: any, offerConfig: any) {
 
   const { data: eventRow } = await admin.from('events').select('start_date, start_time, end_time').eq('id', lead.event_id).maybeSingle();
   const range = eventDateTimeRange(eventRow || {});
-  await admin.from('event_resource_allocations').delete().eq('event_id', lead.event_id).eq('status', 'proposed').throwOnError().catch(() => null);
-  await admin.from('event_resource_allocations').insert(selectedResources.map((row: any) => ({
-    venue_id: lead.venue_id,
-    event_id: lead.event_id,
-    resource_catalog_id: row.id,
-    venue_court_id: row.venue_court_id || null,
-    venue_staff_id: row.venue_staff_id || null,
-    resource_type: row.resource_type,
-    name: row.name,
-    quantity: 1,
-    start_at: range?.startUtc || null,
-    end_at: range?.endUtc || null,
-    status: 'proposed',
-  }))).throwOnError().catch(() => null);
+  try {
+    await admin.from('event_resource_allocations')
+      .delete()
+      .eq('event_id', lead.event_id)
+      .eq('status', 'proposed');
+    await admin.from('event_resource_allocations').insert(selectedResources.map((row: any) => ({
+      venue_id: lead.venue_id,
+      event_id: lead.event_id,
+      resource_catalog_id: row.id,
+      venue_court_id: row.venue_court_id || null,
+      venue_staff_id: row.venue_staff_id || null,
+      resource_type: row.resource_type,
+      name: row.name,
+      quantity: 1,
+      start_at: range?.startUtc || null,
+      end_at: range?.endUtc || null,
+      status: 'proposed',
+    })));
+  } catch (_) {
+    // Resource allocations are planning metadata; event_courts above remains the blocking inventory source.
+  }
 
   return { resources: resourceNames, selectedResources };
 }
