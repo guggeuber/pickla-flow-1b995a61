@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -1166,6 +1167,57 @@ Deno.serve(async (req) => {
 
       if (insertErr) return errorResponse(insertErr.message, 500);
 
+      const leadInput = sanitizeLeadInput({
+        venueId: venue.id,
+        company_name: normalizedType === 'company' || normalizedType === 'team' ? cleanName : null,
+        contact_name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone,
+        participants_count: participantCount,
+        preferred_date: requestedDate,
+        preferred_time: timeLabel,
+        event_type: normalizedType,
+        activities: selectedActivities,
+        resources: selectedResources,
+        message: cleanNotes,
+        source: 'public_group_inquiry',
+      });
+      const leadScore = scoreLead(leadInput);
+      const suggestedPackage = choosePackage(leadInput);
+      const estimatedValue = estimateValue(leadInput, suggestedPackage);
+
+      const { data: eventLead, error: leadErr } = await client.from('event_leads').insert({
+        venue_id: venue.id,
+        event_id: event.id,
+        company_name: leadInput.companyName,
+        contact_name: leadInput.contactName,
+        email: leadInput.email,
+        phone: leadInput.phone,
+        participants_count: leadInput.participants,
+        preferred_date: leadInput.preferredDate,
+        preferred_time: leadInput.preferredTime,
+        event_type: leadInput.eventType,
+        activities: leadInput.activities,
+        resources: leadInput.resources,
+        message: leadInput.message,
+        source: leadInput.source,
+        lead_score: leadScore,
+        status: 'new_event_lead',
+        package_type: suggestedPackage.key,
+        estimated_value: estimatedValue,
+        agent_summary: leadSummary(leadInput, suggestedPackage),
+      }).select('*').single();
+
+      if (leadErr) return errorResponse(leadErr.message, 500);
+
+      await client.from('event_lead_activities').insert(leadActivity({
+        lead: eventLead,
+        type: 'lead_created',
+        title: 'Lead created',
+        body: `${leadInput.contactName} skickade en gruppförfrågan.`,
+        metadata: { source: leadInput.source, package_type: suggestedPackage.key, lead_score: leadScore },
+      }));
+
       const roomId = await createInquiryRoom({
         client,
         venueId: venue.id,
@@ -1203,7 +1255,7 @@ Deno.serve(async (req) => {
         });
       }).catch((err) => console.error('Confirmation email failed:', err?.message || err));
 
-      return jsonResponse({ success: true, event_id: event.id, room_id: roomId }, 201);
+      return jsonResponse({ success: true, event_id: event.id, lead_id: eventLead.id, room_id: roomId }, 201);
     }
 
     // POST /api-event-public/register — register a player + auto-create account
