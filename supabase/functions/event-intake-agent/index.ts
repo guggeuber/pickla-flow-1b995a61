@@ -4,6 +4,7 @@ import {
   assertVenueAdmin,
   choosePackage,
   estimateValue,
+  leadActivity,
   leadSummary,
   sanitizeLeadInput,
   scoreLead,
@@ -122,6 +123,14 @@ Deno.serve(async (req) => {
       }).select('*').single();
       if (leadErr) return errorResponse(leadErr.message, 500);
 
+      await admin.from('event_lead_activities').insert(leadActivity({
+        lead: eventLead,
+        type: 'lead_created',
+        title: 'Lead created',
+        body: `${lead.contactName} skickade en eventförfrågan.`,
+        metadata: { source: lead.source, package_type: pack.key, lead_score: leadScore },
+      }));
+
       return jsonResponse({
         ok: true,
         event_id: event.id,
@@ -140,7 +149,7 @@ Deno.serve(async (req) => {
       if (!venueId) return errorResponse('Missing venueId');
       if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
       const { data, error: qErr } = await admin.from('event_leads')
-        .select('*, event_offers(id, status, total_price, pdf_url, created_at)')
+        .select('*, event_offers(id, status, total_price, pdf_url, sent_at, created_at), event_followups(id, followup_type, scheduled_at, sent_at, status, message, created_at), event_lead_activities(id, activity_type, title, body, created_at, metadata)')
         .eq('venue_id', venueId)
         .order('created_at', { ascending: false })
         .limit(100);
@@ -173,6 +182,15 @@ Deno.serve(async (req) => {
       }
       if (body.status === 'lost' && leadRow.event_id) {
         await admin.from('events').update({ planning_status: 'cancelled' }).eq('id', leadRow.event_id);
+      }
+      if (body.status === 'won' || body.status === 'lost') {
+        await admin.from('event_lead_activities').insert(leadActivity({
+          lead: data,
+          type: body.status,
+          title: body.status === 'won' ? 'Won' : 'Lost',
+          body: body.status === 'won' ? 'Lead markerades som vunnen.' : 'Lead markerades som förlorad.',
+          actorUserId: userId,
+        }));
       }
       return jsonResponse(data);
     }

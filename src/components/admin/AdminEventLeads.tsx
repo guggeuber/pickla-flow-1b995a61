@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, CheckCircle2, Copy, FileText, Loader2, Mail, Trophy, XCircle } from "lucide-react";
+import { CalendarDays, CheckCircle2, Clock, Copy, Eye, FileText, Loader2, Mail, Send, Trophy, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 
@@ -9,9 +9,20 @@ const STATUS_LABELS: Record<string, string> = {
   offer_generated: "Offert skapad",
   pdf_ready: "PDF klar",
   mail_draft_ready: "Mailutkast",
+  offer_sent: "Offert skickad",
   contacted: "Kontaktad",
   won: "Vunnen",
   lost: "Förlorad",
+};
+
+const TIMELINE_LABELS: Record<string, string> = {
+  lead_created: "Lead created",
+  offer_generated: "Offer generated",
+  pdf_ready: "PDF ready",
+  offer_sent: "Offer sent",
+  followup_scheduled: "Follow-up scheduled",
+  won: "Won",
+  lost: "Lost",
 };
 
 function latestOffer(lead: any) {
@@ -26,6 +37,7 @@ function formatSek(value?: number | null) {
 export default function AdminEventLeads({ venueId }: { venueId: string }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<any | null>(null);
+  const [sendPreview, setSendPreview] = useState<any | null>(null);
   const { data: leads = [], isLoading } = useQuery<any[]>({
     queryKey: ["event-agent-leads", venueId],
     queryFn: () => apiGet("event-intake-agent", "leads", { venueId }),
@@ -62,6 +74,22 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const previewSend = useMutation({
+    mutationFn: (offerId: string) => apiGet<any>("event-sales-agent", "preview-send", { offerId }),
+    onSuccess: (result) => setSendPreview(result),
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const sendOffer = useMutation({
+    mutationFn: (offerId: string) => apiPost<any>("event-sales-agent", "send-offer", { offerId }),
+    onSuccess: () => {
+      toast.success("Offert skickad");
+      setSendPreview(null);
+      refresh();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const updateLead = useMutation({
     mutationFn: ({ leadId, status }: { leadId: string; status: string }) => apiPatch("event-intake-agent", "lead", { leadId, status }),
     onSuccess: refresh,
@@ -79,12 +107,30 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     toast.success("Utkast kopierat");
   };
 
+  const formatDateTime = (value?: string | null) => {
+    if (!value) return "";
+    return new Date(value).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" });
+  };
+
   if (isLoading) {
     return <Loader2 className="mx-auto mt-8 h-5 w-5 animate-spin text-primary" />;
   }
 
   const renderLead = (lead: any) => {
     const offer = latestOffer(lead);
+    const timeline = [
+      ...(Array.isArray(lead.event_lead_activities) ? lead.event_lead_activities : []),
+      ...(Array.isArray(lead.event_followups) ? lead.event_followups.map((f: any) => ({
+        id: `followup-${f.id}`,
+        activity_type: "followup_scheduled",
+        title: "Follow-up scheduled",
+        body: f.message,
+        created_at: f.created_at || f.scheduled_at,
+        metadata: { scheduled_at: f.scheduled_at, followup_type: f.followup_type, status: f.status },
+      })) : []),
+    ]
+      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      .slice(0, 8);
     return (
       <div key={lead.id} className="glass-card rounded-2xl p-4 space-y-3">
         <div className="flex items-start gap-3">
@@ -102,6 +148,9 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
             <p className="mt-1 text-[11px] text-muted-foreground">
               {STATUS_LABELS[lead.status] || lead.status} · {lead.package_type || "paket ej valt"} · est. {formatSek(lead.estimated_value)}
             </p>
+            {offer?.sent_at && (
+              <p className="mt-1 text-[10px] font-semibold text-court-free">Skickad {formatDateTime(offer.sent_at)}</p>
+            )}
           </div>
         </div>
 
@@ -123,6 +172,14 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
           >
             <Mail className="mr-1 inline h-3.5 w-3.5" />
             Send Email Draft
+          </button>
+          <button
+            onClick={() => offer?.id ? previewSend.mutate(offer.id) : toast.info("Generera offert först")}
+            disabled={!offer?.id || offer?.status === "sent" || previewSend.isPending}
+            className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50"
+          >
+            {previewSend.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 inline h-3.5 w-3.5" />}
+            {offer?.status === "sent" ? "Sent" : "Send Offer"}
           </button>
           <button
             onClick={() => updateLead.mutate({ leadId: lead.id, status: "won" })}
@@ -153,6 +210,28 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
             Create Booking/Event
           </button>
         </div>
+
+        {timeline.length > 0 && (
+          <div className="rounded-xl border border-border bg-muted/25 p-3">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Timeline</p>
+            <div className="space-y-2">
+              {timeline.map((item: any) => (
+                <div key={item.id} className="flex gap-2 text-xs">
+                  <div className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-background">
+                    <Clock className="h-3 w-3 text-muted-foreground" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-foreground">{TIMELINE_LABELS[item.activity_type] || item.title || item.activity_type}</p>
+                    {item.body && <p className="truncate text-[11px] text-muted-foreground">{item.body}</p>}
+                    <p className="text-[10px] text-muted-foreground">
+                      {formatDateTime(item.metadata?.scheduled_at || item.created_at)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -197,6 +276,50 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
               <Copy className="mr-2 inline h-4 w-4" />
               Kopiera utkast
             </button>
+          </div>
+        </div>
+      )}
+
+      {sendPreview && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/55 px-4 py-8">
+          <div className="mx-auto max-w-xl rounded-2xl bg-background p-4 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Approve first</p>
+                <h3 className="font-bold">Skicka offert</h3>
+              </div>
+              <button onClick={() => setSendPreview(null)}><XCircle className="h-5 w-5" /></button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-border bg-muted/25 p-3 text-xs">
+              <p><span className="font-bold">Till:</span> {sendPreview.to}</p>
+              <p className="mt-1"><span className="font-bold">Subject:</span> {sendPreview.subject}</p>
+            </div>
+
+            <p className="mt-4 text-xs font-bold text-muted-foreground">Email preview</p>
+            <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-muted p-3 text-xs">{sendPreview.email_body}</pre>
+
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => sendPreview.signed_url && window.open(sendPreview.signed_url, "_blank", "noopener,noreferrer")}
+                className="flex-1 rounded-xl bg-muted px-3 py-3 text-sm font-bold text-foreground"
+              >
+                <Eye className="mr-2 inline h-4 w-4" />
+                Förhandsvisa PDF
+              </button>
+              <button
+                onClick={() => sendOffer.mutate(sendPreview.offer.id)}
+                disabled={sendOffer.isPending}
+                className="flex-1 rounded-xl bg-primary px-3 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50"
+              >
+                {sendOffer.isPending ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Send className="mr-2 inline h-4 w-4" />}
+                Godkänn & skicka
+              </button>
+            </div>
+
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              Inget skickas förrän du klickar på Godkänn & skicka. PDF bifogas som bilaga.
+            </p>
           </div>
         </div>
       )}
