@@ -9,6 +9,7 @@ import {
   buildOfferPdfBytes,
   buildSalesDraft,
   emailHtmlFromText,
+  EVENT_PACKAGES,
   leadActivity,
 } from '../_shared/event_agents.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
@@ -144,6 +145,146 @@ async function checkEventResourceConflicts(admin: any, eventRow: any) {
   };
 }
 
+function fallbackOfferCatalog(resources: any[] = []) {
+  const templates = Object.values(EVENT_PACKAGES).map((pack: any, index) => ({
+    id: null,
+    template_key: pack.key,
+    title: pack.title,
+    subtitle: pack.subtitle,
+    description: pack.pitch,
+    default_price_per_person: pack.pricePerPerson,
+    min_price_per_person: null,
+    max_price_per_person: null,
+    payload: {
+      included: pack.includes,
+      agenda: pack.agenda,
+    },
+    sort_order: (index + 1) * 10,
+  }));
+  const items = Object.values(EVENT_PACKAGES).flatMap((pack: any, packageIndex) =>
+    pack.includes.map((title: string, index: number) => ({
+      id: `${pack.key}-${index}`,
+      venue_id: null,
+      template_id: null,
+      item_type: /pizza|dryck|lunch/i.test(title) ? 'food_drink' : /coach|värd/i.test(title) ? 'staff' : 'activity',
+      title,
+      description: null,
+      included_by_default: true,
+      sort_order: packageIndex * 100 + index,
+    }))
+  );
+  return { templates, items, resources, fallback: true };
+}
+
+async function fetchOfferCatalog(admin: any, venueId: string) {
+  const [{ data: templates, error: templateErr }, { data: items, error: itemErr }, { data: resources, error: resourceErr }] = await Promise.all([
+    admin.from('event_offer_templates')
+      .select('id, venue_id, template_key, title, subtitle, description, default_price_per_person, min_price_per_person, max_price_per_person, payload, sort_order')
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true }),
+    admin.from('event_offer_items')
+      .select('id, venue_id, template_id, item_type, title, description, unit_price, unit, included_by_default, sort_order')
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true }),
+    admin.from('event_resource_catalog')
+      .select('id, venue_id, resource_type, name, description, venue_court_id, venue_staff_id, capacity, unit, default_unit_price, is_bookable, sort_order')
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .order('resource_type', { ascending: true })
+      .order('sort_order', { ascending: true }),
+  ]);
+  if (!templateErr && !itemErr && !resourceErr) {
+    return { templates: templates || [], items: items || [], resources: resources || [], fallback: false };
+  }
+
+  const { data: courts } = await admin
+    .from('venue_courts')
+    .select('id, name, sport_type, court_number')
+    .eq('venue_id', venueId)
+    .eq('is_available', true)
+    .order('sport_type', { ascending: true })
+    .order('court_number', { ascending: true });
+  const fallbackResources = (courts || []).map((court: any) => ({
+    id: `court-${court.id}`,
+    venue_id: venueId,
+    resource_type: 'court',
+    name: court.name,
+    description: court.sport_type,
+    venue_court_id: court.id,
+    venue_staff_id: null,
+    capacity: null,
+    unit: 'event',
+    default_unit_price: 0,
+    is_bookable: true,
+    sort_order: court.court_number || 100,
+  }));
+  return fallbackOfferCatalog(fallbackResources);
+}
+
+function uniqueStrings(values: unknown[]) {
+  return values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .filter((value, index, all) => all.indexOf(value) === index);
+}
+
+async function applyOfferResourcePlan(admin: any, lead: any, offerConfig: any) {
+  const selectedIds = Array.isArray(offerConfig?.selected_resource_ids)
+    ? offerConfig.selected_resource_ids.map((id: unknown) => String(id)).filter(Boolean)
+    : [];
+  if (!lead.event_id || selectedIds.length === 0) {
+    return { resources: uniqueStrings(offerConfig?.resources || []), selectedResources: [] };
+  }
+
+  const { data: catalogRows, error } = await admin
+    .from('event_resource_catalog')
+    .select('id, venue_id, resource_type, name, description, venue_court_id, venue_staff_id')
+    .eq('venue_id', lead.venue_id)
+    .in('id', selectedIds);
+  if (error) {
+    return { resources: uniqueStrings(offerConfig?.resources || []), selectedResources: [] };
+  }
+
+  const selectedResources = catalogRows || [];
+  const courtIds = uniqueStrings(selectedResources.map((row: any) => row.venue_court_id).filter(Boolean));
+  const nonCourtNames = uniqueStrings(selectedResources.filter((row: any) => row.resource_type !== 'court').map((row: any) => row.name));
+  const staffNames = uniqueStrings(selectedResources.filter((row: any) => row.resource_type === 'staff').map((row: any) => row.name));
+  const resourceNames = uniqueStrings([...(offerConfig?.resources || []), ...selectedResources.map((row: any) => row.name)]);
+
+  if (courtIds.length > 0) {
+    await admin.from('event_courts').delete().eq('event_id', lead.event_id);
+    await admin.from('event_courts').insert(courtIds.map((venueCourtId) => ({
+      event_id: lead.event_id,
+      venue_court_id: venueCourtId,
+    })));
+  }
+
+  const eventUpdate: Record<string, unknown> = { resources: nonCourtNames };
+  if (staffNames.length) eventUpdate.staffing = staffNames.join(', ');
+  await admin.from('events').update(eventUpdate).eq('id', lead.event_id);
+
+  const { data: eventRow } = await admin.from('events').select('start_date, start_time, end_time').eq('id', lead.event_id).maybeSingle();
+  const range = eventDateTimeRange(eventRow || {});
+  await admin.from('event_resource_allocations').delete().eq('event_id', lead.event_id).eq('status', 'proposed').throwOnError().catch(() => null);
+  await admin.from('event_resource_allocations').insert(selectedResources.map((row: any) => ({
+    venue_id: lead.venue_id,
+    event_id: lead.event_id,
+    resource_catalog_id: row.id,
+    venue_court_id: row.venue_court_id || null,
+    venue_staff_id: row.venue_staff_id || null,
+    resource_type: row.resource_type,
+    name: row.name,
+    quantity: 1,
+    start_at: range?.startUtc || null,
+    end_at: range?.endUtc || null,
+    status: 'proposed',
+  }))).throwOnError().catch(() => null);
+
+  return { resources: resourceNames, selectedResources };
+}
+
 function buildBookingConfirmationText({ lead, offer, eventRow, depositUrl, depositAmount }: any) {
   const date = normalizeDate(eventRow.start_date) || normalizeDate(lead.preferred_date) || 'enligt överenskommelse';
   const time = eventRow.start_time ? `${String(eventRow.start_time).slice(0, 5)}${eventRow.end_time ? `-${String(eventRow.end_time).slice(0, 5)}` : ''}` : 'tid enligt överenskommelse';
@@ -258,6 +399,14 @@ Deno.serve(async (req) => {
     if (error || !userId) return errorResponse(error || 'Unauthorized', 401);
     const admin = getServiceClient();
 
+    if (req.method === 'GET' && path === 'offer-catalog') {
+      const venueId = new URL(req.url).searchParams.get('venueId');
+      if (!venueId) return errorResponse('Missing venueId');
+      if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const catalog = await fetchOfferCatalog(admin, venueId);
+      return jsonResponse(catalog);
+    }
+
     if (req.method === 'POST' && path === 'generate-offer') {
       const { leadId, offerConfig } = await req.json();
       if (!leadId) return errorResponse('Missing leadId');
@@ -267,7 +416,12 @@ Deno.serve(async (req) => {
       if (!await assertVenueAdmin(admin, userId, lead.venue_id)) return errorResponse('Forbidden', 403);
 
       const { data: venue } = await admin.from('venues').select('id, name, email, phone, address').eq('id', lead.venue_id).maybeSingle();
-      const payload = buildOfferPayload(lead, venue, offerConfig || {});
+      const resourcePlan = await applyOfferResourcePlan(admin, lead, offerConfig || {});
+      const mergedOfferConfig = {
+        ...(offerConfig || {}),
+        resources: resourcePlan.resources,
+      };
+      const payload = buildOfferPayload(lead, venue, mergedOfferConfig);
       const html = buildOfferHtml(payload);
       const sales = buildSalesDraft(payload);
 
@@ -304,7 +458,13 @@ Deno.serve(async (req) => {
           title: 'Offer generated',
           body: `${payload.package.title} skapades med totalpris ${Number(payload.total_price).toLocaleString('sv-SE')} kr.`,
           actorUserId: userId,
-          metadata: { package_type: payload.package.key, total_price: payload.total_price },
+          metadata: {
+            package_type: payload.package.key,
+            total_price: payload.total_price,
+            selected_resource_ids: offerConfig?.selected_resource_ids || [],
+            selected_resources: resourcePlan.selectedResources?.map((row: any) => row.name) || [],
+            selected_item_ids: offerConfig?.selected_item_ids || [],
+          },
         }),
         ...followups.map((row: any) => leadActivity({
           lead,

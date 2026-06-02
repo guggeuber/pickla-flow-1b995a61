@@ -70,6 +70,76 @@ const OFFER_PACKAGES: Record<string, {
   },
 };
 
+type OfferTemplate = {
+  id?: string;
+  template_key: string;
+  title: string;
+  subtitle?: string | null;
+  description?: string | null;
+  default_price_per_person?: number | null;
+  payload?: {
+    included?: string[];
+    agenda?: string[];
+  } | null;
+};
+
+type OfferItem = {
+  id: string;
+  template_id?: string | null;
+  item_type: string;
+  title: string;
+  description?: string | null;
+  included_by_default?: boolean | null;
+};
+
+type OfferResource = {
+  id: string;
+  resource_type: string;
+  name: string;
+  description?: string | null;
+  venue_court_id?: string | null;
+  venue_staff_id?: string | null;
+};
+
+function fallbackTemplates(): OfferTemplate[] {
+  return Object.entries(OFFER_PACKAGES).map(([template_key, pack]) => ({
+    template_key,
+    title: pack.title,
+    subtitle: pack.subtitle,
+    default_price_per_person: pack.pricePerPerson,
+    payload: {
+      included: pack.included,
+      agenda: pack.agenda,
+    },
+  }));
+}
+
+function templatePack(template?: OfferTemplate | null) {
+  const key = template?.template_key || "standard";
+  const fallback = OFFER_PACKAGES[key] || OFFER_PACKAGES.standard;
+  return {
+    key,
+    title: template?.title || fallback.title,
+    subtitle: template?.subtitle || fallback.subtitle,
+    pricePerPerson: Number(template?.default_price_per_person ?? fallback.pricePerPerson ?? 0),
+    included: Array.isArray(template?.payload?.included) && template.payload.included.length
+      ? template.payload.included
+      : fallback.included,
+    agenda: Array.isArray(template?.payload?.agenda) && template.payload.agenda.length
+      ? template.payload.agenda
+      : fallback.agenda,
+  };
+}
+
+function groupedByType<T extends { item_type?: string; resource_type?: string }>(rows: T[], key: "item_type" | "resource_type") {
+  return rows.reduce<Record<string, T[]>>((acc, row) => {
+    const type = String(row[key] || "annat");
+    acc[type] = acc[type] || [];
+    acc[type].push(row);
+    return acc;
+  }, {});
+}
+
 function latestOffer(lead: any) {
   const offers = Array.isArray(lead.event_offers) ? lead.event_offers : [];
   return offers.sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0] || null;
@@ -111,33 +181,54 @@ function cleanReplyPreview(value?: string | null) {
     .trim();
 }
 
-function guessOfferPackage(lead: any) {
+function guessOfferPackage(lead: any, templates: OfferTemplate[] = fallbackTemplates()) {
   const text = [
     lead.event_type,
     lead.message,
     ...(Array.isArray(lead.activities) ? lead.activities : []),
     ...(Array.isArray(lead.resources) ? lead.resources : []),
   ].join(" ").toLowerCase();
-  if (/liga|league|serie|återkommande|6 veckor/.test(text)) return "league";
-  if (/konferens|möte|lunch|workshop/.test(text)) return "conference";
-  if (/aw|after work|pizza|dryck|bar|dart|mat|bubbel/.test(text)) return "aw_social";
-  if (Number(lead.participants_count || 0) >= 30) return "aw_social";
-  return lead.package_type && OFFER_PACKAGES[lead.package_type] ? lead.package_type : "standard";
+  const available = new Set(templates.map((template) => template.template_key));
+  const pick = (key: string) => available.has(key) ? key : templates[0]?.template_key || "standard";
+  if (/liga|league|serie|återkommande|6 veckor/.test(text)) return pick("league");
+  if (/konferens|möte|lunch|workshop/.test(text)) return pick("conference");
+  if (/aw|after work|pizza|dryck|bar|dart|mat|bubbel/.test(text)) return pick("aw_social");
+  if (Number(lead.participants_count || 0) >= 30) return pick("aw_social");
+  return lead.package_type && available.has(lead.package_type) ? lead.package_type : pick("standard");
 }
 
-function createOfferBuilderState(lead: any) {
-  const packageType = guessOfferPackage(lead);
-  const pack = OFFER_PACKAGES[packageType] || OFFER_PACKAGES.standard;
+function createOfferBuilderState(lead: any, catalog?: any) {
+  const templates = Array.isArray(catalog?.templates) && catalog.templates.length ? catalog.templates as OfferTemplate[] : fallbackTemplates();
+  const items = Array.isArray(catalog?.items) ? catalog.items as OfferItem[] : [];
+  const resources = Array.isArray(catalog?.resources) ? catalog.resources as OfferResource[] : [];
+  const packageType = guessOfferPackage(lead, templates);
+  const selectedTemplate = templates.find((template) => template.template_key === packageType) || templates[0];
+  const pack = templatePack(selectedTemplate);
   const participants = Number(lead.participants_count || 1);
   const total = packageType === "league"
     ? Math.max(12000, Math.ceil(participants / 4) * 3500)
     : participants * pack.pricePerPerson;
-  const resources = [
+  const leadResources = [
     ...(Array.isArray(lead.activities) ? lead.activities : []),
     ...(Array.isArray(lead.resources) ? lead.resources : []),
   ].filter(Boolean);
+  const defaultItemIds = items
+    .filter((item) => item.included_by_default && (!item.template_id || item.template_id === selectedTemplate?.id))
+    .map((item) => item.id);
+  const lowerText = [...leadResources, lead.message || "", pack.title, pack.subtitle].join(" ").toLowerCase();
+  const defaultResourceIds = resources
+    .filter((resource) => {
+      if (resource.resource_type === "court") return /pickle|bana|spel|aktivitet/.test(lowerText) && ["Bana 1 Center Court", "Bana 2"].includes(resource.name);
+      if (resource.resource_type === "staff") return /coach|värd|event|instruktör|spel/.test(lowerText) && ["Coach", "Eventvärd"].includes(resource.name);
+      if (resource.resource_type === "food_drink") return /mat|dryck|pizza|aw|bubbel|servering/.test(lowerText);
+      if (resource.resource_type === "space") return /lounge|restaurang|bar|konferens|möte|aw/.test(lowerText);
+      return false;
+    })
+    .map((resource) => resource.id)
+    .slice(0, 8);
   return {
     lead,
+    template_id: selectedTemplate?.id || null,
     package_type: packageType,
     title: `${pack.title} för ${lead.company_name || lead.contact_name}`,
     intro: `Förslag baserat på er förfrågan: ${participants} personer hos Pickla med ${pack.subtitle.toLowerCase()}.`,
@@ -145,7 +236,9 @@ function createOfferBuilderState(lead: any) {
     total_price: total,
     included: pack.included.join("\n"),
     agenda: pack.agenda.join("\n"),
-    resources: resources.length ? resources.join("\n") : "Pickleball\nDart\nMat & dryck",
+    resources: leadResources.length ? leadResources.join("\n") : "Pickleball\nDart\nMat & dryck",
+    selected_item_ids: defaultItemIds,
+    selected_resource_ids: defaultResourceIds,
     food_drink_options: "Pizza, snacks och enklare servering kan läggas till.\nDryckespaket offereras efter gruppstorlek och tid.",
     practical_info: "Omklädningsrum och dusch finns på plats.\nParkering finns i direkt anslutning till anläggningen.\nVi hjälper till med lagindelning, regler och tempo på plats.",
     terms: "Offerten är preliminär tills tid och upplägg bekräftats.\nHandpenning krävs för att låsa bokningen.\nÄndring/avbokning enligt överenskommelse baserat på gruppstorlek och datum.",
@@ -163,6 +256,11 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
   const { data: leads = [], isLoading } = useQuery<any[]>({
     queryKey: ["event-agent-leads", venueId],
     queryFn: () => apiGet("event-intake-agent", "leads", { venueId }),
+  });
+  const { data: offerCatalog } = useQuery<any>({
+    queryKey: ["event-offer-catalog", venueId],
+    queryFn: () => apiGet("event-sales-agent", "offer-catalog", { venueId }),
+    staleTime: 60_000,
   });
 
   const leadGroups = useMemo(() => {
@@ -262,35 +360,62 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
 
   const updateOfferBuilderPackage = (packageType: string) => {
     if (!offerBuilder) return;
-    const pack = OFFER_PACKAGES[packageType] || OFFER_PACKAGES.standard;
+    const templates = Array.isArray(offerCatalog?.templates) && offerCatalog.templates.length ? offerCatalog.templates as OfferTemplate[] : fallbackTemplates();
+    const items = Array.isArray(offerCatalog?.items) ? offerCatalog.items as OfferItem[] : [];
+    const selectedTemplate = templates.find((template) => template.template_key === packageType) || templates[0];
+    const pack = templatePack(selectedTemplate);
     const participants = Number(offerBuilder.lead?.participants_count || 1);
     const total = packageType === "league"
       ? Math.max(12000, Math.ceil(participants / 4) * 3500)
       : participants * pack.pricePerPerson;
+    const defaultItemIds = items
+      .filter((item) => item.included_by_default && (!item.template_id || item.template_id === selectedTemplate?.id))
+      .map((item) => item.id);
     setOfferBuilder({
       ...offerBuilder,
+      template_id: selectedTemplate?.id || null,
       package_type: packageType,
       title: `${pack.title} för ${offerBuilder.lead?.company_name || offerBuilder.lead?.contact_name}`,
       price_per_person: pack.pricePerPerson,
       total_price: total,
       included: pack.included.join("\n"),
       agenda: pack.agenda.join("\n"),
+      selected_item_ids: defaultItemIds,
     });
   };
 
   const submitOfferBuilder = () => {
     if (!offerBuilder?.lead?.id) return;
+    const catalogItems = Array.isArray(offerCatalog?.items) ? offerCatalog.items as OfferItem[] : [];
+    const catalogResources = Array.isArray(offerCatalog?.resources) ? offerCatalog.resources as OfferResource[] : [];
+    const selectedItemTitles = catalogItems
+      .filter((item) => Array.isArray(offerBuilder.selected_item_ids) && offerBuilder.selected_item_ids.includes(item.id))
+      .map((item) => item.title);
+    const selectedResourceNames = catalogResources
+      .filter((resource) => Array.isArray(offerBuilder.selected_resource_ids) && offerBuilder.selected_resource_ids.includes(resource.id))
+      .map((resource) => resource.name);
+    const included = [
+      ...String(offerBuilder.included || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+      ...selectedItemTitles,
+    ].filter((item, index, all) => all.indexOf(item) === index);
+    const resources = [
+      ...String(offerBuilder.resources || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+      ...selectedResourceNames,
+    ].filter((item, index, all) => all.indexOf(item) === index);
     generateOffer.mutate({
       leadId: offerBuilder.lead.id,
       offerConfig: {
         package_type: offerBuilder.package_type,
+        template_id: offerBuilder.template_id,
+        selected_item_ids: Array.isArray(offerBuilder.selected_item_ids) ? offerBuilder.selected_item_ids : [],
+        selected_resource_ids: Array.isArray(offerBuilder.selected_resource_ids) ? offerBuilder.selected_resource_ids : [],
         title: offerBuilder.title,
         intro: offerBuilder.intro,
         price_per_person: Number(offerBuilder.price_per_person || 0),
         total_price: Number(offerBuilder.total_price || 0),
-        included: String(offerBuilder.included || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        included,
         agenda: String(offerBuilder.agenda || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
-        resources: String(offerBuilder.resources || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        resources,
         food_drink_options: String(offerBuilder.food_drink_options || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
         practical_info: String(offerBuilder.practical_info || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
         terms: String(offerBuilder.terms || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
@@ -302,6 +427,14 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
   if (isLoading) {
     return <Loader2 className="mx-auto mt-8 h-5 w-5 animate-spin text-primary" />;
   }
+
+  const catalogTemplates = Array.isArray(offerCatalog?.templates) && offerCatalog.templates.length
+    ? offerCatalog.templates as OfferTemplate[]
+    : fallbackTemplates();
+  const catalogItems = Array.isArray(offerCatalog?.items) ? offerCatalog.items as OfferItem[] : [];
+  const catalogResources = Array.isArray(offerCatalog?.resources) ? offerCatalog.resources as OfferResource[] : [];
+  const itemGroups = groupedByType(catalogItems, "item_type");
+  const resourceGroups = groupedByType(catalogResources, "resource_type");
 
   const renderLead = (lead: any) => {
     const offer = latestOffer(lead);
@@ -368,7 +501,7 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
 
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
-              onClick={() => setOfferBuilder(createOfferBuilderState(lead))}
+              onClick={() => setOfferBuilder(createOfferBuilderState(lead, offerCatalog))}
               disabled={generateOffer.isPending}
               className="rounded-xl bg-muted px-3 py-3 text-xs font-bold text-foreground disabled:opacity-50"
             >
@@ -525,13 +658,15 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-              {Object.entries(OFFER_PACKAGES).map(([key, pack]) => (
+              {catalogTemplates.map((template) => {
+                const pack = templatePack(template);
+                return (
                 <button
-                  key={key}
+                  key={template.id || template.template_key}
                   type="button"
-                  onClick={() => updateOfferBuilderPackage(key)}
+                  onClick={() => updateOfferBuilderPackage(template.template_key)}
                   className={`rounded-xl border px-3 py-3 text-left text-xs transition ${
-                    offerBuilder.package_type === key
+                    offerBuilder.package_type === template.template_key
                       ? "border-court-free bg-court-free/10 text-court-free"
                       : "border-border bg-muted/40 text-foreground"
                   }`}
@@ -539,8 +674,86 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
                   <span className="block font-bold">{pack.title}</span>
                   <span className="mt-1 block text-[10px] text-muted-foreground">{pack.subtitle}</span>
                 </button>
-              ))}
+              )})}
             </div>
+
+            {catalogItems.length > 0 && (
+              <div className="mt-4 rounded-xl border border-border bg-muted/20 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Innehåll och tillval</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Det du markerar här följer med i offerten. Personal kan fortfarande skriva över texten nedan.
+                </p>
+                <div className="mt-3 space-y-3">
+                  {Object.entries(itemGroups).map(([type, rows]) => (
+                    <div key={type}>
+                      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{type.replace("_", " ")}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {rows.map((item) => {
+                          const selected = Array.isArray(offerBuilder.selected_item_ids) && offerBuilder.selected_item_ids.includes(item.id);
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => {
+                                const current = Array.isArray(offerBuilder.selected_item_ids) ? offerBuilder.selected_item_ids : [];
+                                setOfferBuilder({
+                                  ...offerBuilder,
+                                  selected_item_ids: selected ? current.filter((id: string) => id !== item.id) : [...current, item.id],
+                                });
+                              }}
+                              className={`rounded-full border px-3 py-2 text-[11px] font-semibold transition ${
+                                selected ? "border-court-free bg-court-free/10 text-court-free" : "border-border bg-background text-foreground"
+                              }`}
+                            >
+                              {selected ? "✓ " : ""}{item.title}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {catalogResources.length > 0 && (
+              <div className="mt-4 rounded-xl border border-border bg-muted/20 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Riktiga resurser</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Banor skrivs till eventet och används av resurskontrollen. Personal/ytor blir planeringsresurser.
+                </p>
+                <div className="mt-3 space-y-3">
+                  {Object.entries(resourceGroups).map(([type, rows]) => (
+                    <div key={type}>
+                      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{type.replace("_", " ")}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {rows.map((resource) => {
+                          const selected = Array.isArray(offerBuilder.selected_resource_ids) && offerBuilder.selected_resource_ids.includes(resource.id);
+                          return (
+                            <button
+                              key={resource.id}
+                              type="button"
+                              onClick={() => {
+                                const current = Array.isArray(offerBuilder.selected_resource_ids) ? offerBuilder.selected_resource_ids : [];
+                                setOfferBuilder({
+                                  ...offerBuilder,
+                                  selected_resource_ids: selected ? current.filter((id: string) => id !== resource.id) : [...current, resource.id],
+                                });
+                              }}
+                              className={`rounded-full border px-3 py-2 text-[11px] font-semibold transition ${
+                                selected ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-foreground"
+                              }`}
+                            >
+                              {selected ? "✓ " : ""}{resource.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="text-xs font-bold text-muted-foreground">

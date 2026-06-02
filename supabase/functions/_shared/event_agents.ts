@@ -240,6 +240,7 @@ export function buildOfferPayload(lead: any, venue: any, offerConfig: any = {}) 
 export function buildOfferHtml(payload: any) {
   const rows = payload.included.map((item: string) => `<li>${escapeHtml(item)}</li>`).join('');
   const agenda = payload.agenda.map((item: string) => `<li>${escapeHtml(item)}</li>`).join('');
+  const resources = (payload.resources || []).map((item: string) => `<li>${escapeHtml(item)}</li>`).join('');
   const practical = payload.practical_info.map((item: string) => `<li>${escapeHtml(item)}</li>`).join('');
   const terms = payload.terms.map((item: string) => `<li>${escapeHtml(item)}</li>`).join('');
   return `<!doctype html>
@@ -283,6 +284,7 @@ export function buildOfferHtml(payload: any) {
       <div class="box"><h2>Ingår</h2><ul>${rows}</ul></div>
       <div class="box"><h2>Agenda</h2><ul>${agenda}</ul></div>
     </div>
+    ${resources ? `<div class="box" style="margin-top:8mm"><h2>Resurser</h2><ul>${resources}</ul></div>` : ''}
     <h2>Pris</h2>
     <p>${payload.price_per_person ? `${payload.price_per_person} kr/person` : payload.package.range}</p>
     <p><strong>Totalpris: ${Number(payload.total_price).toLocaleString('sv-SE')} kr</strong></p>
@@ -371,6 +373,10 @@ export async function buildOfferPdfBytes(payload: any) {
   writeLines(page, payload.included.map((item: string) => `- ${item}`).join('\n'), 92, 510, 11, 38, font, navy);
   label(page, 'Agenda', 342, 540);
   writeLines(page, payload.agenda.map((item: string) => `- ${item}`).join('\n'), 342, 510, 11, 28, font, navy);
+  if (Array.isArray(payload.resources) && payload.resources.length) {
+    label(page, 'Resurser', 92, 260);
+    writeLines(page, payload.resources.map((item: string) => `- ${item}`).join('\n'), 92, 235, 10, 70, font, navy);
+  }
   page.drawRectangle({ x: 72, y: 190, width: 430, height: 55, color: navy, opacity: 1 });
   page.drawText(pdfSafe(`Totalpris: ${Number(payload.total_price).toLocaleString('sv-SE')} kr`), { x: 92, y: 208, size: 20, font: bold, color: white });
 
