@@ -15,7 +15,8 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
-const RESEND_REPLY_DOMAIN = Deno.env.get('RESEND_INBOUND_DOMAIN') || 'playpickla.com';
+const RESEND_REPLY_DOMAIN = (Deno.env.get('RESEND_INBOUND_DOMAIN') || 'playpickla.com')
+  .replace(/^reply\.playpickla\.com$/i, 'playpickla.com');
 const DEFAULT_DEPOSIT_PERCENT = 20;
 
 function eventReplyAddress(eventId: string) {
