@@ -122,10 +122,15 @@ async function sendResendEmail({
 }
 
 function findEventIdFromInbound(email: any) {
-  const recipients = [
-    ...(Array.isArray(email?.to) ? email.to : []),
-    ...(Array.isArray(email?.cc) ? email.cc : []),
-  ].map((value) => emailAddressField(value));
+  const recipients = collectEmailAddresses(
+    email?.to,
+    email?.cc,
+    email?.bcc,
+    email?.recipient,
+    email?.recipients,
+    email?.headers?.to,
+    email?.headers?.cc,
+  );
 
   for (const recipient of recipients) {
     const match = recipient.match(/event-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})@/i);
@@ -136,12 +141,37 @@ function findEventIdFromInbound(email: any) {
   return subjectMatch?.[1] || null;
 }
 
+function collectEmailAddresses(...values: any[]) {
+  return values.flatMap((value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return collectEmailAddresses(...value);
+    if (typeof value === 'string') return [value];
+    if (Array.isArray(value.value)) return collectEmailAddresses(...value.value);
+    if (value.email || value.address) return [emailAddressField(value)];
+    if (value.text) return [String(value.text)];
+    return [String(value)];
+  }).filter(Boolean);
+}
+
 function emailAddressField(value: any) {
   if (!value) return '';
   if (typeof value === 'string') return value;
+  if (value.address && value.name) return `${value.name} <${value.address}>`;
+  if (value.address) return String(value.address);
   if (value.email && value.name) return `${value.name} <${value.email}>`;
   if (value.email) return String(value.email);
   return String(value);
+}
+
+function inboundTextBody(email: any) {
+  return String(
+    email?.text ||
+    email?.text_body ||
+    email?.body_text ||
+    email?.body?.text ||
+    stripHtml(email?.html || email?.html_body || email?.body_html || email?.body?.html) ||
+    ''
+  ).trim();
 }
 
 function activityResourceId(sessionId: string, occurrenceDate: string | null) {
@@ -607,7 +637,17 @@ Deno.serve(async (req) => {
       const emailId = event?.data?.email_id || event?.data?.id;
       if (!emailId) return errorResponse('Missing email id', 400);
 
-      const email = await fetchReceivedEmail(emailId);
+      let fetchError: string | null = null;
+      let email = event?.data || {};
+      try {
+        email = {
+          ...email,
+          ...await fetchReceivedEmail(emailId),
+        };
+      } catch (err) {
+        fetchError = err instanceof Error ? err.message : String(err);
+        console.error('Received email fetch failed, using webhook payload fallback:', fetchError);
+      }
       const eventId = findEventIdFromInbound(email);
       if (!eventId) return errorResponse('Could not route inbound email', 404);
 
@@ -630,10 +670,11 @@ Deno.serve(async (req) => {
         .eq('room_type', 'event')
         .maybeSingle();
 
-      const textBody = String(email?.text || stripHtml(email?.html) || '').trim();
+      const textBody = inboundTextBody(email);
       const content = textBody.length > 4000 ? `${textBody.slice(0, 4000)}...` : textBody;
       const fromEmail = emailAddressField(email?.from || event?.data?.from) || null;
       const subject = email?.subject || event?.data?.subject || null;
+      const toEmail = collectEmailAddresses(email?.to, email?.recipient, email?.recipients).join(', ') || null;
 
       const { data: communication, error: commErr } = await client.from('event_communications')
         .insert({
@@ -642,10 +683,10 @@ Deno.serve(async (req) => {
           direction: 'inbound',
           channel: 'email',
           from_email: fromEmail,
-          to_email: Array.isArray(email?.to) ? email.to.map(emailAddressField).filter(Boolean).join(', ') : null,
+          to_email: toEmail,
           subject,
           body_text: textBody || null,
-          body_html: email?.html || null,
+          body_html: email?.html || email?.html_body || email?.body_html || email?.body?.html || null,
           provider: 'resend',
           provider_message_id: emailId,
           provider_event_id: providerEventId,
@@ -655,6 +696,8 @@ Deno.serve(async (req) => {
             cc: email?.cc || [],
             attachments: email?.attachments || [],
             event_lead_id: eventLead?.id || null,
+            used_webhook_payload_fallback: !!fetchError,
+            fetch_error: fetchError,
           },
         })
         .select('id')
