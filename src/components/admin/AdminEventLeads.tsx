@@ -42,6 +42,38 @@ function formatSek(value?: number | null) {
   return `${Number(value || 0).toLocaleString("sv-SE")} kr`;
 }
 
+function formatEventDate(value?: string | null) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] || raw || "Saknas";
+}
+
+function formatEventTime(value?: string | null) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{2}):(\d{2})/);
+  return match ? `${match[1]}:${match[2]}` : raw || "Saknas";
+}
+
+function cleanReplyPreview(value?: string | null) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (trimmed.startsWith(">")) return false;
+      if (/^(on|på)\s.+(wrote|skrev):?$/i.test(trimmed)) return false;
+      if (/^från:\s|^from:\s|^skickat:\s|^sent:\s|^till:\s|^to:\s|^ämne:\s|^subject:\s/i.test(trimmed)) return false;
+      return true;
+    })
+    .join("\n")
+    .replace(/\s*(On|På)\s.+?(wrote|skrev):[\s\S]*$/i, "")
+    .replace(/\s*>[\s\S]*$/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export default function AdminEventLeads({ venueId }: { venueId: string }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<any | null>(null);
@@ -163,8 +195,7 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
         metadata: { scheduled_at: f.scheduled_at, followup_type: f.followup_type, status: f.status },
       })) : []),
     ]
-      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
-      .slice(0, 8);
+      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
     const latestReply = timeline.find((item: any) => item.activity_type === "customer_reply_received");
     const eventUrl = lead.event_id ? `/hub/admin?event=${lead.event_id}` : null;
     const offerIsSent = offer?.status === "sent" || offer?.sent_at;
@@ -190,8 +221,8 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
               <p className="mt-1 text-[10px] font-semibold text-court-free">Skickad {formatDateTime(offer.sent_at)}</p>
             )}
             {latestReply && (
-              <p className="mt-1 rounded-lg bg-court-free/10 px-2 py-1 text-[10px] font-semibold text-court-free">
-                Kund svarade: {latestReply.body}
+              <p className="mt-1 whitespace-pre-wrap rounded-lg bg-court-free/10 px-2 py-1 text-[10px] font-semibold leading-relaxed text-court-free">
+                Kund svarade: {cleanReplyPreview(latestReply.body) || latestReply.subject || "Kunden svarade på mail."}
               </p>
             )}
           </div>
@@ -307,7 +338,11 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
                   </div>
                   <div className="min-w-0">
                     <p className="font-semibold text-foreground">{TIMELINE_LABELS[item.activity_type] || item.title || item.activity_type}</p>
-                    {item.body && <p className="truncate text-[11px] text-muted-foreground">{item.body}</p>}
+                    {item.body && (
+                      <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground">
+                        {cleanReplyPreview(item.body) || item.body}
+                      </p>
+                    )}
                     <p className="text-[10px] text-muted-foreground">
                       {formatDateTime(item.metadata?.scheduled_at || item.created_at)}
                     </p>
@@ -425,15 +460,29 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
             <div className="mt-4 rounded-xl border border-border bg-muted/25 p-3 text-xs">
               <p><span className="font-bold">Kund:</span> {bookingPreview.lead?.company_name || bookingPreview.lead?.contact_name}</p>
               <p className="mt-1"><span className="font-bold">Event:</span> {bookingPreview.offer?.title}</p>
-              <p className="mt-1"><span className="font-bold">Datum/tid:</span> {bookingPreview.event?.start_date || bookingPreview.lead?.preferred_date || "Saknas"} · {bookingPreview.event?.start_time || bookingPreview.lead?.preferred_time || "Saknas"}</p>
+              <p className="mt-1">
+                <span className="font-bold">Datum/tid:</span>{" "}
+                {formatEventDate(bookingPreview.event?.start_date || bookingPreview.lead?.preferred_date)}
+                {" · "}
+                {formatEventTime(bookingPreview.event?.start_time || bookingPreview.lead?.preferred_time)}
+                {bookingPreview.event?.end_time ? `-${formatEventTime(bookingPreview.event.end_time)}` : ""}
+              </p>
               <p className="mt-1"><span className="font-bold">Totalpris:</span> {formatSek(bookingPreview.offer?.total_price || bookingPreview.lead?.estimated_value)}</p>
             </div>
 
             <div className={`mt-3 rounded-xl border p-3 text-xs ${bookingPreview.resource_check?.ok ? "border-court-free/30 bg-court-free/10" : "border-destructive/30 bg-destructive/10"}`}>
-              <p className="font-bold">{bookingPreview.resource_check?.ok ? "Resurser ser lediga ut" : "Resurskontroll stoppar bokning"}</p>
+              <p className="font-bold">
+                {bookingPreview.resource_check?.ok
+                  ? bookingPreview.resource_check?.courtIds?.length === 0
+                    ? "Ingen automatisk bankontroll"
+                    : "Banor ser lediga ut"
+                  : "Resurskontroll stoppar bokning"}
+              </p>
               {bookingPreview.resource_check?.reason && <p className="mt-1 text-muted-foreground">{bookingPreview.resource_check.reason}</p>}
-              {bookingPreview.resource_check?.courtIds?.length === 0 && (
-                <p className="mt-1 text-muted-foreground">Inga banor/resurser är kopplade ännu. Kontrollera manuellt i event-pipelinen innan du bekräftar.</p>
+              {bookingPreview.resource_check?.ok && bookingPreview.resource_check?.courtIds?.length === 0 && (
+                <p className="mt-1 text-muted-foreground">
+                  Inga banor är kopplade för automatisk konfliktkontroll. Eventresurser som mat, dryck och lounge är planeringsinfo och blockerar inte bekräftelsen.
+                </p>
               )}
               {bookingPreview.resource_check?.conflicts?.length > 0 && (
                 <div className="mt-2 space-y-1">

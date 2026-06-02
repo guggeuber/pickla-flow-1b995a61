@@ -36,13 +36,21 @@ function normalizeTime(value?: string | null) {
   return match ? `${match[1]}:${match[2]}` : null;
 }
 
+function normalizeDate(value?: string | null) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match?.[1]) return match[1];
+  const parsed = DateTime.fromISO(raw, { zone: 'utc' });
+  return parsed.isValid ? parsed.setZone('Europe/Stockholm').toISODate() : null;
+}
+
 function parsePositiveAmount(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function eventDateTimeRange(eventRow: any) {
-  const date = eventRow?.start_date;
+  const date = normalizeDate(eventRow?.start_date);
   const startTime = normalizeTime(eventRow?.start_time);
   if (!date || !startTime) return null;
   const endTime = normalizeTime(eventRow?.end_time);
@@ -84,6 +92,7 @@ async function checkEventResourceConflicts(admin: any, eventRow: any) {
   }
 
   const conflicts: any[] = [];
+  const eventDate = normalizeDate(eventRow.start_date);
   const { data: bookingRows } = await admin
     .from('bookings')
     .select('id, booking_ref, venue_court_id, start_time, end_time, status, venue_courts(name, court_number)')
@@ -108,11 +117,11 @@ async function checkEventResourceConflicts(admin: any, eventRow: any) {
     .from('events')
     .select('id, name, display_name, start_date, start_time, end_time, planning_status, event_courts(venue_court_id, venue_courts(name, court_number))')
     .eq('venue_id', eventRow.venue_id)
-    .eq('start_date', eventRow.start_date)
     .neq('id', eventRow.id)
     .not('planning_status', 'in', '("cancelled","done")');
 
   for (const other of eventRows || []) {
+    if (eventDate && normalizeDate(other.start_date) !== eventDate) continue;
     if (!overlapTime(eventRow.start_time, eventRow.end_time, other.start_time, other.end_time)) continue;
     for (const court of other.event_courts || []) {
       if (!courtIds.includes(court.venue_court_id)) continue;
@@ -136,7 +145,7 @@ async function checkEventResourceConflicts(admin: any, eventRow: any) {
 }
 
 function buildBookingConfirmationText({ lead, offer, eventRow, depositUrl, depositAmount }: any) {
-  const date = eventRow.start_date || lead.preferred_date || 'enligt överenskommelse';
+  const date = normalizeDate(eventRow.start_date) || normalizeDate(lead.preferred_date) || 'enligt överenskommelse';
   const time = eventRow.start_time ? `${String(eventRow.start_time).slice(0, 5)}${eventRow.end_time ? `-${String(eventRow.end_time).slice(0, 5)}` : ''}` : 'tid enligt överenskommelse';
   return [
     `Hej ${lead.contact_name || ''},`,
