@@ -40,12 +40,12 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ["event-agent-leads", venueId] });
 
   const generateOffer = useMutation({
-    mutationFn: (leadId: string) => apiPost<any>("event-offer-builder", "generate", { leadId }),
+    mutationFn: (leadId: string) => apiPost<any>("event-sales-agent", "generate-offer", { leadId }),
     onSuccess: async (result) => {
       toast.success("Offert skapad");
       const offerId = result?.offer?.id;
       if (offerId) {
-        await apiPost("event-pdf-generator", "generate", { offerId }).catch((error) => toast.error(error.message));
+        await apiPost("event-sales-agent", "generate-pdf", { offerId }).catch((error) => toast.error(error.message));
       }
       refresh();
     },
@@ -69,7 +69,7 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
   });
 
   const openPdf = async (offerId: string) => {
-    const result = await apiGet<any>("event-pdf-generator", "signed-url", { offerId });
+    const result = await apiGet<any>("event-sales-agent", "signed-url", { offerId });
     if (result?.signed_url) window.open(result.signed_url, "_blank", "noopener,noreferrer");
   };
 
