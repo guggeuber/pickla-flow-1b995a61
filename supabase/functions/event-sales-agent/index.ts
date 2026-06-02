@@ -259,7 +259,7 @@ Deno.serve(async (req) => {
     const admin = getServiceClient();
 
     if (req.method === 'POST' && path === 'generate-offer') {
-      const { leadId } = await req.json();
+      const { leadId, offerConfig } = await req.json();
       if (!leadId) return errorResponse('Missing leadId');
 
       const { data: lead, error: leadErr } = await admin.from('event_leads').select('*').eq('id', leadId).maybeSingle();
@@ -267,7 +267,7 @@ Deno.serve(async (req) => {
       if (!await assertVenueAdmin(admin, userId, lead.venue_id)) return errorResponse('Forbidden', 403);
 
       const { data: venue } = await admin.from('venues').select('id, name, email, phone, address').eq('id', lead.venue_id).maybeSingle();
-      const payload = buildOfferPayload(lead, venue);
+      const payload = buildOfferPayload(lead, venue, offerConfig || {});
       const html = buildOfferHtml(payload);
       const sales = buildSalesDraft(payload);
 

@@ -132,7 +132,29 @@ export function leadSummary(lead: ReturnType<typeof sanitizeLeadInput>, pack = c
   };
 }
 
-export function buildOfferPayload(lead: any, venue: any) {
+function cleanList(value: unknown, fallback: string[] = []) {
+  if (Array.isArray(value)) {
+    const rows = value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 24);
+    return rows.length ? rows : fallback;
+  }
+  if (typeof value === 'string') {
+    const rows = value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 24);
+    return rows.length ? rows : fallback;
+  }
+  return fallback;
+}
+
+function cleanText(value: unknown, fallback: string) {
+  const text = String(value || '').trim();
+  return text || fallback;
+}
+
+function cleanMoney(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+}
+
+export function buildOfferPayload(lead: any, venue: any, offerConfig: any = {}) {
   const normalized = sanitizeLeadInput({
     venueId: lead.venue_id,
     company_name: lead.company_name,
@@ -148,12 +170,33 @@ export function buildOfferPayload(lead: any, venue: any) {
     message: lead.message,
     source: lead.source,
   });
-  const pack = EVENT_PACKAGES[lead.package_type as keyof typeof EVENT_PACKAGES] || choosePackage(normalized);
-  const total = estimateValue(normalized, pack);
+  const basePack = EVENT_PACKAGES[offerConfig.package_type as keyof typeof EVENT_PACKAGES]
+    || EVENT_PACKAGES[offerConfig.packageKey as keyof typeof EVENT_PACKAGES]
+    || EVENT_PACKAGES[lead.package_type as keyof typeof EVENT_PACKAGES]
+    || choosePackage(normalized);
+  const pricePerPerson = cleanMoney(offerConfig.price_per_person ?? offerConfig.pricePerPerson) ?? basePack.pricePerPerson;
+  const packageRange = pricePerPerson ? `${pricePerPerson.toLocaleString('sv-SE')} kr/person` : basePack.range;
+  const pack = {
+    ...basePack,
+    title: cleanText(offerConfig.package_title ?? offerConfig.packageTitle, basePack.title),
+    subtitle: cleanText(offerConfig.package_subtitle ?? offerConfig.packageSubtitle, basePack.subtitle),
+    pitch: cleanText(offerConfig.package_pitch ?? offerConfig.packagePitch, basePack.pitch),
+    pricePerPerson,
+    range: cleanText(offerConfig.package_range ?? offerConfig.packageRange, packageRange),
+    includes: cleanList(offerConfig.included, basePack.includes),
+    agenda: cleanList(offerConfig.agenda, basePack.agenda),
+  };
+  const fallbackTotal = pack.key === 'league'
+    ? Math.max(12000, Math.ceil(normalized.participants / 4) * 3500)
+    : normalized.participants * pack.pricePerPerson;
+  const total = cleanMoney(offerConfig.total_price ?? offerConfig.totalPrice) ?? fallbackTotal;
   const dateLabel = lead.preferred_date || 'Datum enligt överenskommelse';
   return {
-    title: `${pack.title} för ${lead.company_name || lead.contact_name}`,
-    intro: `Här är ett första upplägg för ett socialt företagsevent hos ${venue?.name || 'Pickla Solna'} med spel, energi och tydligt värdskap.`,
+    title: cleanText(offerConfig.title, `${pack.title} för ${lead.company_name || lead.contact_name}`),
+    intro: cleanText(
+      offerConfig.intro,
+      `Här är ett första upplägg för ett socialt företagsevent hos ${venue?.name || 'Pickla Solna'} med spel, energi och tydligt värdskap.`,
+    ),
     package: pack,
     customer: {
       company_name: lead.company_name,
@@ -164,26 +207,27 @@ export function buildOfferPayload(lead: any, venue: any) {
       preferred_date: dateLabel,
       preferred_time: lead.preferred_time || 'Flexibelt',
     },
-    agenda: pack.agenda,
+    agenda: cleanList(offerConfig.agenda, pack.agenda),
     price_per_person: pack.pricePerPerson,
     total_price: total,
-    included: pack.includes,
-    food_drink_options: [
+    included: cleanList(offerConfig.included, pack.includes),
+    food_drink_options: cleanList(offerConfig.food_drink_options ?? offerConfig.foodDrinkOptions, [
       'Pizza, snacks och enklare servering kan läggas till.',
       'Dryckespaket offereras efter gruppstorlek och tid.',
       'Vi kan kombinera pickleball, dart och sociala finalmoment.',
-    ],
-    practical_info: [
+    ]),
+    practical_info: cleanList(offerConfig.practical_info ?? offerConfig.practicalInfo, [
       'Omklädningsrum och dusch finns på plats.',
       'Parkering finns i direkt anslutning till anläggningen.',
       'Vi hjälper till med lagindelning, regler och tempo på plats.',
-    ],
-    terms: [
+    ]),
+    terms: cleanList(offerConfig.terms, [
       'Offerten är preliminär tills tid och upplägg bekräftats.',
       'Betalning sker enligt överenskommelse. Swish och kort fungerar smidigt hos oss.',
       'Ändring/avbokning enligt överenskommelse baserat på gruppstorlek och datum.',
-    ],
-    cta: 'Svara på mailet så låser vi datum, upplägg och eventuell mat/dryck.',
+    ]),
+    resources: cleanList(offerConfig.resources, normalized.resources),
+    cta: cleanText(offerConfig.cta, 'Svara på mailet så låser vi datum, upplägg och eventuell mat/dryck.'),
     venue: {
       name: venue?.name || 'Pickla Solna',
       email: venue?.email || 'solna@picklaparks.com',

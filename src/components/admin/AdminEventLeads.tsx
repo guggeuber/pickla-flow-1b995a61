@@ -33,6 +33,43 @@ const TIMELINE_LABELS: Record<string, string> = {
   lost: "Lost",
 };
 
+const OFFER_PACKAGES: Record<string, {
+  title: string;
+  subtitle: string;
+  pricePerPerson: number;
+  included: string[];
+  agenda: string[];
+}> = {
+  standard: {
+    title: "Företagsevent Standard",
+    subtitle: "75 min aktivitet med coach och lagspel",
+    pricePerPerson: 295,
+    included: ["75 min aktivitet", "Coach", "Bana", "Rack och bollar", "Lagtävling", "Score och upplägg"],
+    agenda: ["Välkomstintro", "Regler och lagindelning", "Coachad aktivitet", "Final och prisutdelning"],
+  },
+  aw_social: {
+    title: "AW Social Games",
+    subtitle: "Pickleball + dart + pizza + dryck",
+    pricePerPerson: 595,
+    included: ["Pickleball", "Dart", "Pizza", "Dryck", "Social turnering", "Värdskap"],
+    agenda: ["Ankomst och dryck", "Pickleball intro", "Dart challenge", "Pizza/AW", "Finalmoment"],
+  },
+  conference: {
+    title: "Konferens + aktivitet",
+    subtitle: "Möte, lunch och social sport",
+    pricePerPerson: 845,
+    included: ["Mötesyta", "Lunch", "Pickleball eller dart", "Coach/värd", "Utrustning", "Enkelt körschema"],
+    agenda: ["Morgonmöte", "Lunch", "Aktivitetsblock", "Samling och nästa steg"],
+  },
+  league: {
+    title: "Företagsliga",
+    subtitle: "Återkommande liga under 6 veckor",
+    pricePerPerson: 0,
+    included: ["6 veckor", "Spelschema", "Tabell", "Finalkväll", "Kommunikation", "Pris till vinnare"],
+    agenda: ["Kickoff", "Veckomatcher", "Tabelluppdatering", "Final och AW"],
+  },
+};
+
 function latestOffer(lead: any) {
   const offers = Array.isArray(lead.event_offers) ? lead.event_offers : [];
   return offers.sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0] || null;
@@ -74,11 +111,54 @@ function cleanReplyPreview(value?: string | null) {
     .trim();
 }
 
+function guessOfferPackage(lead: any) {
+  const text = [
+    lead.event_type,
+    lead.message,
+    ...(Array.isArray(lead.activities) ? lead.activities : []),
+    ...(Array.isArray(lead.resources) ? lead.resources : []),
+  ].join(" ").toLowerCase();
+  if (/liga|league|serie|återkommande|6 veckor/.test(text)) return "league";
+  if (/konferens|möte|lunch|workshop/.test(text)) return "conference";
+  if (/aw|after work|pizza|dryck|bar|dart|mat|bubbel/.test(text)) return "aw_social";
+  if (Number(lead.participants_count || 0) >= 30) return "aw_social";
+  return lead.package_type && OFFER_PACKAGES[lead.package_type] ? lead.package_type : "standard";
+}
+
+function createOfferBuilderState(lead: any) {
+  const packageType = guessOfferPackage(lead);
+  const pack = OFFER_PACKAGES[packageType] || OFFER_PACKAGES.standard;
+  const participants = Number(lead.participants_count || 1);
+  const total = packageType === "league"
+    ? Math.max(12000, Math.ceil(participants / 4) * 3500)
+    : participants * pack.pricePerPerson;
+  const resources = [
+    ...(Array.isArray(lead.activities) ? lead.activities : []),
+    ...(Array.isArray(lead.resources) ? lead.resources : []),
+  ].filter(Boolean);
+  return {
+    lead,
+    package_type: packageType,
+    title: `${pack.title} för ${lead.company_name || lead.contact_name}`,
+    intro: `Förslag baserat på er förfrågan: ${participants} personer hos Pickla med ${pack.subtitle.toLowerCase()}.`,
+    price_per_person: pack.pricePerPerson,
+    total_price: total,
+    included: pack.included.join("\n"),
+    agenda: pack.agenda.join("\n"),
+    resources: resources.length ? resources.join("\n") : "Pickleball\nDart\nMat & dryck",
+    food_drink_options: "Pizza, snacks och enklare servering kan läggas till.\nDryckespaket offereras efter gruppstorlek och tid.",
+    practical_info: "Omklädningsrum och dusch finns på plats.\nParkering finns i direkt anslutning till anläggningen.\nVi hjälper till med lagindelning, regler och tempo på plats.",
+    terms: "Offerten är preliminär tills tid och upplägg bekräftats.\nHandpenning krävs för att låsa bokningen.\nÄndring/avbokning enligt överenskommelse baserat på gruppstorlek och datum.",
+    cta: "Svara på mailet så låser vi datum, upplägg och eventuell mat/dryck.",
+  };
+}
+
 export default function AdminEventLeads({ venueId }: { venueId: string }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<any | null>(null);
   const [sendPreview, setSendPreview] = useState<any | null>(null);
   const [bookingPreview, setBookingPreview] = useState<any | null>(null);
+  const [offerBuilder, setOfferBuilder] = useState<any | null>(null);
   const [depositAmount, setDepositAmount] = useState("");
   const { data: leads = [], isLoading } = useQuery<any[]>({
     queryKey: ["event-agent-leads", venueId],
@@ -94,9 +174,11 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ["event-agent-leads", venueId] });
 
   const generateOffer = useMutation({
-    mutationFn: (leadId: string) => apiPost<any>("event-sales-agent", "generate-offer", { leadId }),
+    mutationFn: ({ leadId, offerConfig }: { leadId: string; offerConfig?: any }) =>
+      apiPost<any>("event-sales-agent", "generate-offer", { leadId, offerConfig }),
     onSuccess: async (result) => {
       toast.success("Offert skapad");
+      setOfferBuilder(null);
       const offerId = result?.offer?.id;
       if (offerId) {
         await apiPost("event-sales-agent", "generate-pdf", { offerId }).catch((error) => toast.error(error.message));
@@ -178,6 +260,45 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     return new Date(value).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" });
   };
 
+  const updateOfferBuilderPackage = (packageType: string) => {
+    if (!offerBuilder) return;
+    const pack = OFFER_PACKAGES[packageType] || OFFER_PACKAGES.standard;
+    const participants = Number(offerBuilder.lead?.participants_count || 1);
+    const total = packageType === "league"
+      ? Math.max(12000, Math.ceil(participants / 4) * 3500)
+      : participants * pack.pricePerPerson;
+    setOfferBuilder({
+      ...offerBuilder,
+      package_type: packageType,
+      title: `${pack.title} för ${offerBuilder.lead?.company_name || offerBuilder.lead?.contact_name}`,
+      price_per_person: pack.pricePerPerson,
+      total_price: total,
+      included: pack.included.join("\n"),
+      agenda: pack.agenda.join("\n"),
+    });
+  };
+
+  const submitOfferBuilder = () => {
+    if (!offerBuilder?.lead?.id) return;
+    generateOffer.mutate({
+      leadId: offerBuilder.lead.id,
+      offerConfig: {
+        package_type: offerBuilder.package_type,
+        title: offerBuilder.title,
+        intro: offerBuilder.intro,
+        price_per_person: Number(offerBuilder.price_per_person || 0),
+        total_price: Number(offerBuilder.total_price || 0),
+        included: String(offerBuilder.included || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        agenda: String(offerBuilder.agenda || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        resources: String(offerBuilder.resources || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        food_drink_options: String(offerBuilder.food_drink_options || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        practical_info: String(offerBuilder.practical_info || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        terms: String(offerBuilder.terms || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+        cta: offerBuilder.cta,
+      },
+    });
+  };
+
   if (isLoading) {
     return <Loader2 className="mx-auto mt-8 h-5 w-5 animate-spin text-primary" />;
   }
@@ -247,7 +368,7 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
 
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
-              onClick={() => generateOffer.mutate(lead.id)}
+              onClick={() => setOfferBuilder(createOfferBuilderState(lead))}
               disabled={generateOffer.isPending}
               className="rounded-xl bg-muted px-3 py-3 text-xs font-bold text-foreground disabled:opacity-50"
             >
@@ -378,6 +499,168 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
         <div className="space-y-2 opacity-75">
           <p className="px-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Stängda</p>
           {leadGroups.closed.map(renderLead)}
+        </div>
+      )}
+
+      {offerBuilder && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/55 px-4 py-8">
+          <div className="mx-auto max-w-3xl rounded-2xl bg-background p-4 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Offer builder</p>
+                <h3 className="font-bold">Bygg offert</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  AI/default föreslår startpaket. Justera upplägg, resurser och pris innan PDF/mail skapas.
+                </p>
+              </div>
+              <button onClick={() => setOfferBuilder(null)}><XCircle className="h-5 w-5" /></button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-border bg-muted/25 p-3 text-xs">
+              <p><span className="font-bold">Kund:</span> {offerBuilder.lead?.company_name || offerBuilder.lead?.contact_name}</p>
+              <p className="mt-1">
+                <span className="font-bold">Input:</span>{" "}
+                {offerBuilder.lead?.participants_count || "?"} pers · {offerBuilder.lead?.preferred_date || "datum flexibelt"} · {offerBuilder.lead?.message || "ingen notering"}
+              </p>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+              {Object.entries(OFFER_PACKAGES).map(([key, pack]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => updateOfferBuilderPackage(key)}
+                  className={`rounded-xl border px-3 py-3 text-left text-xs transition ${
+                    offerBuilder.package_type === key
+                      ? "border-court-free bg-court-free/10 text-court-free"
+                      : "border-border bg-muted/40 text-foreground"
+                  }`}
+                >
+                  <span className="block font-bold">{pack.title}</span>
+                  <span className="mt-1 block text-[10px] text-muted-foreground">{pack.subtitle}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="text-xs font-bold text-muted-foreground">
+                Titel
+                <input
+                  value={offerBuilder.title}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, title: event.target.value })}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm font-semibold text-foreground"
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs font-bold text-muted-foreground">
+                  Pris/person
+                  <input
+                    value={offerBuilder.price_per_person}
+                    onChange={(event) => setOfferBuilder({ ...offerBuilder, price_per_person: event.target.value })}
+                    inputMode="numeric"
+                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm font-semibold text-foreground"
+                  />
+                </label>
+                <label className="text-xs font-bold text-muted-foreground">
+                  Totalpris
+                  <input
+                    value={offerBuilder.total_price}
+                    onChange={(event) => setOfferBuilder({ ...offerBuilder, total_price: event.target.value })}
+                    inputMode="numeric"
+                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm font-semibold text-foreground"
+                  />
+                </label>
+              </div>
+              <label className="md:col-span-2 text-xs font-bold text-muted-foreground">
+                Intro
+                <textarea
+                  value={offerBuilder.intro}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, intro: event.target.value })}
+                  rows={2}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-bold text-muted-foreground">
+                Ingår
+                <textarea
+                  value={offerBuilder.included}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, included: event.target.value })}
+                  rows={7}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-bold text-muted-foreground">
+                Agenda
+                <textarea
+                  value={offerBuilder.agenda}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, agenda: event.target.value })}
+                  rows={7}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-bold text-muted-foreground">
+                Resurser/innehåll
+                <textarea
+                  value={offerBuilder.resources}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, resources: event.target.value })}
+                  rows={5}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-bold text-muted-foreground">
+                Mat/dryck
+                <textarea
+                  value={offerBuilder.food_drink_options}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, food_drink_options: event.target.value })}
+                  rows={5}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-bold text-muted-foreground">
+                Praktiskt
+                <textarea
+                  value={offerBuilder.practical_info}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, practical_info: event.target.value })}
+                  rows={5}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="text-xs font-bold text-muted-foreground">
+                Villkor
+                <textarea
+                  value={offerBuilder.terms}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, terms: event.target.value })}
+                  rows={5}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+              <label className="md:col-span-2 text-xs font-bold text-muted-foreground">
+                CTA
+                <input
+                  value={offerBuilder.cta}
+                  onChange={(event) => setOfferBuilder({ ...offerBuilder, cta: event.target.value })}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <button
+                onClick={() => setOfferBuilder(null)}
+                className="flex-1 rounded-xl bg-muted px-3 py-3 text-sm font-bold text-foreground"
+              >
+                Avbryt
+              </button>
+              <button
+                onClick={submitOfferBuilder}
+                disabled={generateOffer.isPending}
+                className="flex-1 rounded-xl bg-primary px-3 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50"
+              >
+                {generateOffer.isPending ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <FileText className="mr-2 inline h-4 w-4" />}
+                Skapa offert + PDF
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
