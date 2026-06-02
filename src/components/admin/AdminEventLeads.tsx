@@ -167,6 +167,8 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
       .slice(0, 8);
     const latestReply = timeline.find((item: any) => item.activity_type === "customer_reply_received");
     const eventUrl = lead.event_id ? `/hub/admin?event=${lead.event_id}` : null;
+    const offerIsSent = offer?.status === "sent" || offer?.sent_at;
+    const offerIsConfirmed = offer?.status === "booking_confirmed";
     return (
       <div key={lead.id} className="glass-card rounded-2xl p-4 space-y-3">
         <div className="flex items-start gap-3">
@@ -199,80 +201,104 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
           <p className="rounded-xl bg-muted/50 p-3 text-xs text-muted-foreground">{lead.message}</p>
         )}
 
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => generateOffer.mutate(lead.id)}
-            disabled={generateOffer.isPending}
-            className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50"
-          >
-            Generate Offer
-          </button>
-          <button
-            onClick={() => offer?.id ? generateDraft.mutate(offer.id) : toast.info("Generera offert först")}
-            className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground"
-          >
-            <Mail className="mr-1 inline h-3.5 w-3.5" />
-            Send Email Draft
-          </button>
-          <button
-            onClick={() => offer?.id ? previewSend.mutate(offer.id) : toast.info("Generera offert först")}
-            disabled={!offer?.id || offer?.status === "sent" || previewSend.isPending}
-            className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50"
-          >
-            {previewSend.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 inline h-3.5 w-3.5" />}
-            {offer?.status === "sent" ? "Sent" : "Send Offer"}
-          </button>
-          <button
-            onClick={() => updateLead.mutate({ leadId: lead.id, status: "ready_to_book" })}
-            className="rounded-xl bg-court-free/15 px-3 py-2.5 text-xs font-bold text-court-free"
-          >
-            <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
-            Ready to book
-          </button>
-          <button
-            onClick={() => updateLead.mutate({ leadId: lead.id, status: "lost" })}
-            className="rounded-xl bg-destructive/15 px-3 py-2.5 text-xs font-bold text-destructive"
-          >
-            <XCircle className="mr-1 inline h-3.5 w-3.5" />
-            Mark Lost
-          </button>
-          <button
-            onClick={() => offer?.id ? openPdf(offer.id) : toast.info("PDF skapas efter offert")}
-            className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground"
-          >
-            <FileText className="mr-1 inline h-3.5 w-3.5" />
-            PDF
-          </button>
-          <button
-            onClick={() => offer?.id ? previewBooking.mutate({ leadId: lead.id, offerId: offer.id }) : toast.info("Generera offert först")}
-            disabled={previewBooking.isPending || lead.status === "booking_confirmed"}
-            className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50"
-          >
-            {previewBooking.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <CalendarDays className="mr-1 inline h-3.5 w-3.5" />}
-            Confirm Booking
-          </button>
-          <button
-            onClick={() => {
-              if (!lead.email) return toast.info("Leadet saknar email");
-              window.location.href = `mailto:${lead.email}`;
-            }}
-            className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground"
-          >
-            <Mail className="mr-1 inline h-3.5 w-3.5" />
-            Svara
-          </button>
-          <button
-            onClick={() => eventUrl ? toast.info("Öppna Events och leta upp leadets event i pipeline") : toast.info("Leadet saknar internt event")}
-            className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground"
-          >
-            <CalendarDays className="mr-1 inline h-3.5 w-3.5" />
-            Open Event
-          </button>
+        <div className="rounded-xl border border-border bg-background/70 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Offert</p>
+              <p className="text-xs text-muted-foreground">
+                {offer
+                  ? `${offer.title || "Offert"} · ${STATUS_LABELS[offer.status] || offer.status || "draft"}`
+                  : "Ingen offert skapad ännu"}
+              </p>
+            </div>
+            {offer?.total_price != null && <p className="text-sm font-bold text-foreground">{formatSek(offer.total_price)}</p>}
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <button
+              onClick={() => generateOffer.mutate(lead.id)}
+              disabled={generateOffer.isPending}
+              className="rounded-xl bg-muted px-3 py-3 text-xs font-bold text-foreground disabled:opacity-50"
+            >
+              {generateOffer.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1 inline h-3.5 w-3.5" />}
+              {offer ? "Skapa ny offert" : "Skapa offert"}
+            </button>
+            <button
+              onClick={() => offer?.id ? previewSend.mutate(offer.id) : toast.info("Skapa offert först")}
+              disabled={!offer?.id || offerIsSent || offerIsConfirmed || previewSend.isPending}
+              className="rounded-xl bg-primary px-3 py-3 text-xs font-bold text-primary-foreground disabled:opacity-50"
+            >
+              {previewSend.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 inline h-3.5 w-3.5" />}
+              {offerIsSent ? "Offert skickad" : "Skicka offert"}
+            </button>
+            <button
+              onClick={() => offer?.id ? generateDraft.mutate(offer.id) : toast.info("Skapa offert först")}
+              disabled={!offer?.id}
+              className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
+            >
+              <Mail className="mr-1 inline h-3.5 w-3.5" />
+              Visa mailutkast
+            </button>
+            <button
+              onClick={() => offer?.id ? openPdf(offer.id) : toast.info("PDF skapas efter offert")}
+              disabled={!offer?.id}
+              className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
+            >
+              <FileText className="mr-1 inline h-3.5 w-3.5" />
+              Öppna PDF
+            </button>
+          </div>
         </div>
 
-        {timeline.length > 0 && (
-          <div className="rounded-xl border border-border bg-muted/25 p-3">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Timeline</p>
+        <div className="rounded-xl border border-border bg-background/70 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Closure</p>
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <button
+              onClick={() => updateLead.mutate({ leadId: lead.id, status: "ready_to_book" })}
+              disabled={lead.status === "booking_confirmed"}
+              className="rounded-xl bg-court-free/15 px-3 py-2.5 text-xs font-bold text-court-free disabled:opacity-50"
+            >
+              <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+              Ready to book
+            </button>
+            <button
+              onClick={() => offer?.id ? previewBooking.mutate({ leadId: lead.id, offerId: offer.id }) : toast.info("Skapa offert först")}
+              disabled={previewBooking.isPending || lead.status === "booking_confirmed"}
+              className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50"
+            >
+              {previewBooking.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <CalendarDays className="mr-1 inline h-3.5 w-3.5" />}
+              Confirm Booking
+            </button>
+            <button
+              onClick={() => {
+                if (!lead.email) return toast.info("Leadet saknar email");
+                window.location.href = `mailto:${lead.email}`;
+              }}
+              className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground"
+            >
+              <Mail className="mr-1 inline h-3.5 w-3.5" />
+              Svara
+            </button>
+            <button
+              onClick={() => updateLead.mutate({ leadId: lead.id, status: "lost" })}
+              className="rounded-xl bg-destructive/15 px-3 py-2.5 text-xs font-bold text-destructive"
+            >
+              <XCircle className="mr-1 inline h-3.5 w-3.5" />
+              Mark Lost
+            </button>
+            <button
+              onClick={() => eventUrl ? toast.info("Öppna Events och leta upp leadets event i pipeline") : toast.info("Leadet saknar internt event")}
+              className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground sm:col-span-2"
+            >
+              <CalendarDays className="mr-1 inline h-3.5 w-3.5" />
+              Open Event
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-muted/25 p-3">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Timeline & kundsvar</p>
+          {timeline.length > 0 ? (
             <div className="space-y-2">
               {timeline.map((item: any) => (
                 <div key={item.id} className="flex gap-2 text-xs">
@@ -289,8 +315,10 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <p className="text-xs text-muted-foreground">Inga timeline-händelser ännu. Skapa offert eller invänta kundsvar så fylls den här.</p>
+          )}
+        </div>
       </div>
     );
   };
