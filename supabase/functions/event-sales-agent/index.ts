@@ -238,6 +238,33 @@ async function applyOfferResourcePlan(admin: any, lead: any, offerConfig: any) {
     return { resources: uniqueStrings(offerConfig?.resources || []), selectedResources: [] };
   }
 
+  const fallbackCourtIds = uniqueStrings(selectedIds
+    .filter((id) => id.startsWith('court-'))
+    .map((id) => id.replace(/^court-/, '')));
+  if (fallbackCourtIds.length > 0) {
+    const { data: courts } = await admin
+      .from('venue_courts')
+      .select('id, name, sport_type')
+      .eq('venue_id', lead.venue_id)
+      .in('id', fallbackCourtIds);
+    if (courts?.length) {
+      await admin.from('event_courts').delete().eq('event_id', lead.event_id);
+      await admin.from('event_courts').insert(courts.map((court: any) => ({
+        event_id: lead.event_id,
+        venue_court_id: court.id,
+      })));
+      return {
+        resources: uniqueStrings([...(offerConfig?.resources || []), ...courts.map((court: any) => court.name)]),
+        selectedResources: courts.map((court: any) => ({
+          id: `court-${court.id}`,
+          resource_type: 'court',
+          name: court.name,
+          venue_court_id: court.id,
+        })),
+      };
+    }
+  }
+
   const { data: catalogRows, error } = await admin
     .from('event_resource_catalog')
     .select('id, venue_id, resource_type, name, description, venue_court_id, venue_staff_id')
