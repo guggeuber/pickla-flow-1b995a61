@@ -94,7 +94,7 @@ export default function GroupBookingPage() {
     : "Datum flexibelt";
 
   const inquiryMutation = useMutation({
-    mutationFn: () => apiPost("api-event-public", "group-inquiry", {
+    mutationFn: () => apiPost("event-intake-agent", "intake", {
       slug,
       eventType,
       participants,
@@ -108,7 +108,7 @@ export default function GroupBookingPage() {
       notes: notes.trim(),
     }),
     onSuccess: (result) => {
-      setSentEventId(result.event_id);
+      setSentEventId((result as any).event_id || (result as any).lead_id);
       toast.success("Förfrågan skickad!");
     },
     onError: (error: Error) => toast.error(error.message),

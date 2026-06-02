@@ -26,12 +26,13 @@ import AdminChannels from "@/components/admin/AdminChannels";
 import AdminProducts from "@/components/admin/AdminProducts";
 import AdminSchedule from "@/components/admin/AdminSchedule";
 import AdminDevices from "@/components/admin/AdminDevices";
+import AdminEventLeads from "@/components/admin/AdminEventLeads";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-type SectionId = "venue" | "staff" | "courts" | "devices" | "hours" | "pricing" | "products" | "schedule" | "links" | "stories" | "events" | "memberships" | "templates" | "corporate" | "channels" | null;
+type SectionId = "venue" | "staff" | "courts" | "devices" | "hours" | "pricing" | "products" | "schedule" | "links" | "stories" | "events" | "eventLeads" | "memberships" | "templates" | "corporate" | "channels" | null;
 
 /* ── Sparkline SVG ── */
 function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
@@ -208,6 +209,7 @@ const AdminPage = () => {
       links: { label: "Länkar", icon: Link2 },
       stories: { label: "Stories", icon: Camera },
       events: { label: "Events", icon: Trophy },
+      eventLeads: { label: "Event Leads", icon: MessageSquare },
       memberships: { label: "Medlemskap", icon: Crown },
       templates: { label: "Event-mallar", icon: FileText },
       corporate: { label: "Företag", icon: Building2 },
@@ -249,6 +251,7 @@ const AdminPage = () => {
           {activeSection === "links" && <AdminLinks venueId={venueId} />}
           {activeSection === "stories" && <AdminStories venueId={venueId} />}
           {activeSection === "events" && <AdminEvents venueId={venueId} />}
+          {activeSection === "eventLeads" && <AdminEventLeads venueId={venueId} />}
           {activeSection === "memberships" && <AdminMemberships venueId={venueId} />}
           {activeSection === "templates" && <AdminTemplates />}
           {activeSection === "corporate" && <AdminCorporate venueId={venueId} />}
@@ -272,6 +275,7 @@ const AdminPage = () => {
     { id: "venue" as SectionId, icon: Building2, label: "Venue", stat: "Inställningar", color: "var(--muted-foreground)" },
     { id: "stories" as SectionId, icon: Camera, label: "Stories", stat: "Community", color: "var(--primary)" },
     { id: "events" as SectionId, icon: Trophy, label: "Events", stat: "Turneringar", color: "var(--sell)" },
+    { id: "eventLeads" as SectionId, icon: MessageSquare, label: "Event Leads", stat: "Agent OS & offerter", color: "var(--primary)" },
     { id: "memberships" as SectionId, icon: Crown, label: "Medlemskap", stat: "Nivåer & rabatter", color: "var(--badge-vip)" },
     ...(adminData?.isSuperAdmin ? [{ id: "templates" as SectionId, icon: FileText, label: "Event-mallar", stat: "Franchise", color: "var(--primary)" }] : []),
     { id: "corporate" as SectionId, icon: Building2, label: "Företag", stat: "Företagskonton", color: "var(--badge-vip)" },
