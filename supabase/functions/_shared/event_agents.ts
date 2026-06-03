@@ -314,81 +314,196 @@ export async function buildOfferPdfBytes(payload: any) {
   const muted = rgb(0.38, 0.45, 0.56);
   const green = rgb(0.06, 0.62, 0.28);
   const cream = rgb(1, 0.985, 0.94);
-  const pink = rgb(1, 0.88, 0.96);
+  const blush = rgb(1, 0.93, 0.98);
+  const pale = rgb(0.96, 0.98, 1);
   const white = rgb(1, 1, 1);
+  const line = rgb(0.82, 0.86, 0.91);
 
   const pageSize: [number, number] = [595.28, 841.89];
-  const addPage = () => {
-    const page = pdf.addPage(pageSize);
-    page.drawRectangle({ x: 0, y: 0, width: pageSize[0], height: pageSize[1], color: cream });
-    page.drawRectangle({ x: 0, y: 0, width: pageSize[0], height: 170, color: pink, opacity: 0.45 });
-    page.drawRectangle({ x: 28, y: 28, width: pageSize[0] - 56, height: pageSize[1] - 56, borderColor: blue, borderWidth: 1.6 });
-    page.drawText('pickla', { x: 72, y: 760, size: 28, font: bold, color: navy });
-    page.drawLine({ start: { x: 72, y: 748 }, end: { x: 525, y: 748 }, thickness: 1, color: blue, opacity: 0.45 });
-    return page;
+  const margin = 54;
+  const contentWidth = pageSize[0] - margin * 2;
+
+  const wrapToWidth = (text: unknown, maxWidth: number, size: number, f = font) => {
+    const lines: string[] = [];
+    for (const raw of pdfSafe(text).split('\n')) {
+      if (!raw.trim()) {
+        lines.push('');
+        continue;
+      }
+      let lineText = '';
+      for (const word of raw.split(/\s+/)) {
+        const next = lineText ? `${lineText} ${word}` : word;
+        if (f.widthOfTextAtSize(next, size) > maxWidth && lineText) {
+          lines.push(lineText);
+          lineText = word;
+        } else {
+          lineText = next;
+        }
+      }
+      if (lineText) lines.push(lineText);
+    }
+    return lines;
   };
-  const writeLines = (page: any, text: string, x: number, y: number, size = 11, max = 70, f = font, color = navy) => {
+
+  const drawText = (
+    page: any,
+    text: unknown,
+    x: number,
+    y: number,
+    options: {
+      size?: number;
+      width?: number;
+      lineHeight?: number;
+      maxLines?: number;
+      font?: any;
+      color?: any;
+    } = {},
+  ) => {
+    const size = options.size || 11;
+    const f = options.font || font;
+    const color = options.color || navy;
+    const lineHeight = options.lineHeight || size + 4;
+    const width = options.width || contentWidth;
+    let lines = wrapToWidth(text, width, size, f);
+    if (options.maxLines && lines.length > options.maxLines) {
+      lines = lines.slice(0, options.maxLines);
+      const last = lines[lines.length - 1] || '';
+      lines[lines.length - 1] = last.length > 3 ? `${last.replace(/\s+\S*$/, '')}...` : '...';
+    }
     let yy = y;
-    for (const line of wrap(text, max)) {
-      page.drawText(pdfSafe(line), { x, y: yy, size, font: f, color });
-      yy -= size + 5;
+    for (const item of lines) {
+      if (item) page.drawText(item, { x, y: yy, size, font: f, color });
+      yy -= lineHeight;
     }
     return yy;
   };
-  const label = (page: any, text: string, x: number, y: number) => {
-    page.drawText(pdfSafe(text).toUpperCase(), { x, y, size: 9, font: bold, color: muted, characterSpacing: 1.1 });
-  };
-  const pill = (page: any, text: string, x: number, y: number, w: number, color = blue) => {
-    page.drawRectangle({ x, y, width: w, height: 28, color, opacity: 0.12, borderColor: color, borderWidth: 0.8 });
-    page.drawText(pdfSafe(text), { x: x + 10, y: y + 9, size: 10, font: bold, color });
+
+  const drawLabel = (page: any, text: string, x: number, y: number) => {
+    page.drawText(pdfSafe(text).toUpperCase(), { x, y, size: 8.5, font: bold, color: muted, characterSpacing: 1.2 });
   };
 
-  let page = addPage();
-  label(page, 'Eventoffert', 72, 700);
-  page.drawText(pdfSafe(payload.title).slice(0, 40), { x: 72, y: 655, size: 28, font: bold, color: navy });
-  writeLines(page, payload.intro, 72, 610, 12, 68, font, navy);
-  page.drawRectangle({ x: 72, y: 405, width: 430, height: 135, color: white, opacity: 0.72, borderColor: blue, borderWidth: 0.7 });
-  label(page, 'Kund', 92, 505);
-  writeLines(page, `${payload.customer.company_name || payload.customer.contact_name}\n${payload.customer.contact_name} - ${payload.customer.email}\nDatum: ${payload.customer.preferred_date} - ${payload.customer.preferred_time}\nAntal: ${payload.customer.participants_count} personer`, 92, 480, 11, 62, font, navy);
-  pill(page, payload.package.title, 72, 330, 220, blue);
-  pill(page, `${Number(payload.total_price).toLocaleString('sv-SE')} kr`, 310, 330, 150, green);
-  label(page, 'Kontakt', 72, 255);
-  writeLines(page, `${payload.venue.email} - ${payload.venue.phone}\n${payload.venue.address}`, 72, 232, 11, 78, font, muted);
+  const drawRule = (page: any, y: number) => {
+    page.drawLine({ start: { x: margin, y }, end: { x: pageSize[0] - margin, y }, thickness: 0.7, color: line });
+  };
+
+  const addPage = (pageNo: number) => {
+    const page = pdf.addPage(pageSize);
+    page.drawRectangle({ x: 0, y: 0, width: pageSize[0], height: pageSize[1], color: cream });
+    page.drawRectangle({ x: 0, y: 0, width: pageSize[0], height: 145, color: blush, opacity: 0.55 });
+    page.drawText('pickla', { x: margin, y: 774, size: 29, font: bold, color: navy });
+    page.drawText(String(pageNo).padStart(2, '0'), { x: pageSize[0] - margin - 18, y: 781, size: 9, font: bold, color: muted });
+    drawRule(page, 752);
+    page.drawText(pdfSafe('Pickla Solna AB - Org.nr 556977-4481 - Godkand for F-skatt'), {
+      x: margin,
+      y: 40,
+      size: 8,
+      font,
+      color: muted,
+    });
+    return page;
+  };
+
+  const drawCard = (page: any, x: number, y: number, w: number, h: number, options: { fill?: any; border?: any } = {}) => {
+    page.drawRectangle({
+      x,
+      y,
+      width: w,
+      height: h,
+      color: options.fill || white,
+      opacity: options.fill ? 1 : 0.76,
+      borderColor: options.border || line,
+      borderWidth: 0.8,
+    });
+  };
+
+  const drawListCard = (
+    page: any,
+    title: string,
+    items: unknown[],
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    options: { cols?: number; maxItems?: number } = {},
+  ) => {
+    drawCard(page, x, y, w, h, { fill: pale });
+    drawLabel(page, title, x + 16, y + h - 26);
+    const maxItems = options.maxItems || 8;
+    const rows = (Array.isArray(items) ? items : []).map((item) => String(item || '').trim()).filter(Boolean).slice(0, maxItems);
+    const list = rows.length ? rows : ['Enligt offert'];
+    const colCount = options.cols || 1;
+    const colGap = 12;
+    const colWidth = (w - 32 - colGap * (colCount - 1)) / colCount;
+    const perCol = Math.ceil(list.length / colCount);
+    list.forEach((item, index) => {
+      const col = Math.floor(index / perCol);
+      const row = index % perCol;
+      const xx = x + 16 + col * (colWidth + colGap);
+      const yy = y + h - 52 - row * 29;
+      page.drawText('-', { x: xx, y: yy + 1, size: 10, font: bold, color: blue });
+      drawText(page, item, xx + 12, yy, { size: 10, width: colWidth - 12, lineHeight: 12, maxLines: 2, color: navy });
+    });
+    if (Array.isArray(items) && items.length > maxItems) {
+      page.drawText(`+ ${items.length - maxItems} fler`, { x: x + 16, y: y + 14, size: 9, font: bold, color: muted });
+    }
+  };
+
+  const title = pdfSafe(payload.title || payload.package?.title || 'Pickla Event');
+  const customerName = payload.customer?.company_name || payload.customer?.contact_name || 'Kund';
+  const price = Number(payload.total_price || 0).toLocaleString('sv-SE');
+  const packageTitle = payload.package?.title || 'Eventpaket';
+
+  let page = addPage(1);
+  drawLabel(page, 'Eventoffert', margin, 706);
+  drawText(page, title, margin, 670, { size: 30, width: contentWidth - 80, lineHeight: 34, maxLines: 3, font: bold });
+  drawText(page, payload.intro, margin, 560, { size: 12, width: contentWidth, lineHeight: 18, maxLines: 7 });
+
+  drawCard(page, margin, 330, contentWidth, 150);
+  drawLabel(page, 'Kund och förfrågan', margin + 18, 452);
+  drawText(page, customerName, margin + 18, 424, { size: 15, width: 220, maxLines: 2, font: bold });
+  drawText(page, `${payload.customer?.contact_name || ''}\n${payload.customer?.email || ''}\n${payload.customer?.phone || ''}`, margin + 18, 384, { size: 10, width: 220, lineHeight: 15, maxLines: 4, color: muted });
+  drawText(page, `Datum: ${payload.customer?.preferred_date || 'Enligt overenskommelse'}\nTid: ${payload.customer?.preferred_time || 'Flexibelt'}\nAntal: ${payload.customer?.participants_count || '-'} personer`, 330, 424, { size: 11, width: 160, lineHeight: 17, maxLines: 4, font: bold });
+
+  drawCard(page, margin, 208, 245, 78, { fill: navy, border: navy });
+  drawLabel(page, 'Paket', margin + 18, 260);
+  drawText(page, packageTitle, margin + 18, 238, { size: 14, width: 205, maxLines: 2, font: bold, color: white });
+  drawCard(page, 330, 208, 211, 78, { fill: pale, border: line });
+  drawLabel(page, 'Totalpris', 348, 260);
+  drawText(page, `${price} kr`, 348, 234, { size: 22, width: 170, maxLines: 1, font: bold, color: green });
+
+  drawLabel(page, 'Kontakt', margin, 150);
+  drawText(page, `${payload.venue?.email || 'solna@picklaparks.com'} - ${payload.venue?.phone || '08-83 33 63'}\n${payload.venue?.address || 'Svetsarvagen 22'}`, margin, 128, { size: 10, width: contentWidth, lineHeight: 15, maxLines: 2, color: muted });
 
   page = pdf.addPage(pageSize);
   page.drawRectangle({ x: 0, y: 0, width: pageSize[0], height: pageSize[1], color: navy });
-  page.drawRectangle({ x: 56, y: 130, width: 480, height: 520, color: blue, opacity: 0.22 });
-  page.drawRectangle({ x: 88, y: 180, width: 410, height: 420, color: pink, opacity: 0.18 });
-  page.drawText('PICKLA EVENT', { x: 68, y: 150, size: 44, font: bold, color: white });
-  page.drawText(pdfSafe('SPEL - MAT - DRYCK'), { x: 72, y: 112, size: 18, font, color: white });
-  writeLines(page, pdfSafe(payload.package.pitch || payload.package.subtitle || ''), 72, 85, 11, 68, font, white);
+  page.drawRectangle({ x: 54, y: 110, width: 487, height: 610, color: blue, opacity: 0.2 });
+  page.drawRectangle({ x: 88, y: 164, width: 420, height: 470, color: blush, opacity: 0.16 });
+  page.drawText('pickla', { x: margin, y: 760, size: 29, font: bold, color: white });
+  page.drawText('02', { x: pageSize[0] - margin - 18, y: 768, size: 9, font: bold, color: white, opacity: 0.7 });
+  drawText(page, 'SPEL', margin, 475, { size: 47, width: contentWidth, maxLines: 1, font: bold, color: white });
+  drawText(page, 'MAT', margin, 415, { size: 47, width: contentWidth, maxLines: 1, font: bold, color: white });
+  drawText(page, 'DRYCK', margin, 355, { size: 47, width: contentWidth, maxLines: 1, font: bold, color: white });
+  drawText(page, payload.package?.pitch || payload.package?.subtitle || 'Ett socialt event hos Pickla med tydligt vardskap.', margin, 265, { size: 13, width: 380, lineHeight: 19, maxLines: 5, color: white });
 
-  page = addPage();
-  label(page, 'Paket', 72, 700);
-  page.drawText(pdfSafe(payload.package.title), { x: 72, y: 668, size: 24, font: bold, color: navy });
-  page.drawText(pdfSafe(payload.package.range), { x: 72, y: 640, size: 14, font: bold, color: blue });
-  page.drawRectangle({ x: 72, y: 292, width: 230, height: 285, color: white, opacity: 0.72, borderColor: blue, borderWidth: 0.7 });
-  page.drawRectangle({ x: 322, y: 292, width: 190, height: 285, color: white, opacity: 0.72, borderColor: blue, borderWidth: 0.7 });
-  label(page, 'Ingar', 92, 540);
-  writeLines(page, payload.included.map((item: string) => `- ${item}`).join('\n'), 92, 510, 11, 38, font, navy);
-  label(page, 'Agenda', 342, 540);
-  writeLines(page, payload.agenda.map((item: string) => `- ${item}`).join('\n'), 342, 510, 11, 28, font, navy);
-  if (Array.isArray(payload.resources) && payload.resources.length) {
-    label(page, 'Resurser', 92, 260);
-    writeLines(page, payload.resources.map((item: string) => `- ${item}`).join('\n'), 92, 235, 10, 70, font, navy);
-  }
-  page.drawRectangle({ x: 72, y: 190, width: 430, height: 55, color: navy, opacity: 1 });
-  page.drawText(pdfSafe(`Totalpris: ${Number(payload.total_price).toLocaleString('sv-SE')} kr`), { x: 92, y: 208, size: 20, font: bold, color: white });
+  page = addPage(3);
+  drawLabel(page, 'Paket och innehåll', margin, 706);
+  drawText(page, packageTitle, margin, 676, { size: 25, width: contentWidth, lineHeight: 30, maxLines: 2, font: bold });
+  drawText(page, payload.package?.range || '', margin, 620, { size: 14, width: contentWidth, maxLines: 1, font: bold, color: blue });
 
-  page = addPage();
-  label(page, 'Bra att veta', 72, 700);
-  page.drawText('Praktiskt', { x: 72, y: 665, size: 17, font: bold, color: navy });
-  writeLines(page, payload.practical_info.map((item: string) => `- ${item}`).join('\n'), 72, 635, 11, 75, font, navy);
-  page.drawText('Betalning och villkor', { x: 72, y: 470, size: 17, font: bold, color: navy });
-  writeLines(page, payload.terms.map((item: string) => `- ${item}`).join('\n'), 72, 440, 11, 75, font, navy);
-  page.drawText(pdfSafe('Serveringstillstand'), { x: 72, y: 275, size: 17, font: bold, color: navy });
-  writeLines(page, 'Pickla Solna Business Park har serveringstillstand. Vi serverar mat och dryck pa plats. Det ar forbjudet att ta med egen alkohol till vara lokaler.', 72, 245, 11, 75, font, navy);
-  page.drawText(pdfSafe('Pickla Solna AB - Org.nr 556977-4481 - Godkand for F-skatt'), { x: 72, y: 80, size: 9, font, color: muted });
+  drawListCard(page, 'Ingår', payload.included || [], margin, 352, 238, 220, { maxItems: 8 });
+  drawListCard(page, 'Agenda', payload.agenda || [], 303, 352, 238, 220, { maxItems: 7 });
+  drawListCard(page, 'Resurser', payload.resources || [], margin, 190, contentWidth, 120, { cols: 2, maxItems: 8 });
+  drawCard(page, margin, 105, contentWidth, 54, { fill: navy, border: navy });
+  page.drawText(pdfSafe(`Totalpris: ${price} kr`), { x: margin + 18, y: 124, size: 20, font: bold, color: white });
+
+  page = addPage(4);
+  drawLabel(page, 'Praktisk info', margin, 706);
+  drawText(page, 'Bra att veta', margin, 674, { size: 25, width: contentWidth, maxLines: 1, font: bold });
+  drawListCard(page, 'Praktiskt', payload.practical_info || [], margin, 492, contentWidth, 135, { maxItems: 5 });
+  drawListCard(page, 'Mat och dryck', payload.food_drink_options || [], margin, 330, contentWidth, 125, { maxItems: 5 });
+  drawListCard(page, 'Betalning och villkor', payload.terms || [], margin, 150, contentWidth, 145, { maxItems: 5 });
+  drawText(page, 'Pickla Solna Business Park har serveringstillstand. Vi serverar mat och dryck pa plats. Det ar forbjudet att ta med egen alkohol till vara lokaler.', margin, 110, { size: 9, width: contentWidth, lineHeight: 13, maxLines: 3, color: muted });
+  drawText(page, payload.cta, margin, 82, { size: 11, width: contentWidth, maxLines: 2, font: bold, color: navy });
 
   return await pdf.save();
 }
