@@ -192,6 +192,95 @@ For Edge Functions that need “the venue day”, use `stockholmDateRangeUtc(dat
   - Internal notes are never returned in the public plan.
   - The admin UI always shows the generated link after sharing; mobile Safari can reject async clipboard writes, so copying is best-effort only.
 
+## Current Production Architecture Notes
+
+### Environments
+- `stage.playpickla.com` uses the stage Supabase project and Stripe test mode.
+- `playpickla.com` uses the production Supabase project and Stripe live mode.
+- Never mix stage/prod Supabase keys, project refs, Stripe keys, webhook secrets, or customer/payment IDs.
+- Supabase `.temp` files are local CLI state and must not be committed.
+
+### Stripe Production Setup
+- Stripe live keys are used only in production.
+- Stripe test keys remain only in stage.
+- Production Stripe webhook endpoint: `/functions/v1/api-stripe-webhook`.
+- Webhook code must use Deno-compatible logic. Do not introduce Node-only Stripe SDK paths that crash in Edge Functions with errors such as `Deno.core.runMicrotasks()`.
+- Webhook handling must be idempotent for bookings, activity registrations, day passes, memberships, receipts, and retries.
+
+### Memberships
+- Stripe subscription Checkout activates memberships.
+- Membership activation uses Stripe metadata (`user_id`, `tier_id`) plus Stripe customer/subscription IDs.
+- If a cancelled membership is repurchased, the webhook must reactivate the existing membership to `status = 'active'` instead of leaving the user blocked on a stale cancelled row.
+- `player_profiles.stripe_customer_id` must be the live Stripe Customer ID in production. Stage/test customer IDs must never be copied into production profiles.
+
+### Founder Benefits / Court Hours
+- Founder membership includes 4 free court hours per week.
+- Free court hours must be consumed before discount pricing.
+- Partial coverage is valid. Example: if the user has 1 hour remaining and books 2 hours, the backend should price 1 hour free + 1 hour paid with the post-quota discount.
+- UX totals and Stripe Checkout amount must match backend entitlement logic exactly.
+- After included hours are exhausted, the Founder court discount is 20%.
+
+### Activity / Session Pricing
+- For activity/program sessions, prefer `activity_sessions.price_sek` over `access_products.base_price_sek`.
+- `access_products.base_price_sek` is only a fallback/default when a concrete session price is missing.
+- Do not hardcode activity prices in UI or Edge Functions.
+- Recent bug fixed: `ProgramSessionPage` must prioritize `session.price_sek` before `product.base_price_sek`.
+
+### Activity Sessions / Admin Schedule
+- `activity_sessions` is the source of truth for scheduled activities and concrete occurrences.
+- Admin currently supports create/delete for schedule sessions; edit is still needed.
+- Important activity fields: `name`, `session_type`, `recurrence_days`, `session_date`, `start_time`, `end_time`, `price_sek`, `capacity`, `court_ids`, `access_policy`, `product_key`, `publish_status`.
+
+### Activity Social Layer
+- Each activity/session can have a contextual lobby/chat.
+- This is not a WhatsApp replacement.
+- Keep event/activity chat scoped to the activity occurrence.
+- “Johan kommer” style system messages are valuable social proof and should remain contextual.
+- Do not build a global unstructured chat feed.
+
+### Interested Intent
+- Add “Intresserad” as a soft intent for program/activity sessions.
+- Interest does not reserve capacity.
+- Interest does not trigger Stripe.
+- Interest counts must be per `activity_session_id` + `session_date`, never global across a recurring series.
+- Activity lists/cards should show social proof such as `X kommer · Y intresserade`.
+- Paid registrations are a stronger signal than interest and remain the only thing that consumes capacity.
+
+### Sharing Activities
+- Every activity occurrence should be shareable.
+- Share URLs must include the concrete activity session and occurrence date: `/program/{activity_session_id}?date={session_date}&v={venue_slug}`.
+- Never share only a recurring template without date; that causes wrong-date bugs.
+- Use the native Web Share API when available, with clipboard fallback and a toast such as `Länk kopierad`.
+
+### Receipts / VAT / Friskvård
+- Pickla needs proper receipts for Stripe payments and future Zettle imports.
+- VAT for sport/friskvård is 6% unless a product-specific rule says otherwise.
+- SEK prices are VAT-inclusive.
+- VAT formula: `vat_amount = amount_inc_vat * 6 / 106`.
+- Receipts must include Pickla Solna AB, organisation number `556977-4481`, F-skatt text, address, customer, product/service, payment date, total, and VAT.
+- Friskvård receipts may require Swedish personal identity number. Collect it only when the user requests a friskvård receipt and protect it as sensitive personal data.
+
+### Finance / Kundreskontra Roadmap
+- Build `customer_transactions` as an additive finance ledger.
+- Stripe, Zettle POS, manual payments, refunds, receipts, friskvård, and future Fortnox integration should map into `customer_transactions`.
+- Do not break existing payment flows while adding the ledger.
+- Fortnox integration is future work; prepare fields only.
+
+### Zettle Import Rules
+- Zettle receipts may not contain customer identity.
+- Do not auto-match Zettle transactions based only on last4 card digits.
+- `last4 + amount + date` can be used for admin-assisted matching.
+- Unmatched Zettle transactions should remain unmatched until staff manually matches them.
+
+### Coding Rules For Agents
+- Make small targeted changes only.
+- Avoid broad redesigns/refactors unless the user explicitly asks.
+- Run `npm run build` before commit for application changes. Documentation-only changes do not require a build.
+- Return a concise diff summary after changes.
+- Never commit secrets.
+- Never commit Supabase `.temp` files.
+- Backend secrets live in Supabase Secrets, not frontend code or Vercel-exposed variables.
+
 ## Infrastructure
 
 - **Supabase project**: `pickla-base` — project ref `cqnjpudmsreubgviqptg`
