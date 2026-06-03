@@ -257,7 +257,6 @@ export function buildOfferHtml(payload: any) {
     h2 { font-size: 22px; margin: 0 0 8mm; }
     p, li { font-size: 13px; line-height: 1.45; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .hero { height: 190mm; background: #111827; color: white; display:flex; align-items:end; padding: 16mm; font-size: 40px; letter-spacing: .03em; }
     .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8mm; }
     .box { background: rgba(255,255,255,.68); border: 1px solid rgba(0,112,255,.25); padding: 8mm; }
     .footer { position:absolute; bottom: 16mm; left:24mm; right:24mm; font-size: 10px; }
@@ -275,7 +274,6 @@ export function buildOfferHtml(payload: any) {
       <p><strong>Antal:</strong> ${payload.customer.participants_count} personer</p>
     </div>
   </section>
-  <section class="page"><div class="hero">SPEL · MAT · DRYCK · MAKLÖST KUL</div></section>
   <section class="page">
     <div class="logo">pickla</div>
     <h2>${escapeHtml(payload.package.title)}</h2>
@@ -474,18 +472,7 @@ export async function buildOfferPdfBytes(payload: any) {
   drawLabel(page, 'Kontakt', margin, 150);
   drawText(page, `${payload.venue?.email || 'solna@picklaparks.com'} - ${payload.venue?.phone || '08-83 33 63'}\n${payload.venue?.address || 'Svetsarvagen 22'}`, margin, 128, { size: 10, width: contentWidth, lineHeight: 15, maxLines: 2, color: muted });
 
-  page = pdf.addPage(pageSize);
-  page.drawRectangle({ x: 0, y: 0, width: pageSize[0], height: pageSize[1], color: navy });
-  page.drawRectangle({ x: 54, y: 110, width: 487, height: 610, color: blue, opacity: 0.2 });
-  page.drawRectangle({ x: 88, y: 164, width: 420, height: 470, color: blush, opacity: 0.16 });
-  page.drawText('pickla', { x: margin, y: 760, size: 29, font: bold, color: white });
-  page.drawText('02', { x: pageSize[0] - margin - 18, y: 768, size: 9, font: bold, color: white, opacity: 0.7 });
-  drawText(page, 'SPEL', margin, 475, { size: 47, width: contentWidth, maxLines: 1, font: bold, color: white });
-  drawText(page, 'MAT', margin, 415, { size: 47, width: contentWidth, maxLines: 1, font: bold, color: white });
-  drawText(page, 'DRYCK', margin, 355, { size: 47, width: contentWidth, maxLines: 1, font: bold, color: white });
-  drawText(page, payload.package?.pitch || payload.package?.subtitle || 'Ett socialt event hos Pickla med tydligt vardskap.', margin, 265, { size: 13, width: 380, lineHeight: 19, maxLines: 5, color: white });
-
-  page = addPage(3);
+  page = addPage(2);
   drawLabel(page, 'Paket och innehåll', margin, 706);
   drawText(page, packageTitle, margin, 676, { size: 25, width: contentWidth, lineHeight: 30, maxLines: 2, font: bold });
   drawText(page, payload.package?.range || '', margin, 620, { size: 14, width: contentWidth, maxLines: 1, font: bold, color: blue });
@@ -496,7 +483,7 @@ export async function buildOfferPdfBytes(payload: any) {
   drawCard(page, margin, 105, contentWidth, 54, { fill: navy, border: navy });
   page.drawText(pdfSafe(`Totalpris: ${price} kr`), { x: margin + 18, y: 124, size: 20, font: bold, color: white });
 
-  page = addPage(4);
+  page = addPage(3);
   drawLabel(page, 'Praktisk info', margin, 706);
   drawText(page, 'Bra att veta', margin, 674, { size: 25, width: contentWidth, maxLines: 1, font: bold });
   drawListCard(page, 'Praktiskt', payload.practical_info || [], margin, 492, contentWidth, 135, { maxItems: 5 });
