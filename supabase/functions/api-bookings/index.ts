@@ -1400,9 +1400,11 @@ Deno.serve(async (req) => {
         : DateTime.now().setZone('Europe/Stockholm').year;
       const start = DateTime.fromObject({ year, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
       const end = DateTime.fromObject({ year: year + 1, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+      const startDay = DateTime.fromObject({ year, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toISODate()!;
+      const endDay = DateTime.fromObject({ year: year + 1, month: 1, day: 1 }, { zone: 'Europe/Stockholm' }).toISODate()!;
       const admin = getServiceClient();
 
-      const [receiptRes, profileRes, wellnessProfileRes] = await Promise.all([
+      const [receiptRes, profileRes, wellnessProfileRes, legacyDayPassesRes] = await Promise.all([
         admin.from('booking_receipts')
           .select('id, receipt_number, booking_refs, purchase_type, product_description, customer_name, customer_email, customer_phone, total_inc_vat, total_inc_vat_sek, total_ex_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, stripe_session_id')
           .eq('user_id', userId)
@@ -1419,6 +1421,13 @@ Deno.serve(async (req) => {
           .select('personal_identity_number, employer_note')
           .eq('auth_user_id', userId)
           .maybeSingle(),
+        admin.from('day_passes')
+          .select('id, price, purchase_date, stripe_session_id')
+          .eq('user_id', userId)
+          .gte('purchase_date', startDay)
+          .lt('purchase_date', endDay)
+          .gt('price', 0)
+          .not('stripe_session_id', 'is', null)
       ]);
 
       if (receiptRes.error) return errorResponse(receiptRes.error.message);
@@ -1441,6 +1450,29 @@ Deno.serve(async (req) => {
         payment_method: receipt.payment_method || 'Kort via Stripe',
         stripe_session_id: receipt.stripe_session_id || null,
       }));
+
+      const receiptStripeSessionIds = new Set(items.map((i: any) => i.stripe_session_id).filter(Boolean));
+      const legacyItems = (legacyDayPassesRes.data || [])
+        .filter((pass: any) => pass.stripe_session_id && !receiptStripeSessionIds.has(pass.stripe_session_id))
+        .map((pass: any) => {
+          const amount = Number(pass.price);
+          const vat_amount = Math.round((amount * 6 / 106) * 100) / 100;
+          return {
+            id: pass.id,
+            type: 'Dagsmedlemskap',
+            date: (pass.purchase_date || '').slice(0, 10),
+            label: 'Dagsmedlemskap',
+            reference: pass.id,
+            amount: amount,
+            vat_amount: vat_amount,
+            payment_method: 'Kort via Stripe',
+            stripe_session_id: pass.stripe_session_id,
+          };
+        });
+
+      items.push(...legacyItems);
+      items.sort((a: any, b: any) => ((a.date || '') > (b.date || '') ? 1 : (a.date || '') < (b.date || '') ? -1 : 0));
+
       const total = items.reduce((sum, item) => sum + item.amount, 0);
       const vatRate = 6;
       const vat = vatPartsFromIncludedTotal(total, vatRate);
