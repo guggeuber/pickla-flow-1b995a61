@@ -1,7 +1,23 @@
 import { createRoot } from "react-dom/client";
-import App from "./App.tsx";
 import "./index.css";
-import { installClientObservability } from "./lib/clientObservability.ts";
 
-installClientObservability();
-createRoot(document.getElementById("root")!).render(<App />);
+const MAINTENANCE_MODE = import.meta.env.VITE_MAINTENANCE_MODE === "true";
+
+async function bootstrap() {
+  const root = createRoot(document.getElementById("root")!);
+
+  if (MAINTENANCE_MODE) {
+    const { default: MaintenancePage } = await import("./pages/MaintenancePage");
+    root.render(<MaintenancePage />);
+    return;
+  }
+
+  const [{ default: App }, { installClientObservability }] = await Promise.all([
+    import("./App.tsx"),
+    import("./lib/clientObservability.ts"),
+  ]);
+  installClientObservability();
+  root.render(<App />);
+}
+
+bootstrap();
