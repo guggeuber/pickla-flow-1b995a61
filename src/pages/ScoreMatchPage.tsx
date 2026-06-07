@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
 
+const SCORE_POLLING_ENABLED = import.meta.env.VITE_ENABLE_SCORE_POLLING === "true";
+
 type ScoreMatch = {
   id: string;
   score_session_id: string;
@@ -91,7 +93,7 @@ export default function ScoreMatchPage() {
     queryKey: ["score-match", matchId],
     enabled: !!matchId,
     queryFn: () => apiGet("api-score", "match", { matchId }),
-    refetchInterval: 2_500,
+    refetchInterval: SCORE_POLLING_ENABLED ? 2_500 : false,
   });
 
   useEffect(() => {

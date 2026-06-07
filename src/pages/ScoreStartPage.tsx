@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { apiGet, apiPost } from "@/lib/api";
 
+const SCORE_POLLING_ENABLED = import.meta.env.VITE_ENABLE_SCORE_POLLING === "true";
+
 type Court = {
   id: string;
   name: string;
@@ -80,7 +82,7 @@ export default function ScoreStartPage() {
     queryKey: ["score-device-state", deviceToken],
     enabled: !!deviceToken,
     queryFn: () => apiGet("api-score", "device-state", { device: deviceToken }),
-    refetchInterval: 5_000,
+    refetchInterval: SCORE_POLLING_ENABLED ? 5_000 : false,
   });
 
   const [matchLengthMode, setMatchLengthMode] = useState<"best_of" | "first_to">("best_of");
@@ -116,7 +118,7 @@ export default function ScoreStartPage() {
     queryKey: ["score-join-state", deviceToken, setupId],
     enabled: !!deviceToken && !!setupId,
     queryFn: () => apiGet("api-score", "join-state", { device: deviceToken, setupId }),
-    refetchInterval: linkIndex !== null ? 1_000 : 2_000,
+    refetchInterval: SCORE_POLLING_ENABLED ? (linkIndex !== null ? 1_000 : 2_000) : false,
   });
 
   useEffect(() => {

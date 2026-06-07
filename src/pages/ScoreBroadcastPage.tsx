@@ -7,6 +7,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet } from "@/lib/api";
 
+const SCORE_POLLING_ENABLED = import.meta.env.VITE_ENABLE_SCORE_POLLING === "true";
+
 type BroadcastMatch = {
   id: string;
   status: string;
@@ -71,7 +73,7 @@ export default function ScoreBroadcastPage() {
     queryKey: ["score-broadcast", scoreSessionId],
     enabled: !!scoreSessionId,
     queryFn: () => apiGet("api-score", "live-state", { scoreSessionId }),
-    refetchInterval: 5_000,
+    refetchInterval: SCORE_POLLING_ENABLED ? 5_000 : false,
   });
 
   useEffect(() => {

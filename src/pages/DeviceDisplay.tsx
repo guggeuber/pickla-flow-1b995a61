@@ -5,6 +5,8 @@ import { DateTime } from "luxon";
 import { apiGet } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
+const SCORE_POLLING_ENABLED = import.meta.env.VITE_ENABLE_SCORE_POLLING === "true";
+
 interface DeviceData {
   device: {
     id: string;
@@ -75,7 +77,7 @@ export default function DeviceDisplay() {
     queryKey: ["score-device-state", token],
     enabled: !!token && !!data && isDartDevice(data),
     queryFn: () => apiGet("api-score", "device-state", { device: token }),
-    refetchInterval: 5_000,
+    refetchInterval: SCORE_POLLING_ENABLED ? 5_000 : false,
     staleTime: 2_000,
   });
 
