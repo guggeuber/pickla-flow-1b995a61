@@ -217,7 +217,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
       hasDayAccess: !!dayAccess,
     });
     const userHasMembership = hasActiveMembership(membership);
-    const isRegistered = success || (!!user?.id && programRegistrations.some((row: any) => row.user_id === user.id));
+    const isRegistered = !!user?.id && programRegistrations.some((row: any) => row.user_id === user.id);
     const chatPath = roomId
       ? `/chat/${roomId}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`
       : `/hub${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`;
@@ -272,6 +272,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
           navigate(result.redirect || chatPath, { replace: true });
           return;
         }
+        if (!result.url) throw new Error("Kunde inte starta betalning");
         window.location.href = result.url;
       } catch (err: any) {
         toast.error(err.message || "Kunde inte starta anmälan");

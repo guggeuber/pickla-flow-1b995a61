@@ -14,6 +14,7 @@ type BookingBySessionResponse = {
   pending?: boolean;
   booking_ref?: string;
   venue_slug?: string;
+  type?: "booking" | "session_ticket";
 };
 
 export default function BookingConfirmed() {
@@ -27,9 +28,9 @@ export default function BookingConfirmed() {
 
   const isDayPass = type === "day_pass";
   const isSessionTicket = type === "session_ticket";
-  const isInstantAccess = isDayPass || isSessionTicket;
+  const isInstantAccess = isDayPass;
 
-  // Access/session tickets: show success immediately, then continue to the next app surface.
+  // Standalone day passes are active immediately; paid activity tickets wait for the webhook below.
   useEffect(() => {
     if (!isInstantAccess) return;
     const id = setTimeout(() => navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true }), 1800);
@@ -52,11 +53,15 @@ export default function BookingConfirmed() {
   useEffect(() => {
     const bookingRef = data?.booking_ref;
     const venueSlug = data?.venue_slug;
+    if (isSessionTicket && data && !data.pending && !authLoading) {
+      navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true });
+      return;
+    }
     if (bookingRef && !authLoading) {
       const venueParam = venueSlug ? `&v=${encodeURIComponent(venueSlug)}` : "";
       navigate(user ? `/my?booking=${encodeURIComponent(bookingRef)}${venueParam}` : `/b/${encodeURIComponent(bookingRef)}`, { replace: true });
     }
-  }, [authLoading, data, navigate, user]);
+  }, [authLoading, data, isSessionTicket, navigate, next, user]);
 
   // Fallback: give up after TIMEOUT_MS and show a static message
   useEffect(() => {

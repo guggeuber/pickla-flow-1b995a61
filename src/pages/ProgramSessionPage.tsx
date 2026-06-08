@@ -48,7 +48,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [loading, setLoading] = useState(false);
   const [interestLoading, setInterestLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState(false);
-  const [joined, setJoined] = useState(false);
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -118,7 +117,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     },
   });
 
-  const { data: registrations = [] } = useQuery({
+  const { data: registrations = [], refetch: refetchRegistrations } = useQuery({
     queryKey: ["program-session-registrations", sessionId, occurrenceDate, user?.id],
     enabled: !!sessionId && !!occurrenceDate,
     staleTime: 10000,
@@ -136,7 +135,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const registrationCount = Number(data?.registrations?.count ?? registrations.length ?? 0);
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
-  const isRegistered = joined || (!!user?.id && registrations.some((row: any) => row.user_id === user.id));
+  const isRegistered = !!user?.id && registrations.some((row: any) => row.user_id === user.id);
   const interestedCount = optimisticInterest?.count ?? Number(data?.interests?.interested_count || 0);
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const socialProofLabel = activitySocialProofLabel(registrationCount, interestedCount);
@@ -220,11 +219,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       });
       if (result.free) {
         await announceJoin();
-        setJoined(true);
-        toast.success("Du är anmäld");
         queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
+        await refetchRegistrations();
+        toast.success("Du är anmäld");
         return;
       }
+      if (!result.url) throw new Error("Kunde inte starta betalning");
       window.location.href = result.url;
     } catch (err: any) {
       toast.error(err.message || "Kunde inte starta anmälan");
@@ -510,7 +510,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     ? "Anmäld"
                     : isFull
                       ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
-                      : `${user?.id ? "Anmäl" : "Logga in & anmäl"} · ${pricing.checkoutLabel}`}
+                      : `${user?.id ? (pricing.checkoutLabel === "Ingår" ? "Anmäl" : "Fortsätt till betalning") : "Logga in & anmäl"} · ${pricing.checkoutLabel}`}
                 </button>
                 <div className="grid grid-cols-3 gap-2">
                   <button

@@ -862,7 +862,29 @@ Deno.serve(async (req) => {
       .limit(1)
       .maybeSingle();
 
-    if (!booking) return jsonResponse({ pending: true }, 200, 0);
+    if (!booking) {
+      const { data: registration } = await serviceClient
+        .from('session_registrations')
+        .select('id, venue_id')
+        .eq('stripe_session_id', sessionId)
+        .neq('status', 'cancelled')
+        .limit(1)
+        .maybeSingle();
+
+      if (!registration) return jsonResponse({ pending: true }, 200, 0);
+
+      const { data: venue } = await serviceClient
+        .from('venues')
+        .select('slug')
+        .eq('id', registration.venue_id)
+        .maybeSingle();
+
+      return jsonResponse({
+        pending: false,
+        type: 'session_ticket',
+        venue_slug: venue?.slug || '',
+      }, 200, 0);
+    }
 
     const { data: venue } = await serviceClient
       .from('venues')
