@@ -126,3 +126,38 @@ export function activityPriceLabels({
     checkoutLabel: includedLabel || formatSek(finalPrice),
   };
 }
+
+export type BackendActivityPricingDecision = {
+  baseAmountSek?: number | null;
+  finalAmountSek?: number | null;
+  effectivePriceSek?: number | null;
+  requiresCheckout?: boolean | null;
+  accessDecision?: "paid" | "membership_included" | "day_access_included" | "free_day_pass" | string | null;
+  productKey?: string | null;
+};
+
+export function mergeBackendActivityPricing(
+  labels: ReturnType<typeof activityPriceLabels>,
+  decision?: BackendActivityPricingDecision | null
+) {
+  if (!decision) return labels;
+
+  const backendBase = Number(decision.baseAmountSek ?? labels.basePrice);
+  const backendFinal = Number(decision.effectivePriceSek ?? decision.finalAmountSek ?? labels.finalPrice);
+  const basePrice = Number.isFinite(backendBase) ? Math.round(backendBase) : labels.basePrice;
+  const finalPrice = Number.isFinite(backendFinal) ? Math.round(backendFinal) : labels.finalPrice;
+  const includedLabel = decision.requiresCheckout === false
+    ? decision.accessDecision === "day_access_included"
+      ? "Ingår idag"
+      : "Ingår"
+    : null;
+
+  return {
+    ...labels,
+    basePrice,
+    finalPrice,
+    includedLabel,
+    hasDiscount: finalPrice > 0 && finalPrice < basePrice,
+    checkoutLabel: includedLabel || formatSek(finalPrice),
+  };
+}

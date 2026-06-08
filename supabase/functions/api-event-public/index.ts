@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
+import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -872,7 +873,17 @@ Deno.serve(async (req) => {
           sessionDate: preview.activity_session.occurrence_date,
           userId,
         });
+        const pricing = await resolveActivityPricingDecision({
+          client,
+          venueId: preview.activity_session.venue_id,
+          userId,
+          activitySessionId: preview.activity_session.id,
+          sessionDate: preview.activity_session.occurrence_date,
+          requestedProductKey: preview.activity_session.product_key,
+          requestedAmountSek: preview.activity_session.price_sek,
+        });
         preview.interests = interests;
+        preview.pricing = pricing;
         return jsonResponse(preview, 200, 5);
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Activity preview not found', 404);

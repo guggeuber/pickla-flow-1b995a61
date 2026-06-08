@@ -9,7 +9,7 @@ import { DateTime } from "luxon";
 import { useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
-import { activityPriceLabels, hasActiveMembership } from "@/lib/activityPricing";
+import { activityPriceLabels, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -209,13 +209,14 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const socialProof = activitySocialProofLabel(registrationCount, interestedCount);
     const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
     const isFull = spotsLeft === 0;
-    const pricing = activityPriceLabels({
+    const backendPricing = publicActivityPreview?.pricing || null;
+    const pricing = mergeBackendActivityPricing(activityPriceLabels({
       basePrice: Number(effectiveProgramSession.price_sek || 165),
       productKey: (effectiveProgramSession as any).product_key,
       sessionType: effectiveProgramSession.session_type,
       membership,
       hasDayAccess: !!dayAccess,
-    });
+    }), backendPricing);
     const userHasMembership = hasActiveMembership(membership);
     const isRegistered = !!user?.id && programRegistrations.some((row: any) => row.user_id === user.id);
     const chatPath = roomId
@@ -260,6 +261,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
             chat_room_id: roomId || "",
             session_name: effectiveProgramSession.name,
             session_type: effectiveProgramSession.session_type || "open_play",
+            product_key: backendPricing?.productKey || (effectiveProgramSession as any).product_key || "",
             user_id: user.id,
             slug: venueSlug || "",
             redirect_path: chatPath,

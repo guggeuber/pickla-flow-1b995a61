@@ -9,7 +9,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { activityPriceLabels, hasActiveMembership } from "@/lib/activityPricing";
+import { activityPriceLabels, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -140,13 +140,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const socialProofLabel = activitySocialProofLabel(registrationCount, interestedCount);
   const userHasMembership = hasActiveMembership(membership);
-  const pricing = activityPriceLabels({
+  const backendPricing = data?.pricing || null;
+  const pricing = mergeBackendActivityPricing(activityPriceLabels({
     basePrice: Number(session?.price_sek || 165),
     productKey: session?.product_key,
     sessionType: session?.session_type,
     membership,
     hasDayAccess: !!dayAccess,
-  });
+  }), backendPricing);
 
   const timeLabel = useMemo(() => {
     if (!session) return "";
@@ -205,14 +206,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         product_type: "day_pass",
         amount_sek: session.price_sek || 0,
         venue_id: session.venue_id,
-        metadata: {
-          date: occurrenceDate,
-          activity_session_id: sessionId,
-          chat_room_id: room?.id || "",
-          session_name: session.name,
-          session_type: session.session_type || "open_play",
-          user_id: user.id,
-          slug: venueSlug,
+          metadata: {
+            date: occurrenceDate,
+            activity_session_id: sessionId,
+            chat_room_id: room?.id || "",
+            session_name: session.name,
+            session_type: session.session_type || "open_play",
+            product_key: backendPricing?.productKey || session.product_key || "",
+            user_id: user.id,
+            slug: venueSlug,
           redirect_path: safeLocalPath(programPath),
           success_path: `/booking/confirmed?type=session_ticket&next=${encodeURIComponent(safeLocalPath(programPath))}`,
         },

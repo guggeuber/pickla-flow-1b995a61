@@ -4,6 +4,7 @@ import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
+import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 
 function safeLocalPath(path?: string | null) {
   if (!path || typeof path !== 'string') return '';
@@ -341,6 +342,30 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
+  if (product_type === 'day_pass' && meta.entitlement_type === 'day_access') {
+    const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+    const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+    if (activitySessionId) {
+      await adminFree.from('session_registrations').upsert({
+        venue_id,
+        activity_session_id: activitySessionId,
+        session_date: validDate,
+        user_id: entitlementUserId,
+        status: 'confirmed',
+        price_paid_sek: 0,
+        source_type: 'access_entitlement',
+        source_id: meta.access_entitlement_id || null,
+        metadata: {
+          session_type: meta.session_type || 'open_play',
+          session_name: meta.session_name || null,
+          entitlement_type: 'day_access',
+        },
+      }, { onConflict: 'activity_session_id,session_date,user_id' });
+    }
+
+    return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
+  }
+
   return null;
 }
 
@@ -414,17 +439,19 @@ Deno.serve(async (req) => {
     let baseAmountSek = amount_sek;
     let finalAmountSek = amount_sek;
     let entitlementUserId = meta.user_id || '';
+    let activityPricingDecision: any = null;
 
     if (product_type === 'day_pass' && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
       const adminCheckout = getServiceClient();
-      if (!meta.product_key) meta.product_key = 'day_access';
-      const { data: product } = await adminCheckout
-        .from('access_products')
-        .select('product_key, name, product_kind, session_type, base_price_sek, grants')
-        .eq('venue_id', venue_id)
-        .eq('product_key', meta.product_key)
-        .eq('is_active', true)
-        .maybeSingle();
+      const { data: product } = meta.product_key
+        ? await adminCheckout
+          .from('access_products')
+          .select('product_key, name, product_kind, session_type, base_price_sek, grants')
+          .eq('venue_id', venue_id)
+          .eq('product_key', meta.product_key)
+          .eq('is_active', true)
+          .maybeSingle()
+        : { data: null };
 
       if (product) {
         meta.product_key = product.product_key;
@@ -480,6 +507,32 @@ Deno.serve(async (req) => {
         entitlementUserId = authUser?.id || '';
         if (entitlementUserId) meta.user_id = entitlementUserId;
       }
+    }
+
+    if (product_type === 'day_pass' && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
+      const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+      activityPricingDecision = await resolveActivityPricingDecision({
+        client: getServiceClient(),
+        venueId: venue_id,
+        userId: entitlementUserId || null,
+        activitySessionId,
+        sessionDate: meta.date,
+        requestedProductKey: meta.product_key || null,
+        requestedAmountSek: amount_sek,
+      });
+
+      baseAmountSek = activityPricingDecision.baseAmountSek;
+      finalAmountSek = activityPricingDecision.finalAmountSek;
+      meta.activity_session_id = activitySessionId;
+      meta.product_key = activityPricingDecision.productKey;
+      meta.product_kind = activityPricingDecision.productKind || '';
+      meta.base_amount_sek = String(activityPricingDecision.baseAmountSek);
+      meta.effective_amount_sek = String(activityPricingDecision.finalAmountSek);
+      meta.entitlement_type = activityPricingDecision.entitlementType || '';
+      meta.membership_id = activityPricingDecision.membershipId || '';
+      meta.access_entitlement_id = activityPricingDecision.entitlementType === 'day_access'
+        ? activityPricingDecision.sourceId || ''
+        : '';
     }
 
     if (isMembership) {
@@ -677,7 +730,7 @@ Deno.serve(async (req) => {
           }
         }
 
-        if (product_type === 'day_pass') {
+        if (product_type === 'day_pass' && !activityPricingDecision) {
           const passDiscount = hasEnt('day_pass_discount_pct');
           const freePass = hasEnt('free_day_pass_monthly');
           const openPlayUnlimited = hasEnt('open_play_unlimited');
