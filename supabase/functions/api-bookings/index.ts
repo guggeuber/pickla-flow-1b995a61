@@ -50,6 +50,18 @@ function bookingDurationHours(row: any) {
   return (end - start) / 36e5;
 }
 
+function stockholmSessionIso(sessionDate: string, time?: string | null, end = false) {
+  const cleanDate = String(sessionDate || '').slice(0, 10);
+  const cleanTime = String(time || (end ? '23:59' : '00:00')).slice(0, 5);
+  return DateTime.fromISO(`${cleanDate}T${cleanTime}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO();
+}
+
+function profileDisplayName(profile: any) {
+  if (!profile) return null;
+  const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim();
+  return fullName || profile.display_name || profile.phone || null;
+}
+
 async function refundMembershipCourtHours(admin: any, rows: any[]) {
   const refunds = new Map<string, {
     user_id: string;
@@ -1606,7 +1618,78 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await query;
       if (qErr) return errorResponse(qErr.message);
 
-      return jsonResponse(data, 200, 5);
+      const courtBookings = (data || []).map((booking: any) => ({
+        ...booking,
+        kind: 'court_booking',
+        booking_type: 'Banbokning',
+      }));
+
+      let activityRegistrations: any[] = [];
+      if (date) {
+        const { data: registrations, error: regErr } = await client
+          .from('session_registrations')
+          .select('id, venue_id, activity_session_id, session_date, user_id, status, price_paid_sek, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
+          .eq('venue_id', venueId)
+          .eq('session_date', date)
+          .neq('status', 'cancelled');
+
+        if (regErr) return errorResponse(regErr.message);
+
+        const userIds = Array.from(new Set((registrations || []).map((row: any) => row.user_id).filter(Boolean)));
+        const profilesByUserId = new Map<string, any>();
+
+        if (userIds.length > 0) {
+          const { data: profiles, error: profilesErr } = await client
+            .from('player_profiles')
+            .select('auth_user_id, display_name, first_name, last_name, phone')
+            .in('auth_user_id', userIds);
+
+          if (profilesErr) return errorResponse(profilesErr.message);
+          for (const profile of profiles || []) {
+            profilesByUserId.set(profile.auth_user_id, profile);
+          }
+        }
+
+        activityRegistrations = (registrations || []).map((registration: any) => {
+          const session = registration.activity_sessions || {};
+          const startTime = stockholmSessionIso(registration.session_date, session.start_time, false);
+          const endTime = stockholmSessionIso(registration.session_date, session.end_time, true);
+          const participantName = profileDisplayName(profilesByUserId.get(registration.user_id)) || 'Deltagare';
+
+          return {
+            id: `session_registration:${registration.id}`,
+            kind: 'activity_registration',
+            booking_type: 'Aktivitet',
+            session_registration_id: registration.id,
+            activity_session_id: registration.activity_session_id,
+            session_date: registration.session_date,
+            venue_id: registration.venue_id,
+            venue_court_id: null,
+            start_time: startTime,
+            end_time: endTime,
+            status: registration.status || 'confirmed',
+            total_price: registration.price_paid_sek,
+            booked_by: participantName,
+            notes: session.name || 'Aktivitet',
+            booking_ref: null,
+            venue_courts: null,
+            activity_session: {
+              id: session.id,
+              name: session.name,
+              session_type: session.session_type,
+              capacity: session.capacity,
+              start_time: session.start_time,
+              end_time: session.end_time,
+            },
+          };
+        });
+      }
+
+      const items = [...courtBookings, ...activityRegistrations].sort((a: any, b: any) =>
+        new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+      );
+
+      return jsonResponse(items, 200, 5);
     }
 
     // GET /api-bookings/revenue?venueId=X&date=YYYY-MM-DD

@@ -94,8 +94,20 @@ export function BookingsSection({ venueId }: BookingsSectionProps) {
           {sortedBookings.map((booking: any) => {
             const start = new Date(booking.start_time);
             const end = new Date(booking.end_time);
-            const courtName = (booking.venue_courts as any)?.name || "–";
+            const isActivity = booking.kind === "activity_registration";
+            const courtName = isActivity
+              ? booking.activity_session?.name || booking.notes || "Aktivitet"
+              : (booking.venue_courts as any)?.name || "–";
             const customer = booking.booked_by || booking.notes || "Gäst";
+            const statusLabel = isActivity
+              ? "Aktivitet"
+              : booking.status === "confirmed"
+                ? "Betald"
+                : booking.status === "pending"
+                  ? "Väntande"
+                  : booking.status === "cancelled"
+                    ? "Avbokad"
+                    : booking.status;
 
             return (
               <motion.div
@@ -116,7 +128,7 @@ export function BookingsSection({ venueId }: BookingsSectionProps) {
                   <p className="text-sm font-semibold truncate">{customer}</p>
                   <p className="text-[11px] text-muted-foreground">
                     {courtName}
-                    {booking.booking_ref && ` · ${booking.booking_ref}`}
+                    {isActivity ? " · Aktivitet" : booking.booking_ref && ` · ${booking.booking_ref}`}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -126,7 +138,7 @@ export function BookingsSection({ venueId }: BookingsSectionProps) {
                     </span>
                   )}
                   <span className={`status-chip text-[9px] ${statusColors[booking.status] || "bg-secondary text-secondary-foreground"}`}>
-                    {booking.status === "confirmed" ? "Betald" : booking.status === "pending" ? "Väntande" : booking.status === "cancelled" ? "Avbokad" : booking.status}
+                    {statusLabel}
                   </span>
                 </div>
               </motion.div>

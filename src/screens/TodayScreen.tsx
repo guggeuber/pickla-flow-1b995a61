@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, Users, TrendingUp, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine, UserCheck } from "lucide-react";
+import { Activity, Users, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine, UserCheck } from "lucide-react";
 import QrScanner from "@/components/desk/QrScanner";
 import { BookingsSection } from "@/components/desk/BookingsSection";
 import { useState, useEffect, useMemo } from "react";
@@ -101,7 +101,7 @@ const TodayScreen = () => {
 
     return courts.map((court) => {
       const courtBookings = bookings?.filter(
-        (b) => b.venue_court_id === court.id && (b.status === "confirmed" || b.status === "completed")
+        (b) => b.kind !== "activity_registration" && b.venue_court_id === court.id && (b.status === "confirmed" || b.status === "completed")
       ) || [];
 
       const activeBooking = courtBookings.find((b) => {
@@ -147,6 +147,14 @@ const TodayScreen = () => {
   const occupancy = totalCourts > 0 ? Math.round((activeCourts / totalCourts) * 100) : 0;
   const venueStatus = getVenueStatus(occupancy);
   const recentCheckins = useMemo(() => checkins.slice(0, 6), [checkins]);
+  const courtBookingCount = useMemo(
+    () => bookings?.filter((booking) => booking.kind !== "activity_registration").length || 0,
+    [bookings]
+  );
+  const activityRegistrationCount = useMemo(
+    () => bookings?.filter((booking) => booking.kind === "activity_registration").length || 0,
+    [bookings]
+  );
 
   const upcomingBookings = useMemo(() => {
     if (!bookings) return [];
@@ -214,7 +222,7 @@ const TodayScreen = () => {
           </div>
           <div className="text-right">
             <p className="text-[10px] text-muted-foreground mt-0.5">
-              {occupancy}% occupied · {revenue?.bookingCount || 0} bookings
+              {occupancy}% occupied · {courtBookingCount} bookings · {activityRegistrationCount} aktiviteter
             </p>
           </div>
         </div>
@@ -224,9 +232,9 @@ const TodayScreen = () => {
       <div className="grid grid-cols-4 gap-2">
         {[
           { label: "Courts", value: `${activeCourts}/${totalCourts}`, icon: Activity },
-          { label: "Bookings", value: String(bookings?.length || 0), icon: Zap },
+          { label: "Bookings", value: String(courtBookingCount), icon: Zap },
+          { label: "Aktivitet", value: String(activityRegistrationCount), icon: Users },
           { label: "Upcoming", value: String(upcomingBookings.length), icon: Users },
-          { label: "Passes", value: String(revenue?.passCount || 0), icon: TrendingUp },
         ].map((stat, i) => (
           <motion.div
             key={stat.label}
@@ -348,7 +356,10 @@ const TodayScreen = () => {
           <div className="space-y-1.5">
             {upcomingBookings.map((booking, i) => {
               const startTime = new Date(booking.start_time);
-              const courtName = (booking.venue_courts as any)?.name || "–";
+              const isActivity = booking.kind === "activity_registration";
+              const courtName = isActivity
+                ? booking.activity_session?.name || booking.notes || "Aktivitet"
+                : (booking.venue_courts as any)?.name || "–";
               return (
                 <motion.div
                   key={booking.id}
@@ -364,10 +375,12 @@ const TodayScreen = () => {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold truncate">{booking.booked_by || "Gäst"}</p>
-                    <p className="text-[11px] text-muted-foreground">{courtName}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {courtName}{isActivity ? " · Aktivitet" : ""}
+                    </p>
                   </div>
                   <span className={`status-chip text-[9px] ${booking.status === "confirmed" ? "bg-badge-paid/15 text-badge-paid" : "bg-badge-unpaid/15 text-badge-unpaid"}`}>
-                    {booking.status === "confirmed" ? "Paid" : booking.status}
+                    {isActivity ? "Aktivitet" : booking.status === "confirmed" ? "Paid" : booking.status}
                   </span>
                 </motion.div>
               );

@@ -71,6 +71,29 @@ type MyEventRegistration = {
   events: MyEventSummary | null;
 };
 
+type MyActivitySessionSummary = {
+  id: string;
+  name: string | null;
+  session_type: string | null;
+  session_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  venue_id: string | null;
+  venues?: { name: string | null; slug: string | null } | null;
+};
+
+type MySessionRegistration = {
+  id: string;
+  venue_id: string | null;
+  activity_session_id: string;
+  session_date: string;
+  user_id: string;
+  status: string | null;
+  price_paid_sek: number | null;
+  created_at: string | null;
+  activity_sessions: MyActivitySessionSummary | null;
+};
+
 type ActivityThreadRoom = {
   id: string;
   room_type: "daily" | "booking" | "event" | "ritual";
@@ -117,6 +140,25 @@ function useMyBookings() {
         .limit(50);
       if (error) throw error;
       return data;
+    },
+  });
+}
+
+function useMySessionRegistrations() {
+  const { user } = useAuth();
+  return useQuery<MySessionRegistration[]>({
+    queryKey: ["my-session-registrations", user?.id],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("session_registrations")
+        .select("id, venue_id, activity_session_id, session_date, user_id, status, price_paid_sek, created_at, activity_sessions(id, name, session_type, session_date, start_time, end_time, venue_id, venues(name, slug))")
+        .eq("user_id", user!.id)
+        .neq("status", "cancelled")
+        .order("session_date", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return (data || []) as unknown as MySessionRegistration[];
     },
   });
 }
@@ -176,6 +218,26 @@ function getEventDateTime(event?: MyEventSummary | null, end = false) {
 
   const datePart = String(date).slice(0, 10);
   return new Date(time ? `${datePart}T${time}` : `${datePart}T${end ? "23:59:59" : "00:00:00"}`);
+}
+
+function getSessionRegistrationDateTime(registration?: MySessionRegistration | null, end = false) {
+  const session = registration?.activity_sessions;
+  const date = registration?.session_date || session?.session_date;
+  const time = end ? session?.end_time : session?.start_time;
+  if (!date) return null;
+
+  const datePart = String(date).slice(0, 10);
+  return new Date(time ? `${datePart}T${String(time).slice(0, 5)}` : `${datePart}T${end ? "23:59:59" : "00:00:00"}`);
+}
+
+function getSessionRegistrationPath(registration: MySessionRegistration, fallbackVenueSlug: string) {
+  const sessionDate = String(registration.session_date || registration.activity_sessions?.session_date || "").slice(0, 10);
+  const venueSlug = registration.activity_sessions?.venues?.slug || fallbackVenueSlug;
+  const params = new URLSearchParams();
+  if (sessionDate) params.set("date", sessionDate);
+  if (venueSlug) params.set("v", venueSlug);
+  const query = params.toString();
+  return `/program/${encodeURIComponent(registration.activity_session_id)}${query ? `?${query}` : ""}`;
 }
 
 function getThreadPath(room: ActivityThreadRoom) {
@@ -1565,6 +1627,7 @@ const MyPage = () => {
 
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
+  const { data: sessionRegistrations } = useMySessionRegistrations();
   const { data: eventRegistrations } = useMyEventRegistrations(profile);
   const { data: activeMembership } = useActiveMembership();
   const { data: membershipBenefits } = useMyPasses();
@@ -1625,6 +1688,14 @@ const MyPage = () => {
   const now = Date.now();
   const activeBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now));
   const pastBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now));
+  const activeSessionRegistrations = (sessionRegistrations || []).filter((registration) => {
+    const sessionEnd = getSessionRegistrationDateTime(registration, true);
+    return sessionEnd ? sessionEnd.getTime() >= now : true;
+  });
+  const pastSessionRegistrations = (sessionRegistrations || []).filter((registration) => {
+    const sessionEnd = getSessionRegistrationDateTime(registration, true);
+    return sessionEnd ? sessionEnd.getTime() < now : false;
+  });
   const activeEventRegistrations = (eventRegistrations || []).filter((registration) => {
     const eventEnd = getEventDateTime(registration.events, true);
     return eventEnd ? eventEnd.getTime() >= now : true;
@@ -1633,8 +1704,8 @@ const MyPage = () => {
     const eventEnd = getEventDateTime(registration.events, true);
     return eventEnd ? eventEnd.getTime() < now : false;
   });
-  const activeBookingCount = activeBookings.length + activeEventRegistrations.length;
-  const pastBookingCount = pastBookings.length + pastEventRegistrations.length;
+  const activeBookingCount = activeBookings.length + activeSessionRegistrations.length + activeEventRegistrations.length;
+  const pastBookingCount = pastBookings.length + pastSessionRegistrations.length + pastEventRegistrations.length;
   const ownedBookingThreadKeys = getOwnedBookingThreadKeys(activeBookings);
   const visibleActivityThreads = activityThreads.filter(({ room }) =>
     room.room_type !== "booking" || !room.resource_id || !ownedBookingThreadKeys.has(room.resource_id)
@@ -1793,6 +1864,42 @@ const MyPage = () => {
                     </div>
                   </button>
                 ))}
+                {activeSessionRegistrations.map((registration) => {
+                  const session = registration.activity_sessions;
+                  const sessionStart = getSessionRegistrationDateTime(registration);
+                  const sessionEnd = getSessionRegistrationDateTime(registration, true);
+
+                  return (
+                    <button
+                      key={registration.id}
+                      onClick={() => navigate(getSessionRegistrationPath(registration, venueSlug))}
+                      className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
+                      style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate" style={{ color: TEXT_PRIMARY }}>
+                          {session?.name || "Aktivitet"}
+                        </p>
+                        <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                          {sessionStart
+                            ? sessionStart.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })
+                            : "Datum kommer"}
+                          {sessionStart ? ` ${sessionStart.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                          {sessionEnd ? `–${sessionEnd.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                        </p>
+                        <p className="text-[11px] mt-1" style={{ color: TEXT_SECONDARY }}>
+                          Aktivitet · {session?.venues?.name || "Pickla"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: GREEN_LIGHT, color: GREEN }}>
+                          Anmäld
+                        </span>
+                        <Ticket className="w-4 h-4" style={{ color: TEXT_MUTED }} />
+                      </div>
+                    </button>
+                  );
+                })}
                 {activeEventRegistrations.map((registration) => {
                   const event = registration.events;
                   const eventStart = getEventDateTime(event);
@@ -1899,6 +2006,37 @@ const MyPage = () => {
                             </div>
                           </button>
                         ))}
+                        {pastSessionRegistrations.map((registration) => {
+                          const session = registration.activity_sessions;
+                          const sessionStart = getSessionRegistrationDateTime(registration);
+                          const sessionEnd = getSessionRegistrationDateTime(registration, true);
+
+                          return (
+                            <button
+                              key={registration.id}
+                              onClick={() => navigate(getSessionRegistrationPath(registration, venueSlug))}
+                              className="rounded-xl p-3 flex items-center justify-between text-left opacity-70 active:scale-[0.98] transition-transform"
+                              style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate" style={{ color: TEXT_PRIMARY }}>{session?.name || "Aktivitet"}</p>
+                                <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                                  {sessionStart
+                                    ? sessionStart.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })
+                                    : "Datum kommer"}
+                                  {sessionStart ? ` ${sessionStart.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                                  {sessionEnd ? `–${sessionEnd.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                                </p>
+                                <p className="text-[11px] mt-1" style={{ color: TEXT_SECONDARY }}>
+                                  Aktivitet · {session?.venues?.name || "Pickla"}
+                                </p>
+                              </div>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: PAGE_BG, color: TEXT_SECONDARY }}>
+                                Aktivitet
+                              </span>
+                            </button>
+                          );
+                        })}
                         {pastEventRegistrations.map((registration) => {
                           const event = registration.events;
                           const eventStart = getEventDateTime(event);
