@@ -539,27 +539,30 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     )}
                   </div>
 
-                  {!userHasMembership && (
-                    <div className="grid gap-2 [@media(max-height:640px)]:hidden">
-                      {[
-                        {
-                          label: `Pickla Access ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`,
-                          value: "Medlemspris",
-                          helper: "Köp Access och boka billigare",
-                        },
-                        {
-                          label: `Pickla Unlimited ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`,
-                          value: "Ingår",
-                          helper: "Ingår när aktiviteten täcks av Unlimited",
-                        },
-                        {
-                          label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
-                          value: dayPassPricing?.checkoutLabel || "Heldag",
-                          helper: data?.upgradeDeltaSek > 0 ? `Spela hela dagen · bara +${formatSek(data.upgradeDeltaSek)} extra` : "Spela hela dagen",
-                        },
-                      ]
-                        .filter((row) => !hasDayAccess || !row.label.includes("Dagsmedlemskap"))
-                        .map((row) => {
+                  {(() => {
+                    const upsellRows = [
+                      !userHasMembership ? {
+                        label: `Pickla Access ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`,
+                        value: "Medlemspris",
+                        helper: "Köp Access och boka billigare",
+                      } : null,
+                      !userHasMembership ? {
+                        label: `Pickla Unlimited ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`,
+                        value: "Ingår",
+                        helper: "Ingår när aktiviteten täcks av Unlimited",
+                      } : null,
+                      !hasDayAccess && dayPassPricing ? {
+                        label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
+                        value: dayPassPricing.checkoutLabel || "Heldag",
+                        helper: data?.upgradeDeltaSek > 0 ? `Spela hela dagen · bara +${formatSek(data.upgradeDeltaSek)} extra` : "Spela hela dagen",
+                      } : null,
+                    ].filter(Boolean) as Array<{ label: string; value: string; helper: string }>;
+
+                    if (upsellRows.length === 0) return null;
+
+                    return (
+                      <div className="grid gap-2 [@media(max-height:640px)]:hidden">
+                        {upsellRows.map((row) => {
                           const isMembershipUpsell = row.label.includes("Access") || row.label.includes("Unlimited");
                           const isDayUpsell = !hasDayAccess && row.label.includes("Dagsmedlemskap");
                           const clickable = !pricingPending && (isMembershipUpsell || isDayUpsell);
@@ -586,8 +589,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                             </button>
                           );
                         })}
-                    </div>
-                  )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
