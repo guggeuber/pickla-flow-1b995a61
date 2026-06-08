@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { AlertTriangle, CalendarDays, Edit3, Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -24,6 +24,19 @@ const SESSION_TYPES = [
 ];
 
 type SoldAs = "activity_ticket" | "day_pass" | "included_only";
+
+interface MembershipTier {
+  id: string;
+  name: string;
+  is_active: boolean;
+}
+
+interface TierPricing {
+  tier_id: string;
+  product_type: string;
+  fixed_price: number | null;
+  discount_percent: number | null;
+}
 
 const SOLD_AS_OPTIONS: { key: SoldAs; label: string; helper: string }[] = [
   {
@@ -152,16 +165,48 @@ const sessionWarnings = (session: any) => draftWarnings({
   is_active: session.is_active,
 });
 
+const memberPriceForProduct = ({
+  productKey,
+  basePrice,
+  tiers,
+  tierPricing,
+}: {
+  productKey: string | null;
+  basePrice: number;
+  tiers: MembershipTier[];
+  tierPricing: TierPricing[];
+}) => {
+  if (!productKey) return "Ingen produkt";
+  const activeTiers = tiers.filter((tier) => tier.is_active);
+  const preferredTier = activeTiers.find((tier) => {
+    const name = tier.name.toLowerCase();
+    return (name === "play" || name.includes("access")) && !name.includes("+") && !name.includes("plus") && !name.includes("unlimited");
+  }) || activeTiers[0];
+  if (!preferredTier) return "Sätt i Medlemskap";
+  const rule = tierPricing.find((row) => row.tier_id === preferredTier.id && row.product_type === productKey);
+  if (!rule) return "Sätt i Medlemskap";
+  const effectivePrice = rule.fixed_price != null
+    ? Number(rule.fixed_price)
+    : Math.max(0, Math.round(basePrice * (1 - Number(rule.discount_percent || 0) / 100)));
+  return `${effectivePrice} kr`;
+};
+
 const pricingPreview = ({
   price,
   soldAs,
+  sessionType,
   includedInDayPass,
   includedInUnlimited,
+  tiers,
+  tierPricing,
 }: {
   price: number;
   soldAs: SoldAs;
+  sessionType: string;
   includedInDayPass: boolean;
   includedInUnlimited: boolean;
+  tiers: MembershipTier[];
+  tierPricing: TierPricing[];
 }) => {
   if (soldAs === "included_only") {
     return [
@@ -172,16 +217,18 @@ const pricingPreview = ({
     ];
   }
   if (soldAs === "day_pass") {
+    const basePrice = price || 199;
     return [
-      ["Vanlig kund", `${price || 199} kr`],
-      ["Pickla Access / Play", `${Math.round((price || 199) * 0.6)} kr`],
+      ["Vanlig kund", `${basePrice} kr`],
+      ["Pickla Access / Play", memberPriceForProduct({ productKey: "day_access", basePrice, tiers, tierPricing })],
       ["Unlimited / Play+", "Ej relevant"],
       ["Dagsmedlemskap", "Aktiveras"],
     ];
   }
+  const productKey = productKeyForActivityTicket(sessionType);
   return [
     ["Vanlig kund", `${price} kr`],
-    ["Pickla Access / Play", `${Math.round(price * 0.6)} kr`],
+    ["Pickla Access / Play", memberPriceForProduct({ productKey, basePrice: price, tiers, tierPricing })],
     ["Unlimited / Play+", includedInUnlimited ? "Ingår" : "Ej inkluderat"],
     ["Dagsmedlemskap", includedInDayPass ? "Ingår idag" : "Ej access"],
   ];
@@ -214,6 +261,19 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     queryKey: ["admin-access-products", venueId],
     queryFn: () => apiGet("api-admin", "products", { venueId }),
   });
+  const { data: membershipTiers = [] } = useQuery<MembershipTier[]>({
+    queryKey: ["membership-tiers", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-memberships", "tiers", { venueId, includeHidden: "true" }),
+  });
+  const tierPricingQueries = useQueries({
+    queries: membershipTiers.map((tier) => ({
+      queryKey: ["tier-pricing", tier.id],
+      queryFn: () => apiGet<TierPricing[]>("api-memberships", "tier-pricing", { tierId: tier.id }),
+      enabled: !!tier.id,
+    })),
+  });
+  const allTierPricing = tierPricingQueries.flatMap((query) => query.data || []);
 
   const { data: series = [], isLoading: seriesLoading } = useQuery<any[]>({
     queryKey: ["admin-activity-series", venueId],
@@ -478,8 +538,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const createPreview = pricingPreview({
     price: Math.max(0, Math.round(Number(price || 0))),
     soldAs,
+    sessionType,
     includedInDayPass,
     includedInUnlimited,
+    tiers: membershipTiers,
+    tierPricing: allTierPricing,
   });
 
   if (seriesLoading || sessionsLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
@@ -712,8 +775,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           const activePreview = pricingPreview({
             price: Math.max(0, Math.round(Number(isEditing ? draft.price_sek ?? session.price_sek ?? 0 : session.price_sek ?? 0))),
             soldAs: activeDraftSoldAs,
+            sessionType: draft.session_type || session.session_type || "open_play",
             includedInDayPass: activeDraftIncludedInDayPass,
             includedInUnlimited: activeDraftIncludedInUnlimited,
+            tiers: membershipTiers,
+            tierPricing: allTierPricing,
           });
           return (
             <motion.div key={session.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
