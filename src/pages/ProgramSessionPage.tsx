@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, Star, Ticket, Users } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
-import { Drawer, DrawerContent } from "@/components/ui/drawer";
+import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
 import { apiGet, apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -15,7 +15,6 @@ const BG = "#fbf7f2";
 const TEXT = "#020617";
 const MUTED = "#64748b";
 const BORDER = "rgba(15,23,42,0.10)";
-const SOFT = "#f8fafc";
 const NAVY = "#111827";
 const GREEN = "#16a34a";
 const MENU_BORDER = "rgba(17,17,17,0.12)";
@@ -148,6 +147,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     membership,
     hasDayAccess: !!dayAccess,
   }), backendPricing);
+  const pricingIsIncluded = pricing.checkoutLabel === "Ingår" || pricing.checkoutLabel === "Ingår idag";
+  const requiresCheckout = backendPricing?.requiresCheckout !== false && !pricingIsIncluded;
+  const ctaLabel = isRegistered
+    ? "Anmäld"
+    : isFull
+      ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
+      : `${user?.id ? (pricingIsIncluded ? "Anmäl" : "Fortsätt till betalning") : "Logga in & anmäl"} · ${pricing.checkoutLabel}`;
 
   const timeLabel = useMemo(() => {
     if (!session) return "";
@@ -340,7 +346,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       </div>
 
       <main className="mx-auto mt-12 max-w-md">
-        {isLoading ? (
+        {isLoading || (!session && !error) ? (
           <div className="grid justify-items-center gap-4 rounded-[28px] bg-white p-10 text-center shadow-sm" style={{ border: `1px solid ${BORDER}` }}>
             <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
             <p className="text-lg font-black" style={{ fontFamily: FONT_HEADING }}>Hämtar aktiviteten</p>
@@ -391,111 +397,133 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
       {session && (
         <Drawer open onOpenChange={closeDrawer} shouldScaleBackground={false}>
-          <DrawerContent className="z-[60] max-h-[88vh] overflow-hidden rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] pt-5 text-neutral-950">
-            <div className="mx-auto flex w-full max-w-md min-w-0 flex-col gap-3 overflow-hidden pb-1">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: "'Space Mono', monospace" }}>
-                    {sessionTypeLabel(session.session_type)}
-                  </p>
-                  <h2 className="mt-1 text-[25px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                    {session.name}
-                  </h2>
-                  <p className="mt-1.5 text-[13px] font-normal text-neutral-500">
-                    {dateLabel} · {timeLabel}
-                  </p>
-                  {socialProofLabel && (
-                    <p className="mt-1 text-[12px] font-normal text-neutral-400">
-                      {socialProofLabel}
+          <DrawerContent className="z-[60] h-[88dvh] max-h-[720px] overflow-hidden rounded-t-[28px] border-0 bg-white p-0 text-neutral-950">
+            <DrawerTitle className="sr-only">{session.name}</DrawerTitle>
+            <DrawerDescription className="sr-only">
+              Välj biljett, se ditt pris och anmäl dig till aktiviteten.
+            </DrawerDescription>
+            <div className="mx-auto flex h-full w-full max-w-md min-w-0 flex-col overflow-hidden">
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4 pt-4 [overscroll-behavior:contain]">
+                <div className="flex min-w-0 flex-col gap-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: "'Space Mono', monospace" }}>
+                        {sessionTypeLabel(session.session_type)}
+                      </p>
+                      <h2 className="mt-1 text-[25px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                        {session.name}
+                      </h2>
+                      <p className="mt-1.5 text-[13px] font-normal text-neutral-500">
+                        {dateLabel} · {timeLabel}
+                      </p>
+                      {socialProofLabel && (
+                        <p className="mt-1 text-[12px] font-normal text-neutral-400">
+                          {socialProofLabel}
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
+                      <Ticket className="h-6 w-6 text-neutral-950" />
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-white px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="inline-flex items-center gap-2 text-[14px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                        <Users className="h-4 w-4" />
+                        {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
+                      </span>
+                      <span className="text-[13px] font-semibold" style={{ color: isFull ? "#be123c" : "#16a34a" }}>
+                        {isRegistered ? "Anmäld" : "Live"}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-[12px] font-normal text-neutral-400">
+                      {socialProofLabel || "Inga anmälda ännu"}
                     </p>
+                    {capacity ? (
+                      <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${Math.min(100, (registrationCount / capacity) * 100)}%`,
+                            background: isFull ? "#be123c" : GREEN,
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-[24px] bg-[#f8fafc] p-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Biljettpris</p>
+                        <p className="mt-1 text-[17px] font-semibold text-neutral-500" style={{ fontFamily: FONT_HEADING }}>
+                          {pricing.basePrice} kr
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: GREEN }}>Ditt pris</p>
+                        <p className="mt-1 text-[30px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                          {pricing.checkoutLabel}
+                        </p>
+                      </div>
+                    </div>
+                    {pricing.hasDiscount && (
+                      <p className="mt-2 text-[12px] font-semibold text-neutral-500">
+                        Du sparar {Math.max(0, pricing.basePrice - pricing.finalPrice)} kr på det här passet.
+                      </p>
+                    )}
+                    {requiresCheckout && (
+                      <p className="mt-2 text-[12px] text-neutral-500">
+                        Betalning sker via Stripe innan platsen bekräftas.
+                      </p>
+                    )}
+                  </div>
+
+                  {!userHasMembership && (
+                    <div className="grid gap-2 [@media(max-height:640px)]:hidden">
+                      {pricing.detailRows
+                        .filter((row) => row.label.includes("Access") || row.label.includes("Unlimited") || row.label.includes("Dagsmedlemskap"))
+                        .map((row) => {
+                          const isMembershipUpsell = row.label.includes("Access") || row.label.includes("Unlimited");
+                          const isDayUpsell = !dayAccess && row.label.includes("Dagsmedlemskap");
+                          const clickable = isMembershipUpsell || isDayUpsell;
+                          return (
+                            <button
+                              key={row.label}
+                              type="button"
+                              onClick={() => clickable && openUpsell(row.label)}
+                              className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-white px-4 py-3 text-left"
+                              style={{ border: `1px solid ${MENU_BORDER}` }}
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate text-[14px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                                  {row.label}
+                                </span>
+                                <span className="mt-0.5 block truncate text-[11px] text-neutral-500">
+                                  {row.label.includes("Access")
+                                    ? `Med abonnemang: ${row.value}`
+                                    : row.label.includes("Unlimited")
+                                      ? "Ingår med Unlimited"
+                                      : "Ingår med dagsmedlemskap"}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-[15px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                                {row.value}
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
                   )}
                 </div>
-                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
-                  <Ticket className="h-6 w-6 text-neutral-950" />
-                </div>
               </div>
 
-              <div className="flex min-w-0 flex-wrap gap-1.5">
-                {pricing.publicChips.map((chip) => (
-                  <span
-                    key={chip}
-                    className="rounded-full px-2.5 py-1.5 text-[11px] font-semibold"
-                    style={{
-                      background: chip.includes("ingår") ? "#ecfdf5" : SOFT,
-                      color: chip.includes("ingår") ? GREEN : "#334155",
-                      border: `1px solid ${chip.includes("ingår") ? "rgba(34,197,94,0.18)" : BORDER}`,
-                    }}
-                  >
-                    {chip}
-                  </span>
-                ))}
-              </div>
-
-              <div className="rounded-2xl bg-white px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
-                <div className="flex items-center justify-between gap-4">
-                  <span className="inline-flex items-center gap-2 text-[15px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                    <Users className="h-4 w-4" />
-                    {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
-                  </span>
-                  <span className="text-[13px] font-semibold" style={{ color: isFull ? "#be123c" : "#16a34a" }}>
-                    {isRegistered ? "Anmäld" : "Live"}
-                  </span>
-                </div>
-                <p className="mt-1.5 text-[12px] font-normal text-neutral-400">
-                  {socialProofLabel || "Inga anmälda ännu"}
-                </p>
-                {capacity ? (
-                  <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${Math.min(100, (registrationCount / capacity) * 100)}%`,
-                        background: isFull ? "#be123c" : GREEN,
-                      }}
-                    />
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="grid gap-2">
-                {pricing.detailRows.map((row) => {
-                  const isMembershipUpsell = !userHasMembership && (row.label.includes("Access") || row.label.includes("Unlimited"));
-                  const isDayUpsell = !dayAccess && row.label.includes("Dagsmedlemskap");
-                  const clickable = isMembershipUpsell || isDayUpsell;
-                  return (
-                    <button
-                      key={row.label}
-                      type="button"
-                      onClick={() => clickable && openUpsell(row.label)}
-                      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-2xl bg-white px-4 py-3.5 text-left"
-                      style={{
-                        border: `1px solid ${MENU_BORDER}`,
-                      }}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate text-[16px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                          {row.label}
-                        </span>
-                        {isMembershipUpsell && (
-                          <span className="mt-0.5 block truncate text-[12px] font-normal text-neutral-500">
-                            {row.label.includes("Access") ? `Köp Access och boka för ${row.value}` : "Köp Unlimited och boka när det ingår"}
-                          </span>
-                        )}
-                        {isDayUpsell && (
-                          <span className="mt-0.5 block truncate text-[12px] font-normal text-neutral-500">
-                            Uppgradera till heldag
-                          </span>
-                        )}
-                      </span>
-                      <span className="shrink-0 text-[18px] font-normal text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                        {row.value}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="grid gap-2 pt-0.5">
+              <div
+                className="shrink-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] pt-3"
+                style={{ borderTop: `1px solid ${BORDER}`, boxShadow: "0 -16px 32px rgba(15,23,42,0.08)" }}
+              >
+              <div className="mx-auto grid max-w-md gap-2">
                 <button
                   type="button"
                   onClick={startSignup}
@@ -508,11 +536,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   }}
                 >
                   {loading || queueLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isRegistered ? <Check className="h-5 w-5" /> : null}
-                  {isRegistered
-                    ? "Anmäld"
-                    : isFull
-                      ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
-                      : `${user?.id ? (pricing.checkoutLabel === "Ingår" ? "Anmäl" : "Fortsätt till betalning") : "Logga in & anmäl"} · ${pricing.checkoutLabel}`}
+                  {ctaLabel}
                 </button>
                 <div className="grid grid-cols-3 gap-2">
                   <button
@@ -545,6 +569,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     <span className="truncate">Dela</span>
                   </button>
                 </div>
+              </div>
               </div>
             </div>
           </DrawerContent>
