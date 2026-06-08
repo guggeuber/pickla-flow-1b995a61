@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Loader2, Package, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Package, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
@@ -16,6 +16,19 @@ interface AccessProduct {
   vat_rate: number;
   is_active: boolean;
   sort_order: number;
+}
+
+interface MembershipTier {
+  id: string;
+  name: string;
+  is_active: boolean;
+}
+
+interface TierPricing {
+  tier_id: string;
+  product_type: string;
+  fixed_price: number | null;
+  discount_percent: number | null;
 }
 
 const PRODUCT_KINDS = [
@@ -37,6 +50,152 @@ const SESSION_TYPES = [
 const keyFromName = (name: string) =>
   name.trim().toLowerCase().replace(/å/g, "a").replace(/ä/g, "a").replace(/ö/g, "o").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 
+const formatPrice = (amount: number) => `${Math.round(Number(amount || 0)).toLocaleString("sv-SE")} kr`;
+
+const REQUIRED_PRODUCTS = [
+  {
+    product_key: "day_access",
+    name: "Dagsmedlemskap",
+    description: "Heldagstillgång. Kan användas som upsell från enstaka aktivitetspass.",
+    product_kind: "day_access",
+    session_type: null,
+    base_price_sek: 199,
+    grants: {
+      entitlement_type: "day_access",
+      includes_session_types: ["open_play"],
+    },
+    sort_order: 0,
+  },
+];
+
+const ProductPriceCard = ({
+  product,
+  tiers,
+  tierPricing,
+  onUpdate,
+  onDelete,
+}: {
+  product: AccessProduct;
+  tiers: MembershipTier[];
+  tierPricing: TierPricing[];
+  onUpdate: (body: Record<string, unknown>) => void;
+  onDelete: (productId: string) => void;
+}) => {
+  const [basePrice, setBasePrice] = useState(String(product.base_price_sek ?? 0));
+  const [name, setName] = useState(product.name);
+  const isDayAccess = product.product_key === "day_access";
+  const hasBadDayAccessPrice = isDayAccess && Number(product.base_price_sek || 0) <= 0;
+
+  const previewRows = tiers
+    .filter((tier) => tier.is_active)
+    .map((tier) => {
+      const rule = tierPricing.find((row) => row.tier_id === tier.id && row.product_type === product.product_key);
+      if (!rule) return null;
+      const base = Number(product.base_price_sek || 0);
+      const price = rule.fixed_price != null
+        ? Number(rule.fixed_price)
+        : Math.max(0, Math.round(base * (1 - Number(rule.discount_percent || 0) / 100)));
+      const suffix = rule.fixed_price != null ? "fast pris" : `${rule.discount_percent}% rabatt`;
+      return { tierName: tier.name, price, suffix };
+    })
+    .filter(Boolean) as Array<{ tierName: string; price: number; suffix: string }>;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
+          <Package className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0 space-y-3">
+          <div>
+            <p className="text-sm font-bold">{product.name}</p>
+            <p className="text-[10px] text-muted-foreground font-mono">{product.product_key}</p>
+            {product.description && <p className="text-xs text-muted-foreground mt-1">{product.description}</p>}
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              <span className="status-chip bg-primary/15 text-primary text-[9px]">{product.product_kind}</span>
+              {product.session_type && <span className="status-chip bg-muted text-muted-foreground text-[9px]">{product.session_type}</span>}
+              <span className="status-chip bg-court-free/15 text-court-free text-[9px]">{product.base_price_sek} kr</span>
+            </div>
+          </div>
+
+          {isDayAccess && (
+            <div className="rounded-xl p-3 text-xs space-y-1" style={{ background: "hsl(var(--surface-2))" }}>
+              <p className="font-semibold">Canonical plats för dagsmedlemskap</p>
+              <p className="text-muted-foreground">
+                Baspriset sätts här. Medlemsrabatter sätts på medlemskapsnivån under prislistan för produktnyckel <span className="font-mono">day_access</span>.
+              </p>
+              {hasBadDayAccessPrice && (
+                <p className="flex items-center gap-1.5 text-amber-400 font-semibold">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Baspris saknas eller är 0 kr. Då använder backend bara en nöd-fallback tills produkten är sparad.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_120px_auto] gap-2">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="rounded-xl px-3 py-2 text-xs outline-none"
+              style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+            />
+            <input
+              type="number"
+              value={basePrice}
+              onChange={(e) => setBasePrice(e.target.value)}
+              className="rounded-xl px-3 py-2 text-xs outline-none"
+              style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+            />
+            <button
+              onClick={() => onUpdate({
+                productId: product.id,
+                name: name.trim() || product.name,
+                base_price_sek: Math.max(0, Math.round(Number(basePrice || 0))),
+              })}
+              className="rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground flex items-center justify-center gap-2"
+            >
+              <Save className="w-3.5 h-3.5" />
+              Spara pris
+            </button>
+          </div>
+
+          <div className="rounded-xl p-3" style={{ background: "hsl(var(--surface-2))" }}>
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Medlemspris-preview</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
+                <span className="text-muted-foreground">Vanlig kund</span>
+                <span className="font-bold">{formatPrice(product.base_price_sek)}</span>
+              </div>
+              {previewRows.length > 0 ? previewRows.map((row) => (
+                <div key={`${product.product_key}-${row.tierName}`} className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
+                  <span className="text-muted-foreground">{row.tierName} · {row.suffix}</span>
+                  <span className="font-bold">{row.price <= 0 ? "Ingår" : formatPrice(row.price)}</span>
+                </div>
+              )) : (
+                <div className="rounded-full px-3 py-2 text-xs text-muted-foreground" style={{ background: "hsl(var(--surface-1))" }}>
+                  Inga medlemsprisregler för den här produkten ännu.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1 items-end">
+          <button
+            onClick={() => onUpdate({ productId: product.id, is_active: !product.is_active })}
+            className={`text-[10px] px-2 py-1 rounded-full font-semibold ${product.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}
+          >
+            {product.is_active ? "Aktiv" : "Av"}
+          </button>
+          <button onClick={() => { if (confirm("Ta bort produkten?")) onDelete(product.id); }} className="text-muted-foreground/50 hover:text-destructive">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
 const AdminProducts = ({ venueId }: { venueId: string }) => {
   const qc = useQueryClient();
   const [name, setName] = useState("");
@@ -50,6 +209,22 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
     queryKey: ["admin-access-products", venueId],
     queryFn: () => apiGet("api-admin", "products", { venueId }),
   });
+  const { data: tiers } = useQuery<MembershipTier[]>({
+    queryKey: ["membership-tiers", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-memberships", "tiers", { venueId, includeHidden: "true" }),
+  });
+  const tierPricingQueries = useQueries({
+    queries: (tiers || []).map((tier) => ({
+      queryKey: ["tier-pricing", tier.id],
+      queryFn: () => apiGet<TierPricing[]>("api-memberships", "tier-pricing", { tierId: tier.id }),
+      enabled: !!tier.id,
+    })),
+  });
+  const allTierPricing = tierPricingQueries.flatMap((query) => query.data || []);
+  const missingRequiredProducts = REQUIRED_PRODUCTS.filter(
+    (required) => !(products || []).some((product) => product.product_key === required.product_key),
+  );
 
   const saveProduct = useMutation({
     mutationFn: (body: any) => apiPost("api-admin", "products", body),
@@ -101,6 +276,22 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
         includes_session_ticket: kind === "session_with_day_access",
       },
       sort_order: (products?.length || 0) * 10,
+      is_active: true,
+    });
+  };
+
+  const createRequiredProduct = (required: typeof REQUIRED_PRODUCTS[number]) => {
+    saveProduct.mutate({
+      venueId,
+      product_key: required.product_key,
+      name: required.name,
+      description: required.description,
+      product_kind: required.product_kind,
+      session_type: required.session_type,
+      base_price_sek: required.base_price_sek,
+      vat_rate: 6,
+      grants: required.grants,
+      sort_order: required.sort_order,
       is_active: true,
     });
   };
@@ -159,36 +350,42 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
         </div>
       </div>
 
+      {missingRequiredProducts.length > 0 && (
+        <div className="glass-card rounded-2xl p-4 space-y-3 border border-amber-500/30">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold">Saknad kärnprodukt</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Dagsmedlemskap behöver en produkt i katalogen. Utan den blir priset svårbegripligt och backend måste använda nöd-fallback.
+              </p>
+            </div>
+          </div>
+          {missingRequiredProducts.map((required) => (
+            <button
+              key={required.product_key}
+              onClick={() => createRequiredProduct(required)}
+              disabled={saveProduct.isPending}
+              className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50"
+            >
+              Skapa {required.name} · {required.base_price_sek} kr
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="space-y-2">
         {(products || []).map((product) => (
-          <motion.div key={product.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
-                <Package className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold">{product.name}</p>
-                <p className="text-[10px] text-muted-foreground font-mono">{product.product_key}</p>
-                {product.description && <p className="text-xs text-muted-foreground mt-1">{product.description}</p>}
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  <span className="status-chip bg-primary/15 text-primary text-[9px]">{product.product_kind}</span>
-                  {product.session_type && <span className="status-chip bg-muted text-muted-foreground text-[9px]">{product.session_type}</span>}
-                  <span className="status-chip bg-court-free/15 text-court-free text-[9px]">{product.base_price_sek} kr</span>
-                </div>
-              </div>
-              <div className="flex flex-col gap-1 items-end">
-                <button
-                  onClick={() => updateProduct.mutate({ productId: product.id, is_active: !product.is_active })}
-                  className={`text-[10px] px-2 py-1 rounded-full font-semibold ${product.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}
-                >
-                  {product.is_active ? "Aktiv" : "Av"}
-                </button>
-                <button onClick={() => { if (confirm("Ta bort produkten?")) deleteProduct.mutate(product.id); }} className="text-muted-foreground/50 hover:text-destructive">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          </motion.div>
+          <ProductPriceCard
+            key={product.id}
+            product={product}
+            tiers={tiers || []}
+            tierPricing={allTierPricing}
+            onUpdate={(body) => updateProduct.mutate(body)}
+            onDelete={(productId) => deleteProduct.mutate(productId)}
+          />
         ))}
       </div>
     </div>
