@@ -561,7 +561,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     if (upsellRows.length === 0) return null;
 
                     return (
-                      <div className="grid gap-2 [@media(max-height:640px)]:hidden">
+                      <div className="grid gap-2">
                         {upsellRows.map((row) => {
                           const isMembershipUpsell = row.label.includes("Access") || row.label.includes("Unlimited");
                           const isDayUpsell = !hasDayAccess && row.label.includes("Dagsmedlemskap");
