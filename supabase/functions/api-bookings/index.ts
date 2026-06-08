@@ -312,7 +312,7 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
-  if (product_type === 'day_pass' && meta.entitlement_type === 'open_play_unlimited') {
+  if ((product_type === 'day_pass' || product_type === 'activity_ticket') && meta.entitlement_type === 'open_play_unlimited') {
     const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
     const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
     if (activitySessionId) {
@@ -354,7 +354,7 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
-  if (product_type === 'day_pass' && meta.entitlement_type === 'day_access') {
+  if ((product_type === 'day_pass' || product_type === 'activity_ticket') && meta.entitlement_type === 'day_access') {
     const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
     const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
     if (activitySessionId) {
@@ -395,7 +395,7 @@ Deno.serve(async (req) => {
     const { product_type, amount_sek, venue_id, metadata } = body;
 
     if (!product_type || !amount_sek) return errorResponse('Missing required fields');
-    if (!['court_booking', 'day_pass', 'membership'].includes(product_type)) return errorResponse('Invalid product_type');
+    if (!['court_booking', 'day_pass', 'activity_ticket', 'membership'].includes(product_type)) return errorResponse('Invalid product_type');
     if (typeof amount_sek !== 'number' || amount_sek <= 0) return errorResponse('amount_sek must be positive');
     // venue_id required for court_booking and day_pass, optional for membership
     if (product_type !== 'membership' && !venue_id) return errorResponse('Missing venue_id');
@@ -453,7 +453,7 @@ Deno.serve(async (req) => {
     let entitlementUserId = meta.user_id || '';
     let activityPricingDecision: any = null;
 
-    if (product_type === 'day_pass' && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
+    if ((product_type === 'day_pass' || product_type === 'activity_ticket') && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
       const adminCheckout = getServiceClient();
       const { data: product } = meta.product_key
         ? await adminCheckout
@@ -469,7 +469,7 @@ Deno.serve(async (req) => {
         meta.product_key = product.product_key;
         meta.product_kind = product.product_kind;
         meta.session_type = meta.session_type || product.session_type || 'open_play';
-        meta.includes_day_access = product.product_kind === 'day_access' || product.product_kind === 'session_with_day_access' ? 'true' : '';
+        meta.includes_day_access = product_type === 'day_pass' && (product.product_kind === 'day_access' || product.product_kind === 'session_with_day_access') ? 'true' : '';
 
         if (product.base_price_sek != null) {
           baseAmountSek = Number(product.base_price_sek);
@@ -495,7 +495,7 @@ Deno.serve(async (req) => {
         meta.activity_session_id = activitySessionId;
         meta.session_name = meta.session_name || activitySession.name;
         meta.session_type = activitySession.session_type || 'open_play';
-        meta.includes_day_access = meta.includes_day_access || (activitySession.access_policy?.includes_day_access ? 'true' : '');
+        meta.includes_day_access = product_type === 'day_pass' ? 'true' : '';
       } else if (meta.open_play_session_id) {
         const { data: openPlaySession } = await adminCheckout
           .from('open_play_sessions')
@@ -521,7 +521,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    if (product_type === 'day_pass' && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
+    if ((product_type === 'day_pass' || product_type === 'activity_ticket') && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
       const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
       activityPricingDecision = await resolveActivityPricingDecision({
         client: getServiceClient(),
@@ -529,8 +529,9 @@ Deno.serve(async (req) => {
         userId: entitlementUserId || null,
         activitySessionId,
         sessionDate: meta.date,
-        requestedProductKey: meta.product_key || null,
+        requestedProductKey: product_type === 'day_pass' ? 'day_access' : (meta.product_key || null),
         requestedAmountSek: amount_sek,
+        purchaseKind: product_type === 'day_pass' ? 'day_pass' : 'activity_ticket',
       });
 
       baseAmountSek = activityPricingDecision.baseAmountSek;
@@ -582,7 +583,7 @@ Deno.serve(async (req) => {
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
       const adminEnt = createClient(supabaseUrl, serviceKey);
-      let entitlementSportType: string | null = product_type === 'day_pass' ? 'pickleball' : null;
+      let entitlementSportType: string | null = (product_type === 'day_pass' || product_type === 'activity_ticket') ? 'pickleball' : null;
 
       if (product_type === 'court_booking' && meta.court_ids) {
         let courtIds: string[] = [];
@@ -623,6 +624,8 @@ Deno.serve(async (req) => {
           ? 'court_hourly'
           : product_type === 'day_pass'
           ? (meta.product_key || 'day_access')
+          : product_type === 'activity_ticket'
+          ? (meta.product_key || 'session_ticket')
           : product_type;
         const { data: tierPricingRows } = await adminEnt
           .from('membership_tier_pricing')
@@ -813,6 +816,8 @@ Deno.serve(async (req) => {
       ? `Banbokning${meta.date ? ` · ${meta.date}` : ''}${meta.start_time ? ` ${meta.start_time}–${meta.end_time || ''}` : ''}`
       : product_type === 'membership'
       ? `Pickla Membership${meta.tier_name ? ` · ${meta.tier_name}` : ''}`
+      : product_type === 'activity_ticket'
+      ? `Aktivitetsbiljett${meta.session_name ? ` · ${meta.session_name}` : ''}`
       : 'Dagspass';
 
     // Shared metadata (all values must be strings, max 500 chars each)
@@ -864,6 +869,8 @@ Deno.serve(async (req) => {
       ? (requestedSuccessPath || '/membership/confirmed')
       : product_type === 'day_pass'
       ? (requestedSuccessPath || '/booking/confirmed?type=day_pass')
+      : product_type === 'activity_ticket'
+      ? (requestedSuccessPath || '/booking/confirmed?type=session_ticket')
       : '/booking/confirmed';
 
     let stripeSession: Stripe.Checkout.Session;
@@ -890,7 +897,7 @@ Deno.serve(async (req) => {
         cancel_url:  `${origin}${cancelPath}`,
       });
     } else {
-      // One-time payment (court_booking, day_pass)
+      // One-time payment (court_booking, day_pass, activity_ticket)
       stripeSession = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',

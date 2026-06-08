@@ -86,7 +86,7 @@ const OpenPlayPage = () => {
     queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId: venueId! }),
   });
 
-  const dayPassPricing = (membership?.tier_pricing || []).find((p: any) => p.product_type === "day_pass");
+  const dayPassPricing = (membership?.tier_pricing || []).find((p: any) => p.product_type === "open_play_slot" || p.product_type === "day_pass");
 
   const getMemberDayPassPrice = (basePrice: number) => {
     if (!dayPassPricing) return basePrice;
@@ -108,11 +108,11 @@ const OpenPlayPage = () => {
     setLoadingSlot(slotKey);
     try {
       const result = await apiPost("api-bookings", "create-checkout", {
-        product_type: "day_pass",
+        product_type: "activity_ticket",
         amount_sek: slot.session.price_sek,
         venue_id: venueId,
         metadata: {
-          product_key: "day_access",
+          product_key: "open_play_slot",
           session_name: slot.session.name,
           session_type: slot.session.session_type || "open_play",
           date: slot.date.toISODate(),

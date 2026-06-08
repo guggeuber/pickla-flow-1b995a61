@@ -23,6 +23,63 @@ async function isAdmin(userId: string): Promise<{ ok: boolean; venueId: string |
   return { ok: false, venueId: null };
 }
 
+type SoldAs = 'activity_ticket' | 'day_pass' | 'included_only';
+
+function productKeyForActivityTicket(sessionType: string) {
+  if (sessionType === 'group_training') return 'group_training';
+  return 'open_play_slot';
+}
+
+function normalizeActivitySessionPayload(body: Record<string, any>) {
+  const next = { ...body };
+  const soldAs = String(next.sold_as || '') as SoldAs | '';
+  const sessionType = String(next.session_type || 'open_play');
+  delete next.sold_as;
+
+  if (soldAs) {
+    if (!['activity_ticket', 'day_pass', 'included_only'].includes(soldAs)) {
+      throw new Error('Invalid sold_as');
+    }
+    next.product_key = soldAs === 'day_pass'
+      ? 'day_access'
+      : soldAs === 'included_only'
+      ? null
+      : productKeyForActivityTicket(sessionType);
+
+    const policy = next.access_policy && typeof next.access_policy === 'object' ? next.access_policy : {};
+    next.access_policy = {
+      ...policy,
+      allows_day_access: soldAs === 'day_pass' ? true : Boolean(policy.allows_day_access),
+      includes_day_access: soldAs === 'day_pass',
+      sold_as: soldAs,
+    };
+  }
+
+  const publishStatus = String(next.publish_status || 'published');
+  const isPublished = publishStatus === 'published' && next.is_active !== false;
+  const productKey = next.product_key || null;
+  const price = Number(next.price_sek || 0);
+  const capacity = next.capacity == null || next.capacity === '' ? null : Number(next.capacity);
+
+  if (productKey && !['open_play_slot', 'group_training', 'day_access', 'event_fee'].includes(String(productKey))) {
+    throw new Error(`Unknown product_key for schedule session: ${productKey}`);
+  }
+  if (isPublished && productKey !== null && capacity !== null && capacity <= 0) {
+    throw new Error('Published paid sessions need capacity');
+  }
+  if (isPublished && productKey !== null && capacity === null) {
+    throw new Error('Published paid sessions need capacity');
+  }
+  if (isPublished && productKey !== null && productKey !== 'day_access' && price <= 0) {
+    throw new Error('Published activity tickets need price');
+  }
+  if (productKey === 'day_access' && ['open_play', 'club_night', 'pickla_open'].includes(sessionType) && soldAs !== 'day_pass') {
+    throw new Error('Open Play schedule sessions must be sold as activity_ticket, not day_access');
+  }
+
+  return next;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -530,26 +587,27 @@ Deno.serve(async (req) => {
     if (req.method === 'POST' && path === 'activity-sessions') {
       const { venueId: _v, ...body } = await req.json();
       if (!body.name || !body.start_time || !body.end_time) return errorResponse('Missing name/start_time/end_time');
+      const normalized = normalizeActivitySessionPayload(body);
       const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days : null;
       const { data, error: e } = await admin.from('activity_sessions').insert({
         venue_id: venueId,
-        series_id: body.series_id || null,
-        product_key: body.product_key || null,
-        name: body.name,
-        session_type: body.session_type || 'open_play',
-        sport_type: body.sport_type || 'pickleball',
+        series_id: normalized.series_id || null,
+        product_key: normalized.product_key || null,
+        name: normalized.name,
+        session_type: normalized.session_type || 'open_play',
+        sport_type: normalized.sport_type || 'pickleball',
         recurrence_days: recurrenceDays,
-        session_date: body.session_date || null,
-        start_time: body.start_time,
-        end_time: body.end_time,
-        price_sek: body.price_sek ?? 0,
-        capacity: body.capacity ?? null,
-        court_ids: Array.isArray(body.court_ids) ? body.court_ids : [],
-        access_policy: body.access_policy || {},
-        is_active: body.is_active ?? true,
-        publish_status: body.publish_status || 'published',
-        sort_order: body.sort_order ?? 0,
-        metadata: body.metadata || {},
+        session_date: normalized.session_date || null,
+        start_time: normalized.start_time,
+        end_time: normalized.end_time,
+        price_sek: normalized.price_sek ?? 0,
+        capacity: normalized.capacity ?? null,
+        court_ids: Array.isArray(normalized.court_ids) ? normalized.court_ids : [],
+        access_policy: normalized.access_policy || {},
+        is_active: normalized.is_active ?? true,
+        publish_status: normalized.publish_status || 'published',
+        sort_order: normalized.sort_order ?? 0,
+        metadata: normalized.metadata || {},
       }).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data, 201);
@@ -558,8 +616,9 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'activity-sessions') {
       const { sessionId, ...updates } = await req.json();
       if (!sessionId) return errorResponse('Missing sessionId');
+      const normalized = normalizeActivitySessionPayload(updates);
       const { data, error: e } = await admin.from('activity_sessions')
-        .update(updates).eq('id', sessionId).eq('venue_id', venueId).select().single();
+        .update(normalized).eq('id', sessionId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }

@@ -52,6 +52,7 @@ export async function resolveActivityPricingDecision({
   sessionDate,
   requestedProductKey,
   requestedAmountSek,
+  purchaseKind = 'activity_ticket',
 }: {
   client: any;
   venueId: string;
@@ -60,6 +61,7 @@ export async function resolveActivityPricingDecision({
   sessionDate: string;
   requestedProductKey?: string | null;
   requestedAmountSek?: number | null;
+  purchaseKind?: 'activity_ticket' | 'day_pass';
 }): Promise<ActivityPricingDecision> {
   const { data: session } = await client
     .from('activity_sessions')
@@ -71,10 +73,13 @@ export async function resolveActivityPricingDecision({
     throw new Error('Activity session not found for venue');
   }
 
+  const sessionProductKey = purchaseKind === 'activity_ticket' && session.product_key === 'day_access'
+    ? null
+    : session.product_key;
   const productKey = String(
-    session.product_key ||
-    defaultProductKeyForSession(session.session_type) ||
-    requestedProductKey,
+    purchaseKind === 'day_pass'
+      ? (requestedProductKey || 'day_access')
+      : (sessionProductKey || defaultProductKeyForSession(session.session_type) || requestedProductKey),
   );
 
   const { data: product } = await client
@@ -86,7 +91,7 @@ export async function resolveActivityPricingDecision({
     .maybeSingle();
 
   const baseAmountSek = roundSek(
-    session.price_sek != null
+    purchaseKind !== 'day_pass' && session.price_sek != null
       ? Number(session.price_sek)
       : product?.base_price_sek != null
       ? Number(product.base_price_sek)
@@ -105,6 +110,7 @@ export async function resolveActivityPricingDecision({
     requested_product_key: requestedProductKey || null,
     resolved_product_key: productKey,
     product_kind: product?.product_kind || null,
+    purchase_kind: purchaseKind,
     base_amount_sek: baseAmountSek,
   };
 
@@ -174,7 +180,7 @@ export async function resolveActivityPricingDecision({
         if (finalAmountSek > 0) {
           const freePass = ents.find((row: any) => isPositiveEntitlement(row, 'free_day_pass_monthly'));
           const productKind = product?.product_kind || '';
-          const canUseMonthlyFreePass = productKind === 'day_access' || productKind === 'session_with_day_access';
+          const canUseMonthlyFreePass = purchaseKind === 'day_pass' && (productKind === 'day_access' || productKind === 'session_with_day_access');
 
           if (freePass && canUseMonthlyFreePass) {
             const dt = DateTime.fromISO(sessionDate, { zone: 'Europe/Stockholm' });

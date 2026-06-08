@@ -873,7 +873,7 @@ Deno.serve(async (req) => {
           sessionDate: preview.activity_session.occurrence_date,
           userId,
         });
-        const pricing = await resolveActivityPricingDecision({
+        const activityTicketPricing = await resolveActivityPricingDecision({
           client,
           venueId: preview.activity_session.venue_id,
           userId,
@@ -881,20 +881,43 @@ Deno.serve(async (req) => {
           sessionDate: preview.activity_session.occurrence_date,
           requestedProductKey: preview.activity_session.product_key,
           requestedAmountSek: preview.activity_session.price_sek,
+          purchaseKind: 'activity_ticket',
         });
+        const dayPassPricing = await resolveActivityPricingDecision({
+          client,
+          venueId: preview.activity_session.venue_id,
+          userId,
+          activitySessionId: preview.activity_session.id,
+          sessionDate: preview.activity_session.occurrence_date,
+          requestedProductKey: 'day_access',
+          requestedAmountSek: null,
+          purchaseKind: 'day_pass',
+        });
+        const upgradeDeltaSek = Math.max(0, Number(dayPassPricing.effectivePriceSek || 0) - Number(activityTicketPricing.effectivePriceSek || 0));
+        const recommendedOption = activityTicketPricing.requiresCheckout === false
+          ? 'activity_ticket'
+          : upgradeDeltaSek > 0 && upgradeDeltaSek <= 40
+          ? 'day_pass'
+          : 'activity_ticket';
         const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
         if (supabaseUrl.includes('ptnvhbniiiapzbyofctg')) {
           console.log('activity-pricing-preview', {
             userId: userId || null,
-            membershipTier: pricing.membershipTierName,
-            activitySessionId: pricing.activitySessionId,
-            sessionDate: pricing.sessionDate,
-            pricingBranch: pricing.pricingReason,
-            effectivePriceSek: pricing.effectivePriceSek,
+            membershipTier: activityTicketPricing.membershipTierName,
+            activitySessionId: activityTicketPricing.activitySessionId,
+            sessionDate: activityTicketPricing.sessionDate,
+            pricingBranch: activityTicketPricing.pricingReason,
+            activityTicketPriceSek: activityTicketPricing.effectivePriceSek,
+            dayPassPriceSek: dayPassPricing.effectivePriceSek,
+            recommendedOption,
           });
         }
         preview.interests = interests;
-        preview.pricing = pricing;
+        preview.activityTicketPricing = activityTicketPricing;
+        preview.dayPassPricing = dayPassPricing;
+        preview.recommendedOption = recommendedOption;
+        preview.upgradeDeltaSek = upgradeDeltaSek;
+        preview.pricing = activityTicketPricing;
         return jsonResponse(preview, 200, userId ? 0 : 5);
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Activity preview not found', 404);

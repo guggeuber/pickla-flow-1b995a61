@@ -209,7 +209,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const socialProof = activitySocialProofLabel(registrationCount, interestedCount);
     const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
     const isFull = spotsLeft === 0;
-    const backendPricing = publicActivityPreview?.pricing || null;
+    const backendPricing = publicActivityPreview?.activityTicketPricing || publicActivityPreview?.pricing || null;
     const pricing = mergeBackendActivityPricing(activityPriceLabels({
       basePrice: Number(effectiveProgramSession.price_sek || 165),
       productKey: (effectiveProgramSession as any).product_key,
@@ -252,8 +252,8 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
       setLoading(true);
       try {
         const result = await apiPost("api-bookings", "create-checkout", {
-          product_type: "day_pass",
-          amount_sek: effectiveProgramSession.price_sek || 0,
+          product_type: "activity_ticket",
+          amount_sek: backendPricing?.effectivePriceSek ?? backendPricing?.finalAmountSek ?? effectiveProgramSession.price_sek ?? 0,
           venue_id: effectiveProgramSession.venue_id,
           metadata: {
             date: programOccurrenceDate,

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { CalendarDays, Edit3, Loader2, Plus, Save, Trash2, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Edit3, Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
@@ -21,6 +21,26 @@ const SESSION_TYPES = [
   { key: "pickla_open", label: "Pickla Open" },
   { key: "club_night", label: "Klubbkväll" },
   { key: "event", label: "Event" },
+];
+
+type SoldAs = "activity_ticket" | "day_pass" | "included_only";
+
+const SOLD_AS_OPTIONS: { key: SoldAs; label: string; helper: string }[] = [
+  {
+    key: "activity_ticket",
+    label: "Aktivitetsbiljett",
+    helper: "Ett pass. Skapar inte heldagstillgång.",
+  },
+  {
+    key: "day_pass",
+    label: "Dagsmedlemskap",
+    helper: "Säljer heldagstillgång för datumet.",
+  },
+  {
+    key: "included_only",
+    label: "Ingår endast",
+    helper: "Ingen separat checkout. Kräver medlemskap/entitlement.",
+  },
 ];
 
 const SERIES_TYPES = [
@@ -43,6 +63,130 @@ const sortDays = (days: number[]) => {
   return [...days].sort((a, b) => order.indexOf(a) - order.indexOf(b));
 };
 
+const productKeyForActivityTicket = (sessionType: string) => {
+  if (sessionType === "group_training") return "group_training";
+  return "open_play_slot";
+};
+
+const soldAsFromSession = (session: any): SoldAs => {
+  if (!session?.product_key) return "included_only";
+  if (session.product_key === "day_access") return "day_pass";
+  return "activity_ticket";
+};
+
+const isOpenPlayLike = (sessionType: string) => ["open_play", "club_night", "pickla_open"].includes(sessionType);
+
+const buildSessionConfig = ({
+  soldAs,
+  sessionType,
+  includedInDayPass,
+  includedInUnlimited,
+}: {
+  soldAs: SoldAs;
+  sessionType: string;
+  includedInDayPass: boolean;
+  includedInUnlimited: boolean;
+}) => {
+  const productKey = soldAs === "day_pass"
+    ? "day_access"
+    : soldAs === "included_only"
+    ? null
+    : productKeyForActivityTicket(sessionType);
+
+  return {
+    product_key: productKey,
+    access_policy: {
+      allows_day_access: soldAs === "day_pass" ? true : includedInDayPass,
+      includes_day_access: soldAs === "day_pass",
+      member_benefit_key: includedInUnlimited ? "open_play_unlimited" : null,
+      sold_as: soldAs,
+    },
+  };
+};
+
+const draftWarnings = (draft: {
+  name?: string;
+  session_type?: string;
+  sold_as?: SoldAs;
+  product_key?: string | null;
+  included_in_day_pass?: boolean;
+  price_sek?: number | string | null;
+  capacity?: number | string | null;
+  publish_status?: string;
+  is_active?: boolean;
+}) => {
+  const warnings: { message: string; blocking?: boolean }[] = [];
+  const soldAs = draft.sold_as || "activity_ticket";
+  const sessionType = draft.session_type || "open_play";
+  const price = Number(draft.price_sek || 0);
+  const capacity = draft.capacity === "" || draft.capacity == null ? null : Number(draft.capacity);
+  const isPublished = (draft.publish_status || "published") === "published" && draft.is_active !== false;
+
+  if (isPublished && soldAs === "activity_ticket" && price <= 0) {
+    warnings.push({ message: "Publicerad aktivitetsbiljett behöver pris.", blocking: true });
+  }
+  if (isPublished && soldAs !== "included_only" && (!capacity || capacity <= 0)) {
+    warnings.push({ message: "Publicerat pass behöver kapacitet.", blocking: true });
+  }
+  if (soldAs === "day_pass" && isOpenPlayLike(sessionType)) {
+    warnings.push({ message: "Det här passet säljs som dagsmedlemskap och kan ge heldagstillgång. Är det avsiktligt?" });
+  }
+  if (soldAs === "activity_ticket" && !draft.included_in_day_pass && isOpenPlayLike(sessionType)) {
+    warnings.push({ message: "Passet ingår inte i dagsmedlemskap. Kunder med dagsmedlemskap får inte access." });
+  }
+  if (draft.product_key && !["open_play_slot", "group_training", "day_access", "event_fee"].includes(draft.product_key)) {
+    warnings.push({ message: `Okänd produktnyckel (${draft.product_key}). Kundpriser kan bli fel.`, blocking: true });
+  }
+  return warnings;
+};
+
+const sessionWarnings = (session: any) => draftWarnings({
+  name: session.name,
+  session_type: session.session_type,
+  sold_as: soldAsFromSession(session),
+  product_key: session.product_key,
+  included_in_day_pass: Boolean(session.access_policy?.allows_day_access),
+  price_sek: session.price_sek,
+  capacity: session.capacity,
+  publish_status: session.publish_status || "published",
+  is_active: session.is_active,
+});
+
+const pricingPreview = ({
+  price,
+  soldAs,
+  includedInDayPass,
+  includedInUnlimited,
+}: {
+  price: number;
+  soldAs: SoldAs;
+  includedInDayPass: boolean;
+  includedInUnlimited: boolean;
+}) => {
+  if (soldAs === "included_only") {
+    return [
+      ["Vanlig kund", "Ingen checkout"],
+      ["Pickla Access / Play", "Enligt rättighet"],
+      ["Unlimited / Play+", includedInUnlimited ? "Ingår" : "Ej inkluderat"],
+      ["Dagsmedlemskap", includedInDayPass ? "Ingår idag" : "Ej access"],
+    ];
+  }
+  if (soldAs === "day_pass") {
+    return [
+      ["Vanlig kund", `${price || 199} kr`],
+      ["Pickla Access / Play", `${Math.round((price || 199) * 0.6)} kr`],
+      ["Unlimited / Play+", "Ej relevant"],
+      ["Dagsmedlemskap", "Aktiveras"],
+    ];
+  }
+  return [
+    ["Vanlig kund", `${price} kr`],
+    ["Pickla Access / Play", `${Math.round(price * 0.6)} kr`],
+    ["Unlimited / Play+", includedInUnlimited ? "Ingår" : "Ej inkluderat"],
+    ["Dagsmedlemskap", includedInDayPass ? "Ingår idag" : "Ej access"],
+  ];
+};
+
 const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const qc = useQueryClient();
   const [seriesName, setSeriesName] = useState("");
@@ -52,7 +196,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [sessionName, setSessionName] = useState("");
   const [sessionType, setSessionType] = useState("open_play");
   const [seriesId, setSeriesId] = useState("");
-  const [productKey, setProductKey] = useState("");
+  const [soldAs, setSoldAs] = useState<SoldAs>("activity_ticket");
+  const [includedInDayPass, setIncludedInDayPass] = useState(true);
+  const [includedInUnlimited, setIncludedInUnlimited] = useState(true);
   const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [startTime, setStartTime] = useState("10:00");
   const [endTime, setEndTime] = useState("12:00");
@@ -177,21 +323,41 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       toast.error("Namn och minst en veckodag krävs");
       return;
     }
+    const config = buildSessionConfig({
+      soldAs,
+      sessionType,
+      includedInDayPass,
+      includedInUnlimited,
+    });
+    const warnings = draftWarnings({
+      name: sessionName,
+      session_type: sessionType,
+      sold_as: soldAs,
+      product_key: config.product_key,
+      included_in_day_pass: includedInDayPass,
+      price_sek: price,
+      capacity,
+      publish_status: "published",
+      is_active: true,
+    });
+    const blocker = warnings.find((warning) => warning.blocking);
+    if (blocker) {
+      toast.error(blocker.message);
+      return;
+    }
     createSession.mutate({
       venueId,
       name: sessionName.trim(),
       session_type: sessionType,
       series_id: seriesId || null,
-      product_key: productKey || null,
+      product_key: config.product_key,
       recurrence_days: days,
       start_time: startTime,
       end_time: endTime,
       price_sek: Math.round(Number(price || 0)),
       capacity: capacity ? Math.round(Number(capacity)) : null,
-      access_policy: {
-        allows_day_access: productKey === "day_access",
-        includes_day_access: productKey === "group_training_day_access",
-      },
+      sold_as: soldAs,
+      access_policy: config.access_policy,
       is_active: true,
     });
   };
@@ -243,6 +409,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         session_type: session.session_type || "open_play",
         series_id: session.series_id || "",
         product_key: session.product_key || "",
+        sold_as: soldAsFromSession(session),
+        included_in_day_pass: Boolean(session.access_policy?.allows_day_access),
+        included_in_unlimited: session.access_policy?.member_benefit_key === "open_play_unlimited",
         recurrence_days: session.recurrence_days || [],
         start_time: String(session.start_time || "10:00").slice(0, 5),
         end_time: String(session.end_time || "12:00").slice(0, 5),
@@ -260,12 +429,28 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       toast.error("Passet behöver namn och minst en veckodag");
       return;
     }
+    const config = buildSessionConfig({
+      soldAs: draft.sold_as || "activity_ticket",
+      sessionType: draft.session_type || "open_play",
+      includedInDayPass: Boolean(draft.included_in_day_pass),
+      includedInUnlimited: Boolean(draft.included_in_unlimited),
+    });
+    const warnings = draftWarnings({
+      ...draft,
+      product_key: config.product_key,
+      included_in_day_pass: Boolean(draft.included_in_day_pass),
+    });
+    const blocker = warnings.find((warning) => warning.blocking);
+    if (blocker) {
+      toast.error(blocker.message);
+      return;
+    }
     updateSession.mutate({
       sessionId: session.id,
       name: draft.name.trim(),
       session_type: draft.session_type || "open_play",
       series_id: draft.series_id || null,
-      product_key: draft.product_key || null,
+      product_key: config.product_key,
       recurrence_days: draft.recurrence_days,
       start_time: draft.start_time,
       end_time: draft.end_time,
@@ -273,14 +458,31 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       capacity: draft.capacity === "" || draft.capacity == null ? null : Math.max(0, Math.round(Number(draft.capacity))),
       is_active: Boolean(draft.is_active),
       publish_status: draft.publish_status || "published",
-      access_policy: {
-        allows_day_access: draft.product_key === "day_access",
-        includes_day_access: draft.product_key === "group_training_day_access",
-      },
+      sold_as: draft.sold_as || "activity_ticket",
+      access_policy: config.access_policy,
     }, {
       onSuccess: () => setEditingSessionId(null),
     });
   };
+
+  const createConfig = buildSessionConfig({ soldAs, sessionType, includedInDayPass, includedInUnlimited });
+  const createWarnings = draftWarnings({
+    name: sessionName,
+    session_type: sessionType,
+    sold_as: soldAs,
+    product_key: createConfig.product_key,
+    included_in_day_pass: includedInDayPass,
+    price_sek: price,
+    capacity,
+    publish_status: "published",
+    is_active: true,
+  });
+  const createPreview = pricingPreview({
+    price: Math.max(0, Math.round(Number(price || 0))),
+    soldAs,
+    includedInDayPass,
+    includedInUnlimited,
+  });
 
   if (seriesLoading || sessionsLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
@@ -389,7 +591,16 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           style={inputStyle}
         />
         <div className="grid grid-cols-2 gap-2">
-          <select value={sessionType} onChange={(e) => setSessionType(e.target.value)} className={baseInputClass} style={inputStyle}>
+          <select
+            value={sessionType}
+            onChange={(e) => {
+              const nextType = e.target.value;
+              setSessionType(nextType);
+              setIncludedInUnlimited(isOpenPlayLike(nextType));
+            }}
+            className={baseInputClass}
+            style={inputStyle}
+          >
             {SESSION_TYPES.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
           <select value={seriesId} onChange={(e) => setSeriesId(e.target.value)} className={baseInputClass} style={inputStyle}>
@@ -397,10 +608,63 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             {series.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </div>
-        <select value={productKey} onChange={(e) => setProductKey(e.target.value)} className={`w-full ${baseInputClass}`} style={inputStyle}>
-          <option value="">Ingen produkt kopplad</option>
-          {products.map((product) => <option key={product.id} value={product.product_key}>{product.name} · {product.base_price_sek} kr</option>)}
-        </select>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {SOLD_AS_OPTIONS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => {
+                setSoldAs(option.key);
+                if (option.key === "activity_ticket") setIncludedInDayPass(true);
+                if (option.key === "day_pass") setIncludedInDayPass(true);
+              }}
+              className={`rounded-xl border px-3 py-2 text-left ${soldAs === option.key ? "border-primary bg-primary/10 text-foreground" : "border-border bg-muted/40 text-muted-foreground"}`}
+            >
+              <span className="block text-xs font-bold">{option.label}</span>
+              <span className="mt-0.5 block text-[10px] leading-snug">{option.helper}</span>
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+            Ingår i dagsmedlemskap
+            <input
+              type="checkbox"
+              checked={includedInDayPass}
+              disabled={soldAs === "day_pass"}
+              onChange={(e) => setIncludedInDayPass(e.target.checked)}
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+            Ingår i Unlimited / Play+
+            <input
+              type="checkbox"
+              checked={includedInUnlimited}
+              onChange={(e) => setIncludedInUnlimited(e.target.checked)}
+            />
+          </label>
+        </div>
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Pris/access-preview</p>
+          <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px]">
+            {createPreview.map(([label, value]) => (
+              <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
+                <span className="text-muted-foreground">{label}</span>
+                <span className="font-bold text-foreground">{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {createWarnings.length > 0 && (
+          <div className="space-y-1">
+            {createWarnings.map((warning) => (
+              <div key={warning.message} className={`flex items-start gap-2 rounded-xl px-3 py-2 text-[11px] ${warning.blocking ? "bg-destructive/10 text-destructive" : "bg-badge-vip/10 text-badge-vip"}`}>
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                <span>{warning.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex flex-wrap gap-1.5">
           {DAYS.map((day) => (
             <button
@@ -430,13 +694,51 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           const product = session.product_key ? productMap[session.product_key] : null;
           const isEditing = editingSessionId === session.id;
           const draft = sessionDrafts[session.id] || {};
+          const activeDraftSoldAs = (draft.sold_as || soldAsFromSession(session)) as SoldAs;
+          const activeDraftIncludedInDayPass = Boolean(draft.included_in_day_pass ?? session.access_policy?.allows_day_access);
+          const activeDraftIncludedInUnlimited = Boolean(draft.included_in_unlimited ?? (session.access_policy?.member_benefit_key === "open_play_unlimited"));
+          const activeDraftConfig = buildSessionConfig({
+            soldAs: activeDraftSoldAs,
+            sessionType: draft.session_type || session.session_type || "open_play",
+            includedInDayPass: activeDraftIncludedInDayPass,
+            includedInUnlimited: activeDraftIncludedInUnlimited,
+          });
+          const activeWarnings = isEditing
+            ? draftWarnings({
+                ...draft,
+                sold_as: activeDraftSoldAs,
+                product_key: activeDraftConfig.product_key,
+                included_in_day_pass: activeDraftIncludedInDayPass,
+              })
+            : sessionWarnings(session);
+          const activePreview = pricingPreview({
+            price: Math.max(0, Math.round(Number(isEditing ? draft.price_sek ?? session.price_sek ?? 0 : session.price_sek ?? 0))),
+            soldAs: activeDraftSoldAs,
+            includedInDayPass: activeDraftIncludedInDayPass,
+            includedInUnlimited: activeDraftIncludedInUnlimited,
+          });
           return (
             <motion.div key={session.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
               {isEditing ? (
                 <div className="space-y-3">
                   <input value={draft.name || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, name: e.target.value } }))} className="w-full rounded-xl px-3 py-2.5 text-sm outline-none" style={inputStyle} />
                   <div className="grid grid-cols-2 gap-2">
-                    <select value={draft.session_type || "open_play"} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, session_type: e.target.value } }))} className={baseInputClass} style={inputStyle}>
+                    <select
+                      value={draft.session_type || "open_play"}
+                      onChange={(e) => {
+                        const nextType = e.target.value;
+                        setSessionDrafts((current) => ({
+                          ...current,
+                          [session.id]: {
+                            ...draft,
+                            session_type: nextType,
+                            included_in_unlimited: isOpenPlayLike(nextType),
+                          },
+                        }));
+                      }}
+                      className={baseInputClass}
+                      style={inputStyle}
+                    >
                       {SESSION_TYPES.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
                     </select>
                     <select value={draft.series_id || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, series_id: e.target.value } }))} className={baseInputClass} style={inputStyle}>
@@ -444,10 +746,66 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       {series.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
                   </div>
-                  <select value={draft.product_key || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, product_key: e.target.value } }))} className={`w-full ${baseInputClass}`} style={inputStyle}>
-                    <option value="">Ingen produkt kopplad</option>
-                    {products.map((product) => <option key={product.id} value={product.product_key}>{product.name} · {product.base_price_sek} kr</option>)}
-                  </select>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {SOLD_AS_OPTIONS.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => setSessionDrafts((current) => ({
+                          ...current,
+                          [session.id]: {
+                            ...draft,
+                            sold_as: option.key,
+                            included_in_day_pass: option.key === "day_pass" ? true : draft.included_in_day_pass,
+                          },
+                        }))}
+                        className={`rounded-xl border px-3 py-2 text-left ${activeDraftSoldAs === option.key ? "border-primary bg-primary/10 text-foreground" : "border-border bg-muted/40 text-muted-foreground"}`}
+                      >
+                        <span className="block text-xs font-bold">{option.label}</span>
+                        <span className="mt-0.5 block text-[10px] leading-snug">{option.helper}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                      Ingår i dagsmedlemskap
+                      <input
+                        type="checkbox"
+                        checked={activeDraftIncludedInDayPass}
+                        disabled={activeDraftSoldAs === "day_pass"}
+                        onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, included_in_day_pass: e.target.checked } }))}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                      Ingår i Unlimited / Play+
+                      <input
+                        type="checkbox"
+                        checked={activeDraftIncludedInUnlimited}
+                        onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, included_in_unlimited: e.target.checked } }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="rounded-xl bg-muted/40 p-3">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Pris/access-preview</p>
+                    <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px]">
+                      {activePreview.map(([label, value]) => (
+                        <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
+                          <span className="text-muted-foreground">{label}</span>
+                          <span className="font-bold text-foreground">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {activeWarnings.length > 0 && (
+                    <div className="space-y-1">
+                      {activeWarnings.map((warning) => (
+                        <div key={warning.message} className={`flex items-start gap-2 rounded-xl px-3 py-2 text-[11px] ${warning.blocking ? "bg-destructive/10 text-destructive" : "bg-badge-vip/10 text-badge-vip"}`}>
+                          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                          <span>{warning.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-1.5">
                     {DAYS.map((day) => (
                       <button
@@ -498,6 +856,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <span className="status-chip bg-primary/15 text-primary text-[9px]">{session.session_type}</span>
                       {session.activity_series?.name && <span className="status-chip bg-muted text-muted-foreground text-[9px]">{session.activity_series.name}</span>}
+                      <span className="status-chip bg-muted text-muted-foreground text-[9px]">
+                        {SOLD_AS_OPTIONS.find((option) => option.key === activeDraftSoldAs)?.label}
+                      </span>
+                      {activeDraftIncludedInDayPass && <span className="status-chip bg-badge-paid/15 text-badge-paid text-[9px]">dag ingår</span>}
+                      {activeDraftIncludedInUnlimited && <span className="status-chip bg-badge-paid/15 text-badge-paid text-[9px]">unlimited ingår</span>}
                       <span className="status-chip bg-court-free/15 text-court-free text-[9px]">{session.price_sek} kr</span>
                       {product && <span className="status-chip bg-badge-vip/15 text-badge-vip text-[9px]">{product.name}</span>}
                       {session.capacity && <span className="status-chip bg-muted text-muted-foreground text-[9px]">max {session.capacity}</span>}
@@ -505,6 +868,16 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         {session.is_active ? "Aktiv" : "Av"}
                       </span>
                     </div>
+                    {activeWarnings.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {activeWarnings.map((warning) => (
+                          <div key={warning.message} className={`flex items-start gap-1.5 rounded-lg px-2 py-1.5 text-[10px] ${warning.blocking ? "bg-destructive/10 text-destructive" : "bg-badge-vip/10 text-badge-vip"}`}>
+                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                            <span>{warning.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-col gap-1 items-end">
                     <button onClick={() => startEditSession(session)} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground flex items-center gap-1">

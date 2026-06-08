@@ -126,7 +126,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const interestedCount = optimisticInterest?.count ?? Number(data?.interests?.interested_count || 0);
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const socialProofLabel = activitySocialProofLabel(registrationCount, interestedCount);
-  const backendPricing = data?.pricing || null;
+  const backendPricing = data?.activityTicketPricing || data?.pricing || null;
+  const dayPassPricing = data?.dayPassPricing || null;
   const pricingPending = !!user?.id && (
     waitForAccessSnapshot ||
     accessSnapshotForResolvedSession.isLoading ||
@@ -209,7 +210,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     setLoading(true);
     try {
       const result = await apiPost("api-bookings", "create-checkout", {
-        product_type: "day_pass",
+        product_type: "activity_ticket",
         amount_sek: backendPricing.effectivePriceSek ?? backendPricing.finalAmountSek ?? 0,
         venue_id: session.venue_id,
           metadata: {
@@ -245,6 +246,55 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     }
   };
 
+  const startDayPassSignup = async () => {
+    if (isRegistered || !session || !occurrenceDate) return;
+    if (!user?.id) {
+      navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
+      return;
+    }
+    if (!dayPassPricing || pricingPending) {
+      toast.info("Hämtar ditt pris...");
+      return;
+    }
+    if (loading) return;
+    setLoading(true);
+    try {
+      const result = await apiPost("api-bookings", "create-checkout", {
+        product_type: "day_pass",
+        amount_sek: dayPassPricing.effectivePriceSek ?? dayPassPricing.finalAmountSek ?? 0,
+        venue_id: session.venue_id,
+        metadata: {
+          date: occurrenceDate,
+          activity_session_id: sessionId,
+          chat_room_id: room?.id || "",
+          session_name: session.name,
+          session_type: session.session_type || "open_play",
+          product_key: "day_access",
+          preview_effective_amount_sek: String(dayPassPricing.effectivePriceSek ?? dayPassPricing.finalAmountSek ?? ""),
+          pricing_reason: dayPassPricing.pricingReason || "",
+          user_id: user.id,
+          slug: venueSlug,
+          redirect_path: safeLocalPath(programPath),
+          success_path: `/booking/confirmed?type=day_pass&next=${encodeURIComponent(safeLocalPath(programPath))}`,
+        },
+      });
+      if (result.free) {
+        queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
+        queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
+        queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
+        await refetchRegistrations();
+        toast.success("Dagsmedlemskap aktiverat");
+        return;
+      }
+      if (!result.url) throw new Error("Kunde inte starta betalning");
+      window.location.href = result.url;
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte starta dagsmedlemskap");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const openUpsell = (label: string) => {
     if ((label.includes("Access") || label.includes("Unlimited")) && !userHasMembership) {
       const params = new URLSearchParams();
@@ -254,7 +304,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (label.includes("Dagsmedlemskap") && !hasDayAccess) {
-      toast.info("Dagsmedlemskap kommer strax här.");
+      void startDayPassSignup();
     }
   };
 
@@ -504,8 +554,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                         },
                         {
                           label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
-                          value: "Ingår idag",
-                          helper: "Uppgradera till heldag",
+                          value: dayPassPricing?.checkoutLabel || "Heldag",
+                          helper: data?.upgradeDeltaSek > 0 ? `Spela hela dagen · bara +${formatSek(data.upgradeDeltaSek)} extra` : "Spela hela dagen",
                         },
                       ]
                         .filter((row) => !hasDayAccess || !row.label.includes("Dagsmedlemskap"))

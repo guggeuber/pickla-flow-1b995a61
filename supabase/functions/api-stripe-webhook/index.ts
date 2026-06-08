@@ -115,6 +115,8 @@ Deno.serve(async (req) => {
       await handleCourtBooking(session, meta, serviceClient);
     } else if (product_type === 'day_pass') {
       await handleDayPass(session, meta, serviceClient);
+    } else if (product_type === 'activity_ticket') {
+      await handleActivityTicket(session, meta, serviceClient);
     } else if (product_type === 'membership') {
       await handleMembership(session, meta, serviceClient);
     }
@@ -455,13 +457,13 @@ async function handleDayPass(
     serviceClient,
     userId: resolvedUserId,
     totalSek: paidSek,
-    purchaseType: activity_session_id || open_play_session_id ? 'activity_session' : 'day_pass',
-    productDescription: meta.session_name || (activity_session_id || open_play_session_id ? 'Aktivitetsbiljett' : 'Dagsmedlemskap'),
+    purchaseType: 'day_pass',
+    productDescription: meta.session_name ? `Dagsmedlemskap · ${meta.session_name}` : 'Dagsmedlemskap',
   });
 
   const activitySessionId = activity_session_id || open_play_session_id || null;
   const kind = session_type || 'open_play';
-  const includesDayAccess = includes_day_access === 'true' || kind === 'open_play';
+  const includesDayAccess = includes_day_access !== 'false';
 
   if (activitySessionId) {
     await serviceClient.from('session_registrations').upsert({
@@ -503,6 +505,99 @@ async function handleDayPass(
   }
 
   if (activitySessionId && meta.chat_room_id) {
+    await announceActivityRegistration(serviceClient, {
+      roomId: meta.chat_room_id,
+      userId: resolvedUserId,
+      activitySessionId,
+      sessionDate: date,
+      stripeSessionId: session.id,
+    });
+  }
+}
+
+async function handleActivityTicket(
+  session: any,
+  meta: Record<string, string>,
+  serviceClient: any,
+): Promise<void> {
+  const { venue_id, date, user_id, activity_session_id, open_play_session_id, session_type } = meta;
+  const activitySessionId = activity_session_id || open_play_session_id || null;
+
+  if (!venue_id) throw new Error('Missing venue_id in activity_ticket metadata');
+  if (!date) throw new Error('Missing date in activity_ticket metadata');
+  if (!activitySessionId) throw new Error('Missing activity_session_id in activity_ticket metadata');
+
+  const { data: existing } = await serviceClient
+    .from('session_registrations')
+    .select('id')
+    .eq('stripe_session_id', session.id)
+    .maybeSingle();
+  if (existing) return;
+
+  const resolvedUserId = await resolveUserId(session, user_id, serviceClient, meta.customer_email);
+  const priceSek = Math.round((session.amount_total || 0) / 100);
+  const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
+  const kind = session_type || 'open_play';
+
+  await createPurchaseReceipt({
+    session,
+    meta: { ...meta, venue_id },
+    serviceClient,
+    userId: resolvedUserId,
+    totalSek: paidSek,
+    purchaseType: 'activity_session',
+    productDescription: meta.session_name || 'Aktivitetsbiljett',
+  });
+
+  const { data: registration, error } = await serviceClient
+    .from('session_registrations')
+    .upsert({
+      venue_id,
+      activity_session_id: activitySessionId,
+      session_date: date,
+      user_id: resolvedUserId,
+      status: 'confirmed',
+      price_paid_sek: priceSek,
+      stripe_session_id: session.id,
+      source_type: 'session_ticket',
+      source_id: null,
+      metadata: {
+        session_type: kind,
+        session_name: meta.session_name || null,
+      },
+    }, { onConflict: 'activity_session_id,session_date,user_id' })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`Failed to insert session registration: ${error.message}`);
+
+  if (registration?.id) {
+    const { error: entitlementErr } = await serviceClient
+      .from('access_entitlements')
+      .upsert({
+        venue_id,
+        user_id: resolvedUserId,
+        entitlement_type: 'session_ticket',
+        status: 'active',
+        source_type: 'session_ticket',
+        source_id: registration.id,
+        activity_session_id: activitySessionId,
+        session_date: date,
+        valid_date: null,
+        includes_session_types: [kind],
+        metadata: {
+          session_name: meta.session_name || null,
+          session_type: kind,
+          stripe_session_id: session.id,
+        },
+      }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
+
+    if (entitlementErr) {
+      console.error('Failed to create session ticket entitlement:', entitlementErr.message);
+    }
+  }
+
+  if (meta.chat_room_id) {
     await announceActivityRegistration(serviceClient, {
       roomId: meta.chat_room_id,
       userId: resolvedUserId,
