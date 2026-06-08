@@ -54,6 +54,18 @@ const formatPrice = (amount: number) => `${Math.round(Number(amount || 0)).toLoc
 
 const REQUIRED_PRODUCTS = [
   {
+    product_key: "open_play_slot",
+    name: "Open Play-biljett",
+    description: "En biljett till ett schemalagt Open Play-pass. Priset sätts på passet i Schema.",
+    product_kind: "session_ticket",
+    session_type: "open_play",
+    base_price_sek: 0,
+    grants: {
+      entitlement_type: "session_ticket",
+    },
+    sort_order: 0,
+  },
+  {
     product_key: "day_access",
     name: "Dagsmedlemskap",
     description: "Heldagstillgång. Kan användas som upsell från enstaka aktivitetspass.",
@@ -64,7 +76,19 @@ const REQUIRED_PRODUCTS = [
       entitlement_type: "day_access",
       includes_session_types: ["open_play"],
     },
-    sort_order: 0,
+    sort_order: 1,
+  },
+  {
+    product_key: "group_training",
+    name: "Gruppträning",
+    description: "Biljett till schemalagt träningspass. Priset sätts på passet i Schema.",
+    product_kind: "session_ticket",
+    session_type: "group_training",
+    base_price_sek: 0,
+    grants: {
+      entitlement_type: "session_ticket",
+    },
+    sort_order: 2,
   },
 ];
 
@@ -84,6 +108,7 @@ const ProductPriceCard = ({
   const [basePrice, setBasePrice] = useState(String(product.base_price_sek ?? 0));
   const [name, setName] = useState(product.name);
   const isDayAccess = product.product_key === "day_access";
+  const isSessionPricedProduct = product.product_kind === "session_ticket" && product.product_key !== "day_access";
   const hasBadDayAccessPrice = isDayAccess && Number(product.base_price_sek || 0) <= 0;
 
   const previewRows = tiers
@@ -96,9 +121,10 @@ const ProductPriceCard = ({
         ? Number(rule.fixed_price)
         : Math.max(0, Math.round(base * (1 - Number(rule.discount_percent || 0) / 100)));
       const suffix = rule.fixed_price != null ? "fast pris" : `${rule.discount_percent}% rabatt`;
-      return { tierName: tier.name, price, suffix };
+      const displayPrice = isSessionPricedProduct && rule.fixed_price == null ? suffix : price <= 0 ? "Ingår" : formatPrice(price);
+      return { tierName: tier.name, displayPrice, suffix };
     })
-    .filter(Boolean) as Array<{ tierName: string; price: number; suffix: string }>;
+    .filter(Boolean) as Array<{ tierName: string; displayPrice: string; suffix: string }>;
 
   return (
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
@@ -130,6 +156,15 @@ const ProductPriceCard = ({
                   Baspris saknas eller är 0 kr. Då använder backend bara en nöd-fallback tills produkten är sparad.
                 </p>
               )}
+            </div>
+          )}
+
+          {isSessionPricedProduct && (
+            <div className="rounded-xl p-3 text-xs space-y-1" style={{ background: "hsl(var(--surface-2))" }}>
+              <p className="font-semibold">Produktnyckel för schemapass</p>
+              <p className="text-muted-foreground">
+                Baspriset här är bara fallback. Kundpriset för ett pass sätts på passet i Schema. Medlemsrabatter sätts på medlemskapsnivån för produktnyckel <span className="font-mono">{product.product_key}</span>.
+              </p>
             </div>
           )}
 
@@ -165,12 +200,12 @@ const ProductPriceCard = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
                 <span className="text-muted-foreground">Vanlig kund</span>
-                <span className="font-bold">{formatPrice(product.base_price_sek)}</span>
+                <span className="font-bold">{isSessionPricedProduct ? "Pris i Schema" : formatPrice(product.base_price_sek)}</span>
               </div>
               {previewRows.length > 0 ? previewRows.map((row) => (
                 <div key={`${product.product_key}-${row.tierName}`} className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
                   <span className="text-muted-foreground">{row.tierName} · {row.suffix}</span>
-                  <span className="font-bold">{row.price <= 0 ? "Ingår" : formatPrice(row.price)}</span>
+                  <span className="font-bold">{row.displayPrice}</span>
                 </div>
               )) : (
                 <div className="rounded-full px-3 py-2 text-xs text-muted-foreground" style={{ background: "hsl(var(--surface-1))" }}>
