@@ -354,7 +354,7 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
-  if ((product_type === 'day_pass' || product_type === 'activity_ticket') && meta.entitlement_type === 'day_access') {
+  if (product_type === 'activity_ticket' && meta.entitlement_type === 'day_access') {
     const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
     const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
     if (activitySessionId) {

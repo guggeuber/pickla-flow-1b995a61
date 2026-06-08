@@ -133,7 +133,7 @@ export async function resolveActivityPricingDecision({
       .limit(1)
       .maybeSingle();
 
-    if (dayAccess?.id) {
+    if (purchaseKind === 'activity_ticket' && dayAccess?.id) {
       finalAmountSek = 0;
       accessDecision = 'day_access_included';
       entitlementType = 'day_access';
