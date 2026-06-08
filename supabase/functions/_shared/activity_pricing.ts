@@ -1,5 +1,7 @@
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
+const DEFAULT_DAY_ACCESS_PRICE_SEK = 199;
+
 function roundSek(value: number) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
@@ -90,12 +92,16 @@ export async function resolveActivityPricingDecision({
     .eq('is_active', true)
     .maybeSingle();
 
+  const productBaseAmountSek = Number(product?.base_price_sek ?? 0);
+  const fallbackBaseAmountSek = productKey === 'day_access'
+    ? DEFAULT_DAY_ACCESS_PRICE_SEK
+    : Number(requestedAmountSek || 0);
   const baseAmountSek = roundSek(
     purchaseKind !== 'day_pass' && session.price_sek != null
       ? Number(session.price_sek)
-      : product?.base_price_sek != null
-      ? Number(product.base_price_sek)
-      : Number(requestedAmountSek || 0),
+      : productBaseAmountSek > 0
+      ? productBaseAmountSek
+      : fallbackBaseAmountSek,
   );
 
   let finalAmountSek = baseAmountSek;
@@ -111,6 +117,7 @@ export async function resolveActivityPricingDecision({
     resolved_product_key: productKey,
     product_kind: product?.product_kind || null,
     purchase_kind: purchaseKind,
+    product_base_amount_sek: product?.base_price_sek ?? null,
     base_amount_sek: baseAmountSek,
   };
 
