@@ -176,7 +176,7 @@ export async function resolveActivityPricingDecision({
 
         const ents = (entitlements || []).filter((row: any) => (row.sport_type || 'pickleball') === 'pickleball');
         const openPlayUnlimited = ents.find((row: any) => isPositiveEntitlement(row, 'open_play_unlimited'));
-        if (openPlayUnlimited && (session.session_type || 'open_play') === 'open_play') {
+        if (purchaseKind === 'activity_ticket' && openPlayUnlimited && (session.session_type || 'open_play') === 'open_play') {
           finalAmountSek = 0;
           accessDecision = 'membership_included';
           entitlementType = 'open_play_unlimited';

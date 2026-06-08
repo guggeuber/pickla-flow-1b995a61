@@ -312,7 +312,7 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
-  if ((product_type === 'day_pass' || product_type === 'activity_ticket') && meta.entitlement_type === 'open_play_unlimited') {
+  if (product_type === 'activity_ticket' && meta.entitlement_type === 'open_play_unlimited') {
     const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
     const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
     if (activitySessionId) {
@@ -394,9 +394,9 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const { product_type, amount_sek, venue_id, metadata } = body;
 
-    if (!product_type || !amount_sek) return errorResponse('Missing required fields');
+    if (!product_type || amount_sek == null) return errorResponse('Missing required fields');
     if (!['court_booking', 'day_pass', 'activity_ticket', 'membership'].includes(product_type)) return errorResponse('Invalid product_type');
-    if (typeof amount_sek !== 'number' || amount_sek <= 0) return errorResponse('amount_sek must be positive');
+    if (typeof amount_sek !== 'number' || amount_sek < 0) return errorResponse('amount_sek must be zero or positive');
     // venue_id required for court_booking and day_pass, optional for membership
     if (product_type !== 'membership' && !venue_id) return errorResponse('Missing venue_id');
 
