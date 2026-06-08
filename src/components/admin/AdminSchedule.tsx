@@ -356,7 +356,6 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       end_time: endTime,
       price_sek: Math.round(Number(price || 0)),
       capacity: capacity ? Math.round(Number(capacity)) : null,
-      sold_as: soldAs,
       access_policy: config.access_policy,
       is_active: true,
     });
@@ -458,7 +457,6 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       capacity: draft.capacity === "" || draft.capacity == null ? null : Math.max(0, Math.round(Number(draft.capacity))),
       is_active: Boolean(draft.is_active),
       publish_status: draft.publish_status || "published",
-      sold_as: draft.sold_as || "activity_ticket",
       access_policy: config.access_policy,
     }, {
       onSuccess: () => setEditingSessionId(null),

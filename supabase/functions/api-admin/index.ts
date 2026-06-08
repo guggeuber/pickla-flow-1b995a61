@@ -32,9 +32,11 @@ function productKeyForActivityTicket(sessionType: string) {
 
 function normalizeActivitySessionPayload(body: Record<string, any>) {
   const next = { ...body };
-  const soldAs = String(next.sold_as || '') as SoldAs | '';
+  const soldAs = String(next.sold_as || next.access_policy?.sold_as || '') as SoldAs | '';
   const sessionType = String(next.session_type || 'open_play');
   delete next.sold_as;
+  delete next.included_in_day_pass;
+  delete next.included_in_unlimited;
 
   if (soldAs) {
     if (!['activity_ticket', 'day_pass', 'included_only'].includes(soldAs)) {
