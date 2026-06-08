@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
@@ -23,12 +23,20 @@ export default function BookingConfirmed() {
   const type     = searchParams.get("type") ?? "";
   const next     = searchParams.get("next") ?? "/my";
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user, loading: authLoading } = useAuth();
   const [timedOut, setTimedOut] = useState(false);
 
   const isDayPass = type === "day_pass";
   const isSessionTicket = type === "session_ticket";
   const isInstantAccess = isDayPass;
+
+  useEffect(() => {
+    if (!isDayPass && !isSessionTicket) return;
+    queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
+    queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
+    queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
+  }, [isDayPass, isSessionTicket, queryClient]);
 
   // Standalone day passes are active immediately; paid activity tickets wait for the webhook below.
   useEffect(() => {

@@ -882,9 +882,20 @@ Deno.serve(async (req) => {
           requestedProductKey: preview.activity_session.product_key,
           requestedAmountSek: preview.activity_session.price_sek,
         });
+        const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+        if (supabaseUrl.includes('ptnvhbniiiapzbyofctg')) {
+          console.log('activity-pricing-preview', {
+            userId: userId || null,
+            membershipTier: pricing.membershipTierName,
+            activitySessionId: pricing.activitySessionId,
+            sessionDate: pricing.sessionDate,
+            pricingBranch: pricing.pricingReason,
+            effectivePriceSek: pricing.effectivePriceSek,
+          });
+        }
         preview.interests = interests;
         preview.pricing = pricing;
-        return jsonResponse(preview, 200, 5);
+        return jsonResponse(preview, 200, userId ? 0 : 5);
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Activity preview not found', 404);
       }

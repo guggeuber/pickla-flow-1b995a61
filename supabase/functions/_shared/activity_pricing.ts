@@ -14,6 +14,13 @@ function defaultProductKeyForSession(sessionType?: string | null) {
   return 'session_ticket';
 }
 
+function formatSek(amount: number) {
+  return `${roundSek(amount).toLocaleString('sv-SE', {
+    minimumFractionDigits: Number.isInteger(roundSek(amount)) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })} kr`;
+}
+
 function isPositiveEntitlement(row: any, type: string) {
   return row?.entitlement_type === type && Number(row.value ?? 1) > 0;
 }
@@ -27,9 +34,12 @@ export type ActivityPricingDecision = {
   finalAmountSek: number;
   effectivePriceSek: number;
   requiresCheckout: boolean;
+  checkoutLabel: string;
+  pricingReason: string;
   accessDecision: 'paid' | 'membership_included' | 'day_access_included' | 'free_day_pass';
   entitlementType: string;
   membershipId: string | null;
+  membershipTierName: string | null;
   sourceId: string | null;
   debug: Record<string, unknown>;
 };
@@ -87,7 +97,9 @@ export async function resolveActivityPricingDecision({
   let accessDecision: ActivityPricingDecision['accessDecision'] = 'paid';
   let entitlementType = '';
   let membershipId: string | null = null;
+  let membershipTierName: string | null = null;
   let sourceId: string | null = null;
+  let pricingReason = 'regular_price';
   const debug: Record<string, unknown> = {
     session_product_key: session.product_key || null,
     requested_product_key: requestedProductKey || null,
@@ -112,6 +124,7 @@ export async function resolveActivityPricingDecision({
       finalAmountSek = 0;
       accessDecision = 'day_access_included';
       entitlementType = 'day_access';
+      pricingReason = 'active_day_access';
       sourceId = dayAccess.id;
       debug.day_access_entitlement_id = dayAccess.id;
     }
@@ -145,6 +158,8 @@ export async function resolveActivityPricingDecision({
             .eq('id', membership.tier_id)
             .maybeSingle(),
         ]);
+        membershipTierName = tier?.name || null;
+        debug.membership_tier_name = membershipTierName;
 
         const ents = (entitlements || []).filter((row: any) => (row.sport_type || 'pickleball') === 'pickleball');
         const openPlayUnlimited = ents.find((row: any) => isPositiveEntitlement(row, 'open_play_unlimited'));
@@ -152,6 +167,7 @@ export async function resolveActivityPricingDecision({
           finalAmountSek = 0;
           accessDecision = 'membership_included';
           entitlementType = 'open_play_unlimited';
+          pricingReason = 'membership_open_play_unlimited';
           debug.entitlement = 'open_play_unlimited';
         }
 
@@ -176,6 +192,7 @@ export async function resolveActivityPricingDecision({
               finalAmountSek = 0;
               accessDecision = 'free_day_pass';
               entitlementType = 'free_day_pass_monthly';
+              pricingReason = 'membership_free_day_pass_monthly';
               debug.entitlement = 'free_day_pass_monthly';
               debug.free_pass_period_start = monthStart;
               debug.free_pass_period_end = dt.endOf('month').toISODate();
@@ -194,11 +211,13 @@ export async function resolveActivityPricingDecision({
 
           if (tierPricingAmounts.length > 0) {
             finalAmountSek = Math.min(...tierPricingAmounts);
+            pricingReason = 'membership_tier_pricing';
             debug.pricing_source = 'membership_tier_pricing';
           } else {
             const fallbackDiscount = Number(tier?.discount_percent || 0);
             if (fallbackDiscount > 0) {
               finalAmountSek = applyPercentDiscount(baseAmountSek, fallbackDiscount);
+              pricingReason = 'membership_tier_discount_percent';
               debug.pricing_source = 'membership_tier_discount_percent';
             }
           }
@@ -208,6 +227,11 @@ export async function resolveActivityPricingDecision({
   }
 
   finalAmountSek = roundSek(finalAmountSek);
+  const checkoutLabel = finalAmountSek <= 0
+    ? accessDecision === 'day_access_included'
+      ? 'Ingår idag'
+      : 'Ingår'
+    : formatSek(finalAmountSek);
 
   return {
     activitySessionId,
@@ -218,16 +242,21 @@ export async function resolveActivityPricingDecision({
     finalAmountSek,
     effectivePriceSek: finalAmountSek,
     requiresCheckout: finalAmountSek > 0,
+    checkoutLabel,
+    pricingReason,
     accessDecision,
     entitlementType,
     membershipId,
+    membershipTierName,
     sourceId,
     debug: {
       ...debug,
       final_amount_sek: finalAmountSek,
       access_decision: accessDecision,
+      pricing_reason: pricingReason,
       entitlement_type: entitlementType,
       membership_id: membershipId,
+      membership_tier_name: membershipTierName,
     },
   };
 }

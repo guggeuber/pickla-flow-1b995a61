@@ -1,6 +1,8 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { CheckCircle2 } from "lucide-react";
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
@@ -8,10 +10,16 @@ const FONT_MONO    = "'Space Mono', monospace";
 
 export default function MembershipConfirmed() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const rawReturnTo = searchParams.get("returnTo");
   const returnTo = rawReturnTo && rawReturnTo.startsWith("/") && !rawReturnTo.startsWith("//") ? rawReturnTo : "";
   const nextPath = returnTo || "/my";
+
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
+    queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
+  }, [queryClient]);
 
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-6 px-5 text-center">

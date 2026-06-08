@@ -8,8 +8,9 @@ import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/compone
 import { apiGet, apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { activityPriceLabels, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
+import { DAY_MEMBERSHIP_SEK, PICKLA_ACCESS_MONTHLY_SEK, PICKLA_UNLIMITED_MONTHLY_SEK, formatSek } from "@/lib/activityPricing";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -73,10 +74,22 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     },
   });
 
+  const earlyVenueId = directSession?.venue_id || optimisticSession?.venue_id || null;
+  const earlyOccurrenceDate = requestedDate || directSession?.session_date || optimisticSession?.session_date || null;
+  const accessSnapshot = useAccessSnapshot({ venueId: earlyVenueId, sessionDate: earlyOccurrenceDate });
+  const waitForAccessSnapshot = !!user?.id && !!earlyVenueId && accessSnapshot.isLoading;
+
   const { data, isLoading: previewLoading, error } = useQuery({
-    queryKey: ["program-session-entry", sessionId, requestedDate, venueSlug],
-    enabled: !!sessionId,
-    staleTime: 15000,
+    queryKey: [
+      "program-session-entry",
+      user?.id || "anon",
+      sessionId,
+      earlyOccurrenceDate || requestedDate || "date-pending",
+      venueSlug,
+      accessSnapshot.version,
+    ],
+    enabled: !!sessionId && !waitForAccessSnapshot,
+    staleTime: user?.id ? 0 : 15000,
     queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
       sessionId: sessionId!,
       venueSlug,
@@ -88,33 +101,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const room = data?.room;
   const occurrenceDate = data?.occurrence_date || requestedDate || session?.session_date || null;
   const venueId = session?.venue_id || data?.venue?.id;
-  const isLoading = sessionLoading && previewLoading;
-
-  const { data: membership } = useQuery({
-    queryKey: ["program-membership", user?.id, venueId],
-    enabled: !!user?.id && !!venueId,
-    staleTime: 30000,
-    queryFn: () => apiGet("api-memberships", "user", { userId: user!.id, venueId }),
-  });
-
-  const { data: dayAccess } = useQuery({
-    queryKey: ["program-day-access", user?.id, venueId, occurrenceDate],
-    enabled: !!user?.id && !!venueId && !!occurrenceDate,
-    staleTime: 30000,
-    queryFn: async () => {
-      const { data: row } = await supabase
-        .from("access_entitlements")
-        .select("id")
-        .eq("user_id", user!.id)
-        .eq("venue_id", venueId)
-        .eq("entitlement_type", "day_access")
-        .eq("status", "active")
-        .eq("valid_date", occurrenceDate)
-        .limit(1)
-        .maybeSingle();
-      return row;
-    },
-  });
+  const accessSnapshotForResolvedSession = useAccessSnapshot({ venueId, sessionDate: occurrenceDate });
+  const isLoading = sessionLoading && (previewLoading || waitForAccessSnapshot);
 
   const { data: registrations = [], refetch: refetchRegistrations } = useQuery({
     queryKey: ["program-session-registrations", sessionId, occurrenceDate, user?.id],
@@ -138,22 +126,30 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const interestedCount = optimisticInterest?.count ?? Number(data?.interests?.interested_count || 0);
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const socialProofLabel = activitySocialProofLabel(registrationCount, interestedCount);
-  const userHasMembership = hasActiveMembership(membership);
   const backendPricing = data?.pricing || null;
-  const pricing = mergeBackendActivityPricing(activityPriceLabels({
-    basePrice: Number(session?.price_sek || 165),
-    productKey: session?.product_key,
-    sessionType: session?.session_type,
-    membership,
-    hasDayAccess: !!dayAccess,
-  }), backendPricing);
-  const pricingIsIncluded = pricing.checkoutLabel === "Ingår" || pricing.checkoutLabel === "Ingår idag";
-  const requiresCheckout = backendPricing?.requiresCheckout !== false && !pricingIsIncluded;
+  const pricingPending = !!user?.id && (
+    waitForAccessSnapshot ||
+    accessSnapshotForResolvedSession.isLoading ||
+    previewLoading ||
+    !backendPricing
+  );
+  const basePrice = Number(backendPricing?.baseAmountSek ?? session?.price_sek ?? 0);
+  const effectivePrice = Number(backendPricing?.effectivePriceSek ?? backendPricing?.finalAmountSek ?? basePrice);
+  const checkoutLabel = pricingPending
+    ? "Hämtar ditt pris..."
+    : backendPricing?.checkoutLabel || formatSek(effectivePrice);
+  const pricingIsIncluded = !pricingPending && backendPricing?.requiresCheckout === false;
+  const requiresCheckout = !pricingPending && backendPricing?.requiresCheckout === true;
+  const savingsSek = Math.max(0, Math.round(basePrice - effectivePrice));
+  const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
+  const hasDayAccess = Boolean(accessSnapshotForResolvedSession.data?.hasDayAccess);
   const ctaLabel = isRegistered
     ? "Anmäld"
     : isFull
       ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
-      : `${user?.id ? (pricingIsIncluded ? "Anmäl" : "Fortsätt till betalning") : "Logga in & anmäl"} · ${pricing.checkoutLabel}`;
+      : pricingPending
+        ? "Hämtar ditt pris..."
+        : `${user?.id ? (pricingIsIncluded ? "Anmäl" : "Fortsätt till betalning") : "Logga in & anmäl"} · ${checkoutLabel}`;
 
   const timeLabel = useMemo(() => {
     if (!session) return "";
@@ -205,12 +201,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
       return;
     }
+    if (!backendPricing || pricingPending) {
+      toast.info("Hämtar ditt pris...");
+      return;
+    }
     if (loading) return;
     setLoading(true);
     try {
       const result = await apiPost("api-bookings", "create-checkout", {
         product_type: "day_pass",
-        amount_sek: session.price_sek || 0,
+        amount_sek: backendPricing.effectivePriceSek ?? backendPricing.finalAmountSek ?? 0,
         venue_id: session.venue_id,
           metadata: {
             date: occurrenceDate,
@@ -219,6 +219,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             session_name: session.name,
             session_type: session.session_type || "open_play",
             product_key: backendPricing?.productKey || session.product_key || "",
+            preview_effective_amount_sek: String(backendPricing.effectivePriceSek ?? backendPricing.finalAmountSek ?? ""),
+            pricing_reason: backendPricing.pricingReason || "",
             user_id: user.id,
             slug: venueSlug,
           redirect_path: safeLocalPath(programPath),
@@ -227,6 +229,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       });
       if (result.free) {
         await announceJoin();
+        queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
+        queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
         queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
         await refetchRegistrations();
         toast.success("Du är anmäld");
@@ -249,7 +253,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       navigate(`/membership?${params.toString()}`);
       return;
     }
-    if (label.includes("Dagsmedlemskap") && !dayAccess) {
+    if (label.includes("Dagsmedlemskap") && !hasDayAccess) {
       toast.info("Dagsmedlemskap kommer strax här.");
     }
   };
@@ -274,7 +278,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         mine: Boolean(result.user_is_interested),
       });
       toast.success(result.user_is_interested ? "Du är markerad som intresserad" : "Intresse borttaget");
-      queryClient.invalidateQueries({ queryKey: ["program-session-entry", sessionId, requestedDate, venueSlug] });
+      queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
     } catch (err: any) {
       toast.error(err.message || "Kunde inte uppdatera intresse");
     } finally {
@@ -458,19 +462,24 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Biljettpris</p>
                         <p className="mt-1 text-[17px] font-semibold text-neutral-500" style={{ fontFamily: FONT_HEADING }}>
-                          {pricing.basePrice} kr
+                          {basePrice > 0 ? formatSek(basePrice) : "Ingår"}
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: GREEN }}>Ditt pris</p>
                         <p className="mt-1 text-[30px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                          {pricing.checkoutLabel}
+                          {checkoutLabel}
                         </p>
                       </div>
                     </div>
-                    {pricing.hasDiscount && (
+                    {pricingPending && (
                       <p className="mt-2 text-[12px] font-semibold text-neutral-500">
-                        Du sparar {Math.max(0, pricing.basePrice - pricing.finalPrice)} kr på det här passet.
+                        Vi kontrollerar medlemskap, dagsaccess och entitlements.
+                      </p>
+                    )}
+                    {!pricingPending && savingsSek > 0 && (
+                      <p className="mt-2 text-[12px] font-semibold text-neutral-500">
+                        Du sparar {formatSek(savingsSek)} på det här passet.
                       </p>
                     )}
                     {requiresCheckout && (
@@ -482,17 +491,34 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
                   {!userHasMembership && (
                     <div className="grid gap-2 [@media(max-height:640px)]:hidden">
-                      {pricing.detailRows
-                        .filter((row) => row.label.includes("Access") || row.label.includes("Unlimited") || row.label.includes("Dagsmedlemskap"))
+                      {[
+                        {
+                          label: `Pickla Access ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`,
+                          value: "Medlemspris",
+                          helper: "Köp Access och boka billigare",
+                        },
+                        {
+                          label: `Pickla Unlimited ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`,
+                          value: "Ingår",
+                          helper: "Ingår när aktiviteten täcks av Unlimited",
+                        },
+                        {
+                          label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
+                          value: "Ingår idag",
+                          helper: "Uppgradera till heldag",
+                        },
+                      ]
+                        .filter((row) => !hasDayAccess || !row.label.includes("Dagsmedlemskap"))
                         .map((row) => {
                           const isMembershipUpsell = row.label.includes("Access") || row.label.includes("Unlimited");
-                          const isDayUpsell = !dayAccess && row.label.includes("Dagsmedlemskap");
-                          const clickable = isMembershipUpsell || isDayUpsell;
+                          const isDayUpsell = !hasDayAccess && row.label.includes("Dagsmedlemskap");
+                          const clickable = !pricingPending && (isMembershipUpsell || isDayUpsell);
                           return (
                             <button
                               key={row.label}
                               type="button"
                               onClick={() => clickable && openUpsell(row.label)}
+                              disabled={pricingPending}
                               className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-white px-4 py-3 text-left"
                               style={{ border: `1px solid ${MENU_BORDER}` }}
                             >
@@ -501,11 +527,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                                   {row.label}
                                 </span>
                                 <span className="mt-0.5 block truncate text-[11px] text-neutral-500">
-                                  {row.label.includes("Access")
-                                    ? `Med abonnemang: ${row.value}`
-                                    : row.label.includes("Unlimited")
-                                      ? "Ingår med Unlimited"
-                                      : "Ingår med dagsmedlemskap"}
+                                  {row.helper}
                                 </span>
                               </span>
                               <span className="shrink-0 text-[15px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
@@ -527,7 +549,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 <button
                   type="button"
                   onClick={startSignup}
-                  disabled={loading || queueLoading || isRegistered}
+                  disabled={loading || queueLoading || isRegistered || pricingPending}
                   className="flex h-14 items-center justify-center gap-3 rounded-[22px] px-5 text-[17px] font-semibold disabled:opacity-60"
                   style={{
                     background: isRegistered || (isFull && userIsInterested) ? "#dcfce7" : NAVY,
