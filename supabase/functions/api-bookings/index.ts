@@ -937,7 +937,7 @@ Deno.serve(async (req) => {
     if (!booking) {
       const { data: registration } = await serviceClient
         .from('session_registrations')
-        .select('id, venue_id')
+        .select('id, venue_id, activity_session_id, session_date')
         .eq('stripe_session_id', sessionId)
         .neq('status', 'cancelled')
         .limit(1)
@@ -954,6 +954,9 @@ Deno.serve(async (req) => {
       return jsonResponse({
         pending: false,
         type: 'session_ticket',
+        registration_id: registration.id,
+        activity_session_id: registration.activity_session_id,
+        session_date: registration.session_date,
         venue_slug: venue?.slug || '',
       }, 200, 0);
     }

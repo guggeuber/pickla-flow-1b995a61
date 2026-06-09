@@ -13,6 +13,9 @@ const TIMEOUT_MS   = 30_000;
 type BookingBySessionResponse = {
   pending?: boolean;
   booking_ref?: string;
+  registration_id?: string;
+  activity_session_id?: string;
+  session_date?: string;
   venue_slug?: string;
   type?: "booking" | "session_ticket";
 };
@@ -62,7 +65,11 @@ export default function BookingConfirmed() {
     const bookingRef = data?.booking_ref;
     const venueSlug = data?.venue_slug;
     if (isSessionTicket && data && !data.pending && !authLoading) {
-      navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true });
+      const params = new URLSearchParams();
+      if (data.registration_id) params.set("registration", data.registration_id);
+      if (venueSlug) params.set("v", venueSlug);
+      const myPath = params.toString() ? `/my?${params.toString()}` : "/my";
+      navigate(user ? myPath : next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true });
       return;
     }
     if (bookingRef && !authLoading) {

@@ -240,6 +240,12 @@ function getSessionRegistrationPath(registration: MySessionRegistration, fallbac
   return `/program/${encodeURIComponent(registration.activity_session_id)}${query ? `?${query}` : ""}`;
 }
 
+function getActivityRoomResourceId(registration: MySessionRegistration) {
+  const sessionDate = String(registration.session_date || registration.activity_sessions?.session_date || "").slice(0, 10);
+  if (!registration.activity_session_id || !sessionDate) return null;
+  return `activity_session:${registration.activity_session_id}:${sessionDate}`;
+}
+
 function getThreadPath(room: ActivityThreadRoom) {
   return `/chat/${encodeURIComponent(room.id)}`;
 }
@@ -915,6 +921,141 @@ function BookingDetailsSheet({
                 Avboka
               </button>
             )}
+          </div>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
+function SessionRegistrationDetailsSheet({
+  registration,
+  open,
+  onOpenChange,
+  fallbackVenueSlug,
+  activityThreads,
+}: {
+  registration: MySessionRegistration | null;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  fallbackVenueSlug: string;
+  activityThreads: ActivityThread[];
+}) {
+  const navigate = useNavigate();
+
+  if (!registration) return null;
+
+  const session = registration.activity_sessions;
+  const start = getSessionRegistrationDateTime(registration);
+  const end = getSessionRegistrationDateTime(registration, true);
+  const dateLabel = start
+    ? start.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" })
+    : "Datum kommer";
+  const timeLabel = start
+    ? `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}${end ? `–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}`
+    : "";
+  const venueName = session?.venues?.name || "Pickla";
+  const paidAmount = typeof registration.price_paid_sek === "number" ? registration.price_paid_sek : null;
+  const programPath = getSessionRegistrationPath(registration, fallbackVenueSlug);
+  const resourceId = getActivityRoomResourceId(registration);
+  const chatRoom = resourceId
+    ? activityThreads.find((thread) => thread.room.resource_id === resourceId)?.room
+    : null;
+
+  const handleOpenLobby = () => {
+    onOpenChange(false);
+    if (chatRoom) {
+      navigate(`${getThreadPath(chatRoom)}?v=${encodeURIComponent(session?.venues?.slug || fallbackVenueSlug)}`);
+      return;
+    }
+    navigate(programPath);
+  };
+
+  const handleShare = async () => {
+    const url = `${window.location.origin}${programPath}`;
+    const title = session?.name || "Aktivitet på Pickla";
+    const text = `Häng med på ${title} på Pickla`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        toast.success("Länk kopierad");
+      }
+    } catch (error) {
+      if ((error as Error)?.name !== "AbortError") toast.error("Kunde inte dela länken");
+    }
+  };
+
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent style={{ background: CARD_BG }}>
+        <div className="px-5 pb-6 pt-2 max-w-md mx-auto w-full">
+          <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+            Aktivitet
+          </p>
+          <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+            {session?.name || "Aktivitet"}
+          </p>
+          <p className="text-sm mt-1 capitalize" style={{ color: TEXT_SECONDARY }}>{dateLabel}</p>
+          {timeLabel && <p className="text-sm" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{timeLabel}</p>}
+
+          <div className="mt-4 rounded-2xl p-4 flex items-center justify-between gap-3" style={{ background: PAGE_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                Biljett
+              </p>
+              <p className="text-sm font-bold mt-1 truncate" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                {venueName}
+              </p>
+              <p className="text-xs mt-1" style={{ color: TEXT_SECONDARY }}>
+                {registration.status === "confirmed" ? "Anmäld och bekräftad" : "Väntar på bekräftelse"}
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <span className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: GREEN_LIGHT, color: GREEN, fontFamily: FONT_HEADING }}>
+                {registration.status === "confirmed" ? "Anmäld" : "Väntande"}
+              </span>
+              {paidAmount !== null && (
+                <p className="text-sm font-bold mt-2" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>
+                  {paidAmount} kr
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mt-5">
+            <button
+              onClick={handleOpenLobby}
+              className="col-span-2 w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+              style={{ background: BLUE, fontFamily: FONT_HEADING }}
+            >
+              <MessageCircle className="w-4 h-4" />
+              {chatRoom ? "Gå till chatt" : "Öppna aktivitet"}
+            </button>
+            <button
+              onClick={handleShare}
+              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+              style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+            >
+              <Share2 className="w-4 h-4" />
+              Dela
+            </button>
+            <button
+              onClick={() => toast.info("Kvitto för aktivitetspass kommer här strax")}
+              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+              style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+            >
+              <FileText className="w-4 h-4" />
+              Kvitto
+            </button>
+            <button
+              onClick={() => toast.info("Avbokning av aktivitetspass kommer här strax")}
+              className="col-span-2 w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
+              style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444", fontFamily: FONT_HEADING }}
+            >
+              Avboka
+            </button>
           </div>
         </div>
       </DrawerContent>
@@ -1637,6 +1778,7 @@ const MyPage = () => {
   const queryClient = useQueryClient();
 
   const [selectedBooking, setSelectedBooking] = useState<Record<string, unknown> | null>(null);
+  const [selectedSessionRegistration, setSelectedSessionRegistration] = useState<MySessionRegistration | null>(null);
   const [showMembershipDetails, setShowMembershipDetails] = useState(false);
   const [showPast, setShowPast] = useState(false);
 
@@ -1665,6 +1807,13 @@ const MyPage = () => {
     });
     if (match) setSelectedBooking(match);
   }, [bookings, searchParams, selectedBooking]);
+
+  useEffect(() => {
+    const registrationParam = searchParams.get("registration");
+    if (!registrationParam || selectedSessionRegistration || !sessionRegistrations?.length) return;
+    const match = sessionRegistrations.find((registration) => registration.id === registrationParam);
+    if (match) setSelectedSessionRegistration(match);
+  }, [searchParams, selectedSessionRegistration, sessionRegistrations]);
 
   // Show success toast when returning from Stripe card setup
   useState(() => {
@@ -1722,6 +1871,21 @@ const MyPage = () => {
     if (searchParams.has("booking")) {
       const nextParams = new URLSearchParams(searchParams);
       nextParams.delete("booking");
+      setSearchParams(nextParams, { replace: true });
+    }
+  };
+  const openSessionRegistrationDetails = (registration: MySessionRegistration) => {
+    setSelectedSessionRegistration(registration);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("registration", registration.id);
+    setSearchParams(nextParams, { replace: false });
+  };
+  const closeSessionRegistrationDetails = (open: boolean) => {
+    if (open) return;
+    setSelectedSessionRegistration(null);
+    if (searchParams.has("registration")) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("registration");
       setSearchParams(nextParams, { replace: true });
     }
   };
@@ -1872,7 +2036,7 @@ const MyPage = () => {
                   return (
                     <button
                       key={registration.id}
-                      onClick={() => navigate(getSessionRegistrationPath(registration, venueSlug))}
+                      onClick={() => openSessionRegistrationDetails(registration)}
                       className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
                       style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                     >
@@ -2014,7 +2178,7 @@ const MyPage = () => {
                           return (
                             <button
                               key={registration.id}
-                              onClick={() => navigate(getSessionRegistrationPath(registration, venueSlug))}
+                              onClick={() => openSessionRegistrationDetails(registration)}
                               className="rounded-xl p-3 flex items-center justify-between text-left opacity-70 active:scale-[0.98] transition-transform"
                               style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                             >
@@ -2126,6 +2290,14 @@ const MyPage = () => {
         booking={selectedBooking}
         open={!!selectedBooking}
         onOpenChange={closeBookingDetails}
+      />
+
+      <SessionRegistrationDetailsSheet
+        registration={selectedSessionRegistration}
+        open={!!selectedSessionRegistration}
+        onOpenChange={closeSessionRegistrationDetails}
+        fallbackVenueSlug={venueSlug}
+        activityThreads={activityThreads}
       />
 
       <MembershipDetailsSheet
