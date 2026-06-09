@@ -90,8 +90,21 @@ type MySessionRegistration = {
   user_id: string;
   status: string | null;
   price_paid_sek: number | null;
+  stripe_session_id: string | null;
   created_at: string | null;
   activity_sessions: MyActivitySessionSummary | null;
+};
+
+type MyReceiptItem = {
+  id: string;
+  type: string;
+  date: string;
+  label: string;
+  reference: string | null;
+  amount: number;
+  vat_amount: number;
+  payment_method: string | null;
+  stripe_session_id: string | null;
 };
 
 type ActivityThreadRoom = {
@@ -152,7 +165,7 @@ function useMySessionRegistrations() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("session_registrations")
-        .select("id, venue_id, activity_session_id, session_date, user_id, status, price_paid_sek, created_at, activity_sessions(id, name, session_type, session_date, start_time, end_time, venue_id, venues(name, slug))")
+        .select("id, venue_id, activity_session_id, session_date, user_id, status, price_paid_sek, stripe_session_id, created_at, activity_sessions(id, name, session_type, session_date, start_time, end_time, venue_id, venues(name, slug))")
         .eq("user_id", user!.id)
         .neq("status", "cancelled")
         .order("session_date", { ascending: false })
@@ -160,6 +173,16 @@ function useMySessionRegistrations() {
       if (error) throw error;
       return (data || []) as unknown as MySessionRegistration[];
     },
+  });
+}
+
+function useMyWellnessReceipts(year: number) {
+  const { user } = useAuth();
+  return useQuery<{ items: MyReceiptItem[] }>({
+    queryKey: ["wellness-certificate", year],
+    enabled: !!user,
+    staleTime: 60000,
+    queryFn: () => apiGet<{ items: MyReceiptItem[] }>("api-bookings", "wellness", { year: String(year) }),
   });
 }
 
@@ -934,14 +957,22 @@ function SessionRegistrationDetailsSheet({
   onOpenChange,
   fallbackVenueSlug,
   activityThreads,
+  receiptItems,
 }: {
   registration: MySessionRegistration | null;
   open: boolean;
   onOpenChange: (o: boolean) => void;
   fallbackVenueSlug: string;
   activityThreads: ActivityThread[];
+  receiptItems: MyReceiptItem[];
 }) {
   const navigate = useNavigate();
+  const [openingLobby, setOpeningLobby] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
+
+  useEffect(() => {
+    setShowReceipt(false);
+  }, [registration?.id]);
 
   if (!registration) return null;
 
@@ -955,20 +986,59 @@ function SessionRegistrationDetailsSheet({
     ? `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}${end ? `–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : ""}`
     : "";
   const venueName = session?.venues?.name || "Pickla";
-  const paidAmount = typeof registration.price_paid_sek === "number" ? registration.price_paid_sek : null;
+  const receipt = registration.stripe_session_id
+    ? receiptItems.find((item) => item.stripe_session_id === registration.stripe_session_id)
+    : null;
+  const receiptAmount = typeof receipt?.amount === "number" && receipt.amount > 0 ? receipt.amount : null;
+  const registrationAmount = typeof registration.price_paid_sek === "number" && registration.price_paid_sek > 0
+    ? registration.price_paid_sek
+    : null;
+  const paidAmount = receiptAmount ?? registrationAmount;
   const programPath = getSessionRegistrationPath(registration, fallbackVenueSlug);
   const resourceId = getActivityRoomResourceId(registration);
   const chatRoom = resourceId
     ? activityThreads.find((thread) => thread.room.resource_id === resourceId)?.room
     : null;
+  const venueSlug = session?.venues?.slug || fallbackVenueSlug;
+  const money = (amount: number) =>
+    `${Number(amount || 0).toLocaleString("sv-SE", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })} kr`;
 
-  const handleOpenLobby = () => {
-    onOpenChange(false);
+  const handleOpenLobby = async () => {
+    if (openingLobby) return;
+
     if (chatRoom) {
-      navigate(`${getThreadPath(chatRoom)}?v=${encodeURIComponent(session?.venues?.slug || fallbackVenueSlug)}`);
+      onOpenChange(false);
+      navigate(`${getThreadPath(chatRoom)}?v=${encodeURIComponent(venueSlug)}`);
       return;
     }
-    navigate(programPath);
+
+    if (!registration.venue_id || !resourceId) {
+      toast.error("Kunde inte hitta aktivitetslobbyn");
+      return;
+    }
+
+    setOpeningLobby(true);
+    try {
+      const { data, error } = await supabase.rpc("upsert_resource_chat_room", {
+        p_venue_id: registration.venue_id,
+        p_resource_id: resourceId,
+        p_room_type: "event",
+        p_title: session?.name || "Aktivitet",
+        p_subtitle: `${dateLabel}${timeLabel ? ` · ${timeLabel}` : ""}`,
+        p_emoji: "🎟️",
+        p_is_public: true,
+      });
+      if (error) throw error;
+      const roomId = (data as Array<{ id?: string }> | null)?.[0]?.id;
+      if (!roomId) throw new Error("Missing room id");
+      onOpenChange(false);
+      navigate(`/chat/${encodeURIComponent(roomId)}?v=${encodeURIComponent(venueSlug)}`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Kunde inte öppna lobbyn");
+    } finally {
+      setOpeningLobby(false);
+    }
   };
 
   const handleShare = async () => {
@@ -1011,27 +1081,85 @@ function SessionRegistrationDetailsSheet({
               <p className="text-xs mt-1" style={{ color: TEXT_SECONDARY }}>
                 {registration.status === "confirmed" ? "Anmäld och bekräftad" : "Väntar på bekräftelse"}
               </p>
+              {receipt?.reference && (
+                <p className="text-[11px] mt-1 truncate" style={{ color: TEXT_MUTED }}>
+                  Kvitto {receipt.reference}
+                </p>
+              )}
             </div>
             <div className="text-right shrink-0">
               <span className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: GREEN_LIGHT, color: GREEN, fontFamily: FONT_HEADING }}>
                 {registration.status === "confirmed" ? "Anmäld" : "Väntande"}
               </span>
-              {paidAmount !== null && (
+              {paidAmount !== null ? (
                 <p className="text-sm font-bold mt-2" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>
-                  {paidAmount} kr
+                  {money(paidAmount)}
+                </p>
+              ) : (
+                <p className="text-xs font-bold mt-2" style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}>
+                  Ingår
                 </p>
               )}
             </div>
           </div>
 
+          <AnimatePresence>
+            {showReceipt && receipt && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="mt-3 rounded-2xl p-4" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                    Kvitto
+                  </p>
+                  <div className="mt-2 space-y-1 text-xs" style={{ color: TEXT_SECONDARY }}>
+                    <div className="flex justify-between gap-3">
+                      <span>Produkt</span>
+                      <span className="text-right" style={{ color: TEXT_PRIMARY }}>{receipt.label}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span>Betalt</span>
+                      <span style={{ color: TEXT_PRIMARY }}>{money(receipt.amount)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span>Moms 6 %</span>
+                      <span style={{ color: TEXT_PRIMARY }}>{money(receipt.vat_amount || 0)}</span>
+                    </div>
+                    {receipt.payment_method && (
+                      <div className="flex justify-between gap-3">
+                        <span>Betalsätt</span>
+                        <span style={{ color: TEXT_PRIMARY }}>{receipt.payment_method}</span>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenChange(false);
+                      navigate("/wellness");
+                    }}
+                    className="mt-3 w-full py-2.5 rounded-xl text-xs font-bold"
+                    style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+                  >
+                    Öppna friskvårdsunderlag
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <div className="grid grid-cols-2 gap-2 mt-5">
             <button
               onClick={handleOpenLobby}
+              disabled={openingLobby}
               className="col-span-2 w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
               style={{ background: BLUE, fontFamily: FONT_HEADING }}
             >
-              <MessageCircle className="w-4 h-4" />
-              {chatRoom ? "Gå till chatt" : "Öppna aktivitet"}
+              {openingLobby ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4" />}
+              Gå till chatt
             </button>
             <button
               onClick={handleShare}
@@ -1042,7 +1170,13 @@ function SessionRegistrationDetailsSheet({
               Dela
             </button>
             <button
-              onClick={() => toast.info("Kvitto för aktivitetspass kommer här strax")}
+              onClick={() => {
+                if (!receipt) {
+                  toast.info("Kvitto saknas för den här anmälan ännu");
+                  return;
+                }
+                setShowReceipt((current) => !current);
+              }}
               className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
               style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
             >
@@ -1773,6 +1907,9 @@ const MyPage = () => {
   const { data: activeMembership } = useActiveMembership();
   const { data: membershipBenefits } = useMyPasses();
   const { data: activityThreads = [] } = useMyActivityThreads();
+  const currentYear = new Date().getFullYear();
+  const { data: currentYearReceipts } = useMyWellnessReceipts(currentYear);
+  const { data: nextYearReceipts } = useMyWellnessReceipts(currentYear + 1);
   const activityThreadIds = activityThreads.map((thread) => thread.room.id);
   const { data: threadPreviews = {} } = useActivityThreadPreviews(activityThreadIds);
   const queryClient = useQueryClient();
@@ -1863,6 +2000,10 @@ const MyPage = () => {
   const visibleThreadPreviews = Object.fromEntries(
     Object.entries(threadPreviews).filter(([roomId]) => visibleThreadRoomIds.includes(roomId))
   );
+  const receiptItems = [
+    ...(currentYearReceipts?.items || []),
+    ...(nextYearReceipts?.items || []),
+  ];
   const membershipTier = (activeMembership as any)?.membership_tiers || (membershipBenefits as any)?.membership?.tier;
   const membershipSummary = getMembershipShortSummary(membershipTier, membershipBenefits);
   const closeBookingDetails = (open: boolean) => {
@@ -2298,6 +2439,7 @@ const MyPage = () => {
         onOpenChange={closeSessionRegistrationDetails}
         fallbackVenueSlug={venueSlug}
         activityThreads={activityThreads}
+        receiptItems={receiptItems}
       />
 
       <MembershipDetailsSheet
