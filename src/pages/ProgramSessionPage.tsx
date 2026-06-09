@@ -567,11 +567,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                         value: "Ingår",
                         helper: "Ingår när aktiviteten täcks av Play+",
                       } : null,
-                      !hasDayAccess && dayPassPricing ? {
+                      !hasDayAccess && (dayPassPricing || pricingPending) ? {
                         kind: "day" as const,
                         label: `Spela hela dagen`,
-                        value: dayPassPricing.checkoutLabel || "Heldag",
-                        helper: data?.upgradeDeltaSek > 0
+                        value: dayPassPricing?.checkoutLabel || "Hämtar pris...",
+                        helper: dayPassPricing && data?.upgradeDeltaSek > 0
                           ? `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr · bara +${formatSek(data.upgradeDeltaSek)} extra`
                           : `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
                       } : null,
@@ -584,7 +584,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                         {upsellRows.map((row) => {
                           const isMembershipUpsell = row.kind === "access" || row.kind === "unlimited";
                           const isDayUpsell = row.kind === "day" && !hasDayAccess;
-                          const clickable = !pricingPending && (isMembershipUpsell || isDayUpsell);
+                          const clickable = !pricingPending && (isMembershipUpsell || (isDayUpsell && !!dayPassPricing));
                           const offerStyle = OFFER_STYLES[row.kind];
                           const dayRow = row.kind === "day";
                           return (
