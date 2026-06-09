@@ -1,5 +1,3 @@
-import { DateTime } from 'https://esm.sh/luxon@3.5.0';
-
 const DEFAULT_DAY_ACCESS_PRICE_SEK = 199;
 
 function roundSek(value: number) {
@@ -194,35 +192,6 @@ export async function resolveActivityPricingDecision({
           entitlementType = 'open_play_unlimited';
           pricingReason = 'membership_open_play_unlimited';
           debug.entitlement = 'open_play_unlimited';
-        }
-
-        if (finalAmountSek > 0) {
-          const freePass = ents.find((row: any) => isPositiveEntitlement(row, 'free_day_pass_monthly'));
-          const productKind = product?.product_kind || '';
-          const canUseMonthlyFreePass = purchaseKind === 'day_pass' && (productKind === 'day_access' || productKind === 'session_with_day_access');
-
-          if (freePass && canUseMonthlyFreePass) {
-            const dt = DateTime.fromISO(sessionDate, { zone: 'Europe/Stockholm' });
-            const monthStart = dt.startOf('month').toISODate()!;
-            const { data: usage } = await client
-              .from('membership_usage')
-              .select('used_value')
-              .eq('user_id', userId)
-              .eq('venue_id', venueId)
-              .eq('entitlement_type', 'free_day_pass_monthly')
-              .eq('period_start', monthStart)
-              .maybeSingle();
-
-            if (Number(usage?.used_value || 0) < Number(freePass.value || 0)) {
-              finalAmountSek = 0;
-              accessDecision = 'free_day_pass';
-              entitlementType = 'free_day_pass_monthly';
-              pricingReason = 'membership_free_day_pass_monthly';
-              debug.entitlement = 'free_day_pass_monthly';
-              debug.free_pass_period_start = monthStart;
-              debug.free_pass_period_end = dt.endOf('month').toISODate();
-            }
-          }
         }
 
         if (finalAmountSek > 0) {
