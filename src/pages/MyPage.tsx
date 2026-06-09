@@ -968,11 +968,6 @@ function SessionRegistrationDetailsSheet({
 }) {
   const navigate = useNavigate();
   const [openingLobby, setOpeningLobby] = useState(false);
-  const [showReceipt, setShowReceipt] = useState(false);
-
-  useEffect(() => {
-    setShowReceipt(false);
-  }, [registration?.id]);
 
   if (!registration) return null;
 
@@ -1103,54 +1098,6 @@ function SessionRegistrationDetailsSheet({
             </div>
           </div>
 
-          <AnimatePresence>
-            {showReceipt && receipt && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="mt-3 rounded-2xl p-4" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
-                  <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-                    Kvitto
-                  </p>
-                  <div className="mt-2 space-y-1 text-xs" style={{ color: TEXT_SECONDARY }}>
-                    <div className="flex justify-between gap-3">
-                      <span>Produkt</span>
-                      <span className="text-right" style={{ color: TEXT_PRIMARY }}>{receipt.label}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span>Betalt</span>
-                      <span style={{ color: TEXT_PRIMARY }}>{money(receipt.amount)}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span>Moms 6 %</span>
-                      <span style={{ color: TEXT_PRIMARY }}>{money(receipt.vat_amount || 0)}</span>
-                    </div>
-                    {receipt.payment_method && (
-                      <div className="flex justify-between gap-3">
-                        <span>Betalsätt</span>
-                        <span style={{ color: TEXT_PRIMARY }}>{receipt.payment_method}</span>
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onOpenChange(false);
-                      navigate("/wellness");
-                    }}
-                    className="mt-3 w-full py-2.5 rounded-xl text-xs font-bold"
-                    style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
-                  >
-                    Öppna friskvårdsunderlag
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           <div className="grid grid-cols-2 gap-2 mt-5">
             <button
               onClick={handleOpenLobby}
@@ -1171,11 +1118,12 @@ function SessionRegistrationDetailsSheet({
             </button>
             <button
               onClick={() => {
-                if (!receipt) {
+                if (!receipt?.reference) {
                   toast.info("Kvitto saknas för den här anmälan ännu");
                   return;
                 }
-                setShowReceipt((current) => !current);
+                onOpenChange(false);
+                navigate(`/receipt/${encodeURIComponent(receipt.reference)}`);
               }}
               className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
               style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}

@@ -1489,6 +1489,29 @@ Deno.serve(async (req) => {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
+    // GET /api-bookings/receipt?ref=PICKLA-2026-000001 — authenticated receipt snapshot
+    if (req.method === 'GET' && path === 'receipt') {
+      const ref = (url.searchParams.get('ref') || '').trim();
+      if (!ref) return errorResponse('Missing receipt ref', 400);
+
+      const admin = getServiceClient();
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ref);
+      const query = admin
+        .from('booking_receipts')
+        .select('*')
+        .eq('user_id', userId)
+        .limit(1);
+
+      const { data: receipt, error: receiptErr } = await (isUuid
+        ? query.eq('id', ref).maybeSingle()
+        : query.eq('receipt_number', ref).maybeSingle());
+
+      if (receiptErr) return errorResponse(receiptErr.message, 500);
+      if (!receipt) return errorResponse('Receipt not found', 404);
+
+      return jsonResponse({ receipt }, 200, 30);
+    }
+
     // GET /api-bookings/wellness?year=YYYY — printable friskvårdsintyg
     if (req.method === 'GET' && path === 'wellness') {
       const requestedYear = Number(url.searchParams.get('year') || DateTime.now().setZone('Europe/Stockholm').year);

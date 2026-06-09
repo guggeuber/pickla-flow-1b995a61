@@ -27,6 +27,7 @@ import BookingConfirmation from "./pages/BookingConfirmation";
 import BookingConfirmed from "./pages/BookingConfirmed";
 import MembershipPage from "./pages/MembershipPage";
 import MembershipConfirmed from "./pages/MembershipConfirmed";
+import ReceiptPage from "./pages/ReceiptPage";
 import WellnessCertificatePage from "./pages/WellnessCertificatePage";
 import ClaimPassPage from "./pages/ClaimPassPage";
 import LegalPage from "./pages/LegalPage";
@@ -104,6 +105,7 @@ function AppRoutes() {
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/membership/confirmed" element={<MembershipConfirmed />} />
             <Route path="/wellness" element={<WellnessCertificatePage />} />
+            <Route path="/receipt/:ref" element={<ProtectedRoute><ReceiptPage /></ProtectedRoute>} />
             <Route path="/privacy" element={<LegalPage kind="privacy" />} />
             <Route path="/terms" element={<LegalPage kind="terms" />} />
             <Route path="/cookies" element={<LegalPage kind="cookies" />} />
