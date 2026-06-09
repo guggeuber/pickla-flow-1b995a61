@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import {
+  ACCESS_ACTIVITY_DISCOUNT_PERCENT,
   DAY_MEMBERSHIP_SEK,
   PICKLA_ACCESS_LABEL,
   PICKLA_ACCESS_MONTHLY_SEK,
@@ -154,6 +155,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const pricingIsIncluded = !pricingPending && backendPricing?.requiresCheckout === false;
   const requiresCheckout = !pricingPending && backendPricing?.requiresCheckout === true;
   const savingsSek = Math.max(0, Math.round(basePrice - effectivePrice));
+  const publicPlayPrice = Math.max(0, Math.round(basePrice * (1 - ACCESS_ACTIVITY_DISCOUNT_PERCENT / 100)));
   const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
   const hasDayAccess = Boolean(accessSnapshotForResolvedSession.data?.hasDayAccess);
   const ctaLabel = isRegistered
@@ -556,7 +558,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       !userHasMembership ? {
                         kind: "access" as const,
                         label: `${PICKLA_ACCESS_LABEL} ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`,
-                        value: "Medlemspris",
+                        value: formatSek(publicPlayPrice),
                         helper: "Köp Play och boka billigare",
                       } : null,
                       !userHasMembership ? {
@@ -567,9 +569,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       } : null,
                       !hasDayAccess && dayPassPricing ? {
                         kind: "day" as const,
-                        label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
+                        label: `Spela hela dagen`,
                         value: dayPassPricing.checkoutLabel || "Heldag",
-                        helper: data?.upgradeDeltaSek > 0 ? `Spela hela dagen · bara +${formatSek(data.upgradeDeltaSek)} extra` : "Spela hela dagen",
+                        helper: data?.upgradeDeltaSek > 0
+                          ? `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr · bara +${formatSek(data.upgradeDeltaSek)} extra`
+                          : `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
                       } : null,
                     ].filter(Boolean) as Array<{ kind: "access" | "unlimited" | "day"; label: string; value: string; helper: string }>;
 
@@ -582,20 +586,26 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                           const isDayUpsell = row.kind === "day" && !hasDayAccess;
                           const clickable = !pricingPending && (isMembershipUpsell || isDayUpsell);
                           const offerStyle = OFFER_STYLES[row.kind];
+                          const dayRow = row.kind === "day";
                           return (
                             <button
                               key={row.label}
                               type="button"
                               onClick={() => clickable && openUpsell(row.kind)}
                               disabled={pricingPending}
-                              className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-white px-4 py-3 text-left"
+                              className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-4 text-left ${dayRow ? "py-3.5 shadow-sm" : "py-3"}`}
                               style={{
                                 border: `1px solid ${offerStyle.border}`,
                                 background: offerStyle.background,
                               }}
                             >
                               <span className="min-w-0">
-                                <span className="block truncate text-[14px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                                {dayRow && (
+                                  <span className="mb-1 inline-flex rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: offerStyle.accent }}>
+                                    Bästa uppgradering
+                                  </span>
+                                )}
+                                <span className={`block truncate font-semibold text-neutral-950 ${dayRow ? "text-[15px]" : "text-[14px]"}`} style={{ fontFamily: FONT_HEADING }}>
                                   {row.label}
                                 </span>
                                 <span className="mt-0.5 block truncate text-[11px] text-neutral-500">
