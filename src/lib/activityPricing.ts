@@ -28,6 +28,8 @@ export const PICKLA_ACCESS_MONTHLY_SEK = 199;
 export const PICKLA_UNLIMITED_MONTHLY_SEK = 699;
 export const DAY_MEMBERSHIP_SEK = 199;
 export const ACCESS_ACTIVITY_DISCOUNT_PERCENT = 40;
+export const PICKLA_ACCESS_LABEL = "Play";
+export const PICKLA_UNLIMITED_LABEL = "Play+";
 
 export function formatSek(amount: number) {
   return `${amount.toLocaleString("sv-SE", {
@@ -113,14 +115,14 @@ export function activityPriceLabels({
     hasDiscount: finalPrice > 0 && finalPrice < safeBasePrice,
     publicChips: [
       formatSek(safeBasePrice),
-      `Access ${formatSek(accessPrice)}`,
-      "Unlimited ingår",
+      `${PICKLA_ACCESS_LABEL} ${formatSek(accessPrice)}`,
+      `${PICKLA_UNLIMITED_LABEL} ingår`,
       "Dag ingår",
     ],
     detailRows: [
       { label: "Aktivitetsbiljett", value: formatSek(safeBasePrice) },
-      { label: `Pickla Access ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`, value: formatSek(accessPrice) },
-      { label: `Pickla Unlimited ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`, value: "Ingår" },
+      { label: `${PICKLA_ACCESS_LABEL} ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`, value: formatSek(accessPrice) },
+      { label: `${PICKLA_UNLIMITED_LABEL} ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`, value: "Ingår" },
       { label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`, value: "Ingår idag" },
     ],
     checkoutLabel: includedLabel || formatSek(finalPrice),

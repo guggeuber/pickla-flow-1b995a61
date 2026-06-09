@@ -10,7 +10,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { DAY_MEMBERSHIP_SEK, PICKLA_ACCESS_MONTHLY_SEK, PICKLA_UNLIMITED_MONTHLY_SEK, formatSek } from "@/lib/activityPricing";
+import {
+  DAY_MEMBERSHIP_SEK,
+  PICKLA_ACCESS_LABEL,
+  PICKLA_ACCESS_MONTHLY_SEK,
+  PICKLA_UNLIMITED_LABEL,
+  PICKLA_UNLIMITED_MONTHLY_SEK,
+  formatSek,
+} from "@/lib/activityPricing";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -20,6 +27,11 @@ const NAVY = "#111827";
 const GREEN = "#16a34a";
 const MENU_BORDER = "rgba(17,17,17,0.12)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
+const OFFER_STYLES = {
+  access: { border: "#f9a8d4", background: "#fff1f7", accent: "#be185d" },
+  unlimited: { border: "#93c5fd", background: "#eff6ff", accent: "#1d4ed8" },
+  day: { border: "#86efac", background: "#f0fdf4", accent: "#15803d" },
+} as const;
 
 function safeLocalPath(path: string) {
   return path.startsWith("/") && !path.startsWith("//") ? path : "/today";
@@ -295,15 +307,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     }
   };
 
-  const openUpsell = (label: string) => {
-    if ((label.includes("Access") || label.includes("Unlimited")) && !userHasMembership) {
+  const openUpsell = (kind: "access" | "unlimited" | "day") => {
+    if ((kind === "access" || kind === "unlimited") && !userHasMembership) {
       const params = new URLSearchParams();
       params.set("v", venueSlug);
       params.set("returnTo", safeLocalPath(programPath));
       navigate(`/membership?${params.toString()}`);
       return;
     }
-    if (label.includes("Dagsmedlemskap") && !hasDayAccess) {
+    if (kind === "day" && !hasDayAccess) {
       void startDayPassSignup();
     }
   };
@@ -542,38 +554,45 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   {(() => {
                     const upsellRows = [
                       !userHasMembership ? {
-                        label: `Pickla Access ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`,
+                        kind: "access" as const,
+                        label: `${PICKLA_ACCESS_LABEL} ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`,
                         value: "Medlemspris",
-                        helper: "Köp Access och boka billigare",
+                        helper: "Köp Play och boka billigare",
                       } : null,
                       !userHasMembership ? {
-                        label: `Pickla Unlimited ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`,
+                        kind: "unlimited" as const,
+                        label: `${PICKLA_UNLIMITED_LABEL} ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`,
                         value: "Ingår",
-                        helper: "Ingår när aktiviteten täcks av Unlimited",
+                        helper: "Ingår när aktiviteten täcks av Play+",
                       } : null,
                       !hasDayAccess && dayPassPricing ? {
+                        kind: "day" as const,
                         label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
                         value: dayPassPricing.checkoutLabel || "Heldag",
                         helper: data?.upgradeDeltaSek > 0 ? `Spela hela dagen · bara +${formatSek(data.upgradeDeltaSek)} extra` : "Spela hela dagen",
                       } : null,
-                    ].filter(Boolean) as Array<{ label: string; value: string; helper: string }>;
+                    ].filter(Boolean) as Array<{ kind: "access" | "unlimited" | "day"; label: string; value: string; helper: string }>;
 
                     if (upsellRows.length === 0) return null;
 
                     return (
                       <div className="grid gap-2">
                         {upsellRows.map((row) => {
-                          const isMembershipUpsell = row.label.includes("Access") || row.label.includes("Unlimited");
-                          const isDayUpsell = !hasDayAccess && row.label.includes("Dagsmedlemskap");
+                          const isMembershipUpsell = row.kind === "access" || row.kind === "unlimited";
+                          const isDayUpsell = row.kind === "day" && !hasDayAccess;
                           const clickable = !pricingPending && (isMembershipUpsell || isDayUpsell);
+                          const offerStyle = OFFER_STYLES[row.kind];
                           return (
                             <button
                               key={row.label}
                               type="button"
-                              onClick={() => clickable && openUpsell(row.label)}
+                              onClick={() => clickable && openUpsell(row.kind)}
                               disabled={pricingPending}
                               className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-white px-4 py-3 text-left"
-                              style={{ border: `1px solid ${MENU_BORDER}` }}
+                              style={{
+                                border: `1px solid ${offerStyle.border}`,
+                                background: offerStyle.background,
+                              }}
                             >
                               <span className="min-w-0">
                                 <span className="block truncate text-[14px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
@@ -583,7 +602,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                                   {row.helper}
                                 </span>
                               </span>
-                              <span className="shrink-0 text-[15px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                              <span className="shrink-0 text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING, color: offerStyle.accent }}>
                                 {row.value}
                               </span>
                             </button>
