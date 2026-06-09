@@ -55,6 +55,8 @@ export async function resolveActivityPricingDecision({
   requestedProductKey,
   requestedAmountSek,
   purchaseKind = 'activity_ticket',
+  session: providedSession,
+  productCache,
 }: {
   client: any;
   venueId: string;
@@ -64,12 +66,16 @@ export async function resolveActivityPricingDecision({
   requestedProductKey?: string | null;
   requestedAmountSek?: number | null;
   purchaseKind?: 'activity_ticket' | 'day_pass';
+  session?: any | null;
+  productCache?: Map<string, Promise<any>>;
 }): Promise<ActivityPricingDecision> {
-  const { data: session } = await client
-    .from('activity_sessions')
-    .select('id, venue_id, name, session_type, price_sek, product_key, access_policy')
-    .eq('id', activitySessionId)
-    .maybeSingle();
+  const session = providedSession?.id
+    ? providedSession
+    : (await client
+      .from('activity_sessions')
+      .select('id, venue_id, name, session_type, price_sek, product_key, access_policy')
+      .eq('id', activitySessionId)
+      .maybeSingle()).data;
 
   if (!session?.id || session.venue_id !== venueId) {
     throw new Error('Activity session not found for venue');
@@ -84,13 +90,19 @@ export async function resolveActivityPricingDecision({
       : (sessionProductKey || defaultProductKeyForSession(session.session_type) || requestedProductKey),
   );
 
-  const { data: product } = await client
+  const productCacheKey = `${venueId}:${productKey}`;
+  const productPromise = productCache?.get(productCacheKey) || client
     .from('access_products')
     .select('product_key, product_kind, base_price_sek, session_type')
     .eq('venue_id', venueId)
     .eq('product_key', productKey)
     .eq('is_active', true)
-    .maybeSingle();
+    .maybeSingle()
+    .then((res: any) => res.data);
+  if (productCache && !productCache.has(productCacheKey)) {
+    productCache.set(productCacheKey, productPromise);
+  }
+  const product = await productPromise;
 
   const productBaseAmountSek = Number(product?.base_price_sek ?? 0);
   const fallbackBaseAmountSek = productKey === 'day_access'

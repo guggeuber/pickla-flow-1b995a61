@@ -238,11 +238,15 @@ async function buildActivityPreview(client: any, {
   sessionId,
   date,
   venueSlug,
+  includeChatPreview = false,
+  timings,
 }: {
   roomId?: string | null;
   sessionId?: string | null;
   date?: string | null;
   venueSlug?: string | null;
+  includeChatPreview?: boolean;
+  timings?: Record<string, number>;
 }) {
   let room: any = null;
   let resolvedSessionId = sessionId || null;
@@ -268,11 +272,13 @@ async function buildActivityPreview(client: any, {
 
   if (!resolvedSessionId) throw new Error('Missing sessionId');
 
-  let sessionQuery = client.from('activity_sessions')
+  const sessionStartedAt = performance.now();
+  const sessionQuery = client.from('activity_sessions')
     .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, is_active, publish_status, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
     .eq('id', resolvedSessionId)
     .maybeSingle();
   const { data: session, error: sessionErr } = await sessionQuery;
+  if (timings) timings.sessionLookupMs = Math.round(performance.now() - sessionStartedAt);
   if (sessionErr || !session) throw new Error('Activity session not found');
   if (session.is_active !== true || session.publish_status !== 'published') throw new Error('Activity session is not public');
   if (session.venues?.is_public !== true) throw new Error('Venue not public');
@@ -282,7 +288,7 @@ async function buildActivityPreview(client: any, {
   occurrenceDate = occurrence.toISODate();
   const resourceId = activityResourceId(session.id, occurrenceDate);
 
-  if (!room) {
+  if (!room && includeChatPreview) {
     const { data: existingRoom } = await client.from('chat_rooms')
       .select('id, venue_id, room_type, title, subtitle, emoji, resource_id, is_public, session_date, updated_at')
       .eq('resource_id', resourceId)
@@ -290,50 +296,18 @@ async function buildActivityPreview(client: any, {
       .maybeSingle();
 
     if (existingRoom?.id) {
-      const subtitle = publicActivitySubtitle(session, occurrence);
-      const { data: updatedRoom } = await client.from('chat_rooms')
-        .update({
-          title: session.name,
-          subtitle,
-          emoji: '📅',
-          is_public: true,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingRoom.id)
-        .select('id, venue_id, room_type, title, subtitle, emoji, resource_id, is_public, session_date, updated_at')
-        .maybeSingle();
-      room = updatedRoom || existingRoom;
-    } else {
-      const { data: insertedRoom, error: insertErr } = await client.from('chat_rooms')
-        .insert({
-          venue_id: session.venue_id,
-          resource_id: resourceId,
-          room_type: 'event',
-          title: session.name,
-          subtitle: publicActivitySubtitle(session, occurrence),
-          emoji: '📅',
-          is_public: true,
-        })
-        .select('id, venue_id, room_type, title, subtitle, emoji, resource_id, is_public, session_date, updated_at')
-        .maybeSingle();
-      if (insertErr || !insertedRoom?.id) throw new Error('Could not create activity room');
-      room = insertedRoom;
+      room = existingRoom;
     }
   }
 
-  const [{ count }, messagesResult] = await Promise.all([
-    client.from('session_registrations')
-      .select('id', { count: 'exact', head: true })
-      .eq('activity_session_id', session.id)
-      .eq('session_date', occurrenceDate)
-      .neq('status', 'cancelled'),
-    client.from('chat_messages')
-      .select('id, room_id, user_id, message_type, content, metadata, created_at')
-      .eq('room_id', room.id)
-      .in('message_type', ['text', 'bot'])
-      .order('created_at', { ascending: false })
-      .limit(12),
-  ]);
+  const messagesResult = await (includeChatPreview && room?.id
+      ? client.from('chat_messages')
+        .select('id, room_id, user_id, message_type, content, metadata, created_at')
+        .eq('room_id', room.id)
+        .in('message_type', ['text', 'bot'])
+        .order('created_at', { ascending: false })
+        .limit(12)
+      : Promise.resolve({ data: [] }));
 
   const messages = (messagesResult.data || [])
     .map(safePreviewMessage)
@@ -358,9 +332,18 @@ async function buildActivityPreview(client: any, {
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
     },
-    registrations: { count: count || 0 },
+    registrations: { count: 0 },
     messages,
   };
+}
+
+async function activityRegistrationCount(client: any, activitySessionId: string, sessionDate: string) {
+  const { count } = await client.from('session_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('activity_session_id', activitySessionId)
+    .eq('session_date', sessionDate)
+    .neq('status', 'cancelled');
+  return count || 0;
 }
 
 async function activityInterestState(client: any, {
@@ -861,38 +844,68 @@ Deno.serve(async (req) => {
     // GET /api-event-public/detail?id=X or ?slug=X — public event info
     if (req.method === 'GET' && path === 'activity-preview') {
       try {
+        const totalStartedAt = performance.now();
+        const timings: Record<string, number> = {};
+        const userStartedAt = performance.now();
         const userId = await getOptionalUserId(req);
+        timings.authMs = Math.round(performance.now() - userStartedAt);
         const preview = await buildActivityPreview(client, {
           roomId: url.searchParams.get('roomId'),
           sessionId: url.searchParams.get('sessionId'),
           date: url.searchParams.get('date'),
           venueSlug: url.searchParams.get('venueSlug') || url.searchParams.get('v'),
+          includeChatPreview: !!url.searchParams.get('roomId'),
+          timings,
         });
-        const interests = await activityInterestState(client, {
-          activitySessionId: preview.activity_session.id,
-          sessionDate: preview.activity_session.occurrence_date,
-          userId,
-        });
-        const activityTicketPricing = await resolveActivityPricingDecision({
-          client,
-          venueId: preview.activity_session.venue_id,
-          userId,
-          activitySessionId: preview.activity_session.id,
-          sessionDate: preview.activity_session.occurrence_date,
-          requestedProductKey: preview.activity_session.product_key,
-          requestedAmountSek: preview.activity_session.price_sek,
-          purchaseKind: 'activity_ticket',
-        });
-        const dayPassPricing = await resolveActivityPricingDecision({
-          client,
-          venueId: preview.activity_session.venue_id,
-          userId,
-          activitySessionId: preview.activity_session.id,
-          sessionDate: preview.activity_session.occurrence_date,
-          requestedProductKey: 'day_access',
-          requestedAmountSek: null,
-          purchaseKind: 'day_pass',
-        });
+        const productCache = new Map<string, Promise<any>>();
+        const socialProofPromise = (async () => {
+          const socialProofStartedAt = performance.now();
+          const [registrationCount, interests] = await Promise.all([
+            activityRegistrationCount(client, preview.activity_session.id, preview.activity_session.occurrence_date),
+            activityInterestState(client, {
+              activitySessionId: preview.activity_session.id,
+              sessionDate: preview.activity_session.occurrence_date,
+              userId,
+            }),
+          ]);
+          timings.socialProofMs = Math.round(performance.now() - socialProofStartedAt);
+          return { registrationCount, interests };
+        })();
+        const pricingPromise = (async () => {
+          const pricingStartedAt = performance.now();
+          const [activityTicketPricing, dayPassPricing] = await Promise.all([
+            resolveActivityPricingDecision({
+              client,
+              venueId: preview.activity_session.venue_id,
+              userId,
+              activitySessionId: preview.activity_session.id,
+              sessionDate: preview.activity_session.occurrence_date,
+              requestedProductKey: preview.activity_session.product_key,
+              requestedAmountSek: preview.activity_session.price_sek,
+              purchaseKind: 'activity_ticket',
+              session: preview.activity_session,
+              productCache,
+            }),
+            resolveActivityPricingDecision({
+              client,
+              venueId: preview.activity_session.venue_id,
+              userId,
+              activitySessionId: preview.activity_session.id,
+              sessionDate: preview.activity_session.occurrence_date,
+              requestedProductKey: 'day_access',
+              requestedAmountSek: null,
+              purchaseKind: 'day_pass',
+              session: preview.activity_session,
+              productCache,
+            }),
+          ]);
+          timings.pricingMs = Math.round(performance.now() - pricingStartedAt);
+          return { activityTicketPricing, dayPassPricing };
+        })();
+        const [
+          { registrationCount, interests },
+          { activityTicketPricing, dayPassPricing },
+        ] = await Promise.all([socialProofPromise, pricingPromise]);
         const upgradeDeltaSek = Math.max(0, Number(dayPassPricing.effectivePriceSek || 0) - Number(activityTicketPricing.effectivePriceSek || 0));
         const recommendedOption = activityTicketPricing.requiresCheckout === false
           ? 'activity_ticket'
@@ -901,7 +914,8 @@ Deno.serve(async (req) => {
           : 'activity_ticket';
         const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
         if (supabaseUrl.includes('ptnvhbniiiapzbyofctg')) {
-          console.log('activity-pricing-preview', {
+          timings.totalMs = Math.round(performance.now() - totalStartedAt);
+          console.log('activity-preview-timing', {
             userId: userId || null,
             membershipTier: activityTicketPricing.membershipTierName,
             activitySessionId: activityTicketPricing.activitySessionId,
@@ -910,9 +924,11 @@ Deno.serve(async (req) => {
             activityTicketPriceSek: activityTicketPricing.effectivePriceSek,
             dayPassPriceSek: dayPassPricing.effectivePriceSek,
             recommendedOption,
+            timings,
           });
         }
         preview.interests = interests;
+        preview.registrations = { count: registrationCount };
         preview.activityTicketPricing = activityTicketPricing;
         preview.dayPassPricing = dayPassPricing;
         preview.recommendedOption = recommendedOption;
