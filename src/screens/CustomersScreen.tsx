@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Phone, Calendar, ChevronRight, UserPlus, Edit3, Check, ArrowLeft, Crown, X, UserCheck, Loader2 } from "lucide-react";
+import { Search, Phone, Mail, Calendar, ChevronRight, UserPlus, Edit3, Check, ArrowLeft, Crown, X, UserCheck, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -9,6 +9,48 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 
 type PlayerProfile = Tables<"player_profiles">;
+
+type DeskCustomer = PlayerProfile & {
+  email?: string | null;
+  full_name?: string | null;
+  identity_title?: string | null;
+  identity_initials?: string | null;
+  active_membership_tier?: {
+    id: string;
+    name: string;
+    color?: string | null;
+    monthly_price?: number | null;
+    discount_percent?: number | null;
+  } | null;
+};
+
+const customerTitle = (customer: Partial<DeskCustomer>) =>
+  customer.identity_title || customer.display_name || customer.email || customer.full_name || "Kund utan namn";
+
+const customerInitials = (customer: Partial<DeskCustomer>) => {
+  if (customer.identity_initials) return customer.identity_initials;
+  const source = customer.display_name || customer.full_name || customer.email || "?";
+  const seed = source.includes("@") ? source.split("@")[0] : source;
+  return seed
+    .replace(/[._-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "?";
+};
+
+const customerSearchText = (customer: Partial<DeskCustomer>) =>
+  [
+    customer.display_name,
+    customer.first_name,
+    customer.last_name,
+    customer.full_name,
+    customer.identity_title,
+    customer.email,
+    customer.phone,
+  ].filter(Boolean).join(" ").toLowerCase();
 
 const tierFromRating = (rating: number | null): "VIP" | "Play" | "Drop-in" => {
   if (!rating) return "Drop-in";
@@ -42,7 +84,7 @@ async function performCheckin(venueId: string, profile: any, entryType = "manual
         target_user_id: profile.auth_user_id,
         entry_type: entryType,
         entitlement_id: entitlementId,
-        player_name: profile.display_name,
+        player_name: customerTitle(profile),
       }),
     }
   );
@@ -61,8 +103,13 @@ const CreateCustomerModal = ({ venueId, onClose, onCreated }: { venueId: string;
     if (!name.trim()) { toast.error("Namn krävs"); return; }
     setCreating(true);
     try {
+      const nameParts = name.trim().split(/\s+/);
+      const firstName = nameParts[0] || name.trim();
+      const lastName = nameParts.slice(1).join(" ") || "-";
       await apiPost("api-customers", "create", {
         display_name: name.trim(),
+        first_name: firstName,
+        last_name: lastName,
         phone: phone.trim() || null,
         email: email.trim() || null,
         venue_id: venueId,
@@ -126,9 +173,12 @@ const CustomersScreen = () => {
   const { data: staffVenue } = useVenueForStaff();
   const venueId = staffVenue?.venue_id;
 
+  const normalizedSearch = search.trim();
+
   const { data: profiles, isLoading } = useQuery({
-    queryKey: ["player-profiles"],
-    queryFn: () => apiGet("api-customers", "list", { limit: "100" }),
+    queryKey: ["player-profiles", venueId, normalizedSearch],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-customers", "list", { limit: "100", venueId: venueId!, search: normalizedSearch }),
   });
 
   const updateProfile = useMutation({
@@ -140,10 +190,8 @@ const CustomersScreen = () => {
     },
   });
 
-  const filtered = (profiles || []).filter(
-    (p: any) =>
-      (p.display_name || "").toLowerCase().includes(search.toLowerCase()) ||
-      (p.phone || "").includes(search)
+  const filtered = (profiles || []).filter((p: DeskCustomer) =>
+    customerSearchText(p).includes(normalizedSearch.toLowerCase())
   );
 
   const selected = profiles?.find((p: any) => p.id === selectedId);
@@ -191,7 +239,7 @@ const CustomersScreen = () => {
     setCheckingInId(profile.id);
     try {
       await performCheckin(venueId, profile);
-      toast.success(`${profile.display_name} incheckad! ✅`);
+      toast.success(`${customerTitle(profile)} incheckad! ✅`);
       setCheckedInIds((prev) => new Set(prev).add(profile.id));
     } catch (err: any) {
       toast.error(err.message);
@@ -204,12 +252,8 @@ const CustomersScreen = () => {
   if (selected) {
     const tier = tierFromRating(selected.pickla_rating);
     const t = tierConfig[tier];
-    const initials = (selected.display_name || "?")
-      .split(" ")
-      .map((w: string) => w[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
+    const title = customerTitle(selected);
+    const initials = customerInitials(selected);
 
     const startEdit = () => {
       setEditName(selected.display_name || "");
@@ -224,7 +268,7 @@ const CustomersScreen = () => {
       });
     };
 
-    const memberTier = currentMembership?.membership_tiers;
+    const memberTier = currentMembership?.membership_tiers || selected.active_membership_tier;
     const isCheckedIn = checkedInIds.has(selected.id);
 
     return (
@@ -265,7 +309,8 @@ const CustomersScreen = () => {
                 </div>
               ) : (
                 <>
-                  <h1 className="text-lg font-display font-bold truncate">{selected.display_name || "Unnamed"}</h1>
+                  <h1 className="text-lg font-display font-bold truncate">{title}</h1>
+                  {selected.email && <p className="text-sm text-muted-foreground flex items-center gap-1.5 truncate"><Mail className="w-3 h-3 flex-shrink-0" />{selected.email}</p>}
                   {selected.phone && <p className="text-sm text-muted-foreground flex items-center gap-1.5"><Phone className="w-3 h-3" />{selected.phone}</p>}
                 </>
               )}
@@ -400,7 +445,7 @@ const CustomersScreen = () => {
 
       <div className="relative">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <input type="text" placeholder="Namn, telefon..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-secondary rounded-xl py-3 pl-10 pr-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <input type="text" placeholder="Namn, e-post, telefon..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-secondary rounded-xl py-3 pl-10 pr-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
       </div>
 
       {isLoading ? (
@@ -419,12 +464,9 @@ const CustomersScreen = () => {
             const tier = tierFromRating(profile.pickla_rating);
             const t = tierConfig[tier];
             const isCheckedIn = checkedInIds.has(profile.id);
-            const initials = (profile.display_name || "?")
-              .split(" ")
-              .map((w: string) => w[0])
-              .join("")
-              .slice(0, 2)
-              .toUpperCase();
+            const title = customerTitle(profile);
+            const initials = customerInitials(profile);
+            const activeTier = profile.active_membership_tier;
 
             return (
               <motion.div
@@ -439,12 +481,32 @@ const CustomersScreen = () => {
                   <div className={`w-10 h-10 rounded-xl ${t.bg} ${t.text} flex items-center justify-center text-sm font-display font-bold flex-shrink-0`}>{initials}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold truncate">{profile.display_name || "Unnamed"}</p>
+                      <p className="text-sm font-semibold truncate">{title}</p>
                       <span className={`w-1.5 h-1.5 rounded-full ${t.dot} flex-shrink-0`} />
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      {profile.total_matches || 0} matcher · Rating {profile.pickla_rating || 0}
-                    </p>
+                    {profile.email && (
+                      <p className="text-[11px] text-muted-foreground truncate">{profile.email}</p>
+                    )}
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                      {profile.phone && (
+                        <span className="inline-flex items-center gap-1">
+                          <Phone className="w-3 h-3" />
+                          {profile.phone}
+                        </span>
+                      )}
+                      {activeTier && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-bold text-white"
+                          style={{ background: activeTier.color || "hsl(var(--primary))" }}
+                        >
+                          <Crown className="w-3 h-3" />
+                          {activeTier.name}
+                        </span>
+                      )}
+                      {!profile.phone && !activeTier && (
+                        <span>{profile.total_matches || 0} matcher · Rating {profile.pickla_rating || 0}</span>
+                      )}
+                    </div>
                   </div>
                 </button>
 

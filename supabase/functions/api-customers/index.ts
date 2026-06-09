@@ -1,6 +1,45 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
-import { getAuthenticatedClient } from '../_shared/auth.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+
+const cleanString = (value: unknown) => {
+  const text = String(value || '').trim();
+  return text.length > 0 ? text : null;
+};
+
+const profileFullName = (profile: Record<string, unknown>) => {
+  return cleanString([profile.first_name, profile.last_name].filter(Boolean).join(' '));
+};
+
+const buildInitialsSeed = (value: string | null) => {
+  if (!value) return '?';
+  const emailPrefix = value.includes('@') ? value.split('@')[0] : value;
+  return emailPrefix
+    .replace(/[._-]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || '?';
+};
+
+async function assertCanListCustomers(admin: ReturnType<typeof getServiceClient>, userId: string, venueId: string) {
+  const [{ data: globalRole }, { data: venueStaff }] = await Promise.all([
+    admin.from('user_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .eq('role', 'super_admin')
+      .maybeSingle(),
+    admin.from('venue_staff')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .maybeSingle(),
+  ]);
+
+  return Boolean(globalRole || venueStaff);
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -14,22 +53,101 @@ Deno.serve(async (req) => {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
-    // GET /api-customers/list?search=X&limit=50
+    // GET /api-customers/list?venueId=X&search=X&limit=50
     if (req.method === 'GET' && path === 'list') {
-      const search = url.searchParams.get('search') || '';
+      const search = cleanString(url.searchParams.get('search')) || '';
       const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
+      const venueId = cleanString(url.searchParams.get('venueId'));
+      const admin = getServiceClient();
 
-      let query = client.from('player_profiles').select('*')
-        .order('pickla_rating', { ascending: false }).limit(limit);
-
-      if (search) {
-        query = query.or(`display_name.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%,phone.ilike.%${search}%`);
+      if (venueId) {
+        const canList = await assertCanListCustomers(admin, userId, venueId);
+        if (!canList) return errorResponse('Forbidden', 403);
       }
 
-      const { data, error: qErr } = await query;
+      const fetchLimit = search ? 500 : limit;
+      const { data: profiles, error: qErr } = await admin.from('player_profiles').select('*')
+        .order('pickla_rating', { ascending: false })
+        .limit(fetchLimit);
       if (qErr) return errorResponse(qErr.message);
 
-      return jsonResponse(data, 200, 10);
+      const authUserIds = [...new Set((profiles || []).map((profile: any) => profile.auth_user_id).filter(Boolean))];
+
+      const authUsersPromise = admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      const receiptsPromise = authUserIds.length > 0
+        ? admin.from('booking_receipts')
+          .select('user_id, customer_name, customer_email, customer_phone, issued_at, created_at')
+          .in('user_id', authUserIds)
+          .order('issued_at', { ascending: false })
+        : Promise.resolve({ data: [], error: null });
+      const membershipsPromise = venueId && authUserIds.length > 0
+        ? admin.from('memberships')
+          .select('user_id, status, membership_tiers(id, name, color, monthly_price, discount_percent)')
+          .eq('venue_id', venueId)
+          .eq('status', 'active')
+          .in('user_id', authUserIds)
+        : Promise.resolve({ data: [], error: null });
+
+      const [authUsersResult, receiptsResult, membershipsResult] = await Promise.all([
+        authUsersPromise,
+        receiptsPromise,
+        membershipsPromise,
+      ]);
+
+      const usersById = new Map((authUsersResult.data?.users || []).map((user: any) => [user.id, user]));
+
+      const receiptByUserId = new Map<string, any>();
+      for (const receipt of receiptsResult.data || []) {
+        if (receipt.user_id && !receiptByUserId.has(receipt.user_id)) {
+          receiptByUserId.set(receipt.user_id, receipt);
+        }
+      }
+
+      const membershipByUserId = new Map<string, any>();
+      for (const membership of membershipsResult.data || []) {
+        if (membership.user_id && !membershipByUserId.has(membership.user_id)) {
+          membershipByUserId.set(membership.user_id, membership);
+        }
+      }
+
+      const enriched = (profiles || []).map((profile: any) => {
+        const authUser = usersById.get(profile.auth_user_id);
+        const receipt = receiptByUserId.get(profile.auth_user_id);
+        const displayName = cleanString(profile.display_name);
+        const fullName = profileFullName(profile);
+        const receiptName = cleanString(receipt?.customer_name);
+        const email = cleanString(authUser?.email) || cleanString(receipt?.customer_email);
+        const phone = cleanString(profile.phone) || cleanString(receipt?.customer_phone);
+        const identityTitle = displayName || email || fullName || receiptName || 'Kund utan namn';
+        const initialsSeed = displayName || fullName || receiptName || email;
+        const membership = membershipByUserId.get(profile.auth_user_id);
+
+        return {
+          ...profile,
+          email,
+          phone,
+          full_name: fullName || receiptName,
+          identity_title: identityTitle,
+          identity_initials: buildInitialsSeed(initialsSeed),
+          active_membership_tier: membership?.membership_tiers || null,
+          has_active_membership: Boolean(membership),
+        };
+      });
+
+      const needle = search.toLowerCase();
+      const filtered = needle
+        ? enriched.filter((customer: any) => [
+          customer.display_name,
+          customer.first_name,
+          customer.last_name,
+          customer.full_name,
+          customer.identity_title,
+          customer.email,
+          customer.phone,
+        ].some((value) => String(value || '').toLowerCase().includes(needle)))
+        : enriched;
+
+      return jsonResponse(filtered.slice(0, limit), 200, 10);
     }
 
     // GET /api-customers/profile?id=X
@@ -87,10 +205,7 @@ Deno.serve(async (req) => {
       if (!firstName || !lastName || !phone) return errorResponse('Staff-created customers require first_name, last_name and phone');
 
       // Use service role to create profile without requiring auth signup
-      const serviceClient = createClient(
-        Deno.env.get('SUPABASE_URL')!,
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-      );
+      const serviceClient = getServiceClient();
 
       // If email provided, create an auth user first, then a profile is auto-created via trigger
       if (email) {
