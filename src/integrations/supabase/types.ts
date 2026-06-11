@@ -1230,6 +1230,95 @@ export type Database = {
           },
         ]
       }
+      event_products: {
+        Row: {
+          category: string | null
+          created_at: string
+          duration_minutes: number | null
+          id: string
+          image_url: string | null
+          included_by_default: boolean
+          included_items: Json | null
+          is_active: boolean
+          is_featured: boolean
+          long_description: string | null
+          max_people: number | null
+          metadata: Json | null
+          min_people: number | null
+          name: string
+          price_from_sek: number | null
+          price_sek: number | null
+          price_unit: string | null
+          recommended_for: Json | null
+          short_description: string | null
+          slug: string | null
+          sort_order: number
+          type: string
+          updated_at: string
+          venue_id: string | null
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          duration_minutes?: number | null
+          id?: string
+          image_url?: string | null
+          included_by_default?: boolean
+          included_items?: Json | null
+          is_active?: boolean
+          is_featured?: boolean
+          long_description?: string | null
+          max_people?: number | null
+          metadata?: Json | null
+          min_people?: number | null
+          name: string
+          price_from_sek?: number | null
+          price_sek?: number | null
+          price_unit?: string | null
+          recommended_for?: Json | null
+          short_description?: string | null
+          slug?: string | null
+          sort_order?: number
+          type: string
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          duration_minutes?: number | null
+          id?: string
+          image_url?: string | null
+          included_by_default?: boolean
+          included_items?: Json | null
+          is_active?: boolean
+          is_featured?: boolean
+          long_description?: string | null
+          max_people?: number | null
+          metadata?: Json | null
+          min_people?: number | null
+          name?: string
+          price_from_sek?: number | null
+          price_sek?: number | null
+          price_unit?: string | null
+          recommended_for?: Json | null
+          short_description?: string | null
+          slug?: string | null
+          sort_order?: number
+          type?: string
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "event_products_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       event_templates: {
         Row: {
           background_url: string | null
