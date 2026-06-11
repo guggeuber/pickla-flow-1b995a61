@@ -11,6 +11,7 @@ import NotFound from "./pages/NotFound";
 import EventOps from "./pages/EventOps";
 import AdminPage from "./pages/AdminPage";
 import AdminEventLeadsPage from "./pages/AdminEventLeadsPage";
+import AdminEventProductsPage from "./pages/AdminEventProductsPage";
 import HubPage from "./pages/HubPage";
 import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
@@ -88,6 +89,8 @@ function AppRoutes() {
             <Route path="/hub" element={<HubPage />} />
             <Route path="/hub/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/admin/event-leads" element={<ProtectedRoute><AdminEventLeadsPage /></ProtectedRoute>} />
+            <Route path="/hub/admin/event-products" element={<ProtectedRoute><AdminEventProductsPage /></ProtectedRoute>} />
+            <Route path="/admin/event-products" element={<ProtectedRoute><AdminEventProductsPage /></ProtectedRoute>} />
             <Route path="/ops" element={<ProtectedRoute><OpsCenterPage /></ProtectedRoute>} />
             <Route path="/today" element={<TodayPage />} />
             <Route path="/activity" element={<Navigate to="/today" replace />} />
