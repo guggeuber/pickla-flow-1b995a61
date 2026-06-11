@@ -27,6 +27,7 @@ import AdminProducts from "@/components/admin/AdminProducts";
 import AdminSchedule from "@/components/admin/AdminSchedule";
 import AdminDevices from "@/components/admin/AdminDevices";
 import AdminEventLeads from "@/components/admin/AdminEventLeads";
+import AdminEventProducts from "@/components/admin/AdminEventProducts";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
