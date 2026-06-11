@@ -11,6 +11,7 @@ import NotFound from "./pages/NotFound";
 import EventOps from "./pages/EventOps";
 import AdminPage from "./pages/AdminPage";
 import AdminEventLeadsPage from "./pages/AdminEventLeadsPage";
+import AdminEventProductsPage from "./pages/AdminEventProductsPage";
 import HubPage from "./pages/HubPage";
 import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
