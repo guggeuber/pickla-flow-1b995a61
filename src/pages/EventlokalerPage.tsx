@@ -185,6 +185,52 @@ export default function EventlokalerPage() {
   });
   const [sent, setSent] = useState(false);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+  const [selectedPackageSlug, setSelectedPackageSlug] = useState<string | null>(null);
+
+  // Load active event packages from admin DB (with fallback to hardcoded PACKAGES)
+  const packagesQuery = useQuery({
+    queryKey: ["eventlokaler-packages"],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("event_products")
+        .select("id, name, slug, short_description, category, price_from_sek, price_unit, included_items, is_featured, sort_order")
+        .eq("type", "package")
+        .eq("is_active", true)
+        .order("sort_order");
+      if (error) throw error;
+      return (data || []) as Array<{
+        id: string; name: string; slug: string | null; short_description: string | null;
+        category: string | null; price_from_sek: number | null; price_unit: string | null;
+        included_items: string[] | null; is_featured: boolean; sort_order: number;
+      }>;
+    },
+    staleTime: 60_000,
+  });
+
+  const displayPackages = useMemo(() => {
+    const rows = packagesQuery.data || [];
+    if (rows.length === 0) {
+      return PACKAGES.map((p) => ({
+        id: null as string | null,
+        slug: p.name.toLowerCase(),
+        name: p.name,
+        tag: p.tag,
+        price: p.price,
+        includes: p.includes,
+        featured: !!(p as any).featured,
+      }));
+    }
+    return rows.map((p) => ({
+      id: p.id,
+      slug: p.slug || p.name.toLowerCase(),
+      name: p.name,
+      tag: p.category || (p.is_featured ? "Mest populär" : ""),
+      price: p.price_from_sek != null ? String(Math.round(p.price_from_sek)) : "",
+      includes: (p.included_items || []).slice(0, 6),
+      featured: p.is_featured,
+    }));
+  }, [packagesQuery.data]);
 
   const inquiry = useMutation({
     mutationFn: () => apiPost("api-event-public", "group-inquiry", {
@@ -201,6 +247,7 @@ export default function EventlokalerPage() {
       notes: [
         form.budget ? `Budget: ${form.budget}` : "",
         form.message,
+        selectedPackageSlug ? `Valt paket: ${selectedPackageSlug}${selectedPackageId ? ` (${selectedPackageId})` : ""}` : "",
         "[Källa: /eventlokaler]",
       ].filter(Boolean).join("\n"),
     }),
@@ -225,7 +272,11 @@ export default function EventlokalerPage() {
     inquiry.mutate();
   };
 
-  const scrollToForm = () => {
+  const scrollToForm = (pkg?: { id: string | null; slug: string; name: string }) => {
+    if (pkg) {
+      setSelectedPackageId(pkg.id);
+      setSelectedPackageSlug(pkg.slug);
+    }
     document.getElementById("lead-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
