@@ -32,7 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-type SectionId = "venue" | "staff" | "courts" | "devices" | "hours" | "pricing" | "products" | "schedule" | "links" | "stories" | "events" | "eventLeads" | "memberships" | "templates" | "corporate" | "channels" | null;
+type SectionId = "venue" | "staff" | "courts" | "devices" | "hours" | "pricing" | "products" | "schedule" | "links" | "stories" | "events" | "eventLeads" | "eventProducts" | "memberships" | "templates" | "corporate" | "channels" | null;
 
 /* ── Sparkline SVG ── */
 function Sparkline({ data, color = "hsl(var(--primary))" }: { data: number[]; color?: string }) {
