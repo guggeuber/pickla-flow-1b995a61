@@ -211,6 +211,7 @@ const AdminPage = () => {
       stories: { label: "Stories", icon: Camera },
       events: { label: "Events", icon: Trophy },
       eventLeads: { label: "Event Leads", icon: MessageSquare },
+      eventProducts: { label: "Event Products", icon: Package },
       memberships: { label: "Medlemskap", icon: Crown },
       templates: { label: "Event-mallar", icon: FileText },
       corporate: { label: "Företag", icon: Building2 },
