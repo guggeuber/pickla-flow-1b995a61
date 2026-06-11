@@ -24,6 +24,7 @@ import EventPage from "./pages/EventPage";
 import EventPlanPublic from "./pages/EventPlanPublic";
 import BookingPage from "./pages/BookingPage";
 import GroupBookingPage from "./pages/GroupBookingPage";
+import EventlokalerPage from "./pages/EventlokalerPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
 import BookingConfirmed from "./pages/BookingConfirmed";
 import MembershipPage from "./pages/MembershipPage";
@@ -103,6 +104,7 @@ function AppRoutes() {
             <Route path="/e/:slug" element={<EventPage />} />
             <Route path="/book" element={<BookingPage />} />
             <Route path="/book/group" element={<GroupBookingPage />} />
+            <Route path="/eventlokaler" element={<EventlokalerPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/membership/confirmed" element={<MembershipConfirmed />} />
             <Route path="/wellness" element={<WellnessCertificatePage />} />
