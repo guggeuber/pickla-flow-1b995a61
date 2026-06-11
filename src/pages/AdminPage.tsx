@@ -279,6 +279,7 @@ const AdminPage = () => {
     { id: "stories" as SectionId, icon: Camera, label: "Stories", stat: "Community", color: "var(--primary)" },
     { id: "events" as SectionId, icon: Trophy, label: "Events", stat: "Turneringar", color: "var(--sell)" },
     { id: "eventLeads" as SectionId, icon: MessageSquare, label: "Event Leads", stat: "Agent OS & offerter", color: "var(--primary)" },
+    { id: "eventProducts" as SectionId, icon: Package, label: "Event Products", stat: "Paket & resurser", color: "var(--sell)" },
     { id: "memberships" as SectionId, icon: Crown, label: "Medlemskap", stat: "Nivåer & rabatter", color: "var(--badge-vip)" },
     ...(adminData?.isSuperAdmin ? [{ id: "templates" as SectionId, icon: FileText, label: "Event-mallar", stat: "Franchise", color: "var(--primary)" }] : []),
     { id: "corporate" as SectionId, icon: Building2, label: "Företag", stat: "Företagskonton", color: "var(--badge-vip)" },
