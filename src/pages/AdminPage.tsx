@@ -254,6 +254,7 @@ const AdminPage = () => {
           {activeSection === "stories" && <AdminStories venueId={venueId} />}
           {activeSection === "events" && <AdminEvents venueId={venueId} />}
           {activeSection === "eventLeads" && <AdminEventLeads venueId={venueId} />}
+          {activeSection === "eventProducts" && <AdminEventProducts venueId={venueId} />}
           {activeSection === "memberships" && <AdminMemberships venueId={venueId} />}
           {activeSection === "templates" && <AdminTemplates />}
           {activeSection === "corporate" && <AdminCorporate venueId={venueId} />}
