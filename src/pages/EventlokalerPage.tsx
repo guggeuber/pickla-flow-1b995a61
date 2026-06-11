@@ -465,35 +465,39 @@ export default function EventlokalerPage() {
         </p>
 
         <div className="mt-10 grid gap-4 lg:grid-cols-3">
-          {PACKAGES.map((p) => (
+          {displayPackages.map((p) => (
             <div
-              key={p.name}
+              key={p.slug || p.name}
               className={`rounded-[28px] p-7 ring-1 transition-transform ${
                 p.featured
                   ? "bg-neutral-950 text-white ring-neutral-950"
                   : "bg-white text-neutral-900 ring-black/5"
-              }`}
+              } ${selectedPackageSlug === p.slug ? "outline outline-2 outline-[#32ef87]" : ""}`}
             >
               <div className="flex items-center justify-between">
                 <h3 className="text-[24px]">{p.name}</h3>
-                <span
-                  className={`rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.2em] ${
-                    p.featured ? "bg-[#32ef87] text-neutral-950" : "bg-neutral-100 text-neutral-600"
-                  }`}
-                  style={{ fontFamily: FONT_MONO }}
-                >
-                  {p.tag}
-                </span>
+                {p.tag && (
+                  <span
+                    className={`rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.2em] ${
+                      p.featured ? "bg-[#32ef87] text-neutral-950" : "bg-neutral-100 text-neutral-600"
+                    }`}
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    {p.tag}
+                  </span>
+                )}
               </div>
-              <div className="mt-6 flex items-baseline gap-2">
-                <span className={`text-[12px] uppercase ${p.featured ? "text-white/60" : "text-neutral-500"}`} style={{ fontFamily: FONT_MONO }}>
-                  från
-                </span>
-                <span className="text-[44px] leading-none tracking-tight">{p.price}</span>
-                <span className={`text-[14px] ${p.featured ? "text-white/60" : "text-neutral-500"}`} style={{ fontFamily: FONT_MONO }}>
-                  kr/pers
-                </span>
-              </div>
+              {p.price && (
+                <div className="mt-6 flex items-baseline gap-2">
+                  <span className={`text-[12px] uppercase ${p.featured ? "text-white/60" : "text-neutral-500"}`} style={{ fontFamily: FONT_MONO }}>
+                    från
+                  </span>
+                  <span className="text-[44px] leading-none tracking-tight">{p.price}</span>
+                  <span className={`text-[14px] ${p.featured ? "text-white/60" : "text-neutral-500"}`} style={{ fontFamily: FONT_MONO }}>
+                    kr/pers
+                  </span>
+                </div>
+              )}
               <ul className="mt-7 space-y-3">
                 {p.includes.map((i) => (
                   <li key={i} className="flex items-center gap-3 text-[14px]">
@@ -503,7 +507,7 @@ export default function EventlokalerPage() {
                 ))}
               </ul>
               <button
-                onClick={scrollToForm}
+                onClick={() => scrollToForm({ id: p.id, slug: p.slug, name: p.name })}
                 className={`mt-8 w-full rounded-full py-3.5 text-[14px] font-bold active:scale-[0.98] ${
                   p.featured ? "bg-[#32ef87] text-neutral-950" : "bg-neutral-950 text-white"
                 }`}
