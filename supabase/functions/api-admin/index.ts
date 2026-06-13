@@ -97,6 +97,16 @@ function stockholmBlockRange(date: string, startTime: string, endTime: string) {
   };
 }
 
+function createBlockRef() {
+  const now = DateTime.now().setZone('Europe/Stockholm');
+  const suffix = crypto.randomUUID().split('-')[0].toUpperCase();
+  return `BLK-${now.toFormat('yyyy')}-${suffix}`;
+}
+
+function cleanBlockMetadata(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -406,6 +416,9 @@ Deno.serve(async (req) => {
       const explicitResourceIds = Array.isArray(body.resource_catalog_ids)
         ? body.resource_catalog_ids.map((id: unknown) => String(id)).filter(Boolean)
         : [];
+      const groupId = String(body.group_id || body.metadata?.group_id || crypto.randomUUID());
+      const blockRef = String(body.block_ref || body.metadata?.block_ref || createBlockRef());
+      const note = String(body.note || body.metadata?.note || '').trim().slice(0, 1000);
 
       if (!title) return errorResponse('Missing title');
       if (!['manual', 'event', 'maintenance', 'private', 'internal'].includes(reason)) return errorResponse('Invalid reason', 400);
@@ -486,7 +499,7 @@ Deno.serve(async (req) => {
           ends_at: range.ends_at,
           blocks_public_booking: body.blocks_public_booking !== false,
           created_by: userId,
-          metadata: { scope: 'venue' },
+          metadata: { scope: 'venue', group_id: groupId, block_ref: blockRef, note },
         }]
         : resourceIds.map((resourceId: string) => ({
           venue_id: venueId,
@@ -498,7 +511,7 @@ Deno.serve(async (req) => {
           ends_at: range.ends_at,
           blocks_public_booking: body.blocks_public_booking !== false,
           created_by: userId,
-          metadata: {},
+          metadata: { group_id: groupId, block_ref: blockRef, note },
         }));
 
       const { data, error: e } = await admin
@@ -512,7 +525,10 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'resource-blocks') {
       const body = await req.json();
       const blockId = body.blockId || body.id;
-      if (!blockId) return errorResponse('Missing blockId');
+      const blockIds = Array.isArray(body.blockIds)
+        ? body.blockIds.map((id: unknown) => String(id)).filter(Boolean)
+        : blockId ? [String(blockId)] : [];
+      if (blockIds.length === 0) return errorResponse('Missing blockId');
       const updates: any = {};
       if (body.title !== undefined) updates.title = String(body.title || '').trim().slice(0, 180);
       if (body.reason !== undefined) {
@@ -536,28 +552,63 @@ Deno.serve(async (req) => {
         updates.starts_at = range.starts_at;
         updates.ends_at = range.ends_at;
       }
+      if (body.note !== undefined || body.metadata !== undefined) {
+        const { data: currentRows, error: currentError } = await admin
+          .from('event_resource_blocks')
+          .select('id, metadata')
+          .eq('venue_id', venueId)
+          .in('id', blockIds);
+        if (currentError) return errorResponse(currentError.message);
+        const note = body.note !== undefined ? String(body.note || '').trim().slice(0, 1000) : undefined;
+        const metadataPatch = cleanBlockMetadata(body.metadata);
+
+        for (const row of currentRows || []) {
+          const nextMetadata = {
+            ...cleanBlockMetadata((row as any).metadata),
+            ...metadataPatch,
+            ...(note !== undefined ? { note } : {}),
+          };
+          const { error: metaError } = await admin
+            .from('event_resource_blocks')
+            .update({ ...updates, metadata: nextMetadata })
+            .eq('id', (row as any).id)
+            .eq('venue_id', venueId);
+          if (metaError) return errorResponse(metaError.message);
+        }
+
+        const { data, error: selectError } = await admin
+          .from('event_resource_blocks')
+          .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)')
+          .eq('venue_id', venueId)
+          .in('id', blockIds);
+        if (selectError) return errorResponse(selectError.message);
+        return jsonResponse(data || []);
+      }
 
       const { data, error: e } = await admin
         .from('event_resource_blocks')
         .update(updates)
-        .eq('id', blockId)
         .eq('venue_id', venueId)
-        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)')
-        .single();
+        .in('id', blockIds)
+        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)');
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
 
     if (req.method === 'DELETE' && path === 'resource-blocks') {
       const blockId = url.searchParams.get('blockId');
-      if (!blockId) return errorResponse('Missing blockId');
+      const blockIdsParam = url.searchParams.get('blockIds');
+      const blockIds = blockIdsParam
+        ? blockIdsParam.split(',').map((id) => id.trim()).filter(Boolean)
+        : blockId ? [blockId] : [];
+      if (blockIds.length === 0) return errorResponse('Missing blockId');
       const { data, error: e } = await admin
         .from('event_resource_blocks')
         .update({ status: 'released', blocks_public_booking: false })
-        .eq('id', blockId)
         .eq('venue_id', venueId)
+        .in('id', blockIds)
         .select('id, status, blocks_public_booking')
-        .single();
+      ;
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
