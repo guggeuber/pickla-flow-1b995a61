@@ -83,12 +83,23 @@ function groupMetadata(block: ResourceBlock) {
 
 function groupKeyFor(block: ResourceBlock) {
   const metadata = groupMetadata(block);
-  return String(metadata.group_id || metadata.block_ref || block.id);
+  if (metadata.group_id || metadata.block_ref) {
+    return String(metadata.group_id || metadata.block_ref);
+  }
+
+  return [
+    "legacy",
+    block.title,
+    block.reason,
+    block.starts_at,
+    block.ends_at,
+    noteFor(block),
+  ].join("|");
 }
 
 function blockRefFor(block: ResourceBlock) {
   const metadata = groupMetadata(block);
-  return String(metadata.block_ref || "Äldre block");
+  return String(metadata.block_ref || "Saknar ref");
 }
 
 function noteFor(block: ResourceBlock) {
