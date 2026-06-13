@@ -35,6 +35,57 @@ function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
   };
 }
 
+function normalizeCatalogResource(row: any) {
+  const resource = row?.event_resource_catalog;
+  return Array.isArray(resource) ? resource[0] : resource;
+}
+
+function blockTargetsCourts(block: any, courtIds: string[]) {
+  const resource = normalizeCatalogResource(block);
+  const scope = block?.metadata?.scope;
+  const resourceType = String(resource?.resource_type || '').toLowerCase();
+  if (scope === 'venue' || resourceType === 'venue' || resourceType === 'whole_venue') return courtIds;
+
+  const courtId = resource?.venue_court_id || block?.metadata?.venue_court_id;
+  return courtId && courtIds.includes(courtId) ? [courtId] : [];
+}
+
+async function getCourtResourceBlocks(
+  admin: any,
+  venueId: string,
+  courtIds: string[],
+  startISO: string,
+  endISO: string,
+) {
+  if (!courtIds.length) return [];
+
+  const { data, error } = await admin
+    .from('event_resource_blocks')
+    .select('id, title, reason, status, starts_at, ends_at, metadata, resource_catalog_id, event_resource_catalog(id, name, resource_type, venue_court_id)')
+    .eq('venue_id', venueId)
+    .eq('blocks_public_booking', true)
+    .in('status', ['hold', 'confirmed'])
+    .lt('starts_at', endISO)
+    .gt('ends_at', startISO);
+
+  if (error) {
+    console.error('event_resource_blocks lookup failed', error.message);
+    return [];
+  }
+
+  return (data || []).flatMap((block: any) =>
+    blockTargetsCourts(block, courtIds).map((courtId) => ({
+      id: block.id,
+      court_id: courtId,
+      start: block.starts_at,
+      end: block.ends_at,
+      title: block.title,
+      status: block.status,
+      kind: 'resource_block',
+    }))
+  );
+}
+
 function stockholmWeekForIso(iso: string) {
   const dt = DateTime.fromISO(iso, { zone: 'utc' }).setZone('Europe/Stockholm');
   return {
@@ -442,6 +493,11 @@ Deno.serve(async (req) => {
         .limit(1);
       if (conflicts?.length) {
         return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
+      }
+
+      const resourceBlocks = await getCourtResourceBlocks(adminCheckout, venue_id, courtIds, startISO, endISO);
+      if (resourceBlocks.length) {
+        return errorResponse('En eller flera banor är blockerade för event eller intern planering', 409);
       }
     }
 
@@ -1307,6 +1363,27 @@ Deno.serve(async (req) => {
       availabilityByDate[bookingDate] = bucket;
     }
 
+    const courtIds = (courts || []).map((court: any) => court.id).filter(Boolean);
+    const resourceBlocks = await getCourtResourceBlocks(admin, venue.id, courtIds, start, end);
+    for (const block of resourceBlocks) {
+      for (const requestedDate of requestedDates) {
+        const range = stockholmDateRangeUtc(requestedDate);
+        if (block.start < range.end && block.end > range.start) {
+          const bucket = availabilityByDate[requestedDate] || emptyAvailability();
+          bucket.bookings.push({
+            court_id: block.court_id,
+            start: block.start,
+            end: block.end,
+            status: 'blocked',
+            block_id: block.id,
+            title: block.title,
+            kind: 'resource_block',
+          });
+          availabilityByDate[requestedDate] = bucket;
+        }
+      }
+    }
+
     const selectedAvailability = availabilityByDate[date] || emptyAvailability();
     return jsonResponse({
       venue: { id: venue.id, name: venue.name },
@@ -1357,6 +1434,11 @@ Deno.serve(async (req) => {
       if (conflicts && conflicts.length > 0) {
         return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
       }
+    }
+
+    const resourceBlocks = await getCourtResourceBlocks(admin, venue.id, courtIds, startISO, endISO);
+    if (resourceBlocks.length) {
+      return errorResponse('En eller flera banor är blockerade för event eller intern planering', 409);
     }
 
     // Try to resolve authenticated user from Authorization header

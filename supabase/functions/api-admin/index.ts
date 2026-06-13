@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 async function isAdmin(userId: string): Promise<{ ok: boolean; venueId: string | null }> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -80,6 +81,20 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
   }
 
   return next;
+}
+
+function stockholmBlockRange(date: string, startTime: string, endTime: string) {
+  const cleanDate = String(date || '').slice(0, 10);
+  const cleanStart = String(startTime || '').slice(0, 5);
+  const cleanEnd = String(endTime || '').slice(0, 5);
+  if (!cleanDate || !cleanStart || !cleanEnd) throw new Error('Missing date/time');
+  const startsAt = DateTime.fromISO(`${cleanDate}T${cleanStart}:00`, { zone: 'Europe/Stockholm' });
+  const endsAt = DateTime.fromISO(`${cleanDate}T${cleanEnd}:00`, { zone: 'Europe/Stockholm' });
+  if (!startsAt.isValid || !endsAt.isValid || endsAt <= startsAt) throw new Error('Invalid date/time');
+  return {
+    starts_at: startsAt.toUTC().toISO(),
+    ends_at: endsAt.toUTC().toISO(),
+  };
 }
 
 Deno.serve(async (req) => {
@@ -360,6 +375,191 @@ Deno.serve(async (req) => {
       const { error: e } = await admin.from('venue_courts').delete().eq('id', courtId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
+    }
+
+    // ── EVENT RESOURCE BLOCKS ──
+    if (req.method === 'GET' && path === 'resource-blocks') {
+      const from = url.searchParams.get('from');
+      const to = url.searchParams.get('to');
+      let query = admin
+        .from('event_resource_blocks')
+        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)')
+        .eq('venue_id', venueId)
+        .order('starts_at', { ascending: true });
+      if (from) query = query.gte('ends_at', from);
+      if (to) query = query.lte('starts_at', to);
+
+      const { data, error: e } = await query;
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data || [], 200, 10);
+    }
+
+    if (req.method === 'POST' && path === 'resource-blocks') {
+      const body = await req.json();
+      const title = String(body.title || '').trim().slice(0, 180);
+      const reason = String(body.reason || 'manual');
+      const status = String(body.status || 'hold');
+      const scope = String(body.scope || 'courts');
+      const courtIds = Array.isArray(body.venue_court_ids)
+        ? body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)
+        : [];
+      const explicitResourceIds = Array.isArray(body.resource_catalog_ids)
+        ? body.resource_catalog_ids.map((id: unknown) => String(id)).filter(Boolean)
+        : [];
+
+      if (!title) return errorResponse('Missing title');
+      if (!['manual', 'event', 'maintenance', 'private', 'internal'].includes(reason)) return errorResponse('Invalid reason', 400);
+      if (!['hold', 'confirmed', 'released', 'cancelled'].includes(status)) return errorResponse('Invalid status', 400);
+
+      let range;
+      try {
+        range = stockholmBlockRange(body.date, body.start_time, body.end_time);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Invalid date/time', 400);
+      }
+
+      let resourceIds = [...explicitResourceIds];
+      if (courtIds.length) {
+        const { data: courts, error: courtsError } = await admin
+          .from('venue_courts')
+          .select('id, name, court_number, sport_type')
+          .eq('venue_id', venueId)
+          .in('id', courtIds);
+        if (courtsError) return errorResponse(courtsError.message);
+        if ((courts || []).length !== courtIds.length) return errorResponse('One or more courts do not belong to this venue', 400);
+
+        const { data: existingCatalog, error: catalogError } = await admin
+          .from('event_resource_catalog')
+          .select('id, venue_court_id')
+          .eq('venue_id', venueId)
+          .eq('resource_type', 'court')
+          .in('venue_court_id', courtIds);
+        if (catalogError) return errorResponse(catalogError.message);
+
+        const existingByCourt = new Map((existingCatalog || []).map((row: any) => [row.venue_court_id, row.id]));
+        const missingCourts = (courts || []).filter((court: any) => !existingByCourt.has(court.id));
+        if (missingCourts.length) {
+          const { data: inserted, error: insertError } = await admin
+            .from('event_resource_catalog')
+            .insert(missingCourts.map((court: any) => ({
+              venue_id: venueId,
+              resource_type: 'court',
+              name: court.name,
+              description: court.sport_type || null,
+              venue_court_id: court.id,
+              unit: 'event',
+              is_bookable: true,
+              is_active: true,
+              sort_order: court.court_number || 100,
+            })))
+            .select('id, venue_court_id');
+          if (insertError) return errorResponse(insertError.message);
+          for (const row of inserted || []) existingByCourt.set(row.venue_court_id, row.id);
+        }
+
+        resourceIds = [...resourceIds, ...courtIds.map((courtId: string) => existingByCourt.get(courtId)).filter(Boolean)];
+      }
+
+      if (scope !== 'venue' && resourceIds.length === 0) {
+        return errorResponse('Select at least one resource or use venue scope', 400);
+      }
+
+      if (resourceIds.length) {
+        const { data: validResources, error: validError } = await admin
+          .from('event_resource_catalog')
+          .select('id')
+          .eq('venue_id', venueId)
+          .in('id', resourceIds);
+        if (validError) return errorResponse(validError.message);
+        const validIds = new Set((validResources || []).map((row: any) => row.id));
+        resourceIds = Array.from(new Set(resourceIds.filter((id: string) => validIds.has(id))));
+      }
+
+      const rows = scope === 'venue'
+        ? [{
+          venue_id: venueId,
+          resource_catalog_id: null,
+          title,
+          reason,
+          status,
+          starts_at: range.starts_at,
+          ends_at: range.ends_at,
+          blocks_public_booking: body.blocks_public_booking !== false,
+          created_by: userId,
+          metadata: { scope: 'venue' },
+        }]
+        : resourceIds.map((resourceId: string) => ({
+          venue_id: venueId,
+          resource_catalog_id: resourceId,
+          title,
+          reason,
+          status,
+          starts_at: range.starts_at,
+          ends_at: range.ends_at,
+          blocks_public_booking: body.blocks_public_booking !== false,
+          created_by: userId,
+          metadata: {},
+        }));
+
+      const { data, error: e } = await admin
+        .from('event_resource_blocks')
+        .insert(rows)
+        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)');
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data || [], 201);
+    }
+
+    if (req.method === 'PATCH' && path === 'resource-blocks') {
+      const body = await req.json();
+      const blockId = body.blockId || body.id;
+      if (!blockId) return errorResponse('Missing blockId');
+      const updates: any = {};
+      if (body.title !== undefined) updates.title = String(body.title || '').trim().slice(0, 180);
+      if (body.reason !== undefined) {
+        const reason = String(body.reason);
+        if (!['manual', 'event', 'maintenance', 'private', 'internal'].includes(reason)) return errorResponse('Invalid reason', 400);
+        updates.reason = reason;
+      }
+      if (body.status !== undefined) {
+        const status = String(body.status);
+        if (!['hold', 'confirmed', 'released', 'cancelled'].includes(status)) return errorResponse('Invalid status', 400);
+        updates.status = status;
+      }
+      if (body.blocks_public_booking !== undefined) updates.blocks_public_booking = Boolean(body.blocks_public_booking);
+      if (body.date || body.start_time || body.end_time) {
+        let range;
+        try {
+          range = stockholmBlockRange(body.date, body.start_time, body.end_time);
+        } catch (err) {
+          return errorResponse(err instanceof Error ? err.message : 'Invalid date/time', 400);
+        }
+        updates.starts_at = range.starts_at;
+        updates.ends_at = range.ends_at;
+      }
+
+      const { data, error: e } = await admin
+        .from('event_resource_blocks')
+        .update(updates)
+        .eq('id', blockId)
+        .eq('venue_id', venueId)
+        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)')
+        .single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data);
+    }
+
+    if (req.method === 'DELETE' && path === 'resource-blocks') {
+      const blockId = url.searchParams.get('blockId');
+      if (!blockId) return errorResponse('Missing blockId');
+      const { data, error: e } = await admin
+        .from('event_resource_blocks')
+        .update({ status: 'released', blocks_public_booking: false })
+        .eq('id', blockId)
+        .eq('venue_id', venueId)
+        .select('id, status, blocks_public_booking')
+        .single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data);
     }
 
     // ── DISPLAY DEVICES ──
