@@ -6,6 +6,9 @@ export type EventLandingConfig = {
   canonical: string;
   seoTitle: string;
   seoDesc: string;
+  /** Optional OG/Twitter overrides (fallback to seoTitle/seoDesc). */
+  ogTitle?: string;
+  ogDesc?: string;
   heroKicker: string;
   heroH1: React.ReactNode | string[]; // array = lines
   heroLead: string;
@@ -17,6 +20,7 @@ export type EventLandingConfig = {
   navLabel: string; // for submenu
   category: EventLandingCategory; // menu grouping
 };
+
 
 export const SUBMENU_GROUPS: { label: string; items: { label: string; to: string }[] }[] = [
   {
