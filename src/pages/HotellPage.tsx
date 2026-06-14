@@ -224,6 +224,7 @@ export default function HotellPage() {
           </p>
           <a
             href="mailto:solna@picklaparks.com?subject=Gruppbokning hotell"
+            onClick={() => trackHotelClick("group", "group_inquiry")}
             className="mt-8 inline-flex items-center gap-2 rounded-full bg-white px-8 py-4 text-[14px] font-bold text-neutral-950 active:scale-[0.98]"
             style={{ fontFamily: FONT_GROTESK }}
           >
