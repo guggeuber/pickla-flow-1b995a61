@@ -42,13 +42,55 @@ export const HOTELS: Hotel[] = [
   },
 ];
 
+export type HotelAction =
+  | "book"
+  | "directions"
+  | "group_inquiry"
+  | "hotel_card_click";
+
+/** Debug mode: enabled in dev or when ?debug=hotels is in the URL or localStorage flag is set. */
+function isDebug(): boolean {
+  if (import.meta.env.DEV) return true;
+  try {
+    if (typeof window === "undefined") return false;
+    if (new URLSearchParams(window.location.search).get("debug") === "hotels") return true;
+    if (window.localStorage?.getItem("pickla_debug_hotels") === "1") return true;
+  } catch {
+    /* noop */
+  }
+  return false;
+}
+
+/** Append UTM params to an outbound link without clobbering existing ones. */
+export function withUtm(
+  url: string,
+  action: Extract<HotelAction, "book" | "directions">,
+  hotelId: string,
+): string {
+  try {
+    const u = new URL(url);
+    const params: Record<string, string> = {
+      utm_source: "playpickla",
+      utm_medium: action === "book" ? "hotel_card" : "hotel_directions",
+      utm_campaign: "hotell_page",
+      utm_content: hotelId,
+    };
+    for (const [k, v] of Object.entries(params)) {
+      if (!u.searchParams.has(k)) u.searchParams.set(k, v);
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Lightweight click tracker for hotel CTAs.
- * Sends to Vercel Analytics + gtag when present, falls back to console in dev.
+ * Sends to Vercel Analytics + gtag when present, logs in debug mode.
  */
 export function trackHotelClick(
   hotelId: string,
-  action: "book" | "directions" | "group_inquiry",
+  action: HotelAction,
   source: string = "hotell_page",
 ) {
   const payload = { hotel_id: hotelId, action, source };
@@ -56,7 +98,7 @@ export function trackHotelClick(
     const w = window as any;
     if (typeof w.va === "function") w.va("event", { name: "hotel_click", data: payload });
     if (typeof w.gtag === "function") w.gtag("event", "hotel_click", payload);
-    if (import.meta.env.DEV) {
+    if (isDebug()) {
       // eslint-disable-next-line no-console
       console.log("[hotel_click]", payload);
     }
