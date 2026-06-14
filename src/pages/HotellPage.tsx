@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, MapPin, Building2, Users, Trophy, Briefcase, Dumbbell, Heart } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import hotelSolna from "@/assets/hotel-solna.jpg.asset.json";
+import hotelAiden from "@/assets/hotel-aiden.jpg.asset.json";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -17,6 +19,7 @@ interface Hotel {
   description: string;
   cta: string;
   link: string;
+  image: string;
 }
 
 const HOTELS: Hotel[] = [
@@ -28,6 +31,7 @@ const HOTELS: Hotel[] = [
       "Smidigt hotellalternativ precis intill Pickla. Perfekt för spelare, eventgäster och grupper som vill bo så nära anläggningen som möjligt.",
     cta: "Boka med Pickla-erbjudande",
     link: "https://app.mews.com/distributor/18223665-65c5-4869-8570-b24a00909368?mewsVoucherCode=Pickla",
+    image: hotelAiden.url,
   },
   {
     id: "solna",
@@ -37,15 +41,7 @@ const HOTELS: Hotel[] = [
       "Bekvämt boende i Solna Business Park, nära Pickla och bra kommunikationer. Passar både företag, turneringsgäster och längre vistelser.",
     cta: "Boka med Pickla-erbjudande",
     link: "https://app.mews.com/distributor/d5a26fba-22de-4004-b4ab-b24a0091ac46?mewsVoucherCode=PICKLA%20AB",
-  },
-  {
-    id: "bromma",
-    name: "Best Western Bromma",
-    distance: "Nära Bromma / Stockholm",
-    description:
-      "Bra alternativ för gäster som vill bo i Brommaområdet eller kombinera vistelsen med matcher, event eller besök i västra Stockholm.",
-    cta: "Boka hotell",
-    link: "https://app.mews.com/distributor/25d290f2-ba34-4950-bef0-b25900a8314b?mewsAvailabilityBlockId=c447a342-6b44-4c44-b5a8-b40c0097af3b&mewsStart=2026-04-02&mewsEnd=2026-04-06",
+    image: hotelSolna.url,
   },
 ];
 
@@ -159,37 +155,42 @@ export default function HotellPage() {
 
       {/* HOTEL CARDS */}
       <section className="mx-auto max-w-4xl px-5 pb-16 md:pb-24">
-        <div className="grid gap-5 md:grid-cols-3">
+        <div className="grid gap-5 md:grid-cols-2">
           {HOTELS.map((hotel) => (
             <div
               key={hotel.id}
-              className="flex flex-col rounded-[24px] border border-neutral-200 bg-white p-6 transition-shadow hover:shadow-lg"
+              className="flex flex-col overflow-hidden rounded-[24px] border border-neutral-200 bg-white transition-shadow hover:shadow-lg"
             >
-              <div className="mb-4 flex items-center gap-2 text-[11px] uppercase tracking-[0.15em] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                <MapPin className="h-3.5 w-3.5" />
-                {hotel.distance}
+              <div className="aspect-[16/10] w-full overflow-hidden bg-neutral-100">
+                <img src={hotel.image} alt={hotel.name} className="h-full w-full object-cover" loading="lazy" />
               </div>
-              <h3
-                className="text-[20px] font-bold leading-tight tracking-[-0.01em]"
-                style={{ fontFamily: FONT_GROTESK }}
-              >
-                {hotel.name}
-              </h3>
-              <p
-                className="mt-3 flex-1 text-[14px] leading-relaxed text-neutral-600"
-                style={{ fontFamily: FONT_GROTESK }}
-              >
-                {hotel.description}
-              </p>
-              <a
-                href={hotel.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-neutral-950 px-5 py-3.5 text-[14px] font-bold text-white active:scale-[0.98]"
-                style={{ fontFamily: FONT_GROTESK }}
-              >
-                {hotel.cta} <ArrowRight className="h-4 w-4" />
-              </a>
+              <div className="flex flex-1 flex-col p-6">
+                <div className="mb-4 flex items-center gap-2 text-[11px] uppercase tracking-[0.15em] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                  <MapPin className="h-3.5 w-3.5" />
+                  {hotel.distance}
+                </div>
+                <h3
+                  className="text-[20px] font-bold leading-tight tracking-[-0.01em]"
+                  style={{ fontFamily: FONT_GROTESK }}
+                >
+                  {hotel.name}
+                </h3>
+                <p
+                  className="mt-3 flex-1 text-[14px] leading-relaxed text-neutral-600"
+                  style={{ fontFamily: FONT_GROTESK }}
+                >
+                  {hotel.description}
+                </p>
+                <a
+                  href={hotel.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-neutral-950 px-5 py-3.5 text-[14px] font-bold text-white active:scale-[0.98]"
+                  style={{ fontFamily: FONT_GROTESK }}
+                >
+                  {hotel.cta} <ArrowRight className="h-4 w-4" />
+                </a>
+              </div>
             </div>
           ))}
         </div>
