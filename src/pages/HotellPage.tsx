@@ -1,10 +1,8 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, MapPin, Building2, Users, Trophy, Briefcase, Dumbbell, Heart } from "lucide-react";
+import { ArrowRight, MapPin, Building2, Users, Trophy, Briefcase, Dumbbell, Heart, Navigation } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
-
-const HOTEL_SOLNA_URL = "/hotel-solna.jpg";
-const HOTEL_AIDEN_URL = "/hotel-aiden.webp";
+import { HOTELS, trackHotelClick } from "@/config/hotels";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -13,39 +11,6 @@ const CANONICAL = "https://www.playpickla.com/hotell";
 const SEO_TITLE = "Hotell nära Pickla Solna | Boende för event, turneringar och spelare";
 const SEO_DESC = "Boka hotell nära Pickla i Solna. Hotellalternativ för spelare, turneringar, företagsevent och gäster.";
 
-interface Hotel {
-  id: string;
-  name: string;
-  distance: string;
-  description: string;
-  cta: string;
-  link: string;
-  image: string;
-}
-
-const HOTELS: Hotel[] = [
-  {
-    id: "aiden",
-    name: "Best Western Aiden",
-    distance: "200 m från Pickla",
-    description:
-      "Smidigt hotellalternativ precis intill Pickla. Perfekt för spelare, eventgäster och grupper som vill bo så nära anläggningen som möjligt.",
-    cta: "Boka med Pickla-erbjudande",
-    link: "https://app.mews.com/distributor/18223665-65c5-4869-8570-b24a00909368?mewsVoucherCode=Pickla",
-    image: HOTEL_AIDEN_URL,
-  },
-  {
-    id: "solna",
-    name: "Best Western Solna Business Park",
-    distance: "500 m från Pickla",
-    description:
-      "Bekvämt boende i Solna Business Park, nära Pickla och bra kommunikationer. Passar både företag, turneringsgäster och längre vistelser.",
-    cta: "Boka med Pickla-erbjudande",
-    link: "https://app.mews.com/distributor/d5a26fba-22de-4004-b4ab-b24a0091ac46?mewsVoucherCode=PICKLA%20AB",
-    image: HOTEL_SOLNA_URL,
-  },
-];
-
 const FOR_WHO = [
   { icon: Trophy, label: "Turneringar" },
   { icon: Briefcase, label: "Företagsevent" },
@@ -53,6 +18,7 @@ const FOR_WHO = [
   { icon: Users, label: "Besökande spelare" },
   { icon: Heart, label: "Familj och vänner" },
 ];
+
 
 function useSeo() {
   useEffect(() => {
@@ -186,14 +152,26 @@ export default function HotellPage() {
                   href={hotel.link}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={() => trackHotelClick(hotel.id, "book")}
                   className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-neutral-950 px-5 py-3.5 text-[14px] font-bold text-white active:scale-[0.98]"
                   style={{ fontFamily: FONT_GROTESK }}
                 >
                   {hotel.cta} <ArrowRight className="h-4 w-4" />
                 </a>
+                <a
+                  href={hotel.mapsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => trackHotelClick(hotel.id, "directions")}
+                  className="mt-2 inline-flex items-center justify-center gap-2 rounded-full border border-neutral-200 px-5 py-3 text-[13px] font-semibold text-neutral-700 hover:bg-neutral-50 active:scale-[0.98]"
+                  style={{ fontFamily: FONT_GROTESK }}
+                >
+                  <Navigation className="h-3.5 w-3.5" /> Visa vägbeskrivning
+                </a>
               </div>
             </div>
           ))}
+
         </div>
       </section>
 
@@ -246,6 +224,7 @@ export default function HotellPage() {
           </p>
           <a
             href="mailto:solna@picklaparks.com?subject=Gruppbokning hotell"
+            onClick={() => trackHotelClick("group", "group_inquiry")}
             className="mt-8 inline-flex items-center gap-2 rounded-full bg-white px-8 py-4 text-[14px] font-bold text-neutral-950 active:scale-[0.98]"
             style={{ fontFamily: FONT_GROTESK }}
           >
