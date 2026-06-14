@@ -45,16 +45,18 @@ function useSeo(cfg: EventLandingConfig) {
       return el;
     };
 
+    const ogTitle = cfg.ogTitle || cfg.seoTitle;
+    const ogDesc = cfg.ogDesc || cfg.seoDesc;
     upsertMeta('meta[name="description"]', { name: "description", content: cfg.seoDesc });
     upsertMeta('meta[name="keywords"]', { name: "keywords", content: cfg.primaryKeyword });
-    upsertMeta('meta[property="og:title"]', { property: "og:title", content: cfg.seoTitle });
-    upsertMeta('meta[property="og:description"]', { property: "og:description", content: cfg.seoDesc });
+    upsertMeta('meta[property="og:title"]', { property: "og:title", content: ogTitle });
+    upsertMeta('meta[property="og:description"]', { property: "og:description", content: ogDesc });
     upsertMeta('meta[property="og:url"]', { property: "og:url", content: cfg.canonical });
     upsertMeta('meta[property="og:type"]', { property: "og:type", content: "website" });
     upsertMeta('meta[property="og:image"]', { property: "og:image", content: "https://www.playpickla.com/pwa-512x512.png" });
     upsertMeta('meta[name="twitter:card"]', { name: "twitter:card", content: "summary_large_image" });
-    upsertMeta('meta[name="twitter:title"]', { name: "twitter:title", content: cfg.seoTitle });
-    upsertMeta('meta[name="twitter:description"]', { name: "twitter:description", content: cfg.seoDesc });
+    upsertMeta('meta[name="twitter:title"]', { name: "twitter:title", content: ogTitle });
+    upsertMeta('meta[name="twitter:description"]', { name: "twitter:description", content: ogDesc });
     upsertLink("canonical", cfg.canonical);
 
     const ld = document.createElement("script");
