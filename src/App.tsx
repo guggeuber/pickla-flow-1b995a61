@@ -27,6 +27,11 @@ import EventPlanPublic from "./pages/EventPlanPublic";
 import BookingPage from "./pages/BookingPage";
 import GroupBookingPage from "./pages/GroupBookingPage";
 import EventlokalerPage from "./pages/EventlokalerPage";
+import ForetagseventPage from "./pages/ForetagseventPage";
+import KickoffPage from "./pages/KickoffPage";
+import AwPage from "./pages/AwPage";
+import KonferensPage from "./pages/KonferensPage";
+import TeambuildingPage from "./pages/TeambuildingPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
 import BookingConfirmed from "./pages/BookingConfirmed";
 import MembershipPage from "./pages/MembershipPage";
@@ -109,6 +114,11 @@ function AppRoutes() {
             <Route path="/book" element={<BookingPage />} />
             <Route path="/book/group" element={<GroupBookingPage />} />
             <Route path="/eventlokaler" element={<EventlokalerPage />} />
+            <Route path="/foretagsevent-stockholm" element={<ForetagseventPage />} />
+            <Route path="/kickoff-stockholm" element={<KickoffPage />} />
+            <Route path="/aw-stockholm" element={<AwPage />} />
+            <Route path="/konferens-stockholm" element={<KonferensPage />} />
+            <Route path="/teambuilding-stockholm" element={<TeambuildingPage />} />
             <Route path="/hotell" element={<HotellPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/membership/confirmed" element={<MembershipConfirmed />} />
