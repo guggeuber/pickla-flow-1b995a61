@@ -8,7 +8,8 @@ import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
-import { EventLandingConfig, SUBMENU, SUBMENU_GROUPS } from "@/config/eventLandingPages";
+import { EventLandingConfig, SUBMENU, SUBMENU_GROUPS, EVENT_LANDING_PAGES } from "@/config/eventLandingPages";
+import { trackLandingInquiry, validateLandingPayload } from "@/lib/eventLandingTracking";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -44,16 +45,18 @@ function useSeo(cfg: EventLandingConfig) {
       return el;
     };
 
+    const ogTitle = cfg.ogTitle || cfg.seoTitle;
+    const ogDesc = cfg.ogDesc || cfg.seoDesc;
     upsertMeta('meta[name="description"]', { name: "description", content: cfg.seoDesc });
     upsertMeta('meta[name="keywords"]', { name: "keywords", content: cfg.primaryKeyword });
-    upsertMeta('meta[property="og:title"]', { property: "og:title", content: cfg.seoTitle });
-    upsertMeta('meta[property="og:description"]', { property: "og:description", content: cfg.seoDesc });
+    upsertMeta('meta[property="og:title"]', { property: "og:title", content: ogTitle });
+    upsertMeta('meta[property="og:description"]', { property: "og:description", content: ogDesc });
     upsertMeta('meta[property="og:url"]', { property: "og:url", content: cfg.canonical });
     upsertMeta('meta[property="og:type"]', { property: "og:type", content: "website" });
     upsertMeta('meta[property="og:image"]', { property: "og:image", content: "https://www.playpickla.com/pwa-512x512.png" });
     upsertMeta('meta[name="twitter:card"]', { name: "twitter:card", content: "summary_large_image" });
-    upsertMeta('meta[name="twitter:title"]', { name: "twitter:title", content: cfg.seoTitle });
-    upsertMeta('meta[name="twitter:description"]', { name: "twitter:description", content: cfg.seoDesc });
+    upsertMeta('meta[name="twitter:title"]', { name: "twitter:title", content: ogTitle });
+    upsertMeta('meta[name="twitter:description"]', { name: "twitter:description", content: ogDesc });
     upsertLink("canonical", cfg.canonical);
 
     const ld = document.createElement("script");
@@ -198,25 +201,43 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
   }, [packagesQuery.data]);
 
   const inquiry = useMutation({
-    mutationFn: () => apiPost("api-event-public", "group-inquiry", {
-      slug: SLUG,
-      eventType: config.inquiryEventType,
-      participants: Number(form.participants) || 1,
-      preferredDate: form.date || null,
-      preferredTime: "afternoon",
-      activities: ["Pickleball", "Dart"],
-      resources: [],
-      name: `${form.name}${form.company ? ` (${form.company})` : ""}`.trim(),
-      email: form.email.trim(),
-      phone: form.phone.trim(),
-      notes: [
-        form.budget ? `Budget: ${form.budget}` : "",
-        form.message,
-        selectedPackageSlug ? `Valt paket: ${selectedPackageSlug}${selectedPackageId ? ` (${selectedPackageId})` : ""}` : "",
-        `[Källa: ${config.inquirySource}]`,
-        `[Keyword: ${config.primaryKeyword}]`,
-      ].filter(Boolean).join("\n"),
-    }),
+    mutationFn: async () => {
+      const validated = validateLandingPayload(config, { formType: "group_inquiry" });
+      const res = await apiPost("api-event-public", "group-inquiry", {
+        slug: SLUG,
+        eventType: config.inquiryEventType,
+        participants: Number(form.participants) || 1,
+        preferredDate: form.date || null,
+        preferredTime: "afternoon",
+        activities: ["Pickleball", "Dart"],
+        resources: [],
+        name: `${form.name}${form.company ? ` (${form.company})` : ""}`.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        notes: [
+          form.budget ? `Budget: ${form.budget}` : "",
+          form.message,
+          selectedPackageSlug ? `Valt paket: ${selectedPackageSlug}${selectedPackageId ? ` (${selectedPackageId})` : ""}` : "",
+          `[Källa: ${validated.source}]`,
+          `[Keyword: ${validated.keyword}]`,
+          `[Kategori: ${validated.inquiryCategory}]`,
+          `[Formulär: ${validated.formType}]`,
+        ].filter(Boolean).join("\n"),
+      });
+      trackLandingInquiry({
+        event: "event_landing_inquiry_submit",
+        slug: config.slug,
+        keyword: validated.keyword,
+        inquiryCategory: validated.inquiryCategory,
+        source: validated.source,
+        formType: validated.formType,
+        participants: Number(form.participants) || undefined,
+        hasDate: Boolean(form.date),
+        hasBudget: Boolean(form.budget),
+        packageSlug: selectedPackageSlug,
+      });
+      return res;
+    },
     onSuccess: () => {
       setSent(true);
       toast.success("Förfrågan skickad!");
@@ -237,6 +258,13 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
     if (!canSubmit || inquiry.isPending) return;
     inquiry.mutate();
   };
+
+  const relatedPrivate = useMemo(() => {
+    if (config.category !== "private") return [];
+    return EVENT_LANDING_PAGES
+      .filter((p) => p.category === "private" && p.slug !== config.slug)
+      .slice(0, 3);
+  }, [config]);
 
   const scrollToForm = (pkg?: { id: string | null; slug: string; name: string }) => {
     if (pkg) {
@@ -557,6 +585,59 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
           ))}
         </div>
       </section>
+
+      {/* RELATED — private pages only */}
+      {relatedPrivate.length > 0 && (
+        <section className="mx-auto max-w-6xl px-5 py-14 md:py-20">
+          <p className="text-[11px] uppercase tracking-[0.3em] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            liknande upplägg
+          </p>
+          <h2 className="mt-3 text-[28px] leading-[1.05] tracking-[-0.02em] md:text-[44px]">
+            Andra som passar er grupp
+          </h2>
+          <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {relatedPrivate.map((p) => (
+              <Link
+                key={p.slug}
+                to={p.path}
+                className="rounded-2xl bg-white p-5 ring-1 ring-black/5 transition-transform active:scale-[0.98]"
+              >
+                <h3 className="text-[16px] font-bold leading-snug">{p.navLabel}</h3>
+                <p className="mt-2 text-[12px] leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                  {p.primaryKeyword}
+                </p>
+                <span className="mt-4 inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.2em] text-neutral-900" style={{ fontFamily: FONT_MONO }}>
+                  Läs mer <ArrowRight className="h-3 w-3" />
+                </span>
+              </Link>
+            ))}
+            <Link
+              to="/eventlokaler"
+              className="rounded-2xl bg-neutral-950 p-5 text-white transition-transform active:scale-[0.98]"
+            >
+              <h3 className="text-[16px] font-bold leading-snug">Eventlokaler</h3>
+              <p className="mt-2 text-[12px] leading-relaxed text-white/60" style={{ fontFamily: FONT_MONO }}>
+                Hela arenan för större event
+              </p>
+              <span className="mt-4 inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.2em] text-white" style={{ fontFamily: FONT_MONO }}>
+                Utforska <ArrowRight className="h-3 w-3" />
+              </span>
+            </Link>
+            <Link
+              to="/hotell"
+              className="rounded-2xl bg-[#32ef87] p-5 text-neutral-950 transition-transform active:scale-[0.98]"
+            >
+              <h3 className="text-[16px] font-bold leading-snug">Hotell nära</h3>
+              <p className="mt-2 text-[12px] leading-relaxed text-neutral-800" style={{ fontFamily: FONT_MONO }}>
+                Bo gångavstånd från Pickla
+              </p>
+              <span className="mt-4 inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.2em] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                Se hotell <ArrowRight className="h-3 w-3" />
+              </span>
+            </Link>
+          </div>
+        </section>
+      )}
 
       {/* FAQ */}
       <section className="mx-auto max-w-3xl px-5 py-14 md:py-24">
