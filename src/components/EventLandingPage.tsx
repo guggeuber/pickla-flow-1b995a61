@@ -586,6 +586,59 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
         </div>
       </section>
 
+      {/* RELATED — private pages only */}
+      {relatedPrivate.length > 0 && (
+        <section className="mx-auto max-w-6xl px-5 py-14 md:py-20">
+          <p className="text-[11px] uppercase tracking-[0.3em] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            liknande upplägg
+          </p>
+          <h2 className="mt-3 text-[28px] leading-[1.05] tracking-[-0.02em] md:text-[44px]">
+            Andra som passar er grupp
+          </h2>
+          <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {relatedPrivate.map((p) => (
+              <Link
+                key={p.slug}
+                to={p.path}
+                className="rounded-2xl bg-white p-5 ring-1 ring-black/5 transition-transform active:scale-[0.98]"
+              >
+                <h3 className="text-[16px] font-bold leading-snug">{p.navLabel}</h3>
+                <p className="mt-2 text-[12px] leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                  {p.primaryKeyword}
+                </p>
+                <span className="mt-4 inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.2em] text-neutral-900" style={{ fontFamily: FONT_MONO }}>
+                  Läs mer <ArrowRight className="h-3 w-3" />
+                </span>
+              </Link>
+            ))}
+            <Link
+              to="/eventlokaler"
+              className="rounded-2xl bg-neutral-950 p-5 text-white transition-transform active:scale-[0.98]"
+            >
+              <h3 className="text-[16px] font-bold leading-snug">Eventlokaler</h3>
+              <p className="mt-2 text-[12px] leading-relaxed text-white/60" style={{ fontFamily: FONT_MONO }}>
+                Hela arenan för större event
+              </p>
+              <span className="mt-4 inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.2em] text-white" style={{ fontFamily: FONT_MONO }}>
+                Utforska <ArrowRight className="h-3 w-3" />
+              </span>
+            </Link>
+            <Link
+              to="/hotell"
+              className="rounded-2xl bg-[#32ef87] p-5 text-neutral-950 transition-transform active:scale-[0.98]"
+            >
+              <h3 className="text-[16px] font-bold leading-snug">Hotell nära</h3>
+              <p className="mt-2 text-[12px] leading-relaxed text-neutral-800" style={{ fontFamily: FONT_MONO }}>
+                Bo gångavstånd från Pickla
+              </p>
+              <span className="mt-4 inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.2em] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                Se hotell <ArrowRight className="h-3 w-3" />
+              </span>
+            </Link>
+          </div>
+        </section>
+      )}
+
       {/* FAQ */}
       <section className="mx-auto max-w-3xl px-5 py-14 md:py-24">
         <p className="text-[11px] uppercase tracking-[0.3em] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
