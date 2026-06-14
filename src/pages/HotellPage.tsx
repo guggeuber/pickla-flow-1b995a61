@@ -2,8 +2,9 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, MapPin, Building2, Users, Trophy, Briefcase, Dumbbell, Heart } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import hotelSolna from "@/assets/hotel-solna.jpg.asset.json";
-import hotelAiden from "@/assets/hotel-aiden.jpg.asset.json";
+
+const HOTEL_SOLNA_URL = "/__l5e/assets-v1/cda3d65c-5deb-42d0-bf95-35f0b4d38457/hotel-solna.jpg";
+const HOTEL_AIDEN_URL = "/__l5e/assets-v1/1428a22b-76f2-4390-a7fc-e0ab5505f047/hotel-aiden.jpg";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
