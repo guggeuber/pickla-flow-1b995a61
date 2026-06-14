@@ -32,7 +32,7 @@ const HOTELS: Hotel[] = [
       "Smidigt hotellalternativ precis intill Pickla. Perfekt för spelare, eventgäster och grupper som vill bo så nära anläggningen som möjligt.",
     cta: "Boka med Pickla-erbjudande",
     link: "https://app.mews.com/distributor/18223665-65c5-4869-8570-b24a00909368?mewsVoucherCode=Pickla",
-    image: hotelAiden.url,
+    image: HOTEL_AIDEN_URL,
   },
   {
     id: "solna",
