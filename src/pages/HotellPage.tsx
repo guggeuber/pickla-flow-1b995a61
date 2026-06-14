@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, MapPin, Building2, Users, Trophy, Briefcase, Dumbbell, Heart, Navigation } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { HOTELS, trackHotelClick } from "@/config/hotels";
+import { HOTELS, trackHotelClick, withUtm } from "@/config/hotels";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -126,7 +126,22 @@ export default function HotellPage() {
           {HOTELS.map((hotel) => (
             <div
               key={hotel.id}
-              className="flex flex-col overflow-hidden rounded-[24px] border border-neutral-200 bg-white transition-shadow hover:shadow-lg"
+              role="link"
+              tabIndex={0}
+              onClick={(e) => {
+                // Avoid double-tracking when the inner CTAs are clicked.
+                if ((e.target as HTMLElement).closest("a")) return;
+                trackHotelClick(hotel.id, "hotel_card_click");
+                window.open(withUtm(hotel.link, "book", hotel.id), "_blank", "noopener,noreferrer");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  trackHotelClick(hotel.id, "hotel_card_click");
+                  window.open(withUtm(hotel.link, "book", hotel.id), "_blank", "noopener,noreferrer");
+                }
+              }}
+              className="flex cursor-pointer flex-col overflow-hidden rounded-[24px] border border-neutral-200 bg-white transition-shadow hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900"
             >
               <div className="aspect-[16/10] w-full overflow-hidden bg-neutral-100">
                 <img src={hotel.image} alt={hotel.name} className="h-full w-full object-cover" loading="lazy" />
@@ -149,7 +164,7 @@ export default function HotellPage() {
                   {hotel.description}
                 </p>
                 <a
-                  href={hotel.link}
+                  href={withUtm(hotel.link, "book", hotel.id)}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={() => trackHotelClick(hotel.id, "book")}
@@ -159,7 +174,7 @@ export default function HotellPage() {
                   {hotel.cta} <ArrowRight className="h-4 w-4" />
                 </a>
                 <a
-                  href={hotel.mapsUrl}
+                  href={withUtm(hotel.mapsUrl, "directions", hotel.id)}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={() => trackHotelClick(hotel.id, "directions")}
