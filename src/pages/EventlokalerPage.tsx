@@ -673,6 +673,7 @@ export default function EventlokalerPage() {
           </div>
           <div className="flex flex-wrap gap-5 text-[13px] text-neutral-600" style={{ fontFamily: FONT_MONO }}>
             <Link to="/eventlokaler" className="hover:text-neutral-900">Eventlokaler</Link>
+            <Link to="/hotell" className="hover:text-neutral-900">Hotell</Link>
             <Link to="/book/group" className="hover:text-neutral-900">Gruppbokning</Link>
             <Link to="/membership" className="hover:text-neutral-900">Medlemskap</Link>
             <Link to="/privacy" className="hover:text-neutral-900">Integritet</Link>

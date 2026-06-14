@@ -12,7 +12,7 @@ import EventOps from "./pages/EventOps";
 import AdminPage from "./pages/AdminPage";
 import AdminEventLeadsPage from "./pages/AdminEventLeadsPage";
 import AdminEventProductsPage from "./pages/AdminEventProductsPage";
-import HubPage from "./pages/HubPage";
+import HotellPage from "./pages/HotellPage";
 import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
 import CommunityPage from "./pages/CommunityPage";
@@ -108,6 +108,7 @@ function AppRoutes() {
             <Route path="/book" element={<BookingPage />} />
             <Route path="/book/group" element={<GroupBookingPage />} />
             <Route path="/eventlokaler" element={<EventlokalerPage />} />
+            <Route path="/hotell" element={<HotellPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/membership/confirmed" element={<MembershipConfirmed />} />
             <Route path="/wellness" element={<WellnessCertificatePage />} />
