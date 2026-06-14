@@ -646,6 +646,20 @@ export default function EventlokalerPage() {
               Genom att skicka godkänner du vår <Link to="/privacy" className="underline">integritetspolicy</Link>.
             </p>
           </form>
+
+          {/* Hotel cross-link */}
+          <div className="mt-6 rounded-[20px] border border-neutral-200 bg-[#f7f4ee] p-5 text-center">
+            <p className="text-[13px] text-neutral-600" style={{ fontFamily: FONT_MONO }}>
+              Behöver gästerna hotell?
+            </p>
+            <Link
+              to="/hotell"
+              className="mt-2 inline-flex items-center gap-1.5 text-[14px] font-bold text-neutral-950 underline underline-offset-4"
+              style={{ fontFamily: FONT_GROTESK }}
+            >
+              Se hotell nära Pickla <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
         </div>
       </section>
 
