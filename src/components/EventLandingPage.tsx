@@ -8,7 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
-import { EventLandingConfig, SUBMENU } from "@/config/eventLandingPages";
+import { EventLandingConfig, SUBMENU, SUBMENU_GROUPS } from "@/config/eventLandingPages";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -290,19 +290,28 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
               aria-haspopup="menu"
               aria-expanded={menuOpen}
             >
-              Företagsevent <ChevronDown className={`h-3.5 w-3.5 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
+              Event <ChevronDown className={`h-3.5 w-3.5 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
             </button>
             {menuOpen && (
-              <div role="menu" className="absolute right-0 mt-2 w-56 overflow-hidden rounded-2xl border border-black/5 bg-white shadow-xl">
-                {SUBMENU.map((m) => (
-                  <Link
-                    key={m.to}
-                    to={m.to}
-                    className="block px-4 py-3 text-[13px] text-neutral-800 hover:bg-neutral-100"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    {m.label}
-                  </Link>
+              <div role="menu" className="absolute right-0 mt-2 w-64 overflow-hidden rounded-2xl border border-black/5 bg-white shadow-xl">
+                {SUBMENU_GROUPS.map((group) => (
+                  <div key={group.label} className="border-b border-black/5 last:border-b-0 py-1">
+                    <p className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                      {group.label}
+                    </p>
+                    {group.items.map((m) => (
+                      <Link
+                        key={m.to}
+                        to={m.to}
+                        className={`block px-4 py-2.5 text-[13px] hover:bg-neutral-100 ${
+                          m.to === config.path ? "bg-neutral-100 font-bold text-neutral-950" : "text-neutral-800"
+                        }`}
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        {m.label}
+                      </Link>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
