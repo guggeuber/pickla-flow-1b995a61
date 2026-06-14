@@ -2,8 +2,9 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, MapPin, Building2, Users, Trophy, Briefcase, Dumbbell, Heart } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import hotelSolna from "@/assets/hotel-solna.jpg.asset.json";
-import hotelAiden from "@/assets/hotel-aiden.jpg.asset.json";
+
+const HOTEL_SOLNA_URL = "/__l5e/assets-v1/cda3d65c-5deb-42d0-bf95-35f0b4d38457/hotel-solna.jpg";
+const HOTEL_AIDEN_URL = "/__l5e/assets-v1/1428a22b-76f2-4390-a7fc-e0ab5505f047/hotel-aiden.jpg";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -31,7 +32,7 @@ const HOTELS: Hotel[] = [
       "Smidigt hotellalternativ precis intill Pickla. Perfekt för spelare, eventgäster och grupper som vill bo så nära anläggningen som möjligt.",
     cta: "Boka med Pickla-erbjudande",
     link: "https://app.mews.com/distributor/18223665-65c5-4869-8570-b24a00909368?mewsVoucherCode=Pickla",
-    image: hotelAiden.url,
+    image: HOTEL_AIDEN_URL,
   },
   {
     id: "solna",
@@ -41,7 +42,7 @@ const HOTELS: Hotel[] = [
       "Bekvämt boende i Solna Business Park, nära Pickla och bra kommunikationer. Passar både företag, turneringsgäster och längre vistelser.",
     cta: "Boka med Pickla-erbjudande",
     link: "https://app.mews.com/distributor/d5a26fba-22de-4004-b4ab-b24a0091ac46?mewsVoucherCode=PICKLA%20AB",
-    image: hotelSolna.url,
+    image: HOTEL_SOLNA_URL,
   },
 ];
 
