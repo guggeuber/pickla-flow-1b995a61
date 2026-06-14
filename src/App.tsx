@@ -12,6 +12,7 @@ import EventOps from "./pages/EventOps";
 import AdminPage from "./pages/AdminPage";
 import AdminEventLeadsPage from "./pages/AdminEventLeadsPage";
 import AdminEventProductsPage from "./pages/AdminEventProductsPage";
+import HubPage from "./pages/HubPage";
 import HotellPage from "./pages/HotellPage";
 import Auth from "./pages/Auth";
 import MyPage from "./pages/MyPage";
