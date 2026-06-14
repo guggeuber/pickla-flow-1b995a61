@@ -201,25 +201,43 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
   }, [packagesQuery.data]);
 
   const inquiry = useMutation({
-    mutationFn: () => apiPost("api-event-public", "group-inquiry", {
-      slug: SLUG,
-      eventType: config.inquiryEventType,
-      participants: Number(form.participants) || 1,
-      preferredDate: form.date || null,
-      preferredTime: "afternoon",
-      activities: ["Pickleball", "Dart"],
-      resources: [],
-      name: `${form.name}${form.company ? ` (${form.company})` : ""}`.trim(),
-      email: form.email.trim(),
-      phone: form.phone.trim(),
-      notes: [
-        form.budget ? `Budget: ${form.budget}` : "",
-        form.message,
-        selectedPackageSlug ? `Valt paket: ${selectedPackageSlug}${selectedPackageId ? ` (${selectedPackageId})` : ""}` : "",
-        `[Källa: ${config.inquirySource}]`,
-        `[Keyword: ${config.primaryKeyword}]`,
-      ].filter(Boolean).join("\n"),
-    }),
+    mutationFn: async () => {
+      const validated = validateLandingPayload(config, { formType: "group_inquiry" });
+      const res = await apiPost("api-event-public", "group-inquiry", {
+        slug: SLUG,
+        eventType: config.inquiryEventType,
+        participants: Number(form.participants) || 1,
+        preferredDate: form.date || null,
+        preferredTime: "afternoon",
+        activities: ["Pickleball", "Dart"],
+        resources: [],
+        name: `${form.name}${form.company ? ` (${form.company})` : ""}`.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        notes: [
+          form.budget ? `Budget: ${form.budget}` : "",
+          form.message,
+          selectedPackageSlug ? `Valt paket: ${selectedPackageSlug}${selectedPackageId ? ` (${selectedPackageId})` : ""}` : "",
+          `[Källa: ${validated.source}]`,
+          `[Keyword: ${validated.keyword}]`,
+          `[Kategori: ${validated.inquiryCategory}]`,
+          `[Formulär: ${validated.formType}]`,
+        ].filter(Boolean).join("\n"),
+      });
+      trackLandingInquiry({
+        event: "event_landing_inquiry_submit",
+        slug: config.slug,
+        keyword: validated.keyword,
+        inquiryCategory: validated.inquiryCategory,
+        source: validated.source,
+        formType: validated.formType,
+        participants: Number(form.participants) || undefined,
+        hasDate: Boolean(form.date),
+        hasBudget: Boolean(form.budget),
+        packageSlug: selectedPackageSlug,
+      });
+      return res;
+    },
     onSuccess: () => {
       setSent(true);
       toast.success("Förfrågan skickad!");
@@ -240,6 +258,13 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
     if (!canSubmit || inquiry.isPending) return;
     inquiry.mutate();
   };
+
+  const relatedPrivate = useMemo(() => {
+    if (config.category !== "private") return [];
+    return EVENT_LANDING_PAGES
+      .filter((p) => p.category === "private" && p.slug !== config.slug)
+      .slice(0, 3);
+  }, [config]);
 
   const scrollToForm = (pkg?: { id: string | null; slug: string; name: string }) => {
     if (pkg) {
