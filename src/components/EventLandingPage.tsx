@@ -8,7 +8,8 @@ import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
-import { EventLandingConfig, SUBMENU, SUBMENU_GROUPS } from "@/config/eventLandingPages";
+import { EventLandingConfig, SUBMENU, SUBMENU_GROUPS, EVENT_LANDING_PAGES } from "@/config/eventLandingPages";
+import { trackLandingInquiry, validateLandingPayload } from "@/lib/eventLandingTracking";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
