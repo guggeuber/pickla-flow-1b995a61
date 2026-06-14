@@ -152,14 +152,26 @@ export default function HotellPage() {
                   href={hotel.link}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={() => trackHotelClick(hotel.id, "book")}
                   className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-neutral-950 px-5 py-3.5 text-[14px] font-bold text-white active:scale-[0.98]"
                   style={{ fontFamily: FONT_GROTESK }}
                 >
                   {hotel.cta} <ArrowRight className="h-4 w-4" />
                 </a>
+                <a
+                  href={hotel.mapsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => trackHotelClick(hotel.id, "directions")}
+                  className="mt-2 inline-flex items-center justify-center gap-2 rounded-full border border-neutral-200 px-5 py-3 text-[13px] font-semibold text-neutral-700 hover:bg-neutral-50 active:scale-[0.98]"
+                  style={{ fontFamily: FONT_GROTESK }}
+                >
+                  <Navigation className="h-3.5 w-3.5" /> Visa vägbeskrivning
+                </a>
               </div>
             </div>
           ))}
+
         </div>
       </section>
 
