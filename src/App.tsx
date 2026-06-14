@@ -32,6 +32,16 @@ import KickoffPage from "./pages/KickoffPage";
 import AwPage from "./pages/AwPage";
 import KonferensPage from "./pages/KonferensPage";
 import TeambuildingPage from "./pages/TeambuildingPage";
+import KundeventPage from "./pages/KundeventPage";
+import LedningsgruppPage from "./pages/LedningsgruppPage";
+import GruppbokningPage from "./pages/GruppbokningPage";
+import FodelsedagskalasPage from "./pages/FodelsedagskalasPage";
+import SvensexaPage from "./pages/SvensexaPage";
+import MohippaPage from "./pages/MohippaPage";
+import FamiljeeventPage from "./pages/FamiljeeventPage";
+import KompisgangPage from "./pages/KompisgangPage";
+import SkolavslutningPage from "./pages/SkolavslutningPage";
+import JubileumPage from "./pages/JubileumPage";
 import BookingConfirmation from "./pages/BookingConfirmation";
 import BookingConfirmed from "./pages/BookingConfirmed";
 import MembershipPage from "./pages/MembershipPage";
@@ -119,6 +129,16 @@ function AppRoutes() {
             <Route path="/aw-stockholm" element={<AwPage />} />
             <Route path="/konferens-stockholm" element={<KonferensPage />} />
             <Route path="/teambuilding-stockholm" element={<TeambuildingPage />} />
+            <Route path="/kundevent-stockholm" element={<KundeventPage />} />
+            <Route path="/ledningsgrupp-stockholm" element={<LedningsgruppPage />} />
+            <Route path="/gruppbokning-stockholm" element={<GruppbokningPage />} />
+            <Route path="/fodelsedagskalas-stockholm" element={<FodelsedagskalasPage />} />
+            <Route path="/svensexa-stockholm" element={<SvensexaPage />} />
+            <Route path="/mohippa-stockholm" element={<MohippaPage />} />
+            <Route path="/familjeevent-stockholm" element={<FamiljeeventPage />} />
+            <Route path="/kompisgang-stockholm" element={<KompisgangPage />} />
+            <Route path="/skolavslutning-stockholm" element={<SkolavslutningPage />} />
+            <Route path="/jubileum-stockholm" element={<JubileumPage />} />
             <Route path="/hotell" element={<HotellPage />} />
             <Route path="/membership" element={<MembershipPage />} />
             <Route path="/membership/confirmed" element={<MembershipConfirmed />} />
