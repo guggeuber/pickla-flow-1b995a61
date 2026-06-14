@@ -42,7 +42,7 @@ const HOTELS: Hotel[] = [
       "Bekvämt boende i Solna Business Park, nära Pickla och bra kommunikationer. Passar både företag, turneringsgäster och längre vistelser.",
     cta: "Boka med Pickla-erbjudande",
     link: "https://app.mews.com/distributor/d5a26fba-22de-4004-b4ab-b24a0091ac46?mewsVoucherCode=PICKLA%20AB",
-    image: hotelSolna.url,
+    image: HOTEL_SOLNA_URL,
   },
 ];
 
