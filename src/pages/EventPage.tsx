@@ -468,7 +468,31 @@ export default function EventPage() {
         )}
       </div>
 
+      {/* Hotell cross-link */}
+      <div className="px-5 pb-6">
+        <Link
+          to="/hotell"
+          className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-200 bg-white px-4 py-3.5 active:bg-neutral-50"
+        >
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-neutral-100">
+              <MapPin className="h-4 w-4 text-neutral-700" />
+            </div>
+            <div>
+              <p className="text-[13px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
+                bo nära Pickla
+              </p>
+              <p className="text-[11px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                hotell för spelare och gäster
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-neutral-300" />
+        </Link>
+      </div>
+
       {/* Other events */}
+
       {otherEvents && otherEvents.length > 0 && (
         <>
           <div className="h-px bg-neutral-100 mx-5" />
