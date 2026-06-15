@@ -140,6 +140,17 @@ type OpeningHour = {
   is_closed: boolean | null;
 };
 
+type VenueOperationOverride = {
+  id: string;
+  title: string | null;
+  reason: string | null;
+  override_type: string | null;
+  starts_at: string;
+  ends_at: string;
+  affects_entire_venue: boolean;
+  status: string;
+};
+
 type GuideKey = "pickleball" | "darts" | "pickla";
 
 const GUIDES: Record<GuideKey, {
@@ -185,39 +196,156 @@ function useVenue(slug: string) {
   return useQuery({
     queryKey: ["today-venue", slug],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("venues")
-        .select("id, name, slug, address, city, description, cover_image_url")
-        .eq("slug", slug)
-        .maybeSingle();
-      return data;
+      const data = await apiGet<any>("api-bookings", "public-venue", { slug });
+      return {
+        ...(data?.venue || {}),
+        openingHours: data?.openingHours || [],
+        operationOverrides: data?.operationOverrides || [],
+      };
     },
   });
 }
 
-function useVenueOpenStatus(venueId: string | undefined) {
+function operationLabel(override: VenueOperationOverride) {
+  const start = DateTime.fromISO(override.starts_at, { zone: "utc" }).setZone("Europe/Stockholm").toFormat("HH:mm");
+  const end = DateTime.fromISO(override.ends_at, { zone: "utc" }).setZone("Europe/Stockholm").toFormat("HH:mm");
+  const title = override.title?.trim();
+  return title ? `${title}: Stängt ${start}–${end}` : `Stängt ${start}–${end}`;
+}
+
+function useVenueOpenStatus(venue: any | undefined) {
   return useQuery({
-    queryKey: ["today-open-status", venueId],
-    enabled: !!venueId,
-    staleTime: 60000,
+    queryKey: ["today-open-status", venue?.id, venue?.operationOverrides?.map((row: VenueOperationOverride) => row.id).join(",")],
+    enabled: !!venue?.id,
+    staleTime: 30000,
     queryFn: async () => {
       const now = DateTime.now().setZone("Europe/Stockholm");
-      const { data } = await supabase
-        .from("opening_hours")
-        .select("day_of_week, open_time, close_time, is_closed")
-        .eq("venue_id", venueId!)
-        .order("day_of_week");
-      const openingHours = (data || []) as OpeningHour[];
+      const openingHours = (venue?.openingHours || []) as OpeningHour[];
+      const operationOverrides = ((venue?.operationOverrides || []) as VenueOperationOverride[])
+        .filter((row) => row.status === "active" && row.affects_entire_venue)
+        .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
       const today = openingHours.find((row) => row.day_of_week === now.weekday % 7);
+      const todayLabel = `Today, ${now.setLocale("sv").toFormat("d LLLL")}`;
+      const normalHoursLabel = !today || today.is_closed || !today.open_time || !today.close_time
+        ? "Stängt"
+        : `${String(today.open_time).slice(0, 5)}–${String(today.close_time).slice(0, 5)}`;
+
       if (!today || today.is_closed || !today.open_time || !today.close_time) {
-        return { open: false, label: "Stängt idag", openingHours };
+        return {
+          open: false,
+          label: "Stängt idag",
+          openingHours,
+          operationOverrides,
+          todayOpeningHours: today || null,
+          normalHoursLabel,
+          currentStatusLabel: "Stängt idag",
+          todayLabel,
+          venueStatusTone: "closed" as const,
+        };
       }
+
       const nowTime = now.toFormat("HH:mm");
       const openTime = String(today.open_time).slice(0, 5);
       const closeTime = String(today.close_time).slice(0, 5);
-      const open = nowTime >= openTime && nowTime < closeTime;
-      const label = open ? `Öppet till ${closeTime} ikväll` : nowTime < openTime ? `Öppnar ${openTime} idag` : "Stängt för idag";
-      return { open, label, openingHours };
+      const normalOpen = nowTime >= openTime && nowTime < closeTime;
+      const normalLabel = normalOpen ? `Öppet till ${closeTime} ikväll` : nowTime < openTime ? `Öppnar ${openTime} idag` : "Stängt för idag";
+      const normalOpenStart = now.set({
+        hour: Number(openTime.slice(0, 2)),
+        minute: Number(openTime.slice(3, 5)),
+        second: 0,
+        millisecond: 0,
+      });
+      const normalOpenEnd = now.set({
+        hour: Number(closeTime.slice(0, 2)),
+        minute: Number(closeTime.slice(3, 5)),
+        second: 0,
+        millisecond: 0,
+      });
+
+      const activeOverride = operationOverrides.find((override) => {
+        const start = DateTime.fromISO(override.starts_at, { zone: "utc" }).setZone("Europe/Stockholm");
+        const end = DateTime.fromISO(override.ends_at, { zone: "utc" }).setZone("Europe/Stockholm");
+        return start.hasSame(now, "day") || end.hasSame(now, "day") || (start < now.startOf("day") && end > now.endOf("day"));
+      });
+
+      if (!activeOverride) {
+        return {
+          open: normalOpen,
+          label: normalLabel,
+          openingHours,
+          operationOverrides,
+          todayOpeningHours: today,
+          normalHoursLabel,
+          currentStatusLabel: normalLabel,
+          todayLabel,
+          venueStatusTone: normalOpen ? "open" as const : "closed" as const,
+        };
+      }
+
+      const overrideStart = DateTime.fromISO(activeOverride.starts_at, { zone: "utc" }).setZone("Europe/Stockholm");
+      const overrideEnd = DateTime.fromISO(activeOverride.ends_at, { zone: "utc" }).setZone("Europe/Stockholm");
+      const overrideStartTime = overrideStart.toFormat("HH:mm");
+      const overrideEndTime = overrideEnd.toFormat("HH:mm");
+      const coversNormalDay = overrideStart <= normalOpenStart && overrideEnd >= normalOpenEnd;
+      const wholeCalendarDay = overrideStart <= now.startOf("day") && overrideEnd >= now.plus({ days: 1 }).startOf("day");
+
+      if (wholeCalendarDay || coversNormalDay) {
+        return {
+          open: false,
+          label: "Stängt idag",
+          openingHours,
+          operationOverrides,
+          activeOperationOverride: activeOverride,
+          todayOpeningHours: today,
+          normalHoursLabel,
+          currentStatusLabel: "Stängt idag",
+          todayLabel,
+          venueStatusTone: "exception" as const,
+        };
+      }
+
+      if (now < overrideStart) {
+        return {
+          open: normalOpen,
+          label: `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
+          openingHours,
+          operationOverrides,
+          activeOperationOverride: activeOverride,
+          todayOpeningHours: today,
+          normalHoursLabel,
+          currentStatusLabel: `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
+          todayLabel,
+          venueStatusTone: "exception" as const,
+        };
+      }
+
+      if (now < overrideEnd) {
+        return {
+          open: false,
+          label: `Öppnar ${overrideEndTime} idag`,
+          openingHours,
+          operationOverrides,
+          activeOperationOverride: activeOverride,
+          todayOpeningHours: today,
+          normalHoursLabel,
+          currentStatusLabel: `Öppnar ${overrideEndTime}`,
+          todayLabel,
+          venueStatusTone: "exception" as const,
+        };
+      }
+
+      return {
+        open: normalOpen,
+        label: normalLabel,
+        openingHours,
+        operationOverrides,
+        activeOperationOverride: activeOverride,
+        todayOpeningHours: today,
+        normalHoursLabel,
+        currentStatusLabel: normalLabel,
+        todayLabel,
+        venueStatusTone: normalOpen ? "open" as const : "closed" as const,
+      };
     },
   });
 }
@@ -536,7 +664,7 @@ export default function TodayPage() {
   const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenue(slug);
-  const { data: status } = useVenueOpenStatus(venue?.id);
+  const { data: status } = useVenueOpenStatus(venue);
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const now = DateTime.now().setZone("Europe/Stockholm");
   const heroImage = venue?.cover_image_url || heroPhoto;
@@ -586,6 +714,7 @@ export default function TodayPage() {
         slug={slug}
         venueName={venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Stockholm"}
         venueOpen={Boolean(status?.open)}
+        venueStatusTone={status?.venueStatusTone}
         onVenueClick={() => setVenueSheetOpen(true)}
         background={PAGE_BG}
       />
@@ -709,9 +838,43 @@ export default function TodayPage() {
               <h3 className="text-[16px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
                 Öppettider
               </h3>
+              <div className="mt-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                      {status?.todayLabel || `Today, ${now.setLocale("sv").toFormat("d LLLL")}`}
+                    </p>
+                    <p className="mt-2 text-[13px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                      Normal öppettid: {status?.normalHoursLabel || "Laddar"}
+                    </p>
+                    {status?.activeOperationOverride && (
+                      <p className="mt-1 text-[13px] font-bold text-orange-700" style={{ fontFamily: FONT_HEADING }}>
+                        Driftavvikelse: {operationLabel(status.activeOperationOverride)}
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className="mt-1 h-3 w-3 shrink-0 rounded-full"
+                    style={{
+                      background: status?.venueStatusTone === "exception"
+                        ? "#f97316"
+                        : status?.open
+                          ? GREEN
+                          : "#ef4444",
+                    }}
+                  />
+                </div>
+                <p className="mt-3 rounded-xl bg-white px-3 py-2 text-[13px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                  Aktuell status: {status?.currentStatusLabel || status?.label || "Laddar"}
+                </p>
+              </div>
               <div className="mt-3 space-y-1">
                 {(status?.openingHours || []).map((hour) => (
-                  <div key={hour.day_of_week} className="flex justify-between gap-8 text-[13px] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                  <div
+                    key={hour.day_of_week}
+                    className={`flex justify-between gap-8 rounded-xl px-2 py-1 text-[13px] text-neutral-950 ${hour.day_of_week === now.weekday % 7 ? "bg-neutral-100 font-bold" : ""}`}
+                    style={{ fontFamily: FONT_MONO }}
+                  >
                     <span>{dayLabel(hour.day_of_week)}</span>
                     <span>{hour.is_closed ? "Stängt" : `${formatHour(hour.open_time)} - ${formatHour(hour.close_time)}`}</span>
                   </div>

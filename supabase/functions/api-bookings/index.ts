@@ -1079,6 +1079,18 @@ Deno.serve(async (req) => {
       .eq('venue_id', venue.id)
       .order('day_of_week');
 
+    const todaySthlm = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+    const { start: todayStartUtc, end: todayEndUtc } = stockholmDateRangeUtc(todaySthlm);
+    const { data: operationOverrides } = await admin
+      .from('venue_operation_overrides')
+      .select('id, title, reason, override_type, starts_at, ends_at, affects_entire_venue, status')
+      .eq('venue_id', venue.id)
+      .eq('status', 'active')
+      .eq('affects_entire_venue', true)
+      .lt('starts_at', todayEndUtc)
+      .gt('ends_at', todayStartUtc)
+      .order('starts_at');
+
     // Get active events
     const { data: events } = await admin.from('events')
       .select('id, name, display_name, event_type, format, start_date, end_date, status, logo_url, primary_color')
@@ -1095,7 +1107,13 @@ Deno.serve(async (req) => {
       .eq('is_active', true)
       .order('sort_order');
 
-    return jsonResponse({ venue, openingHours: hours || [], events: events || [], links: links || [] }, 200, 60);
+    return jsonResponse({
+      venue,
+      openingHours: hours || [],
+      operationOverrides: operationOverrides || [],
+      events: events || [],
+      links: links || [],
+    }, 200, 30);
   }
 
   // ── Public endpoint: display device by token (no auth required) ──

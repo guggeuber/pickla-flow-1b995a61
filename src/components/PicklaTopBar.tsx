@@ -19,6 +19,7 @@ type PicklaTopBarProps = {
   slug?: string;
   venueName?: string;
   venueOpen?: boolean;
+  venueStatusTone?: "open" | "closed" | "exception";
   showVenue?: boolean;
   onVenueClick?: () => void;
   background?: string;
@@ -53,6 +54,7 @@ export function PicklaTopBar({
   slug = "pickla-arena-sthlm",
   venueName = "Pickla Stockholm",
   venueOpen = true,
+  venueStatusTone,
   showVenue = true,
   onVenueClick,
   background = "#fffaf7",
@@ -62,6 +64,13 @@ export function PicklaTopBar({
   const [open, setOpen] = useState(false);
   const { data: recentBookings = [] } = useRecentBookings(user?.id);
   const visibleBookings = useMemo(() => recentBookings, [recentBookings]);
+  const dotColor = venueStatusTone === "exception"
+    ? "#f97316"
+    : venueStatusTone === "closed"
+      ? "#ef4444"
+      : venueOpen
+        ? "#32ef87"
+        : "#d1d5db";
 
   const go = (href: string) => {
     setOpen(false);
@@ -100,7 +109,7 @@ export function PicklaTopBar({
               className="min-w-0 flex-1 justify-center flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-[12px] shadow-sm active:scale-[0.98]"
               style={{ fontFamily: FONT_MONO }}
             >
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: venueOpen ? "#32ef87" : "#d1d5db" }} />
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: dotColor }} />
               <span className="truncate">{venueName}</span>
             </button>
           )}
