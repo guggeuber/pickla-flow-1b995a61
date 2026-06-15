@@ -155,6 +155,51 @@ function resourceForBlockRow(block: any) {
   return Array.isArray(resource) ? resource[0] : resource;
 }
 
+function activityOverrideKey(activitySessionId: string, sessionDate: string) {
+  return `${activitySessionId}:${sessionDate}`;
+}
+
+async function activityRegistrationCounts(admin: any, activitySessionIds: string[], startDate: string, endDate: string) {
+  const cleanIds = [...new Set(activitySessionIds.filter(Boolean))];
+  const counts = new Map<string, number>();
+  if (!cleanIds.length || !startDate || !endDate) return counts;
+
+  const { data, error } = await admin
+    .from('session_registrations')
+    .select('activity_session_id, session_date, status')
+    .in('activity_session_id', cleanIds)
+    .gte('session_date', startDate)
+    .lte('session_date', endDate);
+  if (error) throw new Error(error.message);
+
+  for (const row of data || []) {
+    if (row.status === 'cancelled') continue;
+    const key = activityOverrideKey(row.activity_session_id, row.session_date);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+async function activityOverrideMap(admin: any, venueId: string, activitySessionIds: string[], startDate: string, endDate: string) {
+  const cleanIds = [...new Set(activitySessionIds.filter(Boolean))];
+  const overrides = new Map<string, any>();
+  if (!cleanIds.length || !startDate || !endDate) return overrides;
+
+  const { data, error } = await admin
+    .from('activity_session_overrides')
+    .select('id, activity_session_id, session_date, status, reason, venue_operation_override_id')
+    .eq('venue_id', venueId)
+    .in('activity_session_id', cleanIds)
+    .gte('session_date', startDate)
+    .lte('session_date', endDate);
+  if (error) throw new Error(error.message);
+
+  for (const row of data || []) {
+    overrides.set(activityOverrideKey(row.activity_session_id, row.session_date), row);
+  }
+  return overrides;
+}
+
 async function activeBookableCourtResources(admin: any, venueId: string) {
   const { data, error } = await admin
     .from('event_resource_catalog')
@@ -276,6 +321,7 @@ async function analyzeOperationImpact(
         if (activitySamples.length < 8) {
           activitySamples.push({
             id: session.id,
+            activity_session_id: session.id,
             name: session.name,
             session_type: session.session_type,
             session_date: date,
@@ -285,6 +331,21 @@ async function analyzeOperationImpact(
         }
       }
     }
+  }
+
+  const sampleSessionIds = activitySamples.map((sample) => sample.activity_session_id);
+  const startDate = dates[0] || '';
+  const endDate = dates[dates.length - 1] || '';
+  const [registrationCounts, overrides] = await Promise.all([
+    activityRegistrationCounts(admin, sampleSessionIds, startDate, endDate),
+    activityOverrideMap(admin, venueId, sampleSessionIds, startDate, endDate),
+  ]);
+  for (const sample of activitySamples) {
+    const key = activityOverrideKey(sample.activity_session_id, sample.session_date);
+    const override = overrides.get(key);
+    sample.registrations_count = registrationCounts.get(key) || 0;
+    sample.override_status = override?.status || null;
+    sample.activity_session_override_id = override?.id || null;
   }
 
   const resourceIds = !affectsEntireVenue && courtIds.length
@@ -344,7 +405,7 @@ Deno.serve(async (req) => {
     if (!ok) return errorResponse('Forbidden: admin only', 403);
 
     const venueId = url.searchParams.get('venueId') || adminVenueId;
-    const canResolveVenueFromBody = ['venue-operation-impact', 'venue-operation-overrides'].includes(path)
+    const canResolveVenueFromBody = ['venue-operation-impact', 'venue-operation-overrides', 'activity-session-overrides'].includes(path)
       && ['POST', 'PATCH'].includes(req.method);
     if (!venueId && !canResolveVenueFromBody) return errorResponse('No venue found', 400);
 
@@ -786,6 +847,62 @@ Deno.serve(async (req) => {
       if (blocksError) return errorResponse(blocksError.message);
 
       return jsonResponse({ override: data, blocks: blocks || [] });
+    }
+
+    if (req.method === 'POST' && path === 'activity-session-overrides') {
+      const body = await req.json();
+      const requestedVenueId = url.searchParams.get('venueId') || body.venueId || adminVenueId;
+      if (!requestedVenueId) return errorResponse('No venue found', 400);
+
+      const activitySessionId = String(body.activity_session_id || body.activitySessionId || '').trim();
+      const sessionDate = String(body.session_date || body.sessionDate || '').slice(0, 10);
+      const status = String(body.status || '').trim();
+      const reason = String(body.reason || '').trim().slice(0, 1000);
+      const venueOperationOverrideId = body.venue_operation_override_id || body.venueOperationOverrideId || null;
+      const metadata = cleanBlockMetadata(body.metadata);
+
+      if (!activitySessionId) return errorResponse('Missing activity_session_id', 400);
+      if (!sessionDate) return errorResponse('Missing session_date', 400);
+      if (!['active', 'hidden', 'cancelled'].includes(status)) return errorResponse('Invalid status', 400);
+
+      const { data: session, error: sessionError } = await admin
+        .from('activity_sessions')
+        .select('id, venue_id')
+        .eq('id', activitySessionId)
+        .eq('venue_id', requestedVenueId)
+        .maybeSingle();
+      if (sessionError) return errorResponse(sessionError.message);
+      if (!session) return errorResponse('Activity session not found for venue', 404);
+
+      const counts = await activityRegistrationCounts(admin, [activitySessionId], sessionDate, sessionDate);
+      const registrationsCount = counts.get(activityOverrideKey(activitySessionId, sessionDate)) || 0;
+      if (registrationsCount > 0 && body.confirm !== true) {
+        return jsonResponse({
+          requires_confirmation: true,
+          registrations_count: registrationsCount,
+          message: 'Activity occurrence has registrations. Confirm before changing visibility.',
+        }, 409);
+      }
+
+      const { data, error: upsertError } = await admin
+        .from('activity_session_overrides')
+        .upsert({
+          venue_id: requestedVenueId,
+          activity_session_id: activitySessionId,
+          session_date: sessionDate,
+          status,
+          reason: reason || null,
+          venue_operation_override_id: venueOperationOverrideId || null,
+          metadata: {
+            ...metadata,
+            registrations_count_at_change: registrationsCount,
+          },
+        }, { onConflict: 'venue_id,activity_session_id,session_date' })
+        .select()
+        .single();
+      if (upsertError) return errorResponse(upsertError.message);
+
+      return jsonResponse({ override: data, registrations_count: registrationsCount });
     }
 
     // ── EVENT RESOURCE BLOCKS ──

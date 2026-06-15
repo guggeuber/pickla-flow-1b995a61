@@ -33,6 +33,7 @@ import {
 } from "@/lib/bookingGroups";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { DateTime } from "luxon";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { EventCard } from "@/components/hub/EventCard";
@@ -553,7 +554,16 @@ function useWeeklyProgram(venueId: string | undefined, venueSlug: string) {
         }
       }
 
-      const sortedItems = items
+      const sessionIdsForOverrides = [...new Set(items.map((item) => item.id).filter(Boolean))];
+      const overrideMap = sessionIdsForOverrides.length
+        ? await fetchActivitySessionOverrides(venueId!, sessionIdsForOverrides, startDate, endDate)
+        : new Map();
+      const visibleItems = items.filter((item) => {
+        const override = overrideMap.get(occurrenceOverrideKey(item.id, item.occurrence_date));
+        return !isPublicActivityOverrideHidden(override?.status);
+      });
+
+      const sortedItems = visibleItems
         .sort((a, b) => {
           const aTime = `${a.occurrence_date}T${String(a.start_time).slice(0, 5)}`;
           const bTime = `${b.occurrence_date}T${String(b.start_time).slice(0, 5)}`;

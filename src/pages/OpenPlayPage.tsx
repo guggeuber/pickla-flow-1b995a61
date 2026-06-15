@@ -9,6 +9,7 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 import { ArrowLeft, Loader2, Zap } from "lucide-react";
 import { DateTime } from "luxon";
 import { useAuth } from "@/hooks/useAuth";
+import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 
 const CREAM = "#faf8f5";
 const DARK_BLUE = "#1a1f3a";
@@ -163,6 +164,21 @@ const OpenPlayPage = () => {
     return slots;
   })();
 
+  const overrideSessionIds = [...new Set(upcomingSlots.map((slot) => slot.session.id).filter(Boolean))];
+  const overrideStartDate = upcomingSlots[0]?.date.toISODate() || "";
+  const overrideEndDate = upcomingSlots[upcomingSlots.length - 1]?.date.toISODate() || "";
+  const { data: overrideMap = new Map() } = useQuery({
+    queryKey: ["openplay-activity-overrides", venueId, overrideSessionIds.join(","), overrideStartDate, overrideEndDate],
+    enabled: !!venueId && overrideSessionIds.length > 0 && !!overrideStartDate && !!overrideEndDate,
+    staleTime: 10000,
+    queryFn: () => fetchActivitySessionOverrides(venueId!, overrideSessionIds, overrideStartDate, overrideEndDate),
+  });
+  const visibleSlots = upcomingSlots.filter((slot) => {
+    const sessionDate = slot.date.toISODate() || "";
+    const override = overrideMap.get(occurrenceOverrideKey(slot.session.id, sessionDate));
+    return !isPublicActivityOverrideHidden(override?.status);
+  });
+
   return (
     <div
       className="min-h-[100dvh] flex flex-col items-center px-5"
@@ -186,7 +202,7 @@ const OpenPlayPage = () => {
         <div className="flex-1 flex items-center justify-center py-16">
           <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: `${DARK_BLUE} transparent ${DARK_BLUE} transparent` }} />
         </div>
-      ) : !upcomingSlots.length ? (
+      ) : !visibleSlots.length ? (
         <div className="flex-1 flex flex-col items-center justify-center py-16 text-center">
           <Zap className="w-10 h-10 mb-3" style={{ color: PINK }} />
           <p className="text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING }}>Inga Open Play-pass just nu</p>
@@ -194,7 +210,7 @@ const OpenPlayPage = () => {
         </div>
       ) : (
         <motion.div variants={container} initial="hidden" animate="show" className="w-full max-w-md flex flex-col gap-2.5 pb-8">
-          {upcomingSlots.map((slot, i) => {
+          {visibleSlots.map((slot, i) => {
             const isFriday = slot.date.weekday === 5;
             const basePrice = slot.session.price_sek;
             const memberPrice = getMemberDayPassPrice(basePrice);

@@ -31,9 +31,21 @@ interface OperationOverride {
   } | null;
 }
 
+interface ImpactActivity {
+  id: string;
+  activity_session_id: string;
+  name: string;
+  session_type: string;
+  session_date: string;
+  start_time: string;
+  end_time: string;
+  registrations_count?: number;
+  override_status?: string | null;
+}
+
 interface ImpactAnalysis {
   bookings: { count: number; samples: unknown[] };
-  activities: { count: number; samples: unknown[]; limited?: boolean };
+  activities: { count: number; samples: ImpactActivity[]; limited?: boolean };
   blocks: { count: number; samples: unknown[] };
 }
 
@@ -61,6 +73,10 @@ function courtNames(courts: Court[], ids: string[]) {
   return ids.map((id) => byId.get(id)).filter(Boolean).join(", ");
 }
 
+function activityOverrideKey(activity: ImpactActivity) {
+  return `${activity.activity_session_id || activity.id}:${activity.session_date}`;
+}
+
 export default function AdminVenueOperations({ venueId }: { venueId: string }) {
   const qc = useQueryClient();
   const today = DateTime.now().setZone("Europe/Stockholm").toISODate() || "";
@@ -74,6 +90,7 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
   const [affectsEntireVenue, setAffectsEntireVenue] = useState(true);
   const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>([]);
   const [impact, setImpact] = useState<ImpactAnalysis | null>(null);
+  const [lastOverrideId, setLastOverrideId] = useState<string | null>(null);
 
   const { data: courts = [], isLoading: courtsLoading } = useQuery<Court[]>({
     queryKey: ["admin-courts", venueId],
@@ -111,16 +128,20 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
 
   const analyzeImpact = useMutation({
     mutationFn: () => apiPost<ImpactAnalysis>("api-admin", "venue-operation-impact", requestBody),
-    onSuccess: (data) => setImpact(data),
+    onSuccess: (data) => {
+      setImpact(data);
+      setLastOverrideId(null);
+    },
     onError: (err: Error) => toast.error(err.message),
   });
 
   const createOverride = useMutation({
-    mutationFn: () => apiPost<{ impact: ImpactAnalysis }>("api-admin", "venue-operation-overrides", requestBody),
+    mutationFn: () => apiPost<{ override?: OperationOverride; impact: ImpactAnalysis }>("api-admin", "venue-operation-overrides", requestBody),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["admin-venue-operation-overrides", venueId] });
       qc.invalidateQueries({ queryKey: ["admin-resource-blocks", venueId] });
       setImpact(data.impact);
+      setLastOverrideId(data.override?.id || null);
       setReason("");
       setSelectedCourtIds([]);
       toast.success("Driftavvikelse skapad");
@@ -138,6 +159,35 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const activityOverride = useMutation({
+    mutationFn: ({ activity, status, confirm }: { activity: ImpactActivity; status: "hidden" | "cancelled"; confirm: boolean }) =>
+      apiPost("api-admin", "activity-session-overrides", {
+        venueId,
+        activity_session_id: activity.activity_session_id || activity.id,
+        session_date: activity.session_date,
+        status,
+        reason: reason.trim() || title.trim(),
+        venue_operation_override_id: lastOverrideId,
+        confirm,
+      }),
+    onSuccess: (_, variables) => {
+      toast.success(variables.status === "hidden" ? "Aktivitet dold" : "Aktivitet avbokad");
+      setImpact((current) => current ? {
+        ...current,
+        activities: {
+          ...current.activities,
+          samples: current.activities.samples.map((activity) =>
+            activityOverrideKey(activity) === activityOverrideKey(variables.activity)
+              ? { ...activity, override_status: variables.status }
+              : activity
+          ),
+        },
+      } : current);
+      qc.invalidateQueries({ queryKey: ["admin-venue-operation-overrides", venueId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   const toggleCourt = (courtId: string) => {
     setSelectedCourtIds((current) =>
       current.includes(courtId) ? current.filter((id) => id !== courtId) : [...current, courtId],
@@ -146,6 +196,15 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
   };
 
   const canCreate = title.trim() && date && startTime && endTime && (affectsEntireVenue || selectedCourtIds.length > 0);
+
+  const applyActivityOverride = (activity: ImpactActivity, status: "hidden" | "cancelled") => {
+    const registrationsCount = Number(activity.registrations_count || 0);
+    const confirm = registrationsCount > 0
+      ? window.confirm(`${activity.name} har ${registrationsCount} anmälda. Vill du fortsätta?`)
+      : true;
+    if (!confirm) return;
+    activityOverride.mutate({ activity, status, confirm });
+  };
 
   return (
     <div className="space-y-4">
@@ -270,19 +329,75 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
         </div>
 
         {impact && (
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-xl border border-border bg-muted/20 p-3 text-center">
-              <p className="text-xl font-display font-black text-foreground">{impact.bookings.count}</p>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Bokningar</p>
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-xl border border-border bg-muted/20 p-3 text-center">
+                <p className="text-xl font-display font-black text-foreground">{impact.bookings.count}</p>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Bokningar</p>
+              </div>
+              <div className="rounded-xl border border-border bg-muted/20 p-3 text-center">
+                <p className="text-xl font-display font-black text-foreground">{impact.activities.count}</p>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Aktiviteter</p>
+              </div>
+              <div className="rounded-xl border border-border bg-muted/20 p-3 text-center">
+                <p className="text-xl font-display font-black text-foreground">{impact.blocks.count}</p>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Block</p>
+              </div>
             </div>
-            <div className="rounded-xl border border-border bg-muted/20 p-3 text-center">
-              <p className="text-xl font-display font-black text-foreground">{impact.activities.count}</p>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Aktiviteter</p>
-            </div>
-            <div className="rounded-xl border border-border bg-muted/20 p-3 text-center">
-              <p className="text-xl font-display font-black text-foreground">{impact.blocks.count}</p>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Block</p>
-            </div>
+
+            {impact.activities.samples.length > 0 && (
+              <div className="rounded-2xl border border-border bg-muted/20 p-3 space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Påverkade aktiviteter</p>
+                {impact.activities.samples.map((activity) => {
+                  const registrationsCount = Number(activity.registrations_count || 0);
+                  const hasRegistrations = registrationsCount > 0;
+                  const currentStatus = activity.override_status;
+                  return (
+                    <div key={activityOverrideKey(activity)} className="rounded-xl border border-border bg-background/40 p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black text-foreground">{activity.name}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {activity.session_date} · {activity.start_time}-{activity.end_time}
+                          </p>
+                          <p className={`text-[11px] font-bold ${hasRegistrations ? "text-destructive" : "text-muted-foreground"}`}>
+                            {registrationsCount} anmälda
+                          </p>
+                        </div>
+                        {currentStatus && currentStatus !== "active" && (
+                          <span className="rounded-full bg-primary/15 px-2 py-1 text-[10px] font-bold uppercase text-primary">
+                            {currentStatus === "hidden" ? "Dold" : "Avbokad"}
+                          </span>
+                        )}
+                      </div>
+                      {hasRegistrations && (
+                        <p className="rounded-lg bg-destructive/10 px-3 py-2 text-[11px] font-semibold text-destructive">
+                          Har anmälda deltagare. Bekräftelse krävs innan ändring.
+                        </p>
+                      )}
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={activityOverride.isPending || currentStatus === "hidden"}
+                          onClick={() => applyActivityOverride(activity, "hidden")}
+                          className="rounded-xl bg-muted/60 px-3 py-2 text-xs font-black text-foreground disabled:opacity-50"
+                        >
+                          Dölj
+                        </button>
+                        <button
+                          type="button"
+                          disabled={activityOverride.isPending || currentStatus === "cancelled"}
+                          onClick={() => applyActivityOverride(activity, "cancelled")}
+                          className="rounded-xl bg-destructive/10 px-3 py-2 text-xs font-black text-destructive disabled:opacity-50"
+                        >
+                          Avboka
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 

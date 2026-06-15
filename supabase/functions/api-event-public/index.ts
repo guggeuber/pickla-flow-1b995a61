@@ -286,6 +286,10 @@ async function buildActivityPreview(client: any, {
 
   const occurrence = nextActivityOccurrence(session, occurrenceDate);
   occurrenceDate = occurrence.toISODate();
+  const override = await activityOccurrenceOverride(client, session.venue_id, session.id, occurrenceDate);
+  if (override?.status === 'hidden' || override?.status === 'cancelled') {
+    throw new Error('Activity occurrence is not available');
+  }
   const resourceId = activityResourceId(session.id, occurrenceDate);
 
   if (!room && includeChatPreview) {
@@ -344,6 +348,17 @@ async function activityRegistrationCount(client: any, activitySessionId: string,
     .eq('session_date', sessionDate)
     .neq('status', 'cancelled');
   return count || 0;
+}
+
+async function activityOccurrenceOverride(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
+  const { data, error } = await client.from('activity_session_overrides')
+    .select('id, status, reason')
+    .eq('venue_id', venueId)
+    .eq('activity_session_id', activitySessionId)
+    .eq('session_date', sessionDate)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
 }
 
 async function activityInterestState(client: any, {

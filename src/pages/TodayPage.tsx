@@ -13,6 +13,7 @@ import {
   groupBookingRows,
 } from "@/lib/bookingGroups";
 import { activityPriceLabels } from "@/lib/activityPricing";
+import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
@@ -320,7 +321,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       }
 
       const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
-      const [registrationsRes, socialProofRes] = await Promise.all([
+      const [registrationsRes, socialProofRes, overrideMap] = await Promise.all([
         sessionIds.length
           ? supabase
               .from("session_registrations")
@@ -337,6 +338,9 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
               endDate,
             }).catch(() => ({ occurrences: [] }))
           : Promise.resolve({ occurrences: [] }),
+        sessionIds.length
+          ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
+          : Promise.resolve(new Map()),
       ]);
 
       const registrationCounts = new Map<string, number>();
@@ -350,7 +354,12 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
       }
 
-      const sessionItems: FeedItem[] = sessionOccurrences.map((session) => {
+      const visibleSessionOccurrences = sessionOccurrences.filter((session) => {
+        const override = overrideMap.get(occurrenceOverrideKey(session.id, session.occurrence_date));
+        return !isPublicActivityOverrideHidden(override?.status);
+      });
+
+      const sessionItems: FeedItem[] = visibleSessionOccurrences.map((session) => {
         const socialProof = socialProofByKey.get(`${session.id}:${session.occurrence_date}`);
         const count = socialProof?.registrations_count ?? registrationCounts.get(`${session.id}:${session.occurrence_date}`) ?? 0;
         const interestedCount = socialProof?.interested_count ?? 0;

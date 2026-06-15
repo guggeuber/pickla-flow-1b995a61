@@ -9,6 +9,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
+import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import {
   ACCESS_ACTIVITY_DISCOUNT_PERCENT,
@@ -114,6 +115,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const room = data?.room;
   const occurrenceDate = data?.occurrence_date || requestedDate || session?.session_date || null;
   const venueId = session?.venue_id || data?.venue?.id;
+  const { data: occurrenceOverrideMap = new Map() } = useQuery({
+    queryKey: ["program-session-override", venueId, sessionId, occurrenceDate],
+    enabled: !!venueId && !!sessionId && !!occurrenceDate,
+    staleTime: 10000,
+    queryFn: () => fetchActivitySessionOverrides(venueId!, [sessionId!], occurrenceDate!, occurrenceDate!),
+  });
+  const occurrenceOverride = sessionId && occurrenceDate
+    ? occurrenceOverrideMap.get(occurrenceOverrideKey(sessionId, occurrenceDate))
+    : null;
+  const occurrenceHidden = isPublicActivityOverrideHidden(occurrenceOverride?.status) || Boolean(error && !data?.activity_session);
   const accessSnapshotForResolvedSession = useAccessSnapshot({ venueId, sessionDate: occurrenceDate });
   const isLoading = sessionLoading && (previewLoading || waitForAccessSnapshot);
 
@@ -211,6 +222,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       await toggleInterest("primary");
       return;
     }
+    if (occurrenceHidden) {
+      toast.error("Aktiviteten är inte tillgänglig för anmälan");
+      return;
+    }
     if (isRegistered || !session || !occurrenceDate) return;
     if (!user?.id) {
       navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
@@ -261,6 +276,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   };
 
   const startDayPassSignup = async () => {
+    if (occurrenceHidden) {
+      toast.error("Aktiviteten är inte tillgänglig för anmälan");
+      return;
+    }
     if (isRegistered || !session || !occurrenceDate) return;
     if (!user?.id) {
       navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
@@ -414,12 +433,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       </div>
 
       <main className="mx-auto mt-12 max-w-md">
-        {isLoading || (!session && !error) ? (
+        {isLoading || (!session && !error && !occurrenceHidden) ? (
           <div className="grid justify-items-center gap-4 rounded-[28px] bg-white p-10 text-center shadow-sm" style={{ border: `1px solid ${BORDER}` }}>
             <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
             <p className="text-lg font-black" style={{ fontFamily: FONT_HEADING }}>Hämtar aktiviteten</p>
           </div>
-        ) : error && !session ? (
+        ) : occurrenceHidden || (error && !session) ? (
           <div className="grid gap-4 rounded-[28px] bg-white p-7 text-center shadow-sm" style={{ border: `1px solid ${BORDER}` }}>
             <p className="text-xl font-black" style={{ fontFamily: FONT_HEADING }}>Aktiviteten hittades inte</p>
             <p className="text-sm font-bold" style={{ color: MUTED }}>Gå tillbaka till Pickla Idag och välj ett annat pass.</p>
@@ -463,7 +482,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       </>
       )}
 
-      {session && (
+      {session && !occurrenceHidden && (
         <Drawer open onOpenChange={closeDrawer} shouldScaleBackground={false}>
           <DrawerContent className="z-[60] h-[88dvh] max-h-[720px] overflow-hidden rounded-t-[28px] border-0 bg-white p-0 text-neutral-950">
             <DrawerTitle className="sr-only">{session.name}</DrawerTitle>

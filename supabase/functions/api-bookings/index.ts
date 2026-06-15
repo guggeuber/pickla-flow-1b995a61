@@ -86,6 +86,22 @@ async function getCourtResourceBlocks(
   );
 }
 
+async function isActivityOccurrenceBlocked(admin: any, venueId: string, activitySessionId: string, sessionDate: string) {
+  if (!venueId || !activitySessionId || !sessionDate) return false;
+  const { data, error } = await admin
+    .from('activity_session_overrides')
+    .select('status')
+    .eq('venue_id', venueId)
+    .eq('activity_session_id', activitySessionId)
+    .eq('session_date', sessionDate)
+    .maybeSingle();
+  if (error) {
+    console.error('activity_session_overrides lookup failed', error.message);
+    return false;
+  }
+  return data?.status === 'hidden' || data?.status === 'cancelled';
+}
+
 function stockholmWeekForIso(iso: string) {
   const dt = DateTime.fromISO(iso, { zone: 'utc' }).setZone('Europe/Stockholm');
   return {
@@ -511,6 +527,11 @@ Deno.serve(async (req) => {
 
     if ((product_type === 'day_pass' || product_type === 'activity_ticket') && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
       const adminCheckout = getServiceClient();
+      if (meta.activity_session_id && meta.date) {
+        const blocked = await isActivityOccurrenceBlocked(adminCheckout, venue_id, meta.activity_session_id, String(meta.date).slice(0, 10));
+        if (blocked) return errorResponse('Aktiviteten är inte tillgänglig för anmälan', 409);
+      }
+
       const { data: product } = meta.product_key
         ? await adminCheckout
           .from('access_products')

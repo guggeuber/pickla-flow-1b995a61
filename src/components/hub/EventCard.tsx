@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
 import { activityPriceLabels, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
+import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -105,6 +106,16 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     return now.toISODate();
   })();
 
+  const { data: programOverrideMap = new Map() } = useQuery({
+    queryKey: ["hub-event-card-program-override", effectiveProgramSession?.venue_id, eventLookupId, programOccurrenceDate],
+    enabled: !!effectiveProgramSession?.venue_id && !!eventLookupId && !!programOccurrenceDate,
+    staleTime: 10000,
+    queryFn: () => fetchActivitySessionOverrides(effectiveProgramSession!.venue_id, [eventLookupId], programOccurrenceDate!, programOccurrenceDate!),
+  });
+  const programOverride = programOccurrenceDate
+    ? programOverrideMap.get(occurrenceOverrideKey(eventLookupId, programOccurrenceDate))
+    : null;
+
   const { data: programRegistrations = [] } = useQuery({
     queryKey: ["hub-program-session-registrations", eventId, programOccurrenceDate],
     enabled: !!effectiveProgramSession?.id && !!programOccurrenceDate && !publicActivityPreview?.registrations,
@@ -194,6 +205,8 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
   });
 
   if (!event && effectiveProgramSession) {
+    if (isPublicActivityOverrideHidden(programOverride?.status)) return null;
+
     const timeStr = [
       effectiveProgramSession.start_time ? String(effectiveProgramSession.start_time).slice(0, 5) : null,
       effectiveProgramSession.end_time ? String(effectiveProgramSession.end_time).slice(0, 5) : null,
