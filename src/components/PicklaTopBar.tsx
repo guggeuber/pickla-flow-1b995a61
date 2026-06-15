@@ -10,6 +10,8 @@ import {
   getBookingCourtLabel,
   groupBookingRows,
 } from "@/lib/bookingGroups";
+import { useVenueStatusBySlug } from "@/lib/venueStatus";
+import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
@@ -18,10 +20,7 @@ const FONT_MONO = "'Space Mono', monospace";
 type PicklaTopBarProps = {
   slug?: string;
   venueName?: string;
-  venueOpen?: boolean;
-  venueStatusTone?: "open" | "closed" | "exception";
   showVenue?: boolean;
-  onVenueClick?: () => void;
   background?: string;
 };
 
@@ -52,18 +51,22 @@ function formatBookingTime(booking: any) {
 
 export function PicklaTopBar({
   slug = "pickla-arena-sthlm",
-  venueName = "Pickla Stockholm",
-  venueOpen = true,
-  venueStatusTone,
+  venueName,
   showVenue = true,
-  onVenueClick,
   background = "#fffaf7",
 }: PicklaTopBarProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
+  const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const { data: recentBookings = [] } = useRecentBookings(user?.id);
   const visibleBookings = useMemo(() => recentBookings, [recentBookings]);
+  const { venue, status } = useVenueStatusBySlug(showVenue ? slug : undefined);
+  const resolvedVenueName = venueName
+    || venue?.name?.replace("Pickla Arena ", "Pickla ")
+    || "Pickla Stockholm";
+  const venueStatusTone = status?.venueStatusTone;
+  const venueOpen = Boolean(status?.open);
   const dotColor = venueStatusTone === "exception"
     ? "#f97316"
     : venueStatusTone === "closed"
@@ -76,6 +79,7 @@ export function PicklaTopBar({
     setOpen(false);
     navigate(href);
   };
+
 
   return (
     <>
@@ -105,16 +109,17 @@ export function PicklaTopBar({
           {showVenue && (
             <button
               type="button"
-              onClick={onVenueClick}
+              onClick={() => setVenueSheetOpen(true)}
               title={venueStatusTone === "exception" ? "Avvikande öppettider idag" : undefined}
-              aria-label={venueStatusTone === "exception" ? `${venueName} – avvikande öppettider idag` : venueName}
+              aria-label={venueStatusTone === "exception" ? `${resolvedVenueName} – avvikande öppettider idag` : resolvedVenueName}
               className="min-w-0 flex-1 justify-center flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-[12px] shadow-sm active:scale-[0.98]"
               style={{ fontFamily: FONT_MONO }}
             >
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: dotColor }} />
-              <span className="truncate">{venueName}</span>
+              <span className="truncate">{resolvedVenueName}</span>
             </button>
           )}
+
 
           {!showVenue && <div className="h-10 w-10" />}
         </div>
@@ -260,6 +265,16 @@ export function PicklaTopBar({
         </div>
         )}
       </AnimatePresence>
+
+      {showVenue && (
+        <VenueStatusDrawer
+          open={venueSheetOpen}
+          onOpenChange={setVenueSheetOpen}
+          venue={venue}
+          status={status}
+        />
+      )}
     </>
   );
 }
+
