@@ -139,23 +139,6 @@ type BookingGroup = BookingRow & {
   access_codes?: string[];
 };
 
-type OpeningHour = {
-  day_of_week: number;
-  open_time: string | null;
-  close_time: string | null;
-  is_closed: boolean | null;
-};
-
-type VenueOperationOverride = {
-  id: string;
-  title: string | null;
-  reason: string | null;
-  override_type: string | null;
-  starts_at: string;
-  ends_at: string;
-  affects_entire_venue: boolean;
-  status: string;
-};
 
 type GuideKey = "pickleball" | "darts" | "pickla";
 
