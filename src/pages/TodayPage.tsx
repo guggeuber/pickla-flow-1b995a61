@@ -415,7 +415,9 @@ function useVenueOpenStatus(venue: any | undefined) {
           ...baseStatus,
           open: normalOpen,
           label: delayedOpening || `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
-          currentStatusLabel: delayedOpening ? `Öppnar ${overrideEndTime}` : `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
+          currentStatusLabel: delayedOpening
+            ? `Stängt just nu · Öppnar ${overrideEndTime}`
+            : `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
           venueStatusTone: "exception" as const,
         };
       }
@@ -425,7 +427,7 @@ function useVenueOpenStatus(venue: any | undefined) {
           ...baseStatus,
           open: false,
           label: `Öppnar ${overrideEndTime} idag`,
-          currentStatusLabel: `Öppnar ${overrideEndTime}`,
+          currentStatusLabel: `Stängt just nu · Öppnar ${overrideEndTime}`,
           venueStatusTone: "exception" as const,
         };
       }
