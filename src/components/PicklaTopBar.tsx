@@ -51,18 +51,22 @@ function formatBookingTime(booking: any) {
 
 export function PicklaTopBar({
   slug = "pickla-arena-sthlm",
-  venueName = "Pickla Stockholm",
-  venueOpen = true,
-  venueStatusTone,
+  venueName,
   showVenue = true,
-  onVenueClick,
   background = "#fffaf7",
 }: PicklaTopBarProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
+  const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const { data: recentBookings = [] } = useRecentBookings(user?.id);
   const visibleBookings = useMemo(() => recentBookings, [recentBookings]);
+  const { venue, status } = useVenueStatusBySlug(showVenue ? slug : undefined);
+  const resolvedVenueName = venueName
+    || venue?.name?.replace("Pickla Arena ", "Pickla ")
+    || "Pickla Stockholm";
+  const venueStatusTone = status?.venueStatusTone;
+  const venueOpen = Boolean(status?.open);
   const dotColor = venueStatusTone === "exception"
     ? "#f97316"
     : venueStatusTone === "closed"
@@ -75,6 +79,7 @@ export function PicklaTopBar({
     setOpen(false);
     navigate(href);
   };
+
 
   return (
     <>
