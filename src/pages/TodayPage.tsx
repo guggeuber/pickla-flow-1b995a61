@@ -365,6 +365,11 @@ function useVenueOpenStatus(venue: any | undefined) {
       const closeTime = String(today.close_time).slice(0, 5);
       const normalOpen = nowTime >= openTime && nowTime < closeTime;
       const normalLabel = normalOpen ? `Öppet till ${closeTime} ikväll` : nowTime < openTime ? `Öppnar ${openTime} idag` : "Stängt för idag";
+      const normalCurrentLabel = normalOpen
+        ? `Öppet till ${closeTime}`
+        : nowTime < openTime
+          ? `Stängt just nu · Öppnar ${openTime}`
+          : "Stängt för idag";
       const normalOpenStart = now.set({
         hour: Number(openTime.slice(0, 2)),
         minute: Number(openTime.slice(3, 5)),
@@ -383,7 +388,7 @@ function useVenueOpenStatus(venue: any | undefined) {
           ...baseStatus,
           open: normalOpen,
           label: normalLabel,
-          currentStatusLabel: normalLabel,
+          currentStatusLabel: normalCurrentLabel,
           venueStatusTone: normalOpen ? "open" as const : "closed" as const,
         };
       }
