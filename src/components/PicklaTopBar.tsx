@@ -10,6 +10,8 @@ import {
   getBookingCourtLabel,
   groupBookingRows,
 } from "@/lib/bookingGroups";
+import { useVenueStatusBySlug } from "@/lib/venueStatus";
+import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
@@ -18,10 +20,7 @@ const FONT_MONO = "'Space Mono', monospace";
 type PicklaTopBarProps = {
   slug?: string;
   venueName?: string;
-  venueOpen?: boolean;
-  venueStatusTone?: "open" | "closed" | "exception";
   showVenue?: boolean;
-  onVenueClick?: () => void;
   background?: string;
 };
 
