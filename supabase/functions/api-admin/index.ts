@@ -155,6 +155,28 @@ function resourceForBlockRow(block: any) {
   return Array.isArray(resource) ? resource[0] : resource;
 }
 
+async function activeBookableCourtResources(admin: any, venueId: string) {
+  const { data, error } = await admin
+    .from('event_resource_catalog')
+    .select('id, venue_court_id')
+    .eq('venue_id', venueId)
+    .eq('resource_type', 'court')
+    .eq('is_active', true)
+    .eq('is_bookable', true)
+    .not('venue_court_id', 'is', null)
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true });
+  if (error) throw new Error(error.message);
+
+  const seenCourtIds = new Set<string>();
+  return (data || []).filter((row: any) => {
+    const courtId = String(row.venue_court_id || '');
+    if (!courtId || seenCourtIds.has(courtId)) return false;
+    seenCourtIds.add(courtId);
+    return true;
+  });
+}
+
 async function resourceIdsForCourtIds(admin: any, venueId: string, courtIds: string[]) {
   if (courtIds.length === 0) return [];
 
@@ -322,7 +344,9 @@ Deno.serve(async (req) => {
     if (!ok) return errorResponse('Forbidden: admin only', 403);
 
     const venueId = url.searchParams.get('venueId') || adminVenueId;
-    if (!venueId) return errorResponse('No venue found', 400);
+    const canResolveVenueFromBody = ['venue-operation-impact', 'venue-operation-overrides'].includes(path)
+      && ['POST', 'PATCH'].includes(req.method);
+    if (!venueId && !canResolveVenueFromBody) return errorResponse('No venue found', 400);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -605,6 +629,8 @@ Deno.serve(async (req) => {
 
     if (req.method === 'POST' && path === 'venue-operation-impact') {
       const body = await req.json();
+      const requestedVenueId = url.searchParams.get('venueId') || body.venueId || adminVenueId;
+      if (!requestedVenueId) return errorResponse('No venue found', 400);
       const affectsEntireVenue = body.affects_entire_venue !== false;
       const courtIds = Array.isArray(body.venue_court_ids)
         ? Array.from(new Set(body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)))
@@ -614,14 +640,14 @@ Deno.serve(async (req) => {
       let range;
       try {
         range = operationRangeFromBody(body);
-        if (!affectsEntireVenue) await resourceIdsForCourtIds(admin, venueId, courtIds);
+        if (!affectsEntireVenue) await resourceIdsForCourtIds(admin, requestedVenueId, courtIds);
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Invalid operation override', 400);
       }
 
       const impact = await analyzeOperationImpact(
         admin,
-        venueId,
+        requestedVenueId,
         range.starts_at!,
         range.ends_at!,
         affectsEntireVenue,
@@ -633,6 +659,8 @@ Deno.serve(async (req) => {
 
     if (req.method === 'POST' && path === 'venue-operation-overrides') {
       const body = await req.json();
+      const requestedVenueId = url.searchParams.get('venueId') || body.venueId || adminVenueId;
+      if (!requestedVenueId) return errorResponse('No venue found', 400);
       const title = String(body.title || '').trim().slice(0, 180);
       const reason = String(body.reason || '').trim().slice(0, 1000);
       const affectsEntireVenue = body.affects_entire_venue !== false;
@@ -646,19 +674,27 @@ Deno.serve(async (req) => {
       let range;
       let overrideType;
       let resourceIds: string[] = [];
+      let resolvedCourtIds = courtIds;
       try {
         range = operationRangeFromBody(body);
         overrideType = normalizeOverrideType(body.override_type);
-        if (!affectsEntireVenue) resourceIds = await resourceIdsForCourtIds(admin, venueId, courtIds);
+        if (affectsEntireVenue) {
+          const courtResources = await activeBookableCourtResources(admin, requestedVenueId);
+          resourceIds = courtResources.map((row: any) => String(row.id)).filter(Boolean);
+          resolvedCourtIds = courtResources.map((row: any) => String(row.venue_court_id)).filter(Boolean);
+          if (resourceIds.length === 0) return errorResponse('No active bookable court resources found for venue', 400);
+        } else {
+          resourceIds = await resourceIdsForCourtIds(admin, requestedVenueId, courtIds);
+        }
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Invalid operation override', 400);
       }
 
-      const impact = await analyzeOperationImpact(admin, venueId, range.starts_at!, range.ends_at!, affectsEntireVenue, courtIds);
+      const impact = await analyzeOperationImpact(admin, requestedVenueId, range.starts_at!, range.ends_at!, affectsEntireVenue, resolvedCourtIds);
       const { data: override, error: overrideError } = await admin
         .from('venue_operation_overrides')
         .insert({
-          venue_id: venueId,
+          venue_id: requestedVenueId,
           title,
           reason: reason || null,
           override_type: overrideType,
@@ -669,7 +705,8 @@ Deno.serve(async (req) => {
           created_by: userId,
           metadata: {
             ...metadata,
-            venue_court_ids: affectsEntireVenue ? [] : courtIds,
+            venue_court_ids: resolvedCourtIds,
+            resource_catalog_ids: resourceIds,
             impact_snapshot: {
               bookings_count: impact.bookings.count,
               activities_count: impact.activities.count,
@@ -682,44 +719,33 @@ Deno.serve(async (req) => {
       if (overrideError) return errorResponse(overrideError.message);
 
       const blockMetadata = {
-        scope: affectsEntireVenue ? 'venue' : 'courts',
+        scope: 'courts',
+        affects_entire_venue: affectsEntireVenue,
         venue_operation_override_id: override.id,
         override_type: overrideType,
-        venue_court_ids: affectsEntireVenue ? [] : courtIds,
+        venue_court_ids: resolvedCourtIds,
+        resource_catalog_ids: resourceIds,
         note: reason,
       };
-      const blockRows = affectsEntireVenue
-        ? [{
-          venue_id: venueId,
-          resource_catalog_id: null,
-          title,
-          reason: blockReasonForOverride(overrideType),
-          status: 'confirmed',
-          starts_at: range.starts_at,
-          ends_at: range.ends_at,
-          blocks_public_booking: true,
-          created_by: userId,
-          metadata: blockMetadata,
-        }]
-        : resourceIds.map((resourceId: string) => ({
-          venue_id: venueId,
-          resource_catalog_id: resourceId,
-          title,
-          reason: blockReasonForOverride(overrideType),
-          status: 'confirmed',
-          starts_at: range.starts_at,
-          ends_at: range.ends_at,
-          blocks_public_booking: true,
-          created_by: userId,
-          metadata: blockMetadata,
-        }));
+      const blockRows = resourceIds.map((resourceId: string) => ({
+        venue_id: requestedVenueId,
+        resource_catalog_id: resourceId,
+        title,
+        reason: blockReasonForOverride(overrideType),
+        status: 'confirmed',
+        starts_at: range.starts_at,
+        ends_at: range.ends_at,
+        blocks_public_booking: true,
+        created_by: userId,
+        metadata: blockMetadata,
+      }));
 
       const { data: blocks, error: blocksError } = await admin
         .from('event_resource_blocks')
         .insert(blockRows)
         .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)');
       if (blocksError) {
-        await admin.from('venue_operation_overrides').update({ status: 'cancelled' }).eq('id', override.id).eq('venue_id', venueId);
+        await admin.from('venue_operation_overrides').update({ status: 'cancelled' }).eq('id', override.id).eq('venue_id', requestedVenueId);
         return errorResponse(blocksError.message);
       }
 
@@ -728,6 +754,8 @@ Deno.serve(async (req) => {
 
     if (req.method === 'PATCH' && path === 'venue-operation-overrides') {
       const body = await req.json();
+      const requestedVenueId = url.searchParams.get('venueId') || body.venueId || adminVenueId;
+      if (!requestedVenueId) return errorResponse('No venue found', 400);
       const overrideId = String(body.overrideId || body.id || '');
       if (!overrideId) return errorResponse('Missing overrideId', 400);
 
@@ -735,7 +763,7 @@ Deno.serve(async (req) => {
         .from('venue_operation_overrides')
         .select('id, status')
         .eq('id', overrideId)
-        .eq('venue_id', venueId)
+        .eq('venue_id', requestedVenueId)
         .maybeSingle();
       if (overrideFetchError) return errorResponse(overrideFetchError.message);
       if (!override) return errorResponse('Override not found', 404);
@@ -744,7 +772,7 @@ Deno.serve(async (req) => {
         .from('venue_operation_overrides')
         .update({ status: 'cancelled' })
         .eq('id', overrideId)
-        .eq('venue_id', venueId)
+        .eq('venue_id', requestedVenueId)
         .select()
         .single();
       if (e) return errorResponse(e.message);
@@ -752,7 +780,7 @@ Deno.serve(async (req) => {
       const { data: blocks, error: blocksError } = await admin
         .from('event_resource_blocks')
         .update({ status: 'cancelled', blocks_public_booking: false })
-        .eq('venue_id', venueId)
+        .eq('venue_id', requestedVenueId)
         .contains('metadata', { venue_operation_override_id: overrideId })
         .select('id, status, blocks_public_booking');
       if (blocksError) return errorResponse(blocksError.message);
