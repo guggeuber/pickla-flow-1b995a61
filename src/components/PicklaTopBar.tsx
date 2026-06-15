@@ -109,16 +109,17 @@ export function PicklaTopBar({
           {showVenue && (
             <button
               type="button"
-              onClick={onVenueClick}
+              onClick={() => setVenueSheetOpen(true)}
               title={venueStatusTone === "exception" ? "Avvikande öppettider idag" : undefined}
-              aria-label={venueStatusTone === "exception" ? `${venueName} – avvikande öppettider idag` : venueName}
+              aria-label={venueStatusTone === "exception" ? `${resolvedVenueName} – avvikande öppettider idag` : resolvedVenueName}
               className="min-w-0 flex-1 justify-center flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-[12px] shadow-sm active:scale-[0.98]"
               style={{ fontFamily: FONT_MONO }}
             >
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: dotColor }} />
-              <span className="truncate">{venueName}</span>
+              <span className="truncate">{resolvedVenueName}</span>
             </button>
           )}
+
 
           {!showVenue && <div className="h-10 w-10" />}
         </div>
