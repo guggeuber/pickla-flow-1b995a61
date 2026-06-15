@@ -265,6 +265,16 @@ export function PicklaTopBar({
         </div>
         )}
       </AnimatePresence>
+
+      {showVenue && (
+        <VenueStatusDrawer
+          open={venueSheetOpen}
+          onOpenChange={setVenueSheetOpen}
+          venue={venue}
+          status={status}
+        />
+      )}
     </>
   );
 }
+
