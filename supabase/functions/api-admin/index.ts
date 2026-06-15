@@ -107,6 +107,205 @@ function cleanBlockMetadata(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function operationRangeFromBody(body: Record<string, any>) {
+  if (body.starts_at && body.ends_at) {
+    const startsAt = DateTime.fromISO(String(body.starts_at));
+    const endsAt = DateTime.fromISO(String(body.ends_at));
+    if (!startsAt.isValid || !endsAt.isValid || endsAt <= startsAt) throw new Error('Invalid date/time');
+    return {
+      starts_at: startsAt.toUTC().toISO(),
+      ends_at: endsAt.toUTC().toISO(),
+    };
+  }
+
+  return stockholmBlockRange(body.date, body.start_time, body.end_time);
+}
+
+function normalizeOverrideType(value: unknown) {
+  const overrideType = String(value || 'other');
+  if (!['closed', 'maintenance', 'private_event', 'staffing', 'other'].includes(overrideType)) {
+    throw new Error('Invalid override_type');
+  }
+  return overrideType;
+}
+
+function blockReasonForOverride(overrideType: string) {
+  if (overrideType === 'maintenance') return 'maintenance';
+  if (overrideType === 'private_event') return 'private';
+  if (overrideType === 'staffing' || overrideType === 'closed') return 'internal';
+  return 'manual';
+}
+
+function localDatesBetween(startsAtIso: string, endsAtIso: string) {
+  const start = DateTime.fromISO(startsAtIso, { zone: 'utc' }).setZone('Europe/Stockholm').startOf('day');
+  const end = DateTime.fromISO(endsAtIso, { zone: 'utc' }).setZone('Europe/Stockholm').startOf('day');
+  if (!start.isValid || !end.isValid || end < start) return [];
+
+  const dates: string[] = [];
+  let cursor = start;
+  while (cursor <= end && dates.length < 45) {
+    dates.push(cursor.toISODate()!);
+    cursor = cursor.plus({ days: 1 });
+  }
+  return dates;
+}
+
+function resourceForBlockRow(block: any) {
+  const resource = block.event_resource_catalog;
+  return Array.isArray(resource) ? resource[0] : resource;
+}
+
+async function resourceIdsForCourtIds(admin: any, venueId: string, courtIds: string[]) {
+  if (courtIds.length === 0) return [];
+
+  const { data: courts, error: courtsError } = await admin
+    .from('venue_courts')
+    .select('id, name, court_number, sport_type')
+    .eq('venue_id', venueId)
+    .in('id', courtIds);
+  if (courtsError) throw new Error(courtsError.message);
+  if ((courts || []).length !== courtIds.length) throw new Error('One or more courts do not belong to this venue');
+
+  const { data: existingCatalog, error: catalogError } = await admin
+    .from('event_resource_catalog')
+    .select('id, venue_court_id')
+    .eq('venue_id', venueId)
+    .eq('resource_type', 'court')
+    .in('venue_court_id', courtIds);
+  if (catalogError) throw new Error(catalogError.message);
+
+  const existingByCourt = new Map((existingCatalog || []).map((row: any) => [row.venue_court_id, row.id]));
+  const missingCourts = (courts || []).filter((court: any) => !existingByCourt.has(court.id));
+  if (missingCourts.length) {
+    const { data: inserted, error: insertError } = await admin
+      .from('event_resource_catalog')
+      .insert(missingCourts.map((court: any) => ({
+        venue_id: venueId,
+        resource_type: 'court',
+        name: court.name,
+        description: court.sport_type || null,
+        venue_court_id: court.id,
+        unit: 'event',
+        is_bookable: true,
+        is_active: true,
+        sort_order: court.court_number || 100,
+      })))
+      .select('id, venue_court_id');
+    if (insertError) throw new Error(insertError.message);
+    for (const row of inserted || []) existingByCourt.set(row.venue_court_id, row.id);
+  }
+
+  return courtIds.map((courtId: string) => existingByCourt.get(courtId)).filter(Boolean);
+}
+
+async function analyzeOperationImpact(
+  admin: any,
+  venueId: string,
+  startsAt: string,
+  endsAt: string,
+  affectsEntireVenue: boolean,
+  courtIds: string[],
+  overrideId?: string | null,
+) {
+  let bookingsQuery = admin
+    .from('bookings')
+    .select('id, booking_ref, start_time, end_time, status, venue_court_id, venue_courts(id, name)', { count: 'exact' })
+    .eq('venue_id', venueId)
+    .neq('status', 'cancelled')
+    .lt('start_time', endsAt)
+    .gt('end_time', startsAt)
+    .order('start_time', { ascending: true })
+    .limit(8);
+  if (!affectsEntireVenue && courtIds.length) bookingsQuery = bookingsQuery.in('venue_court_id', courtIds);
+  const { data: bookings, count: bookingCount, error: bookingsError } = await bookingsQuery;
+  if (bookingsError) throw new Error(bookingsError.message);
+
+  const dates = localDatesBetween(startsAt, endsAt);
+  const startMs = DateTime.fromISO(startsAt, { zone: 'utc' }).toMillis();
+  const endMs = DateTime.fromISO(endsAt, { zone: 'utc' }).toMillis();
+  const { data: sessions, error: sessionsError } = await admin
+    .from('activity_sessions')
+    .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .eq('venue_id', venueId)
+    .eq('is_active', true)
+    .limit(500);
+  if (sessionsError) throw new Error(sessionsError.message);
+
+  const courtSet = new Set(courtIds);
+  const activitySamples: any[] = [];
+  let activityCount = 0;
+  for (const session of sessions || []) {
+    const sessionCourtIds = Array.isArray(session.court_ids) ? session.court_ids.map((id: unknown) => String(id)) : [];
+    if (!affectsEntireVenue && sessionCourtIds.length && !sessionCourtIds.some((id: string) => courtSet.has(id))) {
+      continue;
+    }
+
+    for (const date of dates) {
+      const isConcrete = session.session_date === date;
+      const isRecurring = !session.session_date && Array.isArray(session.recurrence_days)
+        && session.recurrence_days.includes(DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7);
+      if (!isConcrete && !isRecurring) continue;
+
+      const occurrenceStart = DateTime.fromISO(`${date}T${String(session.start_time).slice(0, 5)}:00`, { zone: 'Europe/Stockholm' }).toUTC();
+      const occurrenceEnd = DateTime.fromISO(`${date}T${String(session.end_time).slice(0, 5)}:00`, { zone: 'Europe/Stockholm' }).toUTC();
+      if (!occurrenceStart.isValid || !occurrenceEnd.isValid) continue;
+      if (occurrenceStart.toMillis() < endMs && occurrenceEnd.toMillis() > startMs) {
+        activityCount += 1;
+        if (activitySamples.length < 8) {
+          activitySamples.push({
+            id: session.id,
+            name: session.name,
+            session_type: session.session_type,
+            session_date: date,
+            start_time: String(session.start_time).slice(0, 5),
+            end_time: String(session.end_time).slice(0, 5),
+          });
+        }
+      }
+    }
+  }
+
+  const resourceIds = !affectsEntireVenue && courtIds.length
+    ? await resourceIdsForCourtIds(admin, venueId, courtIds)
+    : [];
+  let blocksQuery = admin
+    .from('event_resource_blocks')
+    .select('id, title, reason, status, starts_at, ends_at, metadata, resource_catalog_id, event_resource_catalog(id, name, venue_court_id)', { count: 'exact' })
+    .eq('venue_id', venueId)
+    .in('status', ['hold', 'confirmed'])
+    .lt('starts_at', endsAt)
+    .gt('ends_at', startsAt)
+    .order('starts_at', { ascending: true })
+    .limit(100);
+  if (!affectsEntireVenue && resourceIds.length) blocksQuery = blocksQuery.or(`resource_catalog_id.is.null,resource_catalog_id.in.(${resourceIds.join(',')})`);
+  const { data: blockRows, error: blocksError } = await blocksQuery;
+  if (blocksError) throw new Error(blocksError.message);
+
+  const filteredBlocks = (blockRows || []).filter((block: any) => {
+    const metadata = cleanBlockMetadata(block.metadata);
+    if (overrideId && metadata.venue_operation_override_id === overrideId) return false;
+    if (affectsEntireVenue) return true;
+    const resource = resourceForBlockRow(block);
+    return !resource || courtSet.has(resource.venue_court_id);
+  });
+
+  return {
+    bookings: {
+      count: bookingCount ?? (bookings || []).length,
+      samples: bookings || [],
+    },
+    activities: {
+      count: activityCount,
+      samples: activitySamples,
+      limited: dates.length >= 45,
+    },
+    blocks: {
+      count: filteredBlocks.length,
+      samples: filteredBlocks.slice(0, 8),
+    },
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -385,6 +584,180 @@ Deno.serve(async (req) => {
       const { error: e } = await admin.from('venue_courts').delete().eq('id', courtId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
+    }
+
+    // ── VENUE OPERATION OVERRIDES ──
+    if (req.method === 'GET' && path === 'venue-operation-overrides') {
+      const from = url.searchParams.get('from');
+      const to = url.searchParams.get('to');
+      let query = admin
+        .from('venue_operation_overrides')
+        .select('*')
+        .eq('venue_id', venueId)
+        .order('starts_at', { ascending: true });
+      if (from) query = query.gte('ends_at', from);
+      if (to) query = query.lte('starts_at', to);
+
+      const { data, error: e } = await query;
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data || [], 200, 10);
+    }
+
+    if (req.method === 'POST' && path === 'venue-operation-impact') {
+      const body = await req.json();
+      const affectsEntireVenue = body.affects_entire_venue !== false;
+      const courtIds = Array.isArray(body.venue_court_ids)
+        ? Array.from(new Set(body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)))
+        : [];
+      if (!affectsEntireVenue && courtIds.length === 0) return errorResponse('Select at least one court or affect the entire venue', 400);
+
+      let range;
+      try {
+        range = operationRangeFromBody(body);
+        if (!affectsEntireVenue) await resourceIdsForCourtIds(admin, venueId, courtIds);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Invalid operation override', 400);
+      }
+
+      const impact = await analyzeOperationImpact(
+        admin,
+        venueId,
+        range.starts_at!,
+        range.ends_at!,
+        affectsEntireVenue,
+        courtIds,
+        body.overrideId ? String(body.overrideId) : null,
+      );
+      return jsonResponse(impact);
+    }
+
+    if (req.method === 'POST' && path === 'venue-operation-overrides') {
+      const body = await req.json();
+      const title = String(body.title || '').trim().slice(0, 180);
+      const reason = String(body.reason || '').trim().slice(0, 1000);
+      const affectsEntireVenue = body.affects_entire_venue !== false;
+      const courtIds = Array.isArray(body.venue_court_ids)
+        ? Array.from(new Set(body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)))
+        : [];
+      const metadata = cleanBlockMetadata(body.metadata);
+      if (!title) return errorResponse('Missing title', 400);
+      if (!affectsEntireVenue && courtIds.length === 0) return errorResponse('Select at least one court or affect the entire venue', 400);
+
+      let range;
+      let overrideType;
+      let resourceIds: string[] = [];
+      try {
+        range = operationRangeFromBody(body);
+        overrideType = normalizeOverrideType(body.override_type);
+        if (!affectsEntireVenue) resourceIds = await resourceIdsForCourtIds(admin, venueId, courtIds);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Invalid operation override', 400);
+      }
+
+      const impact = await analyzeOperationImpact(admin, venueId, range.starts_at!, range.ends_at!, affectsEntireVenue, courtIds);
+      const { data: override, error: overrideError } = await admin
+        .from('venue_operation_overrides')
+        .insert({
+          venue_id: venueId,
+          title,
+          reason: reason || null,
+          override_type: overrideType,
+          starts_at: range.starts_at,
+          ends_at: range.ends_at,
+          affects_entire_venue: affectsEntireVenue,
+          status: 'active',
+          created_by: userId,
+          metadata: {
+            ...metadata,
+            venue_court_ids: affectsEntireVenue ? [] : courtIds,
+            impact_snapshot: {
+              bookings_count: impact.bookings.count,
+              activities_count: impact.activities.count,
+              blocks_count: impact.blocks.count,
+            },
+          },
+        })
+        .select()
+        .single();
+      if (overrideError) return errorResponse(overrideError.message);
+
+      const blockMetadata = {
+        scope: affectsEntireVenue ? 'venue' : 'courts',
+        venue_operation_override_id: override.id,
+        override_type: overrideType,
+        venue_court_ids: affectsEntireVenue ? [] : courtIds,
+        note: reason,
+      };
+      const blockRows = affectsEntireVenue
+        ? [{
+          venue_id: venueId,
+          resource_catalog_id: null,
+          title,
+          reason: blockReasonForOverride(overrideType),
+          status: 'confirmed',
+          starts_at: range.starts_at,
+          ends_at: range.ends_at,
+          blocks_public_booking: true,
+          created_by: userId,
+          metadata: blockMetadata,
+        }]
+        : resourceIds.map((resourceId: string) => ({
+          venue_id: venueId,
+          resource_catalog_id: resourceId,
+          title,
+          reason: blockReasonForOverride(overrideType),
+          status: 'confirmed',
+          starts_at: range.starts_at,
+          ends_at: range.ends_at,
+          blocks_public_booking: true,
+          created_by: userId,
+          metadata: blockMetadata,
+        }));
+
+      const { data: blocks, error: blocksError } = await admin
+        .from('event_resource_blocks')
+        .insert(blockRows)
+        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)');
+      if (blocksError) {
+        await admin.from('venue_operation_overrides').update({ status: 'cancelled' }).eq('id', override.id).eq('venue_id', venueId);
+        return errorResponse(blocksError.message);
+      }
+
+      return jsonResponse({ override, blocks: blocks || [], impact }, 201);
+    }
+
+    if (req.method === 'PATCH' && path === 'venue-operation-overrides') {
+      const body = await req.json();
+      const overrideId = String(body.overrideId || body.id || '');
+      if (!overrideId) return errorResponse('Missing overrideId', 400);
+
+      const { data: override, error: overrideFetchError } = await admin
+        .from('venue_operation_overrides')
+        .select('id, status')
+        .eq('id', overrideId)
+        .eq('venue_id', venueId)
+        .maybeSingle();
+      if (overrideFetchError) return errorResponse(overrideFetchError.message);
+      if (!override) return errorResponse('Override not found', 404);
+
+      const { data, error: e } = await admin
+        .from('venue_operation_overrides')
+        .update({ status: 'cancelled' })
+        .eq('id', overrideId)
+        .eq('venue_id', venueId)
+        .select()
+        .single();
+      if (e) return errorResponse(e.message);
+
+      const { data: blocks, error: blocksError } = await admin
+        .from('event_resource_blocks')
+        .update({ status: 'cancelled', blocks_public_booking: false })
+        .eq('venue_id', venueId)
+        .contains('metadata', { venue_operation_override_id: overrideId })
+        .select('id, status, blocks_public_booking');
+      if (blocksError) return errorResponse(blocksError.message);
+
+      return jsonResponse({ override: data, blocks: blocks || [] });
     }
 
     // ── EVENT RESOURCE BLOCKS ──
