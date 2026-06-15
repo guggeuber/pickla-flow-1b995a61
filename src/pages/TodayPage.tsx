@@ -218,6 +218,15 @@ function operationTitle(override: VenueOperationOverride) {
   return "Avvikelse";
 }
 
+function operationIcon(override: VenueOperationOverride) {
+  const t = `${override.title || ""} ${override.reason || ""} ${override.override_type || ""}`.toLowerCase();
+  if (t.includes("midsommar") || t.includes("jul") || t.includes("nyår") || t.includes("påsk") || t.includes("helg") || t.includes("holiday")) return "🎉";
+  if (t.includes("underhåll") || t.includes("underhall") || t.includes("maintenance") || t.includes("service")) return "🛠️";
+  if (t.includes("konferens") || t.includes("event") || t.includes("möte") || t.includes("mote")) return "🏢";
+  if (t.includes("städ") || t.includes("stad") || t.includes("clean")) return "🧹";
+  return "⚠️";
+}
+
 function operationRange(override: VenueOperationOverride) {
   return {
     start: DateTime.fromISO(override.starts_at, { zone: "utc" }).setZone("Europe/Stockholm"),
