@@ -9,6 +9,7 @@ import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import {
   useVenueOpenStatus,
+  useVenueWithHours,
   type OpeningHour,
   type VenueOperationOverride,
 } from "@/lib/venueStatus";
