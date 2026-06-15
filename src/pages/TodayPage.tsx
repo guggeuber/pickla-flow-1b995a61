@@ -1002,18 +1002,27 @@ export default function TodayPage() {
                   </h4>
                   <div className="mt-2 space-y-2">
                     {status.upcomingOverrideRows.map((override: any) => (
-                      <div key={override.id} className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <p className="text-[13px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                              {override.title}
-                            </p>
-                            <p className="mt-1 text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                              {override.dateLabel}
-                            </p>
-                          </div>
-                          <p className="text-right text-[12px] font-bold text-red-700" style={{ fontFamily: FONT_HEADING }}>
-                            {override.description}
+                      <div key={override.id} className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3">
+                        <span
+                          aria-hidden
+                          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-[18px] shadow-sm"
+                        >
+                          {override.icon}
+                        </span>
+                        <div className="grid h-11 w-14 shrink-0 place-items-center rounded-lg bg-white text-center leading-none" style={{ fontFamily: FONT_MONO }}>
+                          <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-neutral-400">
+                            {override.dayBadge?.split(" ")[1] || ""}
+                          </span>
+                          <span className="text-[16px] font-black text-neutral-950">
+                            {override.dayBadge?.split(" ")[0] || ""}
+                          </span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                            {override.title}
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-bold text-red-700" style={{ fontFamily: FONT_HEADING }}>
+                            {override.fullDayLabel}
                           </p>
                         </div>
                       </div>
