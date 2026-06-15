@@ -218,6 +218,15 @@ function operationTitle(override: VenueOperationOverride) {
   return "Avvikelse";
 }
 
+function operationIcon(override: VenueOperationOverride) {
+  const t = `${override.title || ""} ${override.reason || ""} ${override.override_type || ""}`.toLowerCase();
+  if (t.includes("midsommar") || t.includes("jul") || t.includes("nyår") || t.includes("påsk") || t.includes("helg") || t.includes("holiday")) return "🎉";
+  if (t.includes("underhåll") || t.includes("underhall") || t.includes("maintenance") || t.includes("service")) return "🛠️";
+  if (t.includes("konferens") || t.includes("event") || t.includes("möte") || t.includes("mote")) return "🏢";
+  if (t.includes("städ") || t.includes("stad") || t.includes("clean")) return "🧹";
+  return "⚠️";
+}
+
 function operationRange(override: VenueOperationOverride) {
   return {
     start: DateTime.fromISO(override.starts_at, { zone: "utc" }).setZone("Europe/Stockholm"),
@@ -316,6 +325,7 @@ function useVenueOpenStatus(venue: any | undefined) {
           overrides: dayOverrides.map((override) => ({
             id: override.id,
             title: operationTitle(override),
+            icon: operationIcon(override),
             description: operationDescription(override, hour, date),
             timeLabel: operationTimeLabel(override, date),
             fullyClosed: operationCoversNormalHours(override, hour, date),
@@ -331,11 +341,16 @@ function useVenueOpenStatus(venue: any | undefined) {
           const { start } = operationRange(override);
           const date = start.startOf("day");
           const hour = openingHourForDate(openingHours, date);
+          const fullyClosed = operationCoversNormalHours(override, hour, date);
           return {
             id: override.id,
             title: operationTitle(override),
+            icon: operationIcon(override),
             dateLabel: start.setLocale("sv").toFormat("d LLLL"),
+            dayBadge: start.setLocale("sv").toFormat("d LLL").toUpperCase(),
             description: operationDescription(override, hour, date),
+            fullDayLabel: fullyClosed ? "Stängt hela dagen" : `Stängt ${operationTimeLabel(override, date)}`,
+            fullyClosed,
           };
         });
       const baseStatus = {
@@ -365,6 +380,11 @@ function useVenueOpenStatus(venue: any | undefined) {
       const closeTime = String(today.close_time).slice(0, 5);
       const normalOpen = nowTime >= openTime && nowTime < closeTime;
       const normalLabel = normalOpen ? `Öppet till ${closeTime} ikväll` : nowTime < openTime ? `Öppnar ${openTime} idag` : "Stängt för idag";
+      const normalCurrentLabel = normalOpen
+        ? `Öppet till ${closeTime}`
+        : nowTime < openTime
+          ? `Stängt just nu · Öppnar ${openTime}`
+          : "Stängt för idag";
       const normalOpenStart = now.set({
         hour: Number(openTime.slice(0, 2)),
         minute: Number(openTime.slice(3, 5)),
@@ -383,7 +403,7 @@ function useVenueOpenStatus(venue: any | undefined) {
           ...baseStatus,
           open: normalOpen,
           label: normalLabel,
-          currentStatusLabel: normalLabel,
+          currentStatusLabel: normalCurrentLabel,
           venueStatusTone: normalOpen ? "open" as const : "closed" as const,
         };
       }
@@ -410,7 +430,9 @@ function useVenueOpenStatus(venue: any | undefined) {
           ...baseStatus,
           open: normalOpen,
           label: delayedOpening || `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
-          currentStatusLabel: delayedOpening ? `Öppnar ${overrideEndTime}` : `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
+          currentStatusLabel: delayedOpening
+            ? `Stängt just nu · Öppnar ${overrideEndTime}`
+            : `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
           venueStatusTone: "exception" as const,
         };
       }
@@ -420,7 +442,7 @@ function useVenueOpenStatus(venue: any | undefined) {
           ...baseStatus,
           open: false,
           label: `Öppnar ${overrideEndTime} idag`,
-          currentStatusLabel: `Öppnar ${overrideEndTime}`,
+          currentStatusLabel: `Stängt just nu · Öppnar ${overrideEndTime}`,
           venueStatusTone: "exception" as const,
         };
       }
@@ -967,7 +989,7 @@ export default function TodayPage() {
                     </div>
                     {!row.fullyClosed && row.overrides?.map((override: any) => (
                       <p key={override.id} className="mt-1 text-right text-[11px] font-bold text-red-700">
-                        {override.title}: Avvikelse {override.timeLabel}
+                        {override.title}: {override.description}
                       </p>
                     ))}
                   </div>
@@ -980,18 +1002,27 @@ export default function TodayPage() {
                   </h4>
                   <div className="mt-2 space-y-2">
                     {status.upcomingOverrideRows.map((override: any) => (
-                      <div key={override.id} className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <p className="text-[13px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                              {override.title}
-                            </p>
-                            <p className="mt-1 text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                              {override.dateLabel}
-                            </p>
-                          </div>
-                          <p className="text-right text-[12px] font-bold text-red-700" style={{ fontFamily: FONT_HEADING }}>
-                            {override.description}
+                      <div key={override.id} className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3">
+                        <span
+                          aria-hidden
+                          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-[18px] shadow-sm"
+                        >
+                          {override.icon}
+                        </span>
+                        <div className="grid h-11 w-14 shrink-0 place-items-center rounded-lg bg-white text-center leading-none" style={{ fontFamily: FONT_MONO }}>
+                          <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-neutral-400">
+                            {override.dayBadge?.split(" ")[1] || ""}
+                          </span>
+                          <span className="text-[16px] font-black text-neutral-950">
+                            {override.dayBadge?.split(" ")[0] || ""}
+                          </span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                            {override.title}
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-bold text-red-700" style={{ fontFamily: FONT_HEADING }}>
+                            {override.fullDayLabel}
                           </p>
                         </div>
                       </div>

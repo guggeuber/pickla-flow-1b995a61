@@ -106,6 +106,8 @@ export function PicklaTopBar({
             <button
               type="button"
               onClick={onVenueClick}
+              title={venueStatusTone === "exception" ? "Avvikande öppettider idag" : undefined}
+              aria-label={venueStatusTone === "exception" ? `${venueName} – avvikande öppettider idag` : venueName}
               className="min-w-0 flex-1 justify-center flex items-center gap-1.5 rounded-full bg-white px-3 py-2 text-[12px] shadow-sm active:scale-[0.98]"
               style={{ fontFamily: FONT_MONO }}
             >
