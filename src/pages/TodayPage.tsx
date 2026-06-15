@@ -989,7 +989,7 @@ export default function TodayPage() {
                     </div>
                     {!row.fullyClosed && row.overrides?.map((override: any) => (
                       <p key={override.id} className="mt-1 text-right text-[11px] font-bold text-red-700">
-                        {override.title}: Avvikelse {override.timeLabel}
+                        {override.title}: {override.description}
                       </p>
                     ))}
                   </div>
