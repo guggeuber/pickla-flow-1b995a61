@@ -538,11 +538,9 @@ export default function TodayPage() {
       <PicklaTopBar
         slug={slug}
         venueName={venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Stockholm"}
-        venueOpen={Boolean(status?.open)}
-        venueStatusTone={status?.venueStatusTone}
-        onVenueClick={() => setVenueSheetOpen(true)}
         background={PAGE_BG}
       />
+
 
       <main>
         <section className="relative mx-auto h-[510px] max-w-md overflow-hidden sm:rounded-b-[28px]">
