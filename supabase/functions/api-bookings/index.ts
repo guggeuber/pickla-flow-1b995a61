@@ -1080,16 +1080,25 @@ Deno.serve(async (req) => {
       .order('day_of_week');
 
     const todaySthlm = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+    const upcomingEndSthlm = DateTime.now().setZone('Europe/Stockholm').plus({ days: 14 }).toISODate()!;
     const { start: todayStartUtc, end: todayEndUtc } = stockholmDateRangeUtc(todaySthlm);
+    const { end: upcomingEndUtc } = stockholmDateRangeUtc(upcomingEndSthlm);
     const { data: operationOverrides } = await admin
       .from('venue_operation_overrides')
       .select('id, title, reason, override_type, starts_at, ends_at, affects_entire_venue, status')
       .eq('venue_id', venue.id)
       .eq('status', 'active')
       .eq('affects_entire_venue', true)
-      .lt('starts_at', todayEndUtc)
+      .lt('starts_at', upcomingEndUtc)
       .gt('ends_at', todayStartUtc)
       .order('starts_at');
+
+    const todayOperationOverrides = (operationOverrides || []).filter((override: any) =>
+      override.starts_at < todayEndUtc && override.ends_at > todayStartUtc
+    );
+    const upcomingOperationOverrides = (operationOverrides || []).filter((override: any) =>
+      override.ends_at > todayEndUtc
+    );
 
     // Get active events
     const { data: events } = await admin.from('events')
@@ -1111,6 +1120,8 @@ Deno.serve(async (req) => {
       venue,
       openingHours: hours || [],
       operationOverrides: operationOverrides || [],
+      todayOperationOverrides,
+      upcomingOperationOverrides,
       events: events || [],
       links: links || [],
     }, 200, 30);

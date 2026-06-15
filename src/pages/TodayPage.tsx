@@ -206,16 +206,87 @@ function useVenue(slug: string) {
   });
 }
 
-function operationLabel(override: VenueOperationOverride) {
-  const start = DateTime.fromISO(override.starts_at, { zone: "utc" }).setZone("Europe/Stockholm").toFormat("HH:mm");
-  const end = DateTime.fromISO(override.ends_at, { zone: "utc" }).setZone("Europe/Stockholm").toFormat("HH:mm");
+function operationTitle(override: VenueOperationOverride) {
   const title = override.title?.trim();
-  return title ? `${title}: Stängt ${start}–${end}` : `Stängt ${start}–${end}`;
+  if (title && title.toLowerCase() !== "driftavvikelse") return title;
+  const reason = override.reason?.trim();
+  if (reason && reason.toLowerCase() !== "driftavvikelse") return reason;
+  const type = String(override.override_type || "").toLowerCase();
+  if (type.includes("maintenance") || type.includes("underhall")) return "Underhåll";
+  if (type.includes("event")) return "Privat event";
+  if (type.includes("holiday") || type.includes("helg")) return "Helgdag";
+  return "Avvikelse";
+}
+
+function operationRange(override: VenueOperationOverride) {
+  return {
+    start: DateTime.fromISO(override.starts_at, { zone: "utc" }).setZone("Europe/Stockholm"),
+    end: DateTime.fromISO(override.ends_at, { zone: "utc" }).setZone("Europe/Stockholm"),
+  };
+}
+
+function openingHourForDate(openingHours: OpeningHour[], date: DateTime) {
+  return openingHours.find((row) => row.day_of_week === date.weekday % 7) || null;
+}
+
+function normalHoursLabelForHour(hour: OpeningHour | null | undefined) {
+  if (!hour || hour.is_closed || !hour.open_time || !hour.close_time) return "Stängt";
+  return `${formatHour(hour.open_time)}–${formatHour(hour.close_time)}`;
+}
+
+function dateTimeForOpeningClock(date: DateTime, time: string) {
+  const [hour = 0, minute = 0] = String(time).slice(0, 5).split(":").map(Number);
+  return date.startOf("day").set({ hour, minute, second: 0, millisecond: 0 });
+}
+
+function normalRangeForDate(hour: OpeningHour | null | undefined, date: DateTime) {
+  if (!hour || hour.is_closed || !hour.open_time || !hour.close_time) return null;
+  const start = dateTimeForOpeningClock(date, hour.open_time);
+  let end = dateTimeForOpeningClock(date, hour.close_time);
+  if (end <= start) end = end.plus({ days: 1 });
+  return { start, end };
+}
+
+function operationOverlapsDate(override: VenueOperationOverride, date: DateTime) {
+  const { start, end } = operationRange(override);
+  const dayStart = date.startOf("day");
+  const dayEnd = dayStart.plus({ days: 1 });
+  return start < dayEnd && end > dayStart;
+}
+
+function operationCoversCalendarDay(override: VenueOperationOverride, date: DateTime) {
+  const { start, end } = operationRange(override);
+  const dayStart = date.startOf("day");
+  return start <= dayStart && end >= dayStart.plus({ days: 1 });
+}
+
+function operationCoversNormalHours(override: VenueOperationOverride, hour: OpeningHour | null | undefined, date: DateTime) {
+  const normalRange = normalRangeForDate(hour, date);
+  if (!normalRange) return operationCoversCalendarDay(override, date);
+  const { start, end } = operationRange(override);
+  return start <= normalRange.start && end >= normalRange.end;
+}
+
+function operationTimeLabel(override: VenueOperationOverride, date?: DateTime) {
+  const { start, end } = operationRange(override);
+  if (!date) return `${start.toFormat("HH:mm")}–${end.toFormat("HH:mm")}`;
+  const dayStart = date.startOf("day");
+  const dayEnd = dayStart.plus({ days: 1 });
+  const displayStart = start > dayStart ? start : dayStart;
+  const displayEnd = end < dayEnd ? end : dayEnd;
+  return `${displayStart.toFormat("HH:mm")}–${displayEnd.toFormat("HH:mm")}`;
+}
+
+function operationDescription(override: VenueOperationOverride, hour: OpeningHour | null | undefined, date: DateTime) {
+  if (operationCoversCalendarDay(override, date) || operationCoversNormalHours(override, hour, date)) {
+    return "Stängt hela dagen";
+  }
+  return `Stängt ${operationTimeLabel(override, date)}`;
 }
 
 function useVenueOpenStatus(venue: any | undefined) {
   return useQuery({
-    queryKey: ["today-open-status", venue?.id, venue?.operationOverrides?.map((row: VenueOperationOverride) => row.id).join(",")],
+    queryKey: ["today-open-status", venue?.id, venue?.operationOverrides?.map((row: VenueOperationOverride) => `${row.id}:${row.title}:${row.status}:${row.starts_at}:${row.ends_at}`).join(",")],
     enabled: !!venue?.id,
     staleTime: 30000,
     queryFn: async () => {
@@ -224,23 +295,68 @@ function useVenueOpenStatus(venue: any | undefined) {
       const operationOverrides = ((venue?.operationOverrides || []) as VenueOperationOverride[])
         .filter((row) => row.status === "active" && row.affects_entire_venue)
         .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
-      const today = openingHours.find((row) => row.day_of_week === now.weekday % 7);
+      const today = openingHourForDate(openingHours, now);
       const todayLabel = `Today, ${now.setLocale("sv").toFormat("d LLLL")}`;
-      const normalHoursLabel = !today || today.is_closed || !today.open_time || !today.close_time
-        ? "Stängt"
-        : `${String(today.open_time).slice(0, 5)}–${String(today.close_time).slice(0, 5)}`;
+      const normalHoursLabel = normalHoursLabelForHour(today);
+      const todayOperationOverrides = operationOverrides.filter((override) => operationOverlapsDate(override, now));
+      const activeOverride = todayOperationOverrides.find((override) => operationRange(override).end > now) || null;
+      const scheduleRows = Array.from({ length: 7 }, (_, offset) => {
+        const date = now.plus({ days: offset }).startOf("day");
+        const hour = openingHourForDate(openingHours, date);
+        const dayOverrides = operationOverrides.filter((override) => operationOverlapsDate(override, date));
+        const primaryOverride = dayOverrides[0] || null;
+        const fullyClosed = !!primaryOverride && operationCoversNormalHours(primaryOverride, hour, date);
+        return {
+          key: date.toISODate()!,
+          dayLabel: `${dayLabel(date.weekday % 7)} ${date.toFormat("d/L")}`,
+          normalLabel: normalHoursLabelForHour(hour),
+          isToday: date.hasSame(now, "day"),
+          primaryTitle: primaryOverride ? operationTitle(primaryOverride) : null,
+          fullyClosed,
+          overrides: dayOverrides.map((override) => ({
+            id: override.id,
+            title: operationTitle(override),
+            description: operationDescription(override, hour, date),
+            timeLabel: operationTimeLabel(override, date),
+            fullyClosed: operationCoversNormalHours(override, hour, date),
+          })),
+        };
+      });
+      const upcomingOverrideRows = operationOverrides
+        .filter((override) => {
+          const { end } = operationRange(override);
+          return end > now && !operationOverlapsDate(override, now);
+        })
+        .map((override) => {
+          const { start } = operationRange(override);
+          const date = start.startOf("day");
+          const hour = openingHourForDate(openingHours, date);
+          return {
+            id: override.id,
+            title: operationTitle(override),
+            dateLabel: start.setLocale("sv").toFormat("d LLLL"),
+            description: operationDescription(override, hour, date),
+          };
+        });
+      const baseStatus = {
+        openingHours,
+        operationOverrides,
+        todayOperationOverrides,
+        activeOperationOverride: activeOverride,
+        todayOpeningHours: today || null,
+        normalHoursLabel,
+        todayLabel,
+        scheduleRows,
+        upcomingOverrideRows,
+      };
 
       if (!today || today.is_closed || !today.open_time || !today.close_time) {
         return {
+          ...baseStatus,
           open: false,
           label: "Stängt idag",
-          openingHours,
-          operationOverrides,
-          todayOpeningHours: today || null,
-          normalHoursLabel,
           currentStatusLabel: "Stängt idag",
-          todayLabel,
-          venueStatusTone: "closed" as const,
+          venueStatusTone: activeOverride ? "exception" as const : "closed" as const,
         };
       }
 
@@ -262,28 +378,17 @@ function useVenueOpenStatus(venue: any | undefined) {
         millisecond: 0,
       });
 
-      const activeOverride = operationOverrides.find((override) => {
-        const start = DateTime.fromISO(override.starts_at, { zone: "utc" }).setZone("Europe/Stockholm");
-        const end = DateTime.fromISO(override.ends_at, { zone: "utc" }).setZone("Europe/Stockholm");
-        return start.hasSame(now, "day") || end.hasSame(now, "day") || (start < now.startOf("day") && end > now.endOf("day"));
-      });
-
       if (!activeOverride) {
         return {
+          ...baseStatus,
           open: normalOpen,
           label: normalLabel,
-          openingHours,
-          operationOverrides,
-          todayOpeningHours: today,
-          normalHoursLabel,
           currentStatusLabel: normalLabel,
-          todayLabel,
           venueStatusTone: normalOpen ? "open" as const : "closed" as const,
         };
       }
 
-      const overrideStart = DateTime.fromISO(activeOverride.starts_at, { zone: "utc" }).setZone("Europe/Stockholm");
-      const overrideEnd = DateTime.fromISO(activeOverride.ends_at, { zone: "utc" }).setZone("Europe/Stockholm");
+      const { start: overrideStart, end: overrideEnd } = operationRange(activeOverride);
       const overrideStartTime = overrideStart.toFormat("HH:mm");
       const overrideEndTime = overrideEnd.toFormat("HH:mm");
       const coversNormalDay = overrideStart <= normalOpenStart && overrideEnd >= normalOpenEnd;
@@ -291,59 +396,40 @@ function useVenueOpenStatus(venue: any | undefined) {
 
       if (wholeCalendarDay || coversNormalDay) {
         return {
+          ...baseStatus,
           open: false,
           label: "Stängt idag",
-          openingHours,
-          operationOverrides,
-          activeOperationOverride: activeOverride,
-          todayOpeningHours: today,
-          normalHoursLabel,
           currentStatusLabel: "Stängt idag",
-          todayLabel,
           venueStatusTone: "exception" as const,
         };
       }
 
       if (now < overrideStart) {
+        const delayedOpening = !normalOpen && overrideStart <= normalOpenStart ? `Öppnar ${overrideEndTime} idag` : null;
         return {
+          ...baseStatus,
           open: normalOpen,
-          label: `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
-          openingHours,
-          operationOverrides,
-          activeOperationOverride: activeOverride,
-          todayOpeningHours: today,
-          normalHoursLabel,
-          currentStatusLabel: `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
-          todayLabel,
+          label: delayedOpening || `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
+          currentStatusLabel: delayedOpening ? `Öppnar ${overrideEndTime}` : `Stänger tillfälligt ${overrideStartTime}–${overrideEndTime}`,
           venueStatusTone: "exception" as const,
         };
       }
 
       if (now < overrideEnd) {
         return {
+          ...baseStatus,
           open: false,
           label: `Öppnar ${overrideEndTime} idag`,
-          openingHours,
-          operationOverrides,
-          activeOperationOverride: activeOverride,
-          todayOpeningHours: today,
-          normalHoursLabel,
           currentStatusLabel: `Öppnar ${overrideEndTime}`,
-          todayLabel,
           venueStatusTone: "exception" as const,
         };
       }
 
       return {
+        ...baseStatus,
         open: normalOpen,
         label: normalLabel,
-        openingHours,
-        operationOverrides,
-        activeOperationOverride: activeOverride,
-        todayOpeningHours: today,
-        normalHoursLabel,
         currentStatusLabel: normalLabel,
-        todayLabel,
         venueStatusTone: normalOpen ? "open" as const : "closed" as const,
       };
     },
@@ -848,8 +934,8 @@ export default function TodayPage() {
                       Normal öppettid: {status?.normalHoursLabel || "Laddar"}
                     </p>
                     {status?.activeOperationOverride && (
-                      <p className="mt-1 text-[13px] font-bold text-orange-700" style={{ fontFamily: FONT_HEADING }}>
-                        Driftavvikelse: {operationLabel(status.activeOperationOverride)}
+                      <p className="mt-1 text-[13px] font-bold text-red-700" style={{ fontFamily: FONT_HEADING }}>
+                        {operationTitle(status.activeOperationOverride)}: {operationDescription(status.activeOperationOverride, status.todayOpeningHours, now)}
                       </p>
                     )}
                   </div>
@@ -869,17 +955,50 @@ export default function TodayPage() {
                 </p>
               </div>
               <div className="mt-3 space-y-1">
-                {(status?.openingHours || []).map((hour) => (
+                {(status?.scheduleRows || []).map((row: any) => (
                   <div
-                    key={hour.day_of_week}
-                    className={`flex justify-between gap-8 rounded-xl px-2 py-1 text-[13px] text-neutral-950 ${hour.day_of_week === now.weekday % 7 ? "bg-neutral-100 font-bold" : ""}`}
+                    key={row.key}
+                    className={`rounded-xl px-2 py-1 text-[13px] text-neutral-950 ${row.isToday ? "bg-neutral-100 font-bold" : ""}`}
                     style={{ fontFamily: FONT_MONO }}
                   >
-                    <span>{dayLabel(hour.day_of_week)}</span>
-                    <span>{hour.is_closed ? "Stängt" : `${formatHour(hour.open_time)} - ${formatHour(hour.close_time)}`}</span>
+                    <div className="flex justify-between gap-8">
+                      <span>{row.dayLabel}</span>
+                      <span>{row.fullyClosed ? `Stängt · ${row.primaryTitle}` : row.normalLabel}</span>
+                    </div>
+                    {!row.fullyClosed && row.overrides?.map((override: any) => (
+                      <p key={override.id} className="mt-1 text-right text-[11px] font-bold text-red-700">
+                        {override.title}: Avvikelse {override.timeLabel}
+                      </p>
+                    ))}
                   </div>
                 ))}
               </div>
+              {status?.upcomingOverrideRows?.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-[13px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                    Kommande avvikelser
+                  </h4>
+                  <div className="mt-2 space-y-2">
+                    {status.upcomingOverrideRows.map((override: any) => (
+                      <div key={override.id} className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-[13px] font-black text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                              {override.title}
+                            </p>
+                            <p className="mt-1 text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                              {override.dateLabel}
+                            </p>
+                          </div>
+                          <p className="text-right text-[12px] font-bold text-red-700" style={{ fontFamily: FONT_HEADING }}>
+                            {override.description}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </DrawerContent>
