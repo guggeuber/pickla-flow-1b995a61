@@ -482,13 +482,13 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
 
 export default function TodayPage() {
   const [searchParams] = useSearchParams();
-  const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const [activeGuide, setActiveGuide] = useState<GuideKey | null>(null);
   const navigate = useNavigate();
   const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
-  const { data: venue, isLoading: venueLoading } = useVenue(slug);
+  const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
   const { data: status } = useVenueOpenStatus(venue);
+
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const now = DateTime.now().setZone("Europe/Stockholm");
   const heroImage = venue?.cover_image_url || heroPhoto;
