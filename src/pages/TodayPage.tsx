@@ -2,11 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { ArrowRight, Loader2, MapPin, X } from "lucide-react";
+import { ArrowRight, Loader2, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
+import {
+  useVenueOpenStatus,
+  type OpeningHour,
+  type VenueOperationOverride,
+} from "@/lib/venueStatus";
 import {
   getBookingChatResourceId,
   getBookingCourtLabel,
@@ -17,6 +22,7 @@ import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurren
 import { apiGet } from "@/lib/api";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
+
 
 const PAGE_BG = "#fffaf7";
 const SOFT = "#f4f0ee";
