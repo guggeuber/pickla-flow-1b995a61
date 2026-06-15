@@ -325,6 +325,7 @@ function useVenueOpenStatus(venue: any | undefined) {
           overrides: dayOverrides.map((override) => ({
             id: override.id,
             title: operationTitle(override),
+            icon: operationIcon(override),
             description: operationDescription(override, hour, date),
             timeLabel: operationTimeLabel(override, date),
             fullyClosed: operationCoversNormalHours(override, hour, date),
@@ -340,11 +341,16 @@ function useVenueOpenStatus(venue: any | undefined) {
           const { start } = operationRange(override);
           const date = start.startOf("day");
           const hour = openingHourForDate(openingHours, date);
+          const fullyClosed = operationCoversNormalHours(override, hour, date);
           return {
             id: override.id,
             title: operationTitle(override),
+            icon: operationIcon(override),
             dateLabel: start.setLocale("sv").toFormat("d LLLL"),
+            dayBadge: start.setLocale("sv").toFormat("d LLL").toUpperCase(),
             description: operationDescription(override, hour, date),
+            fullDayLabel: fullyClosed ? "Stängt hela dagen" : `Stängt ${operationTimeLabel(override, date)}`,
+            fullyClosed,
           };
         });
       const baseStatus = {
