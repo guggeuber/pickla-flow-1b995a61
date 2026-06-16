@@ -29,6 +29,7 @@ export default function AdminTopNav({ surfaces, active, onChange }: Props) {
     <nav
       className="-mx-4 px-4 overflow-x-auto scrollbar-none"
       style={{ WebkitOverflowScrolling: "touch" }}
+      aria-label="Admin OS surfaces"
     >
       <ul className="flex gap-1.5 min-w-max pb-1">
         {surfaces.map((s) => {
@@ -37,7 +38,9 @@ export default function AdminTopNav({ surfaces, active, onChange }: Props) {
             <li key={s.id}>
               <motion.button
                 whileTap={{ scale: 0.94 }}
+                whileHover={!isActive ? { y: -1 } : undefined}
                 onClick={() => onChange(s.id)}
+                aria-current={isActive ? "page" : undefined}
                 className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-colors"
                 style={
                   isActive
