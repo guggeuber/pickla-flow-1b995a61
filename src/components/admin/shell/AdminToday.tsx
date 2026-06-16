@@ -172,17 +172,10 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
   const hhmmss = now.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const dateLong = now.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "short" });
 
-  const attention: { id: string; tone: "warn" | "info"; icon: LucideIcon; title: string; meta: string; target: string }[] = [
-    { id: "lead-1", tone: "warn", icon: MessageSquare, title: "3 event leads pyr i pipen", meta: "Äldsta · 2 dagar gammal · säg hej 👋", target: "eventLeads" },
-    { id: "drift-1", tone: "info", icon: ShieldAlert, title: "Driftavvikelse rullar idag", meta: "Stängt 10:00–14:00 · meddelat ✓", target: "operations" },
-  ];
-
-  const todaysPlan = [
-    { time: "10:00", title: "Stängt för städ", kind: "DRIFT", color: ax("sun") },
-    { time: "14:00", title: "Open Play · Eftermiddag", kind: "OPEN", color: ax("lime") },
-    { time: "17:00", title: "Pickleball nybörjarkurs", kind: "KURS", color: ax("electric") },
-    { time: "18:30", title: "Kickoff Spotify (tentativ)", kind: "EVENT", color: ax("magenta") },
-  ];
+  // Attention inbox + flightplan will be wired to real data in Phase 2.
+  // Until then we render proper empty states — no fake numbers, no fake events.
+  const attention: { id: string; tone: "warn" | "info"; icon: LucideIcon; title: string; meta: string; target: string }[] = [];
+  const todaysPlan: { time: string; title: string; kind: string; color: string }[] = [];
 
   // playful rotating one-liner
   const vibes = ["Allt rullar 💯", "Smörig drift 🧈", "Sjukt fint flow ✨", "Inga konflikter, bara hugs 🤝", "Pickla på maxvarv 🚀"];
@@ -327,41 +320,61 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
       {/* ── Today's plan timeline ── */}
       <section className="space-y-2">
         <SectionLabel icon={Clock} accent={ax("electric")}>Dagens flightplan</SectionLabel>
-        <div
-          className="rounded-2xl overflow-hidden"
-          style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}
-        >
-          {todaysPlan.map((item, i) => (
-            <div
-              key={i}
-              className="relative flex items-center gap-3 px-3.5 py-3"
-              style={{
-                borderTop: i === 0 ? "none" : `1px solid ${ax("borderSoft")}`,
-              }}
-            >
+        {todaysPlan.length === 0 ? (
+          <Card>
+            <div className="flex items-center gap-3 py-1">
               <div
-                className="absolute left-0 top-0 bottom-0 w-[3px]"
-                style={{ background: item.color, opacity: 0.85 }}
-              />
-              <div className="w-12 shrink-0 pl-1">
-                <p className="text-xs font-mono font-bold tabular-nums" style={{ color: "white" }}>{item.time}</p>
+                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                style={{
+                  background: `linear-gradient(135deg, ${ax("electric", 0.6)}, hsl(0 0% 0% / 0.3))`,
+                  boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.15)`,
+                }}
+              >
+                <Clock className="w-4 h-4 text-white" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm truncate" style={{ color: "white" }}>{item.title}</p>
+                <p className="text-sm font-bold" style={{ color: "white" }}>Flightplan tom</p>
+                <p className="text-[11px]" style={{ color: ax("muted") }}>
+                  Slås ihop från Schema, Events och Drift när Calendar-surfacen byggs.
+                </p>
               </div>
-              <span
-                className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] px-1.5 py-0.5 rounded"
-                style={{ background: `${item.color.replace(")", " / 0.15)")}`, color: item.color, border: `1px solid ${item.color.replace(")", " / 0.3)")}` }}
-              >
-                {item.kind}
-              </span>
             </div>
-          ))}
-        </div>
-        <p className="text-[10px] px-1" style={{ color: ax("muted") }}>
-          Concept · slås ihop från Schema, Events och Drift när Calendar-surfacen byggs.
-        </p>
+          </Card>
+        ) : (
+          <div
+            className="rounded-2xl overflow-hidden"
+            style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}
+          >
+            {todaysPlan.map((item, i) => (
+              <div
+                key={i}
+                className="relative flex items-center gap-3 px-3.5 py-3"
+                style={{
+                  borderTop: i === 0 ? "none" : `1px solid ${ax("borderSoft")}`,
+                }}
+              >
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-[3px]"
+                  style={{ background: item.color, opacity: 0.85 }}
+                />
+                <div className="w-12 shrink-0 pl-1">
+                  <p className="text-xs font-mono font-bold tabular-nums" style={{ color: "white" }}>{item.time}</p>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm truncate" style={{ color: "white" }}>{item.title}</p>
+                </div>
+                <span
+                  className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] px-1.5 py-0.5 rounded"
+                  style={{ background: `${item.color.replace(")", " / 0.15)")}`, color: item.color, border: `1px solid ${item.color.replace(")", " / 0.3)")}` }}
+                >
+                  {item.kind}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
+
 
       {/* ── Quick actions ── */}
       <section className="space-y-2">
@@ -391,10 +404,15 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
               <Radio className="w-4 h-4 text-white" />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-bold" style={{ color: "white" }}>Alla system nominella</p>
-              <p className="text-[11px]" style={{ color: ax("muted") }}>Live occupancy + drift status flyttar hit i Phase 2.</p>
+              <p className="text-sm font-bold" style={{ color: "white" }}>Live status</p>
+              <p className="text-[11px]" style={{ color: ax("muted") }}>Occupancy och drift-signaler flyttar hit när Capacity-surfacen byggs.</p>
             </div>
-            <span className="text-[10px] font-mono font-bold" style={{ color: ax("lime") }}>100%</span>
+            <span
+              className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] px-1.5 py-0.5 rounded"
+              style={{ background: ax("lime", 0.15), color: ax("lime"), border: `1px solid ${ax("lime", 0.3)}` }}
+            >
+              SOON
+            </span>
           </div>
         </Card>
       </section>
