@@ -161,6 +161,18 @@ function formatEventTime(value?: string | null) {
   return match ? `${match[1]}:${match[2]}` : raw || "Saknas";
 }
 
+function blockResourceName(block: any) {
+  const resource = Array.isArray(block?.event_resource_catalog)
+    ? block.event_resource_catalog[0]
+    : block?.event_resource_catalog;
+  return resource?.name || block?.title || "Resurs";
+}
+
+function impactRegistrationCount(impact: any) {
+  if (typeof impact?.activities?.registrations_count === "number") return impact.activities.registrations_count;
+  return (impact?.activities?.samples || []).reduce((sum: number, row: any) => sum + Number(row.registrations_count || 0), 0);
+}
+
 function cleanReplyPreview(value?: string | null) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -328,9 +340,9 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
       offerId: bookingPreview?.offer?.id,
       depositAmountSek: Number(depositAmount || bookingPreview?.default_deposit_amount || 0),
     }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast.success("Bokning bekräftad och handpenning skickad");
-      setBookingPreview(null);
+      setBookingPreview((current: any) => current ? { ...current, confirmation: result } : result);
       refresh();
     },
     onError: (error: Error) => toast.error(error.message),
@@ -991,6 +1003,90 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
               )}
             </div>
 
+            {bookingPreview.confirmation && (
+              <div className="mt-3 space-y-3 rounded-xl border border-primary/25 bg-primary/5 p-3 text-xs">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-bold text-foreground">Capacity Impact</p>
+                    <p className="mt-1 text-muted-foreground">
+                      {bookingPreview.confirmation.capacity_plan?.blocks?.length || 0} blockar aktiva ·{" "}
+                      {bookingPreview.confirmation.capacity_plan?.created_count || 0} skapade ·{" "}
+                      {bookingPreview.confirmation.capacity_plan?.updated_count || 0} uppdaterade
+                    </p>
+                  </div>
+                  <CheckCircle2 className="h-5 w-5 text-primary" />
+                </div>
+
+                <div>
+                  <p className="font-bold text-foreground">Resources Selected</p>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {(bookingPreview.confirmation.capacity_plan?.resources || []).map((resource: any) => (
+                      <span key={resource.resource_catalog_id} className="rounded-full bg-background px-2 py-1 text-[11px] font-semibold text-foreground">
+                        {resource.name}
+                      </span>
+                    ))}
+                    {!(bookingPreview.confirmation.capacity_plan?.resources || []).length && (
+                      <span className="text-muted-foreground">Inga operativa banresurser valda</span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="font-bold text-foreground">Blocks Created</p>
+                  <div className="mt-1 space-y-1">
+                    {(bookingPreview.confirmation.capacity_plan?.blocks || []).map((block: any) => (
+                      <p key={block.id} className="text-muted-foreground">
+                        {blockResourceName(block)} · {formatDateTime(block.starts_at)}-{formatDateTime(block.ends_at)}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-lg bg-background p-2">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Activities</p>
+                    <p className="mt-1 text-lg font-black">{bookingPreview.confirmation.impact?.activities?.count || 0}</p>
+                  </div>
+                  <div className="rounded-lg bg-background p-2">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Registrations</p>
+                    <p className="mt-1 text-lg font-black">{impactRegistrationCount(bookingPreview.confirmation.impact)}</p>
+                  </div>
+                  <div className="rounded-lg bg-background p-2">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Bookings</p>
+                    <p className="mt-1 text-lg font-black">{bookingPreview.confirmation.impact?.bookings?.count || 0}</p>
+                  </div>
+                </div>
+
+                {(bookingPreview.confirmation.impact?.activities?.samples || []).length > 0 && (
+                  <div>
+                    <p className="font-bold text-foreground">Affected Activities</p>
+                    <div className="mt-1 space-y-1">
+                      {bookingPreview.confirmation.impact.activities.samples.map((activity: any) => (
+                        <p key={`${activity.activity_session_id}-${activity.session_date}`} className="text-muted-foreground">
+                          {activity.name} · {activity.session_date} {activity.start_time}-{activity.end_time} ·{" "}
+                          {activity.registrations_count || 0} anmälda
+                          {activity.override_status ? ` · ${activity.override_status}` : " · beslut krävs"}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(bookingPreview.confirmation.impact?.bookings?.samples || []).length > 0 && (
+                  <div>
+                    <p className="font-bold text-foreground">Affected Bookings</p>
+                    <div className="mt-1 space-y-1">
+                      {bookingPreview.confirmation.impact.bookings.samples.map((booking: any) => (
+                        <p key={booking.id} className="text-muted-foreground">
+                          {booking.booking_ref || booking.id} · {formatDateTime(booking.start_time)}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <label className="mt-4 block text-xs font-bold text-muted-foreground">Handpenning</label>
             <input
               value={depositAmount}
@@ -1009,11 +1105,11 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
               </button>
               <button
                 onClick={() => confirmBooking.mutate()}
-                disabled={confirmBooking.isPending || !bookingPreview.resource_check?.ok || !Number(depositAmount)}
+                disabled={!!bookingPreview.confirmation || confirmBooking.isPending || !bookingPreview.resource_check?.ok || !Number(depositAmount)}
                 className="flex-1 rounded-xl bg-primary px-3 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50"
               >
                 {confirmBooking.isPending ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 inline h-4 w-4" />}
-                Bekräfta & skicka
+                {bookingPreview.confirmation ? "Bekräftad" : "Bekräfta & skicka"}
               </button>
             </div>
 

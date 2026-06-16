@@ -145,6 +145,352 @@ async function checkEventResourceConflicts(admin: any, eventRow: any) {
   };
 }
 
+function localDatesBetween(startUtc: string, endUtc: string) {
+  const start = DateTime.fromISO(startUtc, { zone: 'utc' }).setZone('Europe/Stockholm').startOf('day');
+  const end = DateTime.fromISO(endUtc, { zone: 'utc' }).setZone('Europe/Stockholm').minus({ millisecond: 1 }).startOf('day');
+  const dates: string[] = [];
+  for (let cursor = start; cursor <= end && dates.length < 45; cursor = cursor.plus({ days: 1 })) {
+    dates.push(cursor.toISODate()!);
+  }
+  return dates;
+}
+
+function occurrenceOverrideKey(activitySessionId: string, sessionDate: string) {
+  return `${activitySessionId}:${sessionDate}`;
+}
+
+async function activityRegistrationCounts(admin: any, sessionIds: string[], startDate: string, endDate: string) {
+  const counts = new Map<string, number>();
+  if (!sessionIds.length || !startDate || !endDate) return counts;
+
+  const { data, error } = await admin
+    .from('session_registrations')
+    .select('activity_session_id, session_date, status')
+    .in('activity_session_id', sessionIds)
+    .gte('session_date', startDate)
+    .lte('session_date', endDate);
+  if (error) throw new Error(error.message);
+
+  for (const row of data || []) {
+    if (row.status === 'cancelled') continue;
+    const key = occurrenceOverrideKey(row.activity_session_id, row.session_date);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+async function activityOverrideMap(admin: any, venueId: string, sessionIds: string[], startDate: string, endDate: string) {
+  const overrides = new Map<string, any>();
+  if (!sessionIds.length || !startDate || !endDate) return overrides;
+
+  const { data, error } = await admin
+    .from('activity_session_overrides')
+    .select('id, activity_session_id, session_date, status, reason')
+    .eq('venue_id', venueId)
+    .in('activity_session_id', sessionIds)
+    .gte('session_date', startDate)
+    .lte('session_date', endDate);
+  if (error) throw new Error(error.message);
+
+  for (const row of data || []) {
+    overrides.set(occurrenceOverrideKey(row.activity_session_id, row.session_date), row);
+  }
+  return overrides;
+}
+
+async function analyzeEventCapacityImpact(admin: any, eventRow: any, courtIds: string[], startUtc: string, endUtc: string) {
+  if (!courtIds.length) {
+    return {
+      bookings: { count: 0, samples: [] },
+      activities: { count: 0, registrations_count: 0, samples: [], limited: false },
+    };
+  }
+
+  let bookingsQuery = admin
+    .from('bookings')
+    .select('id, booking_ref, start_time, end_time, status, venue_court_id, venue_courts(id, name)', { count: 'exact' })
+    .eq('venue_id', eventRow.venue_id)
+    .neq('status', 'cancelled')
+    .lt('start_time', endUtc)
+    .gt('end_time', startUtc)
+    .order('start_time', { ascending: true })
+    .limit(8);
+  if (courtIds.length) bookingsQuery = bookingsQuery.in('venue_court_id', courtIds);
+  const { data: bookings, count: bookingCount, error: bookingsError } = await bookingsQuery;
+  if (bookingsError) throw new Error(bookingsError.message);
+
+  const dates = localDatesBetween(startUtc, endUtc);
+  const startMs = DateTime.fromISO(startUtc, { zone: 'utc' }).toMillis();
+  const endMs = DateTime.fromISO(endUtc, { zone: 'utc' }).toMillis();
+  const { data: sessions, error: sessionsError } = await admin
+    .from('activity_sessions')
+    .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .eq('venue_id', eventRow.venue_id)
+    .eq('is_active', true)
+    .limit(500);
+  if (sessionsError) throw new Error(sessionsError.message);
+
+  const courtSet = new Set(courtIds);
+  const activitySamples: any[] = [];
+  let activityCount = 0;
+  for (const session of sessions || []) {
+    const sessionCourtIds = Array.isArray(session.court_ids) ? session.court_ids.map((id: unknown) => String(id)) : [];
+    if (courtIds.length && sessionCourtIds.length && !sessionCourtIds.some((id: string) => courtSet.has(id))) continue;
+
+    for (const date of dates) {
+      const isConcrete = session.session_date === date;
+      const isRecurring = !session.session_date && Array.isArray(session.recurrence_days)
+        && session.recurrence_days.includes(DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7);
+      if (!isConcrete && !isRecurring) continue;
+
+      const occurrenceStart = DateTime.fromISO(`${date}T${String(session.start_time).slice(0, 5)}:00`, { zone: 'Europe/Stockholm' }).toUTC();
+      let occurrenceEnd = DateTime.fromISO(`${date}T${String(session.end_time).slice(0, 5)}:00`, { zone: 'Europe/Stockholm' }).toUTC();
+      if (!occurrenceStart.isValid || !occurrenceEnd.isValid) continue;
+      if (occurrenceEnd <= occurrenceStart) occurrenceEnd = occurrenceEnd.plus({ days: 1 });
+      if (occurrenceStart.toMillis() < endMs && occurrenceEnd.toMillis() > startMs) {
+        activityCount += 1;
+        if (activitySamples.length < 12) {
+          activitySamples.push({
+            id: session.id,
+            activity_session_id: session.id,
+            name: session.name,
+            session_type: session.session_type,
+            session_date: date,
+            start_time: String(session.start_time).slice(0, 5),
+            end_time: String(session.end_time).slice(0, 5),
+          });
+        }
+      }
+    }
+  }
+
+  const sampleSessionIds = activitySamples.map((sample) => sample.activity_session_id);
+  const startDate = dates[0] || '';
+  const endDate = dates[dates.length - 1] || '';
+  const [registrationCounts, overrides] = await Promise.all([
+    activityRegistrationCounts(admin, sampleSessionIds, startDate, endDate),
+    activityOverrideMap(admin, eventRow.venue_id, sampleSessionIds, startDate, endDate),
+  ]);
+  let registrationsCount = 0;
+  for (const sample of activitySamples) {
+    const key = occurrenceOverrideKey(sample.activity_session_id, sample.session_date);
+    const count = registrationCounts.get(key) || 0;
+    const override = overrides.get(key);
+    registrationsCount += count;
+    sample.registrations_count = count;
+    sample.override_status = override?.status || null;
+    sample.activity_session_override_id = override?.id || null;
+  }
+
+  return {
+    bookings: {
+      count: bookingCount ?? (bookings || []).length,
+      samples: bookings || [],
+    },
+    activities: {
+      count: activityCount,
+      registrations_count: registrationsCount,
+      samples: activitySamples,
+      limited: dates.length >= 45,
+    },
+  };
+}
+
+async function selectedEventCourtResources(admin: any, eventRow: any) {
+  const { data: allocations, error: allocationError } = await admin
+    .from('event_resource_allocations')
+    .select('id, venue_id, event_id, resource_catalog_id, venue_court_id, resource_type, name, status')
+    .eq('venue_id', eventRow.venue_id)
+    .eq('event_id', eventRow.id)
+    .in('status', ['proposed', 'confirmed']);
+  if (allocationError) throw new Error(allocationError.message);
+
+  const catalogIds = uniqueStrings((allocations || []).map((row: any) => row.resource_catalog_id).filter(Boolean));
+  const { data: catalogRows, error: catalogError } = catalogIds.length
+    ? await admin
+      .from('event_resource_catalog')
+      .select('id, name, resource_type, venue_court_id, is_bookable, is_active')
+      .eq('venue_id', eventRow.venue_id)
+      .eq('resource_type', 'court')
+      .eq('is_bookable', true)
+      .eq('is_active', true)
+      .in('id', catalogIds)
+    : { data: [], error: null };
+  if (catalogError) throw new Error(catalogError.message);
+
+  const catalogById = new Map((catalogRows || []).map((row: any) => [row.id, row]));
+  let resources = (allocations || [])
+    .map((allocation: any) => {
+      const catalog = catalogById.get(allocation.resource_catalog_id);
+      if (!catalog?.venue_court_id) return null;
+      return {
+        allocation_id: allocation.id,
+        resource_catalog_id: catalog.id,
+        venue_court_id: catalog.venue_court_id,
+        name: catalog.name || allocation.name,
+      };
+    })
+    .filter(Boolean);
+
+  if (resources.length === 0) {
+    const { data: eventCourts, error: courtsError } = await admin
+      .from('event_courts')
+      .select('venue_court_id')
+      .eq('event_id', eventRow.id);
+    if (courtsError) throw new Error(courtsError.message);
+
+    const courtIds = uniqueStrings((eventCourts || []).map((row: any) => row.venue_court_id).filter(Boolean));
+    if (courtIds.length) {
+      const { data: fallbackCatalog, error: fallbackError } = await admin
+        .from('event_resource_catalog')
+        .select('id, name, venue_court_id')
+        .eq('venue_id', eventRow.venue_id)
+        .eq('resource_type', 'court')
+        .eq('is_bookable', true)
+        .eq('is_active', true)
+        .in('venue_court_id', courtIds);
+      if (fallbackError) throw new Error(fallbackError.message);
+      resources = (fallbackCatalog || []).map((row: any) => ({
+        allocation_id: null,
+        resource_catalog_id: row.id,
+        venue_court_id: row.venue_court_id,
+        name: row.name,
+      }));
+    }
+  }
+
+  const seen = new Set<string>();
+  return {
+    allocations: allocations || [],
+    resources: resources.filter((row: any) => {
+      if (seen.has(row.resource_catalog_id)) return false;
+      seen.add(row.resource_catalog_id);
+      return true;
+    }),
+  };
+}
+
+async function createOrUpdateEventResourceBlocks(admin: any, eventRow: any, lead: any, offer: any, userId: string) {
+  const range = eventDateTimeRange(eventRow);
+  if (!range?.startUtc || !range?.endUtc) throw new Error('Eventet behöver datum, starttid och sluttid innan resurser kan blockeras.');
+
+  const { allocations, resources } = await selectedEventCourtResources(admin, eventRow);
+  const resourceIds = resources.map((row: any) => row.resource_catalog_id);
+  const courtIds = resources.map((row: any) => row.venue_court_id).filter(Boolean);
+
+  const { data: existingBlocks, error: existingError } = await admin
+    .from('event_resource_blocks')
+    .select('id, resource_catalog_id')
+    .eq('venue_id', eventRow.venue_id)
+    .eq('event_id', eventRow.id)
+    .eq('event_offer_id', offer.id);
+  if (existingError) throw new Error(existingError.message);
+
+  const existingByResource = new Map((existingBlocks || []).map((row: any) => [row.resource_catalog_id, row]));
+  const keepIds = new Set(resourceIds);
+  const blocksToInsert = [];
+  const blockIdsToUpdate: string[] = [];
+  const blockIdsToRelease = (existingBlocks || [])
+    .filter((row: any) => !keepIds.has(row.resource_catalog_id))
+    .map((row: any) => row.id);
+
+  for (const resource of resources) {
+    const existing = existingByResource.get(resource.resource_catalog_id);
+    if (existing?.id) {
+      blockIdsToUpdate.push(existing.id);
+      continue;
+    }
+    blocksToInsert.push({
+      venue_id: eventRow.venue_id,
+      resource_catalog_id: resource.resource_catalog_id,
+      event_id: eventRow.id,
+      event_lead_id: lead.id,
+      event_offer_id: offer.id,
+      title: offer.title || eventRow.display_name || eventRow.name || 'Event',
+      reason: 'event',
+      status: 'confirmed',
+      starts_at: range.startUtc,
+      ends_at: range.endUtc,
+      blocks_public_booking: true,
+      created_by: userId,
+      metadata: {
+        event_id: eventRow.id,
+        event_lead_id: lead.id,
+        event_offer_id: offer.id,
+        event_resource_allocation_id: resource.allocation_id,
+        venue_court_id: resource.venue_court_id,
+        source: 'event_confirm_booking',
+      },
+    });
+  }
+
+  if (blockIdsToUpdate.length) {
+    const { error } = await admin
+      .from('event_resource_blocks')
+      .update({
+        event_lead_id: lead.id,
+        title: offer.title || eventRow.display_name || eventRow.name || 'Event',
+        reason: 'event',
+        status: 'confirmed',
+        starts_at: range.startUtc,
+        ends_at: range.endUtc,
+        blocks_public_booking: true,
+      })
+      .eq('venue_id', eventRow.venue_id)
+      .in('id', blockIdsToUpdate);
+    if (error) throw new Error(error.message);
+  }
+
+  if (blockIdsToRelease.length) {
+    const { error } = await admin
+      .from('event_resource_blocks')
+      .update({ status: 'released', blocks_public_booking: false })
+      .eq('venue_id', eventRow.venue_id)
+      .in('id', blockIdsToRelease);
+    if (error) throw new Error(error.message);
+  }
+
+  if (blocksToInsert.length) {
+    const { error } = await admin.from('event_resource_blocks').insert(blocksToInsert);
+    if (error) throw new Error(error.message);
+  }
+
+  const allocationIds = (allocations || []).map((row: any) => row.id).filter(Boolean);
+  if (allocationIds.length) {
+    const { error } = await admin
+      .from('event_resource_allocations')
+      .update({ status: 'confirmed', start_at: range.startUtc, end_at: range.endUtc })
+      .eq('venue_id', eventRow.venue_id)
+      .eq('event_id', eventRow.id)
+      .in('id', allocationIds);
+    if (error) throw new Error(error.message);
+  }
+
+  const { data: blocks, error: blockFetchError } = await admin
+    .from('event_resource_blocks')
+    .select('id, resource_catalog_id, event_id, event_lead_id, event_offer_id, title, reason, status, starts_at, ends_at, blocks_public_booking, event_resource_catalog(id, name, resource_type, venue_court_id)')
+    .eq('venue_id', eventRow.venue_id)
+    .eq('event_id', eventRow.id)
+    .eq('event_offer_id', offer.id)
+    .in('status', ['hold', 'confirmed'])
+    .order('starts_at', { ascending: true });
+  if (blockFetchError) throw new Error(blockFetchError.message);
+
+  const impact = await analyzeEventCapacityImpact(admin, eventRow, courtIds, range.startUtc, range.endUtc);
+  return {
+    allocations: {
+      selected_count: allocations.length,
+      confirmed_count: allocationIds.length,
+    },
+    resources,
+    blocks: blocks || [],
+    created_count: blocksToInsert.length,
+    updated_count: blockIdsToUpdate.length,
+    released_count: blockIdsToRelease.length,
+    impact,
+  };
+}
+
 function fallbackOfferCatalog(resources: any[] = []) {
   const templates = Object.values(EVENT_PACKAGES).map((pack: any, index) => ({
     id: null,
@@ -623,6 +969,7 @@ Deno.serve(async (req) => {
 
       const resourceCheck = await checkEventResourceConflicts(admin, eventRow);
       if (!resourceCheck.ok) return jsonResponse({ ok: false, blocked: true, resource_check: resourceCheck }, 409);
+      const capacityPlan = await createOrUpdateEventResourceBlocks(admin, eventRow, lead, offer, userId);
 
       const total = Number(offer.total_price || lead.estimated_value || 0);
       const fallbackDeposit = Math.max(500, Math.min(total || 500, Math.round((total * DEFAULT_DEPOSIT_PERCENT) / 100)));
@@ -700,7 +1047,7 @@ Deno.serve(async (req) => {
           title: 'Booking confirmed',
           body: 'Eventet bekräftades efter resurskontroll.',
           actorUserId: userId,
-          metadata: { event_id: eventRow.id, resource_check: resourceCheck },
+          metadata: { event_id: eventRow.id, resource_check: resourceCheck, capacity_plan: capacityPlan },
         }),
         leadActivity({
           lead,
@@ -721,6 +1068,9 @@ Deno.serve(async (req) => {
         checkout_url: checkout.url,
         stripe_session_id: checkout.id,
         deposit_amount: deposit,
+        resource_check: resourceCheck,
+        capacity_plan: capacityPlan,
+        impact: capacityPlan.impact,
       });
     }
 
