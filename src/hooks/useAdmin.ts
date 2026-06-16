@@ -111,6 +111,31 @@ export function useAdminAttention(venueId: string | undefined) {
   });
 }
 
+export type AdminAgentInboxItem = {
+  id: string;
+  activity_id: string;
+  lead_id: string;
+  lead_name: string;
+  event_date?: string | null;
+  event_time?: string | null;
+  summary: string;
+  risk: "low" | "medium" | "high" | string;
+  capacity_ok: boolean;
+  next_action: string;
+  affected_registrations: number;
+  created_at: string;
+  moduleTarget?: string | null;
+};
+
+export function useAdminAgentInbox(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-agent-inbox", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet<AdminAgentInboxItem[]>("api-admin", "agent-inbox", { venueId: venueId! }),
+    refetchInterval: 60000,
+  });
+}
+
 export type AdminTodaysPlanItem = {
   id: string;
   time: string;

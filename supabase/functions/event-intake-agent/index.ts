@@ -9,6 +9,7 @@ import {
   sanitizeLeadInput,
   scoreLead,
 } from '../_shared/event_agents.ts';
+import { createEventOperationsRecommendationActivity } from '../_shared/event_operations_agent.ts';
 
 const typeLabelMap: Record<string, string> = {
   company: 'Företagsevent',
@@ -130,6 +131,11 @@ Deno.serve(async (req) => {
         body: `${lead.contactName} skickade en eventförfrågan.`,
         metadata: { source: lead.source, package_type: pack.key, lead_score: leadScore },
       }));
+      try {
+        await createEventOperationsRecommendationActivity(admin, eventLead.id);
+      } catch (agentErr) {
+        console.error('event_operations_agent_create_failed', agentErr);
+      }
 
       return jsonResponse({
         ok: true,
@@ -207,6 +213,11 @@ Deno.serve(async (req) => {
               : 'Lead markerades som förlorad.',
           actorUserId: userId,
         }));
+      }
+      try {
+        await createEventOperationsRecommendationActivity(admin, data.id, userId);
+      } catch (agentErr) {
+        console.error('event_operations_agent_update_failed', agentErr);
       }
       return jsonResponse(data);
     }

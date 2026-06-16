@@ -120,6 +120,18 @@ function cleanTime(value: unknown) {
   return value ? String(value).slice(0, 5) : '';
 }
 
+function normalizeDateForResponse(value: unknown) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match?.[1]) return match[1];
+  const parsed = DateTime.fromISO(raw, { zone: 'utc' });
+  return parsed.isValid ? parsed.setZone('Europe/Stockholm').toISODate() : null;
+}
+
+function uniqueStrings(values: unknown[]) {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
 function eventDisplayTitle(event: Record<string, any>) {
   return event.display_name || event.name || event.title || 'Event';
 }
@@ -713,6 +725,96 @@ Deno.serve(async (req) => {
       }
 
       return jsonResponse(items, 200, 5);
+    }
+
+    // ── PICKLA AGENT INBOX ──
+    if (req.method === 'GET' && path === 'agent-inbox') {
+      const scopedVenueId = venueId!;
+      const { data: recommendations, error: recommendationsError } = await admin
+        .from('event_lead_activities')
+        .select('id, event_lead_id, title, body, metadata, created_at')
+        .eq('venue_id', scopedVenueId)
+        .eq('activity_type', 'agent_recommendation')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (recommendationsError) return errorResponse(recommendationsError.message);
+
+      const latestByLead = new Map<string, any>();
+      for (const recommendation of recommendations || []) {
+        if (!latestByLead.has(recommendation.event_lead_id)) {
+          latestByLead.set(recommendation.event_lead_id, recommendation);
+        }
+      }
+
+      const leadIds = Array.from(latestByLead.keys());
+      if (!leadIds.length) return jsonResponse([], 200, 5);
+
+      const [{ data: leads, error: leadsError }, { data: decisions, error: decisionsError }] = await Promise.all([
+        admin
+          .from('event_leads')
+          .select('id, event_id, company_name, contact_name, status, preferred_date')
+          .eq('venue_id', scopedVenueId)
+          .in('id', leadIds),
+        admin
+          .from('event_lead_activities')
+          .select('id, event_lead_id, activity_type, created_at')
+          .eq('venue_id', scopedVenueId)
+          .in('event_lead_id', leadIds)
+          .in('activity_type', ['agent_recommendation_approved', 'agent_recommendation_rejected'])
+          .order('created_at', { ascending: false }),
+      ]);
+      if (leadsError) return errorResponse(leadsError.message);
+      if (decisionsError) return errorResponse(decisionsError.message);
+
+      const leadById = new Map((leads || []).map((lead: any) => [lead.id, lead]));
+      const latestDecisionByLead = new Map<string, any>();
+      for (const decision of decisions || []) {
+        if (!latestDecisionByLead.has(decision.event_lead_id)) latestDecisionByLead.set(decision.event_lead_id, decision);
+      }
+
+      const eventIds = uniqueStrings((leads || []).map((lead: any) => lead.event_id).filter(Boolean));
+      const eventById = new Map<string, any>();
+      if (eventIds.length) {
+        const { data: events, error: eventsError } = await admin
+          .from('events')
+          .select('id, start_date, start_time, end_time')
+          .in('id', eventIds);
+        if (eventsError) return errorResponse(eventsError.message);
+        for (const event of events || []) eventById.set(event.id, event);
+      }
+
+      const rows: any[] = [];
+      for (const recommendation of latestByLead.values()) {
+        const decision = latestDecisionByLead.get(recommendation.event_lead_id);
+        if (decision && new Date(decision.created_at).getTime() > new Date(recommendation.created_at).getTime()) continue;
+        const lead = leadById.get(recommendation.event_lead_id);
+        if (!lead || ['won', 'lost', 'booking_confirmed'].includes(String(lead.status))) continue;
+        const event = lead.event_id ? eventById.get(lead.event_id) : null;
+        const metadata = cleanBlockMetadata(recommendation.metadata) as any;
+        rows.push({
+          id: recommendation.id,
+          activity_id: recommendation.id,
+          lead_id: lead.id,
+          lead_name: lead.company_name || lead.contact_name || 'Event lead',
+          event_date: normalizeDateForResponse(event?.start_date || metadata.recommended_schedule?.event_date || lead.preferred_date),
+          event_time: cleanTime(event?.start_time || metadata.recommended_schedule?.start_time),
+          summary: String(metadata.summary || recommendation.body || 'Agent recommendation'),
+          risk: String(metadata.risk || 'low'),
+          capacity_ok: metadata.capacity_ok !== false,
+          next_action: String(metadata.next_action || 'review'),
+          affected_registrations: Number(metadata.affected_registrations || 0),
+          created_at: recommendation.created_at,
+          moduleTarget: 'eventLeads',
+        });
+      }
+
+      rows.sort((a, b) => {
+        const riskOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+        return (riskOrder[a.risk] ?? 3) - (riskOrder[b.risk] ?? 3)
+          || new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+
+      return jsonResponse(rows.slice(0, 12), 200, 5);
     }
 
     // ── ADMIN OS TODAY TIMELINE ──

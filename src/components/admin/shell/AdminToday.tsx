@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import {
   Ban,
+  Bot,
   CalendarCheck,
   ChevronRight,
   Clock,
@@ -19,7 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useAdminAttention, useAdminHistory, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
+import { useAdminAgentInbox, useAdminAttention, useAdminHistory, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
 import { AX, ax, AX_GRID_BG } from "./axTheme";
 import {
   AxCard,
@@ -62,6 +63,24 @@ function toneColor(tone: string | undefined) {
   if (tone === "sun") return ax("sun");
   if (tone === "danger") return ax("danger");
   return ax("electric");
+}
+
+function riskColor(risk: string | undefined) {
+  if (risk === "high") return ax("danger");
+  if (risk === "medium") return ax("sun");
+  return ax("lime");
+}
+
+function nextActionLabel(action: string | undefined) {
+  const labels: Record<string, string> = {
+    approve_offer: "Godkänn offert",
+    create_offer: "Skapa offert",
+    review_activity_capacity: "Granska kapacitet",
+    resolve_conflicts: "Lös konflikt",
+    set_schedule: "Sätt datum/tid",
+    review: "Granska",
+  };
+  return labels[String(action || "review")] || String(action || "Granska").replace(/_/g, " ");
 }
 
 /* ───────────── Atoms ───────────── */
@@ -206,6 +225,7 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
   const [now, setNow] = useState(new Date());
   const todayIso = stockholmIsoDate(now);
   const attentionQ = useAdminAttention(venueId);
+  const agentInboxQ = useAdminAgentInbox(venueId);
   const planQ = useAdminTodaysPlan(venueId, todayIso);
   const stats = (statsQ.data as any) || {};
   const history = (histQ.data as any[]) || [];
@@ -240,6 +260,7 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
     ...item,
     color: toneColor(item.tone),
   }));
+  const agentInbox = agentInboxQ.data || [];
 
   return (
     <div className="space-y-5">
@@ -416,6 +437,76 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 shrink-0" style={{ color: ax("muted") }} />
+                  </div>
+                </AxCard>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ── Agent inbox ── */}
+      <section className="space-y-2">
+        <AxSectionLabel
+          icon={Bot}
+          accent={ax("magenta")}
+          trailing={
+            agentInbox.length > 0 ? (
+              <AxChip tone="magenta">{agentInbox.length} FÖRSLAG</AxChip>
+            ) : (
+              <AxChip tone="lime">AGENT 0</AxChip>
+            )
+          }
+        >
+          Agent Inbox
+        </AxSectionLabel>
+        {agentInboxQ.isLoading ? (
+          <AxEmpty
+            icon={Bot}
+            tint={ax("magenta", 0.7)}
+            title="Laddar agentförslag"
+            hint="Hämtar senaste rekommendationer från event leads."
+          />
+        ) : agentInbox.length === 0 ? (
+          <AxEmpty
+            icon={Bot}
+            tint={ax("lime", 0.7)}
+            title="Inga agentförslag väntar"
+            hint="Nya eller om-analyserade event leads dyker upp här tills någon godkänner eller avvisar rekommendationen."
+          />
+        ) : (
+          <div className="space-y-2">
+            {agentInbox.map((item) => {
+              const c = riskColor(item.risk);
+              return (
+                <AxCard key={item.id} onClick={() => onOpenSettings(item.moduleTarget || "eventLeads")} glow={c}>
+                  <div className="flex items-start gap-3">
+                    <div
+                      className="mt-0.5 w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                      style={{
+                        background: `linear-gradient(135deg, ${c}, hsl(0 0% 0% / 0.3))`,
+                        boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.15)`,
+                      }}
+                    >
+                      <Bot className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className={`${AX_TYPE.bodyBold} truncate`} style={{ color: "white" }}>
+                          {item.lead_name}
+                        </p>
+                        <span className="text-[9px] font-mono uppercase" style={{ color: c }}>
+                          {item.risk}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[11px] line-clamp-2" style={{ color: ax("muted") }}>
+                        {item.summary}
+                      </p>
+                      <p className="mt-1 text-[10px] font-mono uppercase tracking-[0.14em]" style={{ color: ax("muted") }}>
+                        {[item.event_date, item.event_time, nextActionLabel(item.next_action)].filter(Boolean).join(" · ")}
+                      </p>
+                    </div>
+                    <ChevronRight className="mt-2 w-4 h-4 shrink-0" style={{ color: ax("muted") }} />
                   </div>
                 </AxCard>
               );

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, CheckCircle2, Clock, Copy, Eye, FileText, Loader2, Mail, Send, Trophy, XCircle } from "lucide-react";
+import { Bot, CalendarDays, CheckCircle2, Clock, Copy, Eye, FileText, Loader2, Mail, RefreshCw, Send, Trophy, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 
@@ -27,6 +27,10 @@ const TIMELINE_LABELS: Record<string, string> = {
   followup_scheduled: "Follow-up scheduled",
   customer_reply_received: "Customer replied",
   ready_to_book: "Ready to book",
+  agent_recommendation: "Agent recommendation",
+  agent_recommendation_created: "Agent recommendation created",
+  agent_recommendation_approved: "Agent recommendation approved",
+  agent_recommendation_rejected: "Agent recommendation rejected",
   booking_confirmed: "Booking confirmed",
   deposit_link_sent: "Deposit link sent",
   won: "Won",
@@ -207,6 +211,28 @@ function impactRegistrationCount(impact: any) {
   return (impact?.activities?.samples || []).reduce((sum: number, row: any) => sum + Number(row.registrations_count || 0), 0);
 }
 
+function latestAgentRecommendation(timeline: any[]) {
+  return timeline.find((item) => item.activity_type === "agent_recommendation") || null;
+}
+
+function agentActionLabel(action?: string | null) {
+  const labels: Record<string, string> = {
+    approve_offer: "Godkänn offert",
+    create_offer: "Skapa offert",
+    review_activity_capacity: "Granska aktivitetspåverkan",
+    resolve_conflicts: "Lös kapacitetskonflikt",
+    set_schedule: "Sätt datum och tid",
+    review: "Granska",
+  };
+  return labels[String(action || "review")] || String(action || "review").replace(/_/g, " ");
+}
+
+function agentRiskClass(risk?: string | null) {
+  if (risk === "high") return "border-destructive/35 bg-destructive/10 text-destructive";
+  if (risk === "medium") return "border-yellow-500/35 bg-yellow-500/10 text-yellow-200";
+  return "border-court-free/35 bg-court-free/10 text-court-free";
+}
+
 function cleanReplyPreview(value?: string | null) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -319,7 +345,10 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     return { active, closed };
   }, [leads]);
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ["event-agent-leads", venueId] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["event-agent-leads", venueId] });
+    qc.invalidateQueries({ queryKey: ["admin-agent-inbox", venueId] });
+  };
 
   const generateOffer = useMutation({
     mutationFn: ({ leadId, offerConfig }: { leadId: string; offerConfig?: any }) =>
@@ -410,6 +439,22 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
   const updateLead = useMutation({
     mutationFn: ({ leadId, status }: { leadId: string; status: string }) => apiPatch("event-intake-agent", "lead", { leadId, status }),
     onSuccess: refresh,
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const agentRecommendation = useMutation({
+    mutationFn: ({ leadId, action, recommendationActivityId }: { leadId: string; action: "approve" | "reject" | "reanalyze"; recommendationActivityId?: string }) =>
+      apiPost("event-sales-agent", "agent-recommendation", { leadId, action, recommendationActivityId }),
+    onSuccess: (_result, variables) => {
+      toast.success(
+        variables.action === "approve"
+          ? "Agentförslag godkänt"
+          : variables.action === "reject"
+            ? "Agentförslag avvisat"
+            : "Agenten har analyserat igen",
+      );
+      refresh();
+    },
     onError: (error: Error) => toast.error(error.message),
   });
 
@@ -562,6 +607,8 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     ]
       .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
     const latestReply = timeline.find((item: any) => item.activity_type === "customer_reply_received");
+    const agent = latestAgentRecommendation(timeline);
+    const agentMeta = agent?.metadata || {};
     const eventUrl = lead.event_id ? `/hub/admin?event=${lead.event_id}` : null;
     const offerIsSent = offer?.status === "sent" || offer?.sent_at;
     const offerIsConfirmed = offer?.status === "booking_confirmed";
@@ -596,6 +643,115 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
         {lead.message && (
           <p className="rounded-xl bg-muted/50 p-3 text-xs text-muted-foreground">{lead.message}</p>
         )}
+
+        <div className={`rounded-xl border p-3 ${agentRiskClass(agentMeta.risk)}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest opacity-80">Agent Recommendation</p>
+              <h3 className="mt-1 text-sm font-black text-foreground">{lead.company_name || lead.contact_name}</h3>
+            </div>
+            <Bot className="h-5 w-5 shrink-0" />
+          </div>
+
+          {agent ? (
+            <div className="mt-3 space-y-3 text-xs">
+              <div>
+                <p className="font-bold text-foreground">Recommended</p>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {agentMeta.recommended_package?.title && (
+                    <span className="rounded-full bg-background/80 px-2 py-1 font-semibold text-foreground">
+                      {agentMeta.recommended_package.title}
+                    </span>
+                  )}
+                  {(agentMeta.recommended_resources || []).slice(0, 6).map((resource: any) => (
+                    <span key={resource.resource_catalog_id || resource.name} className="rounded-full bg-background/80 px-2 py-1 font-semibold text-foreground">
+                      {resource.name}
+                    </span>
+                  ))}
+                  {!(agentMeta.recommended_resources || []).length && (
+                    <span className="text-muted-foreground">Resurser behöver väljas</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="rounded-lg bg-background/75 p-2">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Capacity</p>
+                  <p className="mt-1 font-black text-foreground">{agentMeta.capacity_ok ? "OK" : "Conflict"}</p>
+                </div>
+                <div className="rounded-lg bg-background/75 p-2">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Risk</p>
+                  <p className="mt-1 font-black text-foreground">{agentMeta.risk || "low"}</p>
+                </div>
+                <div className="rounded-lg bg-background/75 p-2">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Next</p>
+                  <p className="mt-1 font-black text-foreground">{agentActionLabel(agentMeta.next_action)}</p>
+                </div>
+              </div>
+
+              {(agentMeta.affected_activities || []).length > 0 && (
+                <div>
+                  <p className="font-bold text-foreground">Affected</p>
+                  <div className="mt-1 space-y-1">
+                    {(agentMeta.affected_activities || []).slice(0, 4).map((activity: any) => (
+                      <p key={`${activity.activity_session_id}-${activity.session_date}`} className="text-muted-foreground">
+                        {activity.name} · {activity.session_date} {activity.start_time}-{activity.end_time} · {activity.registrations_count || 0} anmälda
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="font-bold text-foreground">Recommendation</p>
+                <p className="mt-1 text-muted-foreground">{agentMeta.summary || agent.body}</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "approve", recommendationActivityId: agent.id })}
+                  disabled={agentRecommendation.isPending}
+                  className="rounded-xl bg-court-free/15 px-3 py-2.5 text-xs font-bold text-court-free disabled:opacity-50"
+                >
+                  <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reject", recommendationActivityId: agent.id })}
+                  disabled={agentRecommendation.isPending}
+                  className="rounded-xl bg-destructive/15 px-3 py-2.5 text-xs font-bold text-destructive disabled:opacity-50"
+                >
+                  <XCircle className="mr-1 inline h-3.5 w-3.5" />
+                  Reject
+                </button>
+                <button
+                  type="button"
+                  onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reanalyze" })}
+                  disabled={agentRecommendation.isPending}
+                  className="rounded-xl bg-background px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
+                >
+                  {agentRecommendation.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 inline h-3.5 w-3.5" />}
+                  Re-analyze
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 space-y-3 text-xs">
+              <p className="text-muted-foreground">Ingen agentrekommendation finns ännu för leadet.</p>
+              <button
+                type="button"
+                onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reanalyze" })}
+                disabled={agentRecommendation.isPending}
+                className="w-full rounded-xl bg-background px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
+              >
+                {agentRecommendation.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 inline h-3.5 w-3.5" />}
+                Re-analyze
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="rounded-xl border border-border bg-background/70 p-3">
           <div className="flex items-center justify-between gap-3">

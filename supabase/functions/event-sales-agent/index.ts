@@ -12,6 +12,10 @@ import {
   EVENT_PACKAGES,
   leadActivity,
 } from '../_shared/event_agents.ts';
+import {
+  createEventOperationsRecommendationActivity,
+  logAgentRecommendationDecision,
+} from '../_shared/event_operations_agent.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
@@ -802,6 +806,36 @@ Deno.serve(async (req) => {
       if (!await assertVenueAdmin(admin, userId, venueId)) return errorResponse('Forbidden', 403);
       const catalog = await fetchOfferCatalog(admin, venueId);
       return jsonResponse(catalog);
+    }
+
+    if (req.method === 'POST' && path === 'agent-recommendation') {
+      const body = await req.json();
+      const leadId = String(body.leadId || '').trim();
+      const action = String(body.action || 'reanalyze');
+      if (!leadId) return errorResponse('Missing leadId');
+
+      const { data: lead, error: leadErr } = await admin
+        .from('event_leads')
+        .select('*')
+        .eq('id', leadId)
+        .maybeSingle();
+      if (leadErr || !lead) return errorResponse('Lead not found', 404);
+      if (!await assertVenueAdmin(admin, userId, lead.venue_id)) return errorResponse('Forbidden', 403);
+
+      if (action === 'approve' || action === 'reject') {
+        const activity = await logAgentRecommendationDecision(
+          admin,
+          lead,
+          action === 'approve' ? 'approved' : 'rejected',
+          userId,
+          body.recommendationActivityId || null,
+        );
+        return jsonResponse({ ok: true, activity });
+      }
+
+      if (action !== 'reanalyze') return errorResponse('Invalid action', 400);
+      const recommendation = await createEventOperationsRecommendationActivity(admin, lead.id, userId);
+      return jsonResponse({ ok: true, recommendation: recommendation.recommendation, activity: recommendation.activity });
     }
 
     if (req.method === 'PATCH' && path === 'schedule') {
