@@ -144,12 +144,14 @@ function QuickAction({ icon: Icon, label, onClick }: { icon: LucideIcon; label: 
 }
 
 export default function AdminToday({ venueId, venueName, onOpenSettings }: Props) {
-  const { data: stats } = useAdminStats(venueId);
-  const { data: history } = useAdminHistory(venueId);
+  const { data: statsData } = useAdminStats(venueId);
+  const { data: historyData } = useAdminHistory(venueId);
+  const stats = (statsData as any) || {};
+  const history = (historyData as any[]) || [];
 
-  const revenueSpark = (history || []).map((d: any) => d.revenue);
-  const bookingsSpark = (history || []).map((d: any) => d.bookings);
-  const passesSpark = (history || []).map((d: any) => d.passes);
+  const revenueSpark = history.map((d: any) => d.revenue);
+  const bookingsSpark = history.map((d: any) => d.bookings);
+  const passesSpark = history.map((d: any) => d.passes);
 
   // Mocked attention items — Codex hook into useAdminAttention()
   const attention: { id: string; tone: "warning" | "danger" | "default"; icon: LucideIcon; title: string; meta: string; target: string }[] = [
