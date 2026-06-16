@@ -78,6 +78,7 @@ function nextActionLabel(action: string | undefined) {
     review_activity_capacity: "Granska kapacitet",
     resolve_conflicts: "Lös konflikt",
     set_schedule: "Sätt datum/tid",
+    choose_alternative_time: "Välj ny tid",
     review: "Granska",
   };
   return labels[String(action || "review")] || String(action || "Granska").replace(/_/g, " ");
@@ -378,73 +379,6 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
         </div>
       </div>
 
-      {/* ── Attention inbox ── */}
-      <section className="space-y-2">
-        <AxSectionLabel
-          icon={Inbox}
-          accent={ax("sun")}
-          trailing={
-            attention.length > 0 ? (
-              <AxChip tone="sun">
-                {attention.length} ITEM{attention.length === 1 ? "" : "S"}
-              </AxChip>
-            ) : (
-              <AxChip tone="lime">INBOX 0</AxChip>
-            )
-          }
-        >
-          Behöver dig
-        </AxSectionLabel>
-        {attentionQ.isLoading ? (
-          <AxEmpty
-            icon={Inbox}
-            tint={ax("sun", 0.7)}
-            title="Laddar attention"
-            hint="Hämtar leads, driftavvikelser, eventluckor och resursblockeringar."
-          />
-        ) : attention.length === 0 ? (
-          <AxEmpty
-            icon={Sparkles}
-            tint={ax("lime", 0.7)}
-            title="Inget behöver din uppmärksamhet"
-            hint="Inga sena leads, aktiva driftavvikelser, eventluckor eller resursblockeringar hittades just nu."
-          />
-        ) : (
-          <div className="space-y-2">
-            {attention.map((a) => {
-              const c = a.tone === "warn" ? ax("sun") : ax("electric");
-              return (
-                <AxCard key={a.id} onClick={() => onOpenSettings(a.target)} glow={c}>
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-                      style={{
-                        background: `linear-gradient(135deg, ${c}, hsl(0 0% 0% / 0.3))`,
-                        boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.15)`,
-                      }}
-                    >
-                      <a.icon className="w-4 h-4 text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`${AX_TYPE.bodyBold} truncate`} style={{ color: "white" }}>
-                        {a.title}
-                      </p>
-                      <p
-                        className={`${AX_TYPE.meta} truncate`}
-                        style={{ color: ax("muted") }}
-                      >
-                        {a.meta}
-                      </p>
-                    </div>
-                    <ChevronRight className="w-4 h-4 shrink-0" style={{ color: ax("muted") }} />
-                  </div>
-                </AxCard>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
       {/* ── Agent inbox ── */}
       <section className="space-y-2">
         <AxSectionLabel
@@ -507,6 +441,73 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
                       </p>
                     </div>
                     <ChevronRight className="mt-2 w-4 h-4 shrink-0" style={{ color: ax("muted") }} />
+                  </div>
+                </AxCard>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ── Attention inbox ── */}
+      <section className="space-y-2">
+        <AxSectionLabel
+          icon={Inbox}
+          accent={ax("sun")}
+          trailing={
+            attention.length > 0 ? (
+              <AxChip tone="sun">
+                {attention.length} ITEM{attention.length === 1 ? "" : "S"}
+              </AxChip>
+            ) : (
+              <AxChip tone="lime">INBOX 0</AxChip>
+            )
+          }
+        >
+          Behöver dig
+        </AxSectionLabel>
+        {attentionQ.isLoading ? (
+          <AxEmpty
+            icon={Inbox}
+            tint={ax("sun", 0.7)}
+            title="Laddar attention"
+            hint="Hämtar leads, driftavvikelser, eventluckor och resursblockeringar."
+          />
+        ) : attention.length === 0 ? (
+          <AxEmpty
+            icon={Sparkles}
+            tint={ax("lime", 0.7)}
+            title="Inget behöver din uppmärksamhet"
+            hint="Inga sena leads, aktiva driftavvikelser, eventluckor eller resursblockeringar hittades just nu."
+          />
+        ) : (
+          <div className="space-y-2">
+            {attention.map((a) => {
+              const c = a.tone === "warn" ? ax("sun") : ax("electric");
+              return (
+                <AxCard key={a.id} onClick={() => onOpenSettings(a.target)} glow={c}>
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                      style={{
+                        background: `linear-gradient(135deg, ${c}, hsl(0 0% 0% / 0.3))`,
+                        boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.15)`,
+                      }}
+                    >
+                      <a.icon className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`${AX_TYPE.bodyBold} truncate`} style={{ color: "white" }}>
+                        {a.title}
+                      </p>
+                      <p
+                        className={`${AX_TYPE.meta} truncate`}
+                        style={{ color: ax("muted") }}
+                      >
+                        {a.meta}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 shrink-0" style={{ color: ax("muted") }} />
                   </div>
                 </AxCard>
               );

@@ -10,12 +10,53 @@ function normalizeTime(value?: string | null) {
   return match ? `${match[1]}:${match[2]}` : null;
 }
 
+function timeToMinutes(value?: string | null) {
+  const time = normalizeTime(value);
+  if (!time) return null;
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(value: number) {
+  const normalized = ((value % 1440) + 1440) % 1440;
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
 function normalizeDate(value?: string | null) {
   const raw = String(value || '').trim();
   const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
   if (match?.[1]) return match[1];
   const parsed = DateTime.fromISO(raw, { zone: 'utc' });
   return parsed.isValid ? parsed.setZone('Europe/Stockholm').toISODate() : null;
+}
+
+function leadText(lead: any) {
+  return [
+    lead.event_type,
+    lead.message,
+    lead.company_name,
+    ...(Array.isArray(lead.activities) ? lead.activities : []),
+    ...(Array.isArray(lead.resources) ? lead.resources : []),
+  ].join(' ').toLowerCase();
+}
+
+function eventPreference(lead: any) {
+  const text = leadText(lead);
+  if (/aw|after work/.test(text)) return 'aw';
+  if (/svensexa|möhippa|kalas|kompis|födelsedag|birthday|privat|private/.test(text)) return 'social';
+  if (/familj|family|skola|barn|kids/.test(text)) return 'family';
+  if (/företag|foretag|konferens|kickoff|möte|workshop|team|company|corporate/.test(text)) return 'corporate';
+  return 'social';
+}
+
+function preferredDaysAndTimes(lead: any) {
+  const preference = eventPreference(lead);
+  if (preference === 'aw') return { days: [1, 2, 3, 4, 5], starts: ['16:00', '17:00'] };
+  if (preference === 'corporate') return { days: [1, 2, 3, 4, 5], starts: ['10:00', '13:00', '15:00', '16:00'] };
+  if (preference === 'family') return { days: [6, 0], starts: ['10:00', '11:00', '13:00', '14:00'] };
+  return { days: [6, 0], starts: ['15:00', '16:00', '17:00', '18:00'] };
 }
 
 function rangeFromSchedule(dateValue?: string | null, startValue?: string | null, endValue?: string | null) {
@@ -35,6 +76,56 @@ function rangeFromSchedule(dateValue?: string | null, startValue?: string | null
     startUtc: start.toUTC().toISO(),
     endUtc: end.toUTC().toISO(),
   };
+}
+
+function openingHoursByDay(rows: any[]) {
+  return new Map((rows || []).map((row: any) => [Number(row.day_of_week), row]));
+}
+
+function openingWindow(row: any) {
+  const open = timeToMinutes(row?.open_time);
+  let close = timeToMinutes(row?.close_time);
+  if (open == null || close == null) return null;
+  if (close <= open) close += 1440;
+  return { open, close };
+}
+
+function generateAlternativeTimes(lead: any, range: any, hoursRows: any[]) {
+  if (!range?.event_date || !range?.start_time || !range?.end_time) return [];
+  const hoursMap = openingHoursByDay(hoursRows);
+  const prefs = preferredDaysAndTimes(lead);
+  const requested = DateTime.fromISO(range.event_date, { zone: 'Europe/Stockholm' });
+  const startMinutes = timeToMinutes(range.start_time) ?? 0;
+  let endMinutes = timeToMinutes(range.end_time) ?? startMinutes + 120;
+  if (endMinutes <= startMinutes) endMinutes += 1440;
+  const duration = Math.max(60, Math.min(360, endMinutes - startMinutes));
+  const suggestions: any[] = [];
+
+  for (let offset = 0; offset <= 21 && suggestions.length < 4; offset += 1) {
+    const day = requested.plus({ days: offset });
+    const dayOfWeek = day.weekday % 7;
+    if (!prefs.days.includes(dayOfWeek)) continue;
+    const hours = hoursMap.get(dayOfWeek);
+    if (!hours || hours.is_closed) continue;
+    const window = openingWindow(hours);
+    if (!window) continue;
+
+    for (const start of prefs.starts) {
+      const candidateStart = timeToMinutes(start);
+      if (candidateStart == null) continue;
+      const candidateEnd = candidateStart + duration;
+      if (candidateStart < window.open || candidateEnd > window.close) continue;
+      suggestions.push({
+        event_date: day.toISODate(),
+        start_time: minutesToTime(candidateStart),
+        end_time: minutesToTime(candidateEnd),
+        reason: `Passar ${eventPreference(lead)} och ligger inom öppettiderna.`,
+      });
+      break;
+    }
+  }
+
+  return suggestions;
 }
 
 function localDatesBetween(startUtc: string, endUtc: string) {
@@ -161,7 +252,7 @@ async function activityOverrides(admin: any, venueId: string, sessionIds: string
   return map;
 }
 
-async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: any[], range: any) {
+async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: any[], range: any, catalog: any[] = []) {
   if (!range?.startUtc || !range?.endUtc) {
     return {
       ok: false,
@@ -170,17 +261,64 @@ async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: 
       affected_registrations: 0,
       affected_bookings: 0,
       active_blocks: 0,
+      alternative_times: [],
+      alternative_resources: [],
     };
   }
 
   const venueId = lead.venue_id;
   const courtIds = uniqueStrings(resources.map((row) => row.venue_court_id).filter(Boolean));
   const catalogIds = uniqueStrings(resources.map((row) => row.resource_catalog_id).filter(Boolean));
+  const catalogById = new Map((catalog || []).map((row: any) => [row.id, row]));
+  const selectedCatalogIds = new Set(catalogIds);
+  const unavailableCatalogIds = new Set<string>();
+  const unavailableCourtIds = new Set<string>();
   const conflicts: any[] = [];
+
+  for (const resource of resources || []) {
+    if (!resource.resource_catalog_id) continue;
+    const catalogRow = catalogById.get(resource.resource_catalog_id);
+    const courtBookableMissing = (resource.resource_type === 'court' || catalogRow?.resource_type === 'court') && catalogRow?.is_bookable === false;
+    if (!catalogRow || catalogRow.is_active === false || courtBookableMissing) {
+      unavailableCatalogIds.add(resource.resource_catalog_id);
+      if (resource.venue_court_id) unavailableCourtIds.add(resource.venue_court_id);
+      conflicts.push({
+        type: 'resource_unavailable',
+        id: resource.resource_catalog_id,
+        label: `${resource.name || 'Resurs'} är inte aktiv/bokningsbar.`,
+        severity: 'high',
+      });
+    }
+  }
+
+  const { data: hoursRows, error: hoursError } = await admin
+    .from('opening_hours')
+    .select('day_of_week, open_time, close_time, is_closed')
+    .eq('venue_id', venueId);
+  if (hoursError) throw new Error(hoursError.message);
+
+  const eventDay = DateTime.fromISO(range.event_date, { zone: 'Europe/Stockholm' });
+  const dayOfWeek = eventDay.weekday % 7;
+  const hours = openingHoursByDay(hoursRows || []).get(dayOfWeek);
+  const openingConflict = {
+    type: 'opening_hours',
+    label: 'Venue is closed at requested time',
+    severity: 'high',
+    day_of_week: dayOfWeek,
+    open_time: hours?.open_time || null,
+    close_time: hours?.close_time || null,
+  };
+  const startMinutes = timeToMinutes(range.start_time);
+  let endMinutes = timeToMinutes(range.end_time);
+  if (startMinutes != null && endMinutes != null && endMinutes <= startMinutes) endMinutes += 1440;
+  const window = hours && !hours.is_closed ? openingWindow(hours) : null;
+  if (!hours || hours.is_closed || !window || startMinutes == null || endMinutes == null || startMinutes < window.open || endMinutes > window.close) {
+    conflicts.push(openingConflict);
+  }
 
   const { data: driftRows, error: driftError } = await admin
     .from('venue_operation_overrides')
-    .select('id, title, override_type, starts_at, ends_at')
+    .select('id, title, override_type, starts_at, ends_at, affects_entire_venue')
     .eq('venue_id', venueId)
     .eq('status', 'active')
     .lt('starts_at', range.endUtc)
@@ -188,7 +326,14 @@ async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: 
     .limit(20);
   if (driftError) throw new Error(driftError.message);
   for (const row of driftRows || []) {
-    conflicts.push({ type: 'drift', id: row.id, label: row.title || 'Driftavvikelse', starts_at: row.starts_at, ends_at: row.ends_at });
+    conflicts.push({
+      type: 'drift',
+      id: row.id,
+      label: row.title || 'Driftavvikelse',
+      severity: row.affects_entire_venue === false ? 'medium' : 'high',
+      starts_at: row.starts_at,
+      ends_at: row.ends_at,
+    });
   }
 
   let blockQuery = admin
@@ -204,7 +349,17 @@ async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: 
   if (blockError) throw new Error(blockError.message);
   for (const row of blocks || []) {
     if (eventRow?.id && row.event_id === eventRow.id) continue;
-    conflicts.push({ type: 'resource_block', id: row.id, label: row.title || resourceName(row.event_resource_catalog), starts_at: row.starts_at, ends_at: row.ends_at });
+    if (row.resource_catalog_id) unavailableCatalogIds.add(row.resource_catalog_id);
+    const resource = Array.isArray(row.event_resource_catalog) ? row.event_resource_catalog[0] : row.event_resource_catalog;
+    if (resource?.venue_court_id) unavailableCourtIds.add(resource.venue_court_id);
+    conflicts.push({
+      type: 'resource_block',
+      id: row.id,
+      label: row.title || resourceName(resource),
+      severity: 'high',
+      starts_at: row.starts_at,
+      ends_at: row.ends_at,
+    });
   }
 
   let affectedBookings = 0;
@@ -221,10 +376,12 @@ async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: 
     if (error) throw new Error(error.message);
     affectedBookings = count ?? (bookings || []).length;
     for (const row of bookings || []) {
+      if (row.venue_court_id) unavailableCourtIds.add(row.venue_court_id);
       conflicts.push({
         type: 'booking',
         id: row.id,
         label: row.booking_ref || row.venue_courts?.name || 'Bokning',
+        severity: 'high',
         starts_at: row.start_time,
         ends_at: row.end_time,
       });
@@ -282,7 +439,33 @@ async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: 
     affectedRegistrations += count;
     activity.registrations_count = count;
     activity.override_status = override?.status || null;
+    if (!['hidden', 'cancelled'].includes(String(override?.status || ''))) {
+      conflicts.push({
+        type: 'activity',
+        id: activity.activity_session_id,
+        label: activity.name,
+        severity: count > 0 ? 'high' : 'medium',
+        session_date: activity.session_date,
+        start_time: activity.start_time,
+        end_time: activity.end_time,
+        registrations_count: count,
+      });
+    }
   }
+
+  const alternativeResources = (catalog || [])
+    .filter((row: any) => row.resource_type === 'court')
+    .filter((row: any) => row.is_active !== false && row.is_bookable !== false && row.venue_court_id)
+    .filter((row: any) => !selectedCatalogIds.has(row.id))
+    .filter((row: any) => !unavailableCatalogIds.has(row.id) && !unavailableCourtIds.has(row.venue_court_id))
+    .slice(0, Math.max(2, courtIds.length || 2))
+    .map((row: any) => ({
+      resource_catalog_id: row.id,
+      venue_court_id: row.venue_court_id,
+      name: row.name,
+      resource_type: row.resource_type,
+      reason: 'Alternativ bana utan känd konflikt i aktuell analys.',
+    }));
 
   return {
     ok: conflicts.length === 0,
@@ -291,6 +474,8 @@ async function analyzeCapacity(admin: any, lead: any, eventRow: any, resources: 
     affected_registrations: affectedRegistrations,
     affected_bookings: affectedBookings,
     active_blocks: (blocks || []).filter((row: any) => !eventRow?.id || row.event_id !== eventRow.id).length,
+    alternative_times: generateAlternativeTimes(lead, range, hoursRows || []),
+    alternative_resources: alternativeResources,
   };
 }
 
@@ -298,6 +483,7 @@ function nextActionFor(payload: any) {
   if (!payload.recommended_schedule?.event_date || !payload.recommended_schedule?.start_time || !payload.recommended_schedule?.end_time) {
     return 'set_schedule';
   }
+  if (payload.conflicts?.some((row: any) => row.type === 'opening_hours')) return 'choose_alternative_time';
   if (!payload.capacity_ok) return 'resolve_conflicts';
   if (payload.affected_registrations > 0) return 'review_activity_capacity';
   if (!payload.existing_offer_id) return 'create_offer';
@@ -305,7 +491,9 @@ function nextActionFor(payload: any) {
 }
 
 function riskFor(payload: any) {
-  if (!payload.capacity_ok || payload.conflicts?.some((row: any) => ['booking', 'drift', 'resource_block'].includes(row.type))) return 'high';
+  if (payload.conflicts?.some((row: any) => row.severity === 'high')) return 'high';
+  if (payload.affected_registrations > 0) return 'high';
+  if (!payload.capacity_ok) return 'medium';
   if (!payload.recommended_schedule?.event_date || payload.affected_registrations > 0 || !payload.recommended_resources?.length) return 'medium';
   return 'low';
 }
@@ -314,7 +502,12 @@ function summaryFor(payload: any, lead: any) {
   const leadName = lead.company_name || lead.contact_name || 'Leadet';
   const schedule = payload.recommended_schedule;
   const resources = payload.recommended_resources?.slice(0, 4).map((row: any) => row.name).join(', ') || 'resurser behöver väljas';
+  const firstAlternative = payload.alternative_times?.[0];
   if (!schedule?.event_date) return `${leadName}: sätt datum/tid innan offert eller bokning. Agenten föreslår ${payload.recommended_package?.title}.`;
+  if (payload.conflicts?.some((row: any) => row.type === 'opening_hours')) {
+    const alt = firstAlternative ? ` Föreslå ${firstAlternative.event_date} ${firstAlternative.start_time}-${firstAlternative.end_time} istället.` : ' Välj en annan tid inom öppettiderna.';
+    return `${leadName}: venue är stängt vid önskad tid ${schedule.event_date} ${schedule.start_time}-${schedule.end_time}.${alt}`;
+  }
   if (!payload.capacity_ok) return `${leadName}: kapacitetskonflikt hittad för ${schedule.event_date} ${schedule.start_time}-${schedule.end_time}.`;
   if (payload.affected_registrations > 0) return `${leadName}: kapacitet OK men ${payload.affected_registrations} registreringar påverkas. Rekommenderade resurser: ${resources}.`;
   return `${leadName}: rekommendera ${payload.recommended_package?.title} ${schedule.event_date} ${schedule.start_time}-${schedule.end_time} med ${resources}.`;
@@ -363,7 +556,7 @@ export async function buildEventOperationsRecommendation(admin: any, leadId: str
   const pack = packageForLead(lead, offer);
   const range = rangeFromSchedule(eventRow?.start_date || lead.preferred_date, eventRow?.start_time || lead.preferred_time, eventRow?.end_time);
   const recommendedResources = chooseRecommendedResources(lead, pack, catalog, allocations);
-  const capacity = await analyzeCapacity(admin, lead, eventRow, recommendedResources, range);
+  const capacity = await analyzeCapacity(admin, lead, eventRow, recommendedResources, range, catalog);
 
   const payload: any = {
     summary: '',
@@ -387,6 +580,8 @@ export async function buildEventOperationsRecommendation(admin: any, leadId: str
     affected_registrations: capacity.affected_registrations,
     affected_bookings: capacity.affected_bookings,
     active_blocks: capacity.active_blocks,
+    alternative_times: capacity.alternative_times,
+    alternative_resources: capacity.alternative_resources,
     price_recommendation: {
       total_sek: fallbackPrice(lead, pack, offer),
       source: offer?.id ? 'existing_offer' : 'package_estimate',

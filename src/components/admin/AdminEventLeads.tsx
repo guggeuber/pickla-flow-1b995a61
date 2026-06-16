@@ -222,6 +222,7 @@ function agentActionLabel(action?: string | null) {
     review_activity_capacity: "Granska aktivitetspåverkan",
     resolve_conflicts: "Lös kapacitetskonflikt",
     set_schedule: "Sätt datum och tid",
+    choose_alternative_time: "Välj alternativ tid",
     review: "Granska",
   };
   return labels[String(action || "review")] || String(action || "review").replace(/_/g, " ");
@@ -706,6 +707,30 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
                 <p className="font-bold text-foreground">Recommendation</p>
                 <p className="mt-1 text-muted-foreground">{agentMeta.summary || agent.body}</p>
               </div>
+
+              {((agentMeta.alternative_times || []).length > 0 || (agentMeta.alternative_resources || []).length > 0) && (
+                <div className="rounded-lg bg-background/75 p-2">
+                  <p className="font-bold text-foreground">Alternatives</p>
+                  {(agentMeta.alternative_times || []).length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(agentMeta.alternative_times || []).slice(0, 4).map((slot: any) => (
+                        <span key={`${slot.event_date}-${slot.start_time}`} className="rounded-full bg-muted px-2 py-1 text-[11px] font-semibold text-foreground">
+                          {slot.event_date} {slot.start_time}-{slot.end_time}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {(agentMeta.alternative_resources || []).length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {(agentMeta.alternative_resources || []).slice(0, 4).map((resource: any) => (
+                        <span key={resource.resource_catalog_id || resource.name} className="rounded-full bg-muted px-2 py-1 text-[11px] font-semibold text-foreground">
+                          {resource.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <button
