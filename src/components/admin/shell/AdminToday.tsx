@@ -320,41 +320,61 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
       {/* ── Today's plan timeline ── */}
       <section className="space-y-2">
         <SectionLabel icon={Clock} accent={ax("electric")}>Dagens flightplan</SectionLabel>
-        <div
-          className="rounded-2xl overflow-hidden"
-          style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}
-        >
-          {todaysPlan.map((item, i) => (
-            <div
-              key={i}
-              className="relative flex items-center gap-3 px-3.5 py-3"
-              style={{
-                borderTop: i === 0 ? "none" : `1px solid ${ax("borderSoft")}`,
-              }}
-            >
+        {todaysPlan.length === 0 ? (
+          <Card>
+            <div className="flex items-center gap-3 py-1">
               <div
-                className="absolute left-0 top-0 bottom-0 w-[3px]"
-                style={{ background: item.color, opacity: 0.85 }}
-              />
-              <div className="w-12 shrink-0 pl-1">
-                <p className="text-xs font-mono font-bold tabular-nums" style={{ color: "white" }}>{item.time}</p>
+                className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                style={{
+                  background: `linear-gradient(135deg, ${ax("electric", 0.6)}, hsl(0 0% 0% / 0.3))`,
+                  boxShadow: `inset 0 1px 0 hsl(0 0% 100% / 0.15)`,
+                }}
+              >
+                <Clock className="w-4 h-4 text-white" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm truncate" style={{ color: "white" }}>{item.title}</p>
+                <p className="text-sm font-bold" style={{ color: "white" }}>Flightplan tom</p>
+                <p className="text-[11px]" style={{ color: ax("muted") }}>
+                  Slås ihop från Schema, Events och Drift när Calendar-surfacen byggs.
+                </p>
               </div>
-              <span
-                className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] px-1.5 py-0.5 rounded"
-                style={{ background: `${item.color.replace(")", " / 0.15)")}`, color: item.color, border: `1px solid ${item.color.replace(")", " / 0.3)")}` }}
-              >
-                {item.kind}
-              </span>
             </div>
-          ))}
-        </div>
-        <p className="text-[10px] px-1" style={{ color: ax("muted") }}>
-          Concept · slås ihop från Schema, Events och Drift när Calendar-surfacen byggs.
-        </p>
+          </Card>
+        ) : (
+          <div
+            className="rounded-2xl overflow-hidden"
+            style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}
+          >
+            {todaysPlan.map((item, i) => (
+              <div
+                key={i}
+                className="relative flex items-center gap-3 px-3.5 py-3"
+                style={{
+                  borderTop: i === 0 ? "none" : `1px solid ${ax("borderSoft")}`,
+                }}
+              >
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-[3px]"
+                  style={{ background: item.color, opacity: 0.85 }}
+                />
+                <div className="w-12 shrink-0 pl-1">
+                  <p className="text-xs font-mono font-bold tabular-nums" style={{ color: "white" }}>{item.time}</p>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm truncate" style={{ color: "white" }}>{item.title}</p>
+                </div>
+                <span
+                  className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] px-1.5 py-0.5 rounded"
+                  style={{ background: `${item.color.replace(")", " / 0.15)")}`, color: item.color, border: `1px solid ${item.color.replace(")", " / 0.3)")}` }}
+                >
+                  {item.kind}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
+
 
       {/* ── Quick actions ── */}
       <section className="space-y-2">
