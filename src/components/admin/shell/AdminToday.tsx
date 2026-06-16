@@ -404,10 +404,15 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
               <Radio className="w-4 h-4 text-white" />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-bold" style={{ color: "white" }}>Alla system nominella</p>
-              <p className="text-[11px]" style={{ color: ax("muted") }}>Live occupancy + drift status flyttar hit i Phase 2.</p>
+              <p className="text-sm font-bold" style={{ color: "white" }}>Live status</p>
+              <p className="text-[11px]" style={{ color: ax("muted") }}>Occupancy och drift-signaler flyttar hit när Capacity-surfacen byggs.</p>
             </div>
-            <span className="text-[10px] font-mono font-bold" style={{ color: ax("lime") }}>100%</span>
+            <span
+              className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] px-1.5 py-0.5 rounded"
+              style={{ background: ax("lime", 0.15), color: ax("lime"), border: `1px solid ${ax("lime", 0.3)}` }}
+            >
+              SOON
+            </span>
           </div>
         </Card>
       </section>
