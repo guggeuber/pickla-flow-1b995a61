@@ -172,17 +172,10 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
   const hhmmss = now.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const dateLong = now.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "short" });
 
-  const attention: { id: string; tone: "warn" | "info"; icon: LucideIcon; title: string; meta: string; target: string }[] = [
-    { id: "lead-1", tone: "warn", icon: MessageSquare, title: "3 event leads pyr i pipen", meta: "Äldsta · 2 dagar gammal · säg hej 👋", target: "eventLeads" },
-    { id: "drift-1", tone: "info", icon: ShieldAlert, title: "Driftavvikelse rullar idag", meta: "Stängt 10:00–14:00 · meddelat ✓", target: "operations" },
-  ];
-
-  const todaysPlan = [
-    { time: "10:00", title: "Stängt för städ", kind: "DRIFT", color: ax("sun") },
-    { time: "14:00", title: "Open Play · Eftermiddag", kind: "OPEN", color: ax("lime") },
-    { time: "17:00", title: "Pickleball nybörjarkurs", kind: "KURS", color: ax("electric") },
-    { time: "18:30", title: "Kickoff Spotify (tentativ)", kind: "EVENT", color: ax("magenta") },
-  ];
+  // Attention inbox + flightplan will be wired to real data in Phase 2.
+  // Until then we render proper empty states — no fake numbers, no fake events.
+  const attention: { id: string; tone: "warn" | "info"; icon: LucideIcon; title: string; meta: string; target: string }[] = [];
+  const todaysPlan: { time: string; title: string; kind: string; color: string }[] = [];
 
   // playful rotating one-liner
   const vibes = ["Allt rullar 💯", "Smörig drift 🧈", "Sjukt fint flow ✨", "Inga konflikter, bara hugs 🤝", "Pickla på maxvarv 🚀"];
