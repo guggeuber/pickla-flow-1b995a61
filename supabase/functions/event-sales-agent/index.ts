@@ -63,6 +63,23 @@ function eventDateTimeRange(eventRow: any) {
   return { start, end, startUtc: start.toUTC().toISO(), endUtc: end.toUTC().toISO() };
 }
 
+function scheduleRangeFromInput(dateValue: unknown, startValue: unknown, endValue: unknown) {
+  const eventDate = normalizeDate(String(dateValue || ''));
+  const startTime = normalizeTime(String(startValue || ''));
+  const endTime = normalizeTime(String(endValue || ''));
+  if (!eventDate) throw new Error('Event date is required');
+  if (!startTime) throw new Error('Start time is required');
+  if (!endTime) throw new Error('End time is required');
+
+  const range = eventDateTimeRange({
+    start_date: eventDate,
+    start_time: startTime,
+    end_time: endTime,
+  });
+  if (!range) throw new Error('End time must be after start time');
+  return { eventDate, startTime, endTime, range };
+}
+
 function overlapTime(aStart: string | null, aEnd: string | null, bStart: string | null, bEnd: string | null) {
   const startA = normalizeTime(aStart);
   const endA = normalizeTime(aEnd) || (startA ? DateTime.fromISO(`2026-01-01T${startA}:00`).plus({ hours: 2 }).toFormat('HH:mm') : null);
@@ -787,6 +804,84 @@ Deno.serve(async (req) => {
       return jsonResponse(catalog);
     }
 
+    if (req.method === 'PATCH' && path === 'schedule') {
+      const body = await req.json();
+      const leadId = String(body.leadId || '').trim();
+      if (!leadId) return errorResponse('Missing leadId');
+
+      const { data: lead, error: leadErr } = await admin
+        .from('event_leads')
+        .select('id, venue_id, event_id')
+        .eq('id', leadId)
+        .maybeSingle();
+      if (leadErr || !lead) return errorResponse('Lead not found', 404);
+      if (!await assertVenueAdmin(admin, userId, lead.venue_id)) return errorResponse('Forbidden', 403);
+      if (!lead.event_id) return errorResponse('Lead has no event yet', 404);
+
+      let schedule;
+      try {
+        schedule = scheduleRangeFromInput(body.eventDate || body.startDate, body.startTime, body.endTime);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Invalid schedule', 400);
+      }
+
+      const { data: eventRow, error: eventErr } = await admin
+        .from('events')
+        .update({
+          start_date: schedule.eventDate,
+          end_date: schedule.eventDate,
+          start_time: schedule.startTime,
+          end_time: schedule.endTime,
+        })
+        .eq('id', lead.event_id)
+        .eq('venue_id', lead.venue_id)
+        .select('id, venue_id, start_date, end_date, start_time, end_time, planning_status')
+        .single();
+      if (eventErr || !eventRow) return errorResponse(eventErr?.message || 'Event not found', 404);
+
+      const { data: allocations, error: allocationError } = await admin
+        .from('event_resource_allocations')
+        .update({
+          start_at: schedule.range.startUtc,
+          end_at: schedule.range.endUtc,
+        })
+        .eq('venue_id', lead.venue_id)
+        .eq('event_id', lead.event_id)
+        .eq('status', 'proposed')
+        .select('id');
+      if (allocationError) return errorResponse(allocationError.message, 500);
+
+      const { count: confirmedBlocksCount } = await admin
+        .from('event_resource_blocks')
+        .select('id', { count: 'exact', head: true })
+        .eq('venue_id', lead.venue_id)
+        .eq('event_id', lead.event_id)
+        .in('status', ['hold', 'confirmed']);
+
+      await admin.from('event_lead_activities').insert(leadActivity({
+        lead,
+        type: 'schedule_updated',
+        title: 'Schedule updated',
+        body: `Eventet schemalades till ${schedule.eventDate} ${schedule.startTime}-${schedule.endTime}.`,
+        actorUserId: userId,
+        metadata: {
+          event_id: lead.event_id,
+          start_date: schedule.eventDate,
+          start_time: schedule.startTime,
+          end_time: schedule.endTime,
+          proposed_allocations_updated: allocations?.length || 0,
+          confirmed_blocks_unchanged: confirmedBlocksCount || 0,
+        },
+      }));
+
+      return jsonResponse({
+        ok: true,
+        event: eventRow,
+        proposed_allocations_updated: allocations?.length || 0,
+        confirmed_blocks_unchanged: confirmedBlocksCount || 0,
+      });
+    }
+
     if (req.method === 'POST' && path === 'generate-offer') {
       const { leadId, offerConfig } = await req.json();
       if (!leadId) return errorResponse('Missing leadId');
@@ -796,10 +891,16 @@ Deno.serve(async (req) => {
       if (!await assertVenueAdmin(admin, userId, lead.venue_id)) return errorResponse('Forbidden', 403);
 
       const { data: venue } = await admin.from('venues').select('id, name, email, phone, address').eq('id', lead.venue_id).maybeSingle();
+      const { data: eventRow } = lead.event_id
+        ? await admin.from('events').select('start_date, start_time, end_time').eq('id', lead.event_id).maybeSingle()
+        : { data: null };
       const resourcePlan = await applyOfferResourcePlan(admin, lead, offerConfig || {});
       const mergedOfferConfig = {
         ...(offerConfig || {}),
         resources: resourcePlan.resources,
+        event_date: normalizeDate(eventRow?.start_date),
+        event_start_time: normalizeTime(eventRow?.start_time),
+        event_end_time: normalizeTime(eventRow?.end_time),
       };
       const payload = buildOfferPayload(lead, venue, mergedOfferConfig);
       const html = buildOfferHtml(payload);

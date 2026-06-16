@@ -190,7 +190,19 @@ export function buildOfferPayload(lead: any, venue: any, offerConfig: any = {}) 
     ? Math.max(12000, Math.ceil(normalized.participants / 4) * 3500)
     : normalized.participants * pack.pricePerPerson;
   const total = cleanMoney(offerConfig.total_price ?? offerConfig.totalPrice) ?? fallbackTotal;
-  const dateLabel = lead.preferred_date || 'Datum enligt överenskommelse';
+  const eventDate = String(offerConfig.event_date || offerConfig.eventDate || '').match(/^\d{4}-\d{2}-\d{2}$/)
+    ? String(offerConfig.event_date || offerConfig.eventDate)
+    : null;
+  const eventStartTime = String(offerConfig.event_start_time || offerConfig.eventStartTime || '').match(/^\d{2}:\d{2}/)
+    ? String(offerConfig.event_start_time || offerConfig.eventStartTime).slice(0, 5)
+    : null;
+  const eventEndTime = String(offerConfig.event_end_time || offerConfig.eventEndTime || '').match(/^\d{2}:\d{2}/)
+    ? String(offerConfig.event_end_time || offerConfig.eventEndTime).slice(0, 5)
+    : null;
+  const dateLabel = eventDate || lead.preferred_date || 'Datum enligt överenskommelse';
+  const timeLabel = eventStartTime
+    ? `${eventStartTime}${eventEndTime ? `-${eventEndTime}` : ''}`
+    : lead.preferred_time || 'Flexibelt';
   return {
     title: cleanText(offerConfig.title, `${pack.title} för ${lead.company_name || lead.contact_name}`),
     intro: cleanText(
@@ -205,7 +217,7 @@ export function buildOfferPayload(lead: any, venue: any, offerConfig: any = {}) 
       phone: lead.phone,
       participants_count: lead.participants_count,
       preferred_date: dateLabel,
-      preferred_time: lead.preferred_time || 'Flexibelt',
+      preferred_time: timeLabel,
     },
     agenda: cleanList(offerConfig.agenda, pack.agenda),
     price_per_person: pack.pricePerPerson,

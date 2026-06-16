@@ -154,7 +154,19 @@ Deno.serve(async (req) => {
         .order('created_at', { ascending: false })
         .limit(100);
       if (qErr) return errorResponse(qErr.message);
-      return jsonResponse(data || []);
+      const rows = data || [];
+      const eventIds = rows.map((row: any) => row.event_id).filter(Boolean);
+      if (eventIds.length) {
+        const { data: events } = await admin
+          .from('events')
+          .select('id, start_date, end_date, start_time, end_time, planning_status, status')
+          .in('id', eventIds);
+        const eventsById = new Map((events || []).map((event: any) => [event.id, event]));
+        for (const row of rows) {
+          row.event = row.event_id ? eventsById.get(row.event_id) || null : null;
+        }
+      }
+      return jsonResponse(rows);
     }
 
     if (req.method === 'PATCH' && path === 'lead') {
