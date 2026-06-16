@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import {
+  Ban,
   CalendarCheck,
   ChevronRight,
   Clock,
@@ -18,7 +19,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useAdminStats, useAdminHistory } from "@/hooks/useAdmin";
+import { useAdminAttention, useAdminHistory, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
 import { AX, ax, AX_GRID_BG } from "./axTheme";
 import {
   AxCard,
@@ -34,6 +35,33 @@ interface Props {
   venueId: string | undefined;
   venueName?: string;
   onOpenSettings: (sectionId: string) => void;
+}
+
+const stockholmDateFormatter = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Europe/Stockholm",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function stockholmIsoDate(date: Date) {
+  return stockholmDateFormatter.format(date);
+}
+
+function attentionIcon(kind: string): LucideIcon {
+  if (kind === "lead") return Trophy;
+  if (kind === "drift") return ShieldAlert;
+  if (kind === "event") return CalendarCheck;
+  if (kind === "block") return Ban;
+  return Inbox;
+}
+
+function toneColor(tone: string | undefined) {
+  if (tone === "lime") return ax("lime");
+  if (tone === "magenta") return ax("magenta");
+  if (tone === "sun") return ax("sun");
+  if (tone === "danger") return ax("danger");
+  return ax("electric");
 }
 
 /* ───────────── Atoms ───────────── */
@@ -175,6 +203,10 @@ function QuickAction({
 export default function AdminToday({ venueId, venueName, onOpenSettings }: Props) {
   const statsQ = useAdminStats(venueId);
   const histQ = useAdminHistory(venueId);
+  const [now, setNow] = useState(new Date());
+  const todayIso = stockholmIsoDate(now);
+  const attentionQ = useAdminAttention(venueId);
+  const planQ = useAdminTodaysPlan(venueId, todayIso);
   const stats = (statsQ.data as any) || {};
   const history = (histQ.data as any[]) || [];
   const statsLoading = statsQ.isLoading;
@@ -184,7 +216,6 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
   const passesSpark = history.map((d: any) => d.passes);
 
   // Live clock — mission control vibe
-  const [now, setNow] = useState(new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
@@ -200,25 +231,15 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
     month: "short",
   });
 
-  // No fake data: attention inbox and flightplan render empty until wired.
-  const attention: {
-    id: string;
-    tone: "warn" | "info";
-    icon: LucideIcon;
-    title: string;
-    meta: string;
-    target: string;
-  }[] = [];
-  const todaysPlan: { time: string; title: string; kind: string; color: string }[] = [];
-
-  const vibes = [
-    "Allt rullar 💯",
-    "Smörig drift 🧈",
-    "Sjukt fint flow ✨",
-    "Inga konflikter, bara hugs 🤝",
-    "Pickla på maxvarv 🚀",
-  ];
-  const vibe = vibes[now.getSeconds() % vibes.length];
+  const attention = (attentionQ.data || []).map((item) => ({
+    ...item,
+    icon: attentionIcon(item.kind),
+    target: item.moduleTarget || "events",
+  }));
+  const todaysPlan = (planQ.data || []).map((item) => ({
+    ...item,
+    color: toneColor(item.tone),
+  }));
 
   return (
     <div className="space-y-5">
@@ -262,7 +283,7 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
               <span style={{ color: ax("electricSoft") }}>/ Today</span>
             </h1>
             <p className="text-[11px] mt-1" style={{ color: ax("muted") }}>
-              {vibe}
+              Read-only driftläge från live data
             </p>
           </div>
           <div className="text-right shrink-0">
@@ -353,12 +374,19 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
         >
           Behöver dig
         </AxSectionLabel>
-        {attention.length === 0 ? (
+        {attentionQ.isLoading ? (
+          <AxEmpty
+            icon={Inbox}
+            tint={ax("sun", 0.7)}
+            title="Laddar attention"
+            hint="Hämtar leads, driftavvikelser, eventluckor och resursblockeringar."
+          />
+        ) : attention.length === 0 ? (
           <AxEmpty
             icon={Sparkles}
             tint={ax("lime", 0.7)}
-            title="Inbox zero. Du är en legend. 🏆"
-            hint="Pyrande leads, driftavvikelser och konflikter dyker upp här när Phase 2 är på plats."
+            title="Inget behöver din uppmärksamhet"
+            hint="Inga sena leads, aktiva driftavvikelser, eventluckor eller resursblockeringar hittades just nu."
           />
         ) : (
           <div className="space-y-2">
@@ -401,12 +429,19 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
         <AxSectionLabel icon={Clock} accent={ax("electric")}>
           Dagens flightplan
         </AxSectionLabel>
-        {todaysPlan.length === 0 ? (
+        {planQ.isLoading ? (
           <AxEmpty
             icon={Clock}
             tint={ax("electric", 0.7)}
-            title="Flightplan tom"
-            hint="Slås ihop från Schema, Events och Drift när Calendar-surfacen byggs."
+            title="Laddar dagens plan"
+            hint="Hämtar schema, events, blockeringar och drift för idag."
+          />
+        ) : todaysPlan.length === 0 ? (
+          <AxEmpty
+            icon={Clock}
+            tint={ax("electric", 0.7)}
+            title="Dagens plan är tom"
+            hint="Inga aktiviteter, events, resursblockeringar eller driftavvikelser hittades för idag."
           />
         ) : (
           <div
@@ -414,9 +449,12 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
             style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}
           >
             {todaysPlan.map((item, i) => (
-              <div
-                key={i}
-                className="relative flex items-center gap-3 px-3.5 py-3"
+              <motion.button
+                key={item.id}
+                type="button"
+                whileTap={{ scale: 0.99 }}
+                onClick={() => item.moduleTarget && onOpenSettings(item.moduleTarget)}
+                className="relative flex w-full items-center gap-3 px-3.5 py-3 text-left"
                 style={{
                   borderTop: i === 0 ? "none" : `1px solid ${ax("borderSoft")}`,
                 }}
@@ -448,7 +486,7 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
                 >
                   {item.kind}
                 </span>
-              </div>
+              </motion.button>
             ))}
           </div>
         )}

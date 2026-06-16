@@ -92,6 +92,44 @@ export function useAdminHistory(venueId: string | undefined) {
   });
 }
 
+export type AdminAttentionItem = {
+  id: string;
+  kind: "lead" | "drift" | "event" | "block";
+  tone: "warn" | "info";
+  title: string;
+  meta: string;
+  href?: string | null;
+  moduleTarget?: string | null;
+};
+
+export function useAdminAttention(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-attention", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet<AdminAttentionItem[]>("api-admin", "attention", { venueId: venueId! }),
+    refetchInterval: 60000,
+  });
+}
+
+export type AdminTodaysPlanItem = {
+  id: string;
+  time: string;
+  title: string;
+  kind: string;
+  tone: "electric" | "lime" | "magenta" | "sun" | "danger";
+  href?: string | null;
+  moduleTarget?: string | null;
+};
+
+export function useAdminTodaysPlan(venueId: string | undefined, date: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-todays-plan", venueId, date],
+    enabled: !!venueId && !!date,
+    queryFn: () => apiGet<AdminTodaysPlanItem[]>("api-admin", "todays-plan", { venueId: venueId!, date: date! }),
+    refetchInterval: 60000,
+  });
+}
+
 export function useAdminMutation(venueId: string | undefined) {
   const qc = useQueryClient();
 

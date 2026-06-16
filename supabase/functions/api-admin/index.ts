@@ -97,6 +97,33 @@ function stockholmBlockRange(date: string, startTime: string, endTime: string) {
   };
 }
 
+function stockholmDayRangeUtc(date: string) {
+  const day = DateTime.fromISO(String(date || '').slice(0, 10), { zone: 'Europe/Stockholm' });
+  if (!day.isValid) throw new Error('Invalid date');
+  return {
+    start: day.startOf('day').toUTC().toISO(),
+    end: day.plus({ days: 1 }).startOf('day').toUTC().toISO(),
+  };
+}
+
+function stockholmToday() {
+  return DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+}
+
+function stockholmTimeFromIso(value: string | null | undefined) {
+  if (!value) return null;
+  const date = DateTime.fromISO(value, { zone: 'utc' }).setZone('Europe/Stockholm');
+  return date.isValid ? date.toFormat('HH:mm') : null;
+}
+
+function cleanTime(value: unknown) {
+  return value ? String(value).slice(0, 5) : '';
+}
+
+function eventDisplayTitle(event: Record<string, any>) {
+  return event.display_name || event.name || event.title || 'Event';
+}
+
 function createBlockRef() {
   const now = DateTime.now().setZone('Europe/Stockholm');
   const suffix = crypto.randomUUID().split('-')[0].toUpperCase();
@@ -541,6 +568,264 @@ Deno.serve(async (req) => {
         };
       }));
       return jsonResponse(results, 200, 5);
+    }
+
+    // ── ADMIN OS ATTENTION SIGNALS ──
+    if (req.method === 'GET' && path === 'attention') {
+      const scopedVenueId = venueId!;
+      const today = stockholmToday();
+      const tomorrow = DateTime.fromISO(today, { zone: 'Europe/Stockholm' }).plus({ days: 1 }).toISODate()!;
+      const todayRange = stockholmDayRangeUtc(today);
+      const tomorrowRange = stockholmDayRangeUtc(tomorrow);
+      const cutoff = DateTime.now().minus({ hours: 24 }).toUTC().toISO();
+      const items: any[] = [];
+
+      const { data: leads, error: leadsError } = await admin
+        .from('event_leads')
+        .select('id, company_name, contact_name, status, created_at, event_id')
+        .eq('venue_id', scopedVenueId)
+        .lt('created_at', cutoff)
+        .not('status', 'in', '("won","lost","booking_confirmed")')
+        .order('created_at', { ascending: true })
+        .limit(50);
+      if (leadsError) return errorResponse(leadsError.message);
+
+      const leadIds = (leads || []).map((lead: any) => lead.id);
+      const respondedLeadIds = new Set<string>();
+      if (leadIds.length) {
+        const { data: activities, error: activitiesError } = await admin
+          .from('event_lead_activities')
+          .select('event_lead_id, activity_type')
+          .in('event_lead_id', leadIds);
+        if (activitiesError) return errorResponse(activitiesError.message);
+        const outboundResponseTypes = new Set(['offer_sent', 'booking_confirmation', 'booking_confirmed', 'deposit_link_sent']);
+        for (const activity of activities || []) {
+          if (outboundResponseTypes.has(activity.activity_type)) respondedLeadIds.add(activity.event_lead_id);
+        }
+      }
+
+      for (const lead of leads || []) {
+        if (respondedLeadIds.has(lead.id)) continue;
+        const created = DateTime.fromISO(lead.created_at, { zone: 'utc' }).setZone('Europe/Stockholm');
+        items.push({
+          id: `lead-${lead.id}`,
+          kind: 'lead',
+          tone: 'warn',
+          title: lead.company_name || lead.contact_name || 'Event lead',
+          meta: `Inget svar till kund registrerat sedan ${created.isValid ? created.toFormat('d MMM HH:mm') : 'skapande'}`,
+          moduleTarget: 'eventLeads',
+          href: null,
+        });
+      }
+
+      const { data: overrides, error: overridesError } = await admin
+        .from('venue_operation_overrides')
+        .select('id, title, override_type, starts_at, ends_at, affects_entire_venue, status')
+        .eq('venue_id', scopedVenueId)
+        .eq('status', 'active')
+        .lt('starts_at', tomorrowRange.end)
+        .gt('ends_at', todayRange.start)
+        .order('starts_at', { ascending: true })
+        .limit(50);
+      if (overridesError) return errorResponse(overridesError.message);
+
+      for (const override of overrides || []) {
+        const starts = DateTime.fromISO(override.starts_at, { zone: 'utc' }).setZone('Europe/Stockholm');
+        const ends = DateTime.fromISO(override.ends_at, { zone: 'utc' }).setZone('Europe/Stockholm');
+        const day = starts.toISODate() === today ? 'idag' : starts.toISODate() === tomorrow ? 'imorgon' : starts.toFormat('d MMM');
+        items.push({
+          id: `drift-${override.id}`,
+          kind: 'drift',
+          tone: 'warn',
+          title: override.title || 'Driftavvikelse',
+          meta: `${day} ${starts.toFormat('HH:mm')}–${ends.toFormat('HH:mm')}${override.affects_entire_venue ? ' · hela venue' : ''}`,
+          moduleTarget: 'operations',
+          href: null,
+        });
+      }
+
+      const { data: events, error: eventsError } = await admin
+        .from('events')
+        .select('id, name, display_name, start_date, start_time, planning_status, resources, staffing')
+        .eq('venue_id', scopedVenueId)
+        .not('planning_status', 'in', '("done","cancelled")')
+        .order('start_date', { ascending: true, nullsFirst: false })
+        .limit(80);
+      if (eventsError) return errorResponse(eventsError.message);
+
+      const eventIds = (events || []).map((event: any) => event.id);
+      const courtCounts = new Map<string, number>();
+      if (eventIds.length) {
+        const { data: courts, error: courtsError } = await admin
+          .from('event_courts')
+          .select('event_id, venue_court_id')
+          .in('event_id', eventIds);
+        if (courtsError) return errorResponse(courtsError.message);
+        for (const court of courts || []) {
+          courtCounts.set(court.event_id, (courtCounts.get(court.event_id) || 0) + 1);
+        }
+      }
+
+      for (const event of events || []) {
+        const issues: string[] = [];
+        const resourceCount = Array.isArray(event.resources) ? event.resources.length : 0;
+        if (resourceCount === 0 && (courtCounts.get(event.id) || 0) === 0) issues.push('resurser');
+        if (!String(event.staffing || '').trim()) issues.push('personal');
+        if (!['booked', 'ready', 'published'].includes(String(event.planning_status || ''))) issues.push('bekräftelse');
+        if (!issues.length) continue;
+        const date = event.start_date ? String(event.start_date).slice(0, 10) : 'Datum saknas';
+        const time = cleanTime(event.start_time);
+        items.push({
+          id: `event-${event.id}`,
+          kind: 'event',
+          tone: 'info',
+          title: eventDisplayTitle(event),
+          meta: `${date}${time ? ` ${time}` : ''} · Saknar ${issues.join(', ')}`,
+          moduleTarget: 'events',
+          href: null,
+        });
+      }
+
+      const { data: blocks, error: blocksError } = await admin
+        .from('event_resource_blocks')
+        .select('id, title, reason, status, starts_at, ends_at, resource_catalog_id, event_resource_catalog(id, name, venue_court_id)')
+        .eq('venue_id', scopedVenueId)
+        .in('status', ['hold', 'confirmed'])
+        .lt('starts_at', todayRange.end)
+        .gt('ends_at', todayRange.start)
+        .order('starts_at', { ascending: true })
+        .limit(50);
+      if (blocksError) return errorResponse(blocksError.message);
+
+      for (const block of blocks || []) {
+        const starts = stockholmTimeFromIso(block.starts_at) || '--:--';
+        const ends = stockholmTimeFromIso(block.ends_at) || '--:--';
+        const resource = resourceForBlockRow(block);
+        items.push({
+          id: `block-${block.id}`,
+          kind: 'block',
+          tone: 'warn',
+          title: block.title || resource?.name || 'Resursblockering',
+          meta: `${starts}–${ends} · ${block.status}`,
+          moduleTarget: 'resourceBlocks',
+          href: null,
+        });
+      }
+
+      return jsonResponse(items, 200, 5);
+    }
+
+    // ── ADMIN OS TODAY TIMELINE ──
+    if (req.method === 'GET' && path === 'todays-plan') {
+      const scopedVenueId = venueId!;
+      const date = url.searchParams.get('date') || stockholmToday();
+      const day = DateTime.fromISO(date, { zone: 'Europe/Stockholm' });
+      if (!day.isValid) return errorResponse('Invalid date', 400);
+      const range = stockholmDayRangeUtc(date);
+      const weekday = day.weekday % 7;
+      const items: any[] = [];
+
+      const { data: sessions, error: sessionsError } = await admin
+        .from('activity_sessions')
+        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status')
+        .eq('venue_id', scopedVenueId)
+        .eq('is_active', true)
+        .order('start_time', { ascending: true })
+        .limit(500);
+      if (sessionsError) return errorResponse(sessionsError.message);
+
+      for (const session of sessions || []) {
+        const isConcrete = session.session_date === date;
+        const isRecurring = !session.session_date && Array.isArray(session.recurrence_days) && session.recurrence_days.includes(weekday);
+        if (!isConcrete && !isRecurring) continue;
+        const time = cleanTime(session.start_time);
+        items.push({
+          id: `activity-${session.id}-${date}`,
+          time: time || '--:--',
+          title: session.name || 'Aktivitet',
+          kind: 'aktivitet',
+          tone: 'lime',
+          href: null,
+          moduleTarget: 'schedule',
+        });
+      }
+
+      const { data: dayEvents, error: dayEventsError } = await admin
+        .from('events')
+        .select('id, name, display_name, start_date, start_time, end_time, planning_status')
+        .eq('venue_id', scopedVenueId)
+        .eq('start_date', date)
+        .neq('planning_status', 'cancelled')
+        .order('start_time', { ascending: true });
+      if (dayEventsError) return errorResponse(dayEventsError.message);
+
+      for (const event of dayEvents || []) {
+        const time = cleanTime(event.start_time);
+        items.push({
+          id: `event-${event.id}`,
+          time: time || '--:--',
+          title: eventDisplayTitle(event),
+          kind: 'event',
+          tone: 'magenta',
+          href: null,
+          moduleTarget: 'events',
+        });
+      }
+
+      const { data: blocks, error: blocksError } = await admin
+        .from('event_resource_blocks')
+        .select('id, title, reason, status, starts_at, ends_at, resource_catalog_id, event_resource_catalog(id, name, venue_court_id)')
+        .eq('venue_id', scopedVenueId)
+        .in('status', ['hold', 'confirmed'])
+        .lt('starts_at', range.end)
+        .gt('ends_at', range.start)
+        .order('starts_at', { ascending: true })
+        .limit(200);
+      if (blocksError) return errorResponse(blocksError.message);
+
+      for (const block of blocks || []) {
+        const resource = resourceForBlockRow(block);
+        items.push({
+          id: `block-${block.id}`,
+          time: stockholmTimeFromIso(block.starts_at) || '--:--',
+          title: block.title || resource?.name || 'Resursblockering',
+          kind: 'block',
+          tone: block.reason === 'event' ? 'magenta' : 'sun',
+          href: null,
+          moduleTarget: 'resourceBlocks',
+        });
+      }
+
+      const { data: overrides, error: overridesError } = await admin
+        .from('venue_operation_overrides')
+        .select('id, title, override_type, starts_at, ends_at, affects_entire_venue, status')
+        .eq('venue_id', scopedVenueId)
+        .eq('status', 'active')
+        .lt('starts_at', range.end)
+        .gt('ends_at', range.start)
+        .order('starts_at', { ascending: true })
+        .limit(100);
+      if (overridesError) return errorResponse(overridesError.message);
+
+      for (const override of overrides || []) {
+        items.push({
+          id: `drift-${override.id}`,
+          time: stockholmTimeFromIso(override.starts_at) || '--:--',
+          title: override.title || 'Driftavvikelse',
+          kind: 'drift',
+          tone: 'danger',
+          href: null,
+          moduleTarget: 'operations',
+        });
+      }
+
+      items.sort((a, b) => {
+        const at = /^\d{2}:\d{2}$/.test(a.time) ? a.time : '99:99';
+        const bt = /^\d{2}:\d{2}$/.test(b.time) ? b.time : '99:99';
+        return at.localeCompare(bt) || String(a.title || '').localeCompare(String(b.title || ''));
+      });
+
+      return jsonResponse(items, 200, 5);
     }
 
     // ── CREATE VENUE (super_admin only) ──
