@@ -18,7 +18,7 @@ import {
   getBookingCourtLabel,
   groupBookingRows,
 } from "@/lib/bookingGroups";
-import { activityPriceLabels } from "@/lib/activityPricing";
+import { activityPriceLabels, formatSek } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
@@ -51,6 +51,8 @@ type FeedItem = {
   userIsInterested?: boolean;
   socialProofLabel?: string;
   priceChips?: string[];
+  isSpecialPass?: boolean;
+  onlineCheaper?: boolean;
   activitySession?: {
     id: string;
     name: string;
@@ -64,6 +66,8 @@ type FeedItem = {
     product_key: string | null;
     venue_id?: string;
     occurrence_date?: string;
+    access_policy?: Record<string, unknown> | null;
+    metadata?: Record<string, unknown> | null;
   };
   availabilityLabel?: string;
   href: string;
@@ -88,6 +92,8 @@ type SessionRow = {
   price_sek: number | null;
   product_key: string | null;
   venue_id: string;
+  access_policy: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
 };
 
 type SessionOccurrence = SessionRow & {
@@ -228,7 +234,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const [sessionsRes, eventsRes, bookingsRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")
@@ -317,12 +323,25 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         const count = socialProof?.registrations_count ?? registrationCounts.get(`${session.id}:${session.occurrence_date}`) ?? 0;
         const interestedCount = socialProof?.interested_count ?? 0;
         const capacity = Number(session.capacity || 0);
+        const metadata = session.metadata || {};
+        const pricingMode = String(metadata.pricing_mode || "standard");
+        const isSpecialPass = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
+        const onlinePrice = Number(metadata.online_price_sek ?? session.price_sek ?? 0);
+        const deskPrice = Number(metadata.desk_price_sek ?? onlinePrice);
+        const memberDiscountPercent = Number(metadata.member_discount_percent || 0);
+        const memberPrice = Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100);
         const spotsLeft = capacity ? Math.max(capacity - count, 0) : null;
-        const pricing = activityPriceLabels({
-          basePrice: Number(session.price_sek || 165),
-          productKey: session.product_key,
-          sessionType: session.session_type,
-        });
+        const pricing = isSpecialPass
+          ? {
+            publicChips: pricingMode === "fixed_ticket"
+              ? [`Playpickla.com ${formatSek(onlinePrice)}`, `Drop-in ${formatSek(deskPrice)}`]
+              : [`Playpickla.com ${formatSek(onlinePrice)}`, `Medlem ${formatSek(memberPrice)}`, `Drop-in ${formatSek(deskPrice)}`],
+          }
+          : activityPriceLabels({
+            basePrice: Number(session.price_sek || 165),
+            productKey: session.product_key,
+            sessionType: session.session_type,
+          });
         return {
           id: `session:${session.id}:${session.occurrence_date}`,
           kind: "session",
@@ -338,6 +357,8 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           userIsInterested: Boolean(socialProof?.user_is_interested),
           socialProofLabel: activitySocialProofLabel(count, interestedCount),
           priceChips: pricing.publicChips,
+          isSpecialPass,
+          onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
           activitySession: session,
           availabilityLabel: spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : spotsLeft <= 4 ? `Få platser · ${spotsLeft} kvar` : `${spotsLeft} kvar`,
           href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
@@ -404,6 +425,12 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
   const meta = item.availabilityLabel || (item.spotsLeft != null
     ? item.spotsLeft === 0 ? "Fullt" : `${item.spotsLeft} kvar`
     : item.status);
+  const popBorder = item.isSpecialPass ? "rgba(237,63,143,0.38)" : highlight ? "rgba(50,239,135,0.55)" : BORDER;
+  const popBackground = item.isSpecialPass
+    ? "linear-gradient(135deg, #fff7fb 0%, #f3fff8 100%)"
+    : highlight
+    ? GREEN
+    : SOFT;
   const openItem = async () => {
     if (item.kind === "session") {
       navigate(item.href, { state: { backgroundLocation: location, activitySession: item.activitySession } });
@@ -449,23 +476,34 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
       disabled={opening}
       className="grid w-full grid-cols-[58px_1fr_auto] items-center gap-2 px-3 py-3 text-left transition-transform active:scale-[0.99]"
       style={{
-        background: highlight ? GREEN : SOFT,
+        background: popBackground,
         color: TEXT,
         opacity: isPast || item.status === "Full" ? 0.48 : 1,
-        border: `1px solid ${highlight ? "rgba(50,239,135,0.55)" : BORDER}`,
+        border: `1px solid ${popBorder}`,
+        boxShadow: item.isSpecialPass ? "0 10px 26px rgba(237,63,143,0.08)" : "none",
         fontFamily: FONT_MONO,
       }}
     >
       <span className="text-[15px]">{item.startTime}</span>
       <span className="min-w-0">
+        {item.isSpecialPass && (
+          <span className="mb-1 inline-flex rounded-full bg-black px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-white">
+            Specialpass
+          </span>
+        )}
         <span className="block truncate text-[15px]">{item.title}</span>
         {item.priceChips && (
           <span className="mt-1 flex min-w-0 flex-wrap gap-1">
             {item.priceChips.map((chip) => (
-              <span key={chip} className="rounded-full bg-white/65 px-1.5 py-0.5 text-[9px] font-bold text-black/55">
+              <span key={chip} className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${item.isSpecialPass ? "bg-white text-black/75 shadow-sm" : "bg-white/65 text-black/55"}`}>
                 {chip}
               </span>
             ))}
+          </span>
+        )}
+        {item.onlineCheaper && (
+          <span className="mt-1 block truncate text-[10px] font-black" style={{ color: PINK }}>
+            Billigare online
           </span>
         )}
         {item.socialProofLabel && (
