@@ -1,6 +1,6 @@
 import { type InputHTMLAttributes, type TextareaHTMLAttributes, useEffect, useMemo, useState } from "react";
 import { DateTime } from "luxon";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Ban,
@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { useAdminCalendar, type AdminCalendarItem } from "@/hooks/useAdmin";
 import { ax, AX_GRID_BG } from "./axTheme";
 import { AX_TYPE, AxCard, AxChip, AxSectionLabel } from "./axPrimitives";
@@ -26,6 +26,25 @@ import { AX_TYPE, AxCard, AxChip, AxSectionLabel } from "./axPrimitives";
 interface Props {
   venueId: string | undefined;
   onOpenModule: (id: string) => void;
+}
+
+interface MembershipTier {
+  id: string;
+  name: string;
+  is_active: boolean;
+}
+
+interface TierPricing {
+  tier_id: string;
+  product_type: string;
+  fixed_price: number | null;
+  discount_percent: number | null;
+}
+
+interface MembershipEntitlement {
+  tier_id: string;
+  entitlement_type: string;
+  value: number | null;
 }
 
 /* ───────── helpers ───────── */
@@ -62,6 +81,19 @@ function productKeyForSessionType(sessionType: string) {
   if (sessionType === "group_training") return "group_training";
   if (sessionType === "event") return "event_fee";
   return "open_play_slot";
+}
+
+function formatSek(amount: number) {
+  return `${Math.round(amount).toLocaleString("sv-SE")} kr`;
+}
+
+function tierEffectivePrice(rule: TierPricing | undefined, standardPrice: number) {
+  if (!rule) return standardPrice;
+  if (rule.fixed_price != null) return Math.max(0, Math.round(Number(rule.fixed_price)));
+  if (rule.discount_percent != null) {
+    return Math.max(0, Math.round(standardPrice * (1 - Number(rule.discount_percent || 0) / 100)));
+  }
+  return standardPrice;
 }
 
 /* Tone per kind. Used for timeline strip + chip color. */
@@ -370,6 +402,31 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   const calendarQ = useAdminCalendar(venueId, range.from, range.to);
   const items = calendarQ.data?.items || [];
 
+  const { data: membershipTiers = [] } = useQuery<MembershipTier[]>({
+    queryKey: ["membership-tiers", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-memberships", "tiers", { venueId, includeHidden: "true" }),
+  });
+
+  const tierPricingQueries = useQueries({
+    queries: membershipTiers.map((tier) => ({
+      queryKey: ["tier-pricing", tier.id],
+      queryFn: () => apiGet<TierPricing[]>("api-memberships", "tier-pricing", { tierId: tier.id }),
+      enabled: !!tier.id,
+    })),
+  });
+
+  const tierEntitlementQueries = useQueries({
+    queries: membershipTiers.map((tier) => ({
+      queryKey: ["tier-entitlements", tier.id],
+      queryFn: () => apiGet<MembershipEntitlement[]>("api-memberships", "tier-entitlements", { tierId: tier.id }),
+      enabled: !!tier.id,
+    })),
+  });
+
+  const allTierPricing = tierPricingQueries.flatMap((query) => query.data || []);
+  const allTierEntitlements = tierEntitlementQueries.flatMap((query) => query.data || []);
+
   const dayItems = useMemo(
     () =>
       items
@@ -383,6 +440,74 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     for (const i of items) m[i.date] = (m[i.date] || 0) + 1;
     return m;
   }, [items]);
+
+  const pricingPreview = useMemo(() => {
+    const standardPrice = Math.max(0, Math.round(Number(activityPrice || 0)));
+    const capacity = Math.max(0, Math.round(Number(activityCapacity || 0)));
+    const productKey = productKeyForSessionType(activityType);
+    const activeTiers = membershipTiers.filter((tier) => tier.is_active);
+    const includedMemberships: string[] = [];
+    const discountedMemberships: string[] = [];
+    const standardMemberships: string[] = [];
+    const paidPrices = new Set<number>(standardPrice > 0 ? [standardPrice] : []);
+
+    activeTiers.forEach((tier) => {
+      const rule = allTierPricing.find((row) => row.tier_id === tier.id && row.product_type === productKey);
+      const hasOpenPlayUnlimited = allTierEntitlements.some((row) =>
+        row.tier_id === tier.id &&
+        row.entitlement_type === "open_play_unlimited" &&
+        Number(row.value || 0) > 0
+      );
+      const isIncludedByUnlimited = includedInUnlimited && productKey === "open_play_slot" && hasOpenPlayUnlimited;
+
+      if (isIncludedByUnlimited) {
+        includedMemberships.push(tier.name);
+        return;
+      }
+
+      const effectivePrice = tierEffectivePrice(rule, standardPrice);
+      if (rule && effectivePrice <= 0) {
+        includedMemberships.push(`${tier.name} (${rule.fixed_price != null ? "fast 0 kr" : "100% rabatt"})`);
+        return;
+      }
+      if (effectivePrice < standardPrice) {
+        discountedMemberships.push(`${tier.name} (${formatSek(effectivePrice)})`);
+        paidPrices.add(effectivePrice);
+        return;
+      }
+
+      standardMemberships.push(tier.name);
+      if (effectivePrice > 0) paidPrices.add(effectivePrice);
+    });
+
+    const lowestPaidPrice = paidPrices.size > 0 ? Math.min(...Array.from(paidPrices)) : 0;
+
+    return {
+      standardPrice,
+      capacity,
+      productKey,
+      activeTierCount: activeTiers.length,
+      includedMemberships,
+      discountedMemberships,
+      standardMemberships,
+      dayPassBehavior: includedInDayPass
+        ? "Dagsmedlemskap ger access till passet."
+        : "Dagsmedlemskap ger inte access. Kunden behöver köpa passet separat.",
+      maxRevenue: capacity * standardPrice,
+      lowestPaidPrice,
+      lowestPaidRevenue: capacity * lowestPaidPrice,
+      hasIncludedAccess: includedInDayPass || includedMemberships.length > 0,
+    };
+  }, [
+    activityCapacity,
+    activityPrice,
+    activityType,
+    allTierEntitlements,
+    allTierPricing,
+    includedInDayPass,
+    includedInUnlimited,
+    membershipTiers,
+  ]);
 
   const invalidateCalendar = () => {
     qc.invalidateQueries({ queryKey: ["admin-calendar", venueId] });
@@ -764,6 +889,7 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
                 onChange={setIncludedInUnlimited}
               />
             </div>
+            <PricingPreview preview={pricingPreview} />
           </Step>
 
           {/* Publicering */}
@@ -961,6 +1087,134 @@ function ItemActions({
 }
 
 /* ───────── Step + Toggle helpers ───────── */
+
+function PricingPreview({
+  preview,
+}: {
+  preview: {
+    standardPrice: number;
+    capacity: number;
+    productKey: string;
+    activeTierCount: number;
+    includedMemberships: string[];
+    discountedMemberships: string[];
+    standardMemberships: string[];
+    dayPassBehavior: string;
+    maxRevenue: number;
+    lowestPaidPrice: number;
+    lowestPaidRevenue: number;
+    hasIncludedAccess: boolean;
+  };
+}) {
+  return (
+    <div
+      className="mt-3 space-y-3 rounded-2xl p-3"
+      style={{
+        background: `linear-gradient(135deg, ${ax("electric", 0.1)}, ${ax("surfaceHi")})`,
+        border: `1px solid ${ax("electric", 0.32)}`,
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className={AX_TYPE.micro} style={{ color: ax("electricSoft") }}>
+            PRICING PREVIEW
+          </p>
+          <p className="mt-1 text-[11px]" style={{ color: ax("muted") }}>
+            Visar befintliga medlems- och dagsmedlemskapsregler innan publicering.
+          </p>
+        </div>
+        <AxChip tone="neutral">{preview.productKey}</AxChip>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <PreviewMetric label="Standardkund" value={formatSek(preview.standardPrice)} />
+        <PreviewMetric label="Aktiva tiers" value={String(preview.activeTierCount)} />
+        <PreviewMetric
+          label="Förväntad maxintäkt"
+          value={formatSek(preview.maxRevenue)}
+          helper={`${preview.capacity} x ${formatSek(preview.standardPrice)}`}
+        />
+        <PreviewMetric
+          label="Lägsta betalda scenario"
+          value={formatSek(preview.lowestPaidRevenue)}
+          helper={`${preview.capacity} x ${formatSek(preview.lowestPaidPrice)}`}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <PreviewLine
+          label="Ingår för"
+          value={preview.includedMemberships.length > 0 ? preview.includedMemberships.join(", ") : "Inga tiers får fri access via nuvarande regler."}
+        />
+        <PreviewLine
+          label="Rabatterat för"
+          value={preview.discountedMemberships.length > 0 ? preview.discountedMemberships.join(", ") : "Inga rabatterade tier-priser hittades."}
+        />
+        <PreviewLine
+          label="Betalar standardpris"
+          value={preview.standardMemberships.length > 0 ? preview.standardMemberships.join(", ") : "Inga aktiva tiers betalar standardpris."}
+        />
+        <PreviewLine label="Day pass" value={preview.dayPassBehavior} />
+      </div>
+
+      {preview.hasIncludedAccess && (
+        <p
+          className="rounded-xl px-3 py-2 text-[11px] font-bold"
+          style={{
+            background: ax("lime", 0.1),
+            border: `1px solid ${ax("lime", 0.28)}`,
+            color: ax("lime"),
+          }}
+        >
+          Intäkten blir lägre än max om platser tas av inkluderade medlemskap eller dagsmedlemskap.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PreviewMetric({ label, value, helper }: { label: string; value: string; helper?: string }) {
+  return (
+    <div
+      className="rounded-xl p-3"
+      style={{
+        background: ax("surfaceHi"),
+        border: `1px solid ${ax("borderSoft")}`,
+      }}
+    >
+      <p className="font-mono text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: ax("muted") }}>
+        {label}
+      </p>
+      <p className="mt-1 font-display text-lg font-black" style={{ color: "white" }}>
+        {value}
+      </p>
+      {helper && (
+        <p className="mt-0.5 text-[10px]" style={{ color: ax("muted") }}>
+          {helper}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PreviewLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      className="rounded-xl px-3 py-2"
+      style={{
+        background: ax("surface"),
+        border: `1px solid ${ax("borderSoft")}`,
+      }}
+    >
+      <p className="font-mono text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: ax("muted") }}>
+        {label}
+      </p>
+      <p className="mt-0.5 text-[12px] font-bold leading-snug" style={{ color: "white" }}>
+        {value}
+      </p>
+    </div>
+  );
+}
 
 function Step({ n, label, children }: { n: number; label: string; children: React.ReactNode }) {
   return (
