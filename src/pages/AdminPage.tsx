@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Package,
   Plus,
+  ReceiptText,
   Settings,
   ShieldAlert,
   Sparkles,
@@ -53,6 +54,7 @@ import AdminEventLeads from "@/components/admin/AdminEventLeads";
 import AdminEventProducts from "@/components/admin/AdminEventProducts";
 import AdminResourceBlocks from "@/components/admin/AdminResourceBlocks";
 import AdminVenueOperations from "@/components/admin/AdminVenueOperations";
+import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
 import AdminToday from "@/components/admin/shell/AdminToday";
 import AdminSettings from "@/components/admin/shell/AdminSettings";
@@ -148,6 +150,7 @@ const sectionLabels: Record<string, { label: string; icon: any }> = {
   eventProducts: { label: "Event Products", icon: Package },
   resourceBlocks: { label: "Blockeringar", icon: Ban },
   operations: { label: "Drift", icon: ShieldAlert },
+  revenueLedger: { label: "Revenue Ledger", icon: ReceiptText },
   memberships: { label: "Medlemskap", icon: Crown },
   templates: { label: "Event-mallar", icon: FileText },
   corporate: { label: "Företag", icon: Building2 },
@@ -195,6 +198,7 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
             {id === "eventProducts" && <AdminEventProducts venueId={venueId} />}
             {id === "resourceBlocks" && <AdminResourceBlocks venueId={venueId} />}
             {id === "operations" && <AdminVenueOperations venueId={venueId} />}
+            {id === "revenueLedger" && <AdminRevenueLedger venueId={venueId} />}
             {id === "memberships" && <AdminMemberships venueId={venueId} />}
             {id === "templates" && <AdminTemplates />}
             {id === "corporate" && <AdminCorporate venueId={venueId} />}

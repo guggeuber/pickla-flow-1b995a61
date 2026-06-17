@@ -92,6 +92,70 @@ export function useAdminHistory(venueId: string | undefined) {
   });
 }
 
+export type AdminLedgerEntry = {
+  id: string;
+  source_type: string;
+  source_label: string;
+  source_id: string;
+  accounting_date: string;
+  occurred_at: string;
+  customer_name?: string | null;
+  amount_inc_vat_minor: number;
+  vat_amount_minor: number;
+  amount_sek: number;
+  vat_sek: number;
+  payment_status: string;
+  payment_method?: string | null;
+  stripe_session_id?: string | null;
+  receipt_number?: string | null;
+  booking_receipt_id?: string | null;
+  receipt?: {
+    id: string;
+    receipt_number: string;
+    customer_name?: string | null;
+    customer_email?: string | null;
+    customer_phone?: string | null;
+    product_description?: string | null;
+    purchase_type?: string | null;
+    total_inc_vat_sek?: number | null;
+    vat_amount_sek?: number | null;
+    vat_rate?: number | null;
+    payment_method?: string | null;
+    payment_status?: string | null;
+    stripe_session_id?: string | null;
+    stripe_payment_intent_id?: string | null;
+    issued_at?: string | null;
+  } | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type AdminLedgerPeriodSummary = {
+  ledger: { total_minor: number; vat_minor: number; count: number };
+  receipts: { total_minor: number; count: number };
+  delta_minor: number;
+};
+
+export type AdminRevenueLedger = {
+  date: string;
+  entries: AdminLedgerEntry[];
+  by_type: Array<{ source_type: string; label: string; count: number; total_minor: number; total_sek: number }>;
+  selected: AdminLedgerPeriodSummary;
+  summary: {
+    today: AdminLedgerPeriodSummary;
+    yesterday: AdminLedgerPeriodSummary;
+    month: AdminLedgerPeriodSummary;
+  };
+};
+
+export function useAdminRevenueLedger(venueId: string | undefined, date: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-revenue-ledger", venueId, date],
+    enabled: !!venueId && !!date,
+    queryFn: () => apiGet<AdminRevenueLedger>("api-admin", "revenue-ledger", { venueId: venueId!, date: date! }),
+    refetchInterval: 60000,
+  });
+}
+
 export type AdminAttentionItem = {
   id: string;
   kind: "lead" | "drift" | "event" | "block";

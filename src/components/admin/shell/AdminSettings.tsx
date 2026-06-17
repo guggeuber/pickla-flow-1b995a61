@@ -13,6 +13,7 @@ import {
   LucideIcon,
   MessageSquare,
   Package,
+  ReceiptText,
   ShieldAlert,
   TabletSmartphone,
   Tag,
@@ -65,6 +66,7 @@ const groups: SettingsGroup[] = [
       { id: "pricing", label: "Priser", desc: "Dynamiska regler", icon: Tag, tint: ax("lime", 0.7) },
       { id: "memberships", label: "Medlemskap", desc: "Nivåer & rabatter", icon: Crown, tint: ax("sun", 0.7) },
       { id: "schedule", label: "Schema", desc: "Program & pass", icon: CalendarCheck, tint: ax("electric", 0.7) },
+      { id: "revenueLedger", label: "Revenue Ledger", desc: "Daglig sälj-sanning", icon: ReceiptText, tint: ax("electric", 0.7) },
     ],
   },
   {

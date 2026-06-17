@@ -140,10 +140,73 @@ function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
   };
 }
 
+function vatMinorFromIncludedMinor(totalIncVatMinor: number, vatRate = 6) {
+  return Math.round(totalIncVatMinor * vatRate / (100 + vatRate));
+}
+
 function receiptPaymentMethod(session: any) {
   const types = Array.isArray(session.payment_method_types) ? session.payment_method_types : [];
   if (types.includes('card')) return 'Kort via Stripe';
   return types.length ? `${types.join(', ')} via Stripe` : 'Stripe';
+}
+
+async function createLedgerEntryFromReceipt({
+  session,
+  meta,
+  serviceClient,
+  sourceType,
+  sourceId,
+  receipt,
+  amountIncVatMinor,
+  metadata = {},
+}: {
+  session: any;
+  meta: Record<string, string>;
+  serviceClient: any;
+  sourceType: string;
+  sourceId: string;
+  receipt?: any;
+  amountIncVatMinor: number;
+  metadata?: Record<string, unknown>;
+}) {
+  if (!meta.venue_id || !sourceId || amountIncVatMinor <= 0) return;
+
+  const occurredAt = receipt?.issued_at || new Date().toISOString();
+  const accountingDate = DateTime
+    .fromISO(occurredAt, { zone: 'utc' })
+    .setZone('Europe/Stockholm')
+    .toISODate();
+  if (!accountingDate) throw new Error('Could not resolve ledger accounting date');
+
+  const entry = {
+    venue_id: meta.venue_id,
+    source_type: sourceType,
+    source_id: sourceId,
+    accounting_date: accountingDate,
+    occurred_at: occurredAt,
+    customer_name: receipt?.customer_name || meta.customer_name || meta.name || session.customer_details?.name || null,
+    amount_inc_vat_minor: amountIncVatMinor,
+    vat_amount_minor: vatMinorFromIncludedMinor(amountIncVatMinor, Number(receipt?.vat_rate || 6)),
+    payment_status: receipt?.payment_status || session.payment_status || 'paid',
+    payment_method: receipt?.payment_method || receiptPaymentMethod(session),
+    stripe_session_id: session.id,
+    receipt_number: receipt?.receipt_number || null,
+    booking_receipt_id: receipt?.id || null,
+    metadata: {
+      product_type: meta.product_type || sourceType,
+      purchase_type: receipt?.purchase_type || null,
+      product_description: receipt?.product_description || null,
+      stripe_payment_intent_id: session.payment_intent || receipt?.stripe_payment_intent_id || null,
+      stripe_customer_id: session.customer || receipt?.stripe_customer_id || null,
+      ...metadata,
+    },
+  };
+
+  const { error } = await serviceClient.from('ledger_entries').insert(entry);
+  if (error) {
+    if (error.code === '23505') return;
+    throw new Error(`Failed to create ledger entry: ${error.message}`);
+  }
 }
 
 async function createPurchaseReceipt({
@@ -165,21 +228,21 @@ async function createPurchaseReceipt({
   purchaseType: string;
   productDescription: string;
 }) {
-  if (totalSek <= 0) return;
+  if (totalSek <= 0) return null;
 
   const { data: existing } = await serviceClient
     .from('booking_receipts')
-    .select('id')
+    .select('id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id')
     .eq('stripe_session_id', session.id)
     .maybeSingle();
-  if (existing) return;
+  if (existing) return existing;
 
   const vat = vatPartsFromIncludedTotal(totalSek, 6);
   const customerName = meta.customer_name || meta.name || session.customer_details?.name || null;
   const customerEmail = session.customer_details?.email || meta.customer_email || null;
   const customerPhone = meta.customer_phone || meta.phone || session.customer_details?.phone || null;
 
-  const { error } = await serviceClient.from('booking_receipts').insert({
+  const { data: receipt, error } = await serviceClient.from('booking_receipts').insert({
     booking_refs: bookingRefs,
     stripe_session_id: session.id,
     stripe_payment_intent_id: session.payment_intent || null,
@@ -212,11 +275,14 @@ async function createPurchaseReceipt({
       activity_session_id: meta.activity_session_id || meta.open_play_session_id || null,
       tier_id: meta.tier_id || null,
     },
-  });
+  }).select('id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id').single();
 
   if (error) {
     console.error('Failed to create receipt:', error.message);
+    return null;
   }
+
+  return receipt;
 }
 
 async function createCourtBookingReceipt({
@@ -234,7 +300,7 @@ async function createCourtBookingReceipt({
   bookingRefs: string[];
   totalSek: number;
 }) {
-  await createPurchaseReceipt({
+  return await createPurchaseReceipt({
     session,
     meta,
     serviceClient,
@@ -341,7 +407,7 @@ async function handleCourtBooking(
 
   const { data: sessionBookings, error: refsErr } = await serviceClient
     .from('bookings')
-    .select('booking_ref')
+    .select('id, booking_ref')
     .eq('stripe_session_id', session.id)
     .neq('status', 'cancelled');
 
@@ -350,13 +416,33 @@ async function handleCourtBooking(
     return;
   }
 
-  await createCourtBookingReceipt({
+  const bookingRefs = (sessionBookings || []).map((b: any) => b.booking_ref).filter(Boolean);
+  const receipt = await createCourtBookingReceipt({
     session,
     meta,
     serviceClient,
     bookingUserId,
-    bookingRefs: (sessionBookings || []).map((b: any) => b.booking_ref).filter(Boolean),
+    bookingRefs,
     totalSek,
+  });
+  await createLedgerEntryFromReceipt({
+    session,
+    meta,
+    serviceClient,
+    sourceType: 'court_booking',
+    sourceId: session.id,
+    receipt,
+    amountIncVatMinor: Number(session.amount_total || 0),
+    metadata: {
+      booking_ids: (sessionBookings || []).map((b: any) => b.id).filter(Boolean),
+      booking_refs: bookingRefs,
+      court_ids: courtIds,
+      date,
+      start_time,
+      end_time,
+      included_court_hours: includedCourtHours,
+      paid_court_hours: paidCourtHours,
+    },
   });
 
   if (insertedAnyBooking && includedCourtHours > 0 && meta.entitlement_period_start && meta.entitlement_period_end) {
@@ -428,30 +514,32 @@ async function handleDayPass(
 
   if (!date) throw new Error('Missing date in day_pass metadata');
 
-  // Idempotency: skip if already created
   const { data: existing } = await serviceClient
     .from('day_passes')
-    .select('id')
+    .select('id, user_id')
     .eq('stripe_session_id', session.id)
     .maybeSingle();
-  if (existing) return;
 
-  const resolvedUserId = await resolveUserId(session, user_id, serviceClient);
+  const resolvedUserId = existing?.user_id || await resolveUserId(session, user_id, serviceClient);
   const priceSek = Math.round((session.amount_total || 0) / 100);
   const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
 
-  const { data: dayPass, error } = await serviceClient.from('day_passes').insert({
-    venue_id,
-    user_id:           resolvedUserId,
-    valid_date:        date,
-    price:             priceSek,
-    status:            'active',
-    stripe_session_id: session.id,
-  }).select('id').single();
+  let dayPass = existing;
+  if (!dayPass) {
+    const { data: insertedDayPass, error } = await serviceClient.from('day_passes').insert({
+      venue_id,
+      user_id:           resolvedUserId,
+      valid_date:        date,
+      price:             priceSek,
+      status:            'active',
+      stripe_session_id: session.id,
+    }).select('id, user_id').single();
 
-  if (error) throw new Error(`Failed to insert day_pass: ${error.message}`);
+    if (error) throw new Error(`Failed to insert day_pass: ${error.message}`);
+    dayPass = insertedDayPass;
+  }
 
-  await createPurchaseReceipt({
+  const receipt = await createPurchaseReceipt({
     session,
     meta: { ...meta, venue_id },
     serviceClient,
@@ -460,6 +548,23 @@ async function handleDayPass(
     purchaseType: 'day_pass',
     productDescription: meta.session_name ? `Dagsmedlemskap · ${meta.session_name}` : 'Dagsmedlemskap',
   });
+  await createLedgerEntryFromReceipt({
+    session,
+    meta: { ...meta, venue_id },
+    serviceClient,
+    sourceType: 'day_pass',
+    sourceId: session.id,
+    receipt,
+    amountIncVatMinor: Number(session.amount_total || 0),
+    metadata: {
+      day_pass_id: dayPass?.id || null,
+      activity_session_id: activity_session_id || open_play_session_id || null,
+      session_date: date,
+      session_type: session_type || 'open_play',
+    },
+  });
+
+  if (existing) return;
 
   const activitySessionId = activity_session_id || open_play_session_id || null;
   const kind = session_type || 'open_play';
@@ -529,17 +634,16 @@ async function handleActivityTicket(
 
   const { data: existing } = await serviceClient
     .from('session_registrations')
-    .select('id')
+    .select('id, user_id')
     .eq('stripe_session_id', session.id)
     .maybeSingle();
-  if (existing) return;
 
-  const resolvedUserId = await resolveUserId(session, user_id, serviceClient, meta.customer_email);
+  const resolvedUserId = existing?.user_id || await resolveUserId(session, user_id, serviceClient, meta.customer_email);
   const priceSek = Math.round((session.amount_total || 0) / 100);
   const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
   const kind = session_type || 'open_play';
 
-  await createPurchaseReceipt({
+  const receipt = await createPurchaseReceipt({
     session,
     meta: { ...meta, venue_id },
     serviceClient,
@@ -548,6 +652,25 @@ async function handleActivityTicket(
     purchaseType: 'activity_session',
     productDescription: meta.session_name || 'Aktivitetsbiljett',
   });
+
+  if (existing) {
+    await createLedgerEntryFromReceipt({
+      session,
+      meta: { ...meta, venue_id },
+      serviceClient,
+      sourceType: 'activity_registration',
+      sourceId: session.id,
+      receipt,
+      amountIncVatMinor: Number(session.amount_total || 0),
+      metadata: {
+        session_registration_id: existing.id,
+        activity_session_id: activitySessionId,
+        session_date: date,
+        session_type: kind,
+      },
+    });
+    return;
+  }
 
   const { data: registration, error } = await serviceClient
     .from('session_registrations')
@@ -570,6 +693,22 @@ async function handleActivityTicket(
     .single();
 
   if (error) throw new Error(`Failed to insert session registration: ${error.message}`);
+
+  await createLedgerEntryFromReceipt({
+    session,
+    meta: { ...meta, venue_id },
+    serviceClient,
+    sourceType: 'activity_registration',
+    sourceId: session.id,
+    receipt,
+    amountIncVatMinor: Number(session.amount_total || 0),
+    metadata: {
+      session_registration_id: registration?.id || null,
+      activity_session_id: activitySessionId,
+      session_date: date,
+      session_type: kind,
+    },
+  });
 
   if (registration?.id) {
     const { error: entitlementErr } = await serviceClient
@@ -716,7 +855,7 @@ async function handleMembership(
       .eq('id', existing.id);
 
     if (updateErr) throw new Error(`Failed to reactivate membership: ${updateErr.message}`);
-    await createPurchaseReceipt({
+    const receipt = await createPurchaseReceipt({
       session,
       meta: { ...meta, venue_id: tier.venue_id },
       serviceClient,
@@ -725,10 +864,25 @@ async function handleMembership(
       purchaseType: 'membership',
       productDescription: meta.tier_name ? `Medlemskap · ${meta.tier_name}` : 'Medlemskap',
     });
+    await createLedgerEntryFromReceipt({
+      session,
+      meta: { ...meta, venue_id: tier.venue_id },
+      serviceClient,
+      sourceType: 'membership',
+      sourceId: session.id,
+      receipt,
+      amountIncVatMinor: Number(session.amount_total || 0),
+      metadata: {
+        membership_id: existing.id,
+        tier_id,
+        tier_name: meta.tier_name || null,
+        reactivated: true,
+      },
+    });
     return;
   }
 
-  const { error } = await serviceClient.from('memberships').insert({
+  const { data: membership, error } = await serviceClient.from('memberships').insert({
     venue_id:    tier.venue_id,
     user_id:     resolvedUserId,
     tier_id,
@@ -736,11 +890,11 @@ async function handleMembership(
     starts_at:   today,
     expires_at:  null,
     assigned_by: resolvedUserId,
-  });
+  }).select('id').single();
 
   if (error) throw new Error(`Failed to insert membership: ${error.message}`);
 
-  await createPurchaseReceipt({
+  const receipt = await createPurchaseReceipt({
     session,
     meta: { ...meta, venue_id: tier.venue_id },
     serviceClient,
@@ -748,5 +902,20 @@ async function handleMembership(
     totalSek: paidSek,
     purchaseType: 'membership',
     productDescription: meta.tier_name ? `Medlemskap · ${meta.tier_name}` : 'Medlemskap',
+  });
+  await createLedgerEntryFromReceipt({
+    session,
+    meta: { ...meta, venue_id: tier.venue_id },
+    serviceClient,
+    sourceType: 'membership',
+    sourceId: session.id,
+    receipt,
+    amountIncVatMinor: Number(session.amount_total || 0),
+    metadata: {
+      membership_id: membership?.id || null,
+      tier_id,
+      tier_name: meta.tier_name || null,
+      reactivated: false,
+    },
   });
 }

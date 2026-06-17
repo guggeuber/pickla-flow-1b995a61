@@ -582,6 +582,147 @@ Deno.serve(async (req) => {
       return jsonResponse(results, 200, 5);
     }
 
+    // ── REVENUE LEDGER ──
+    if (req.method === 'GET' && path === 'revenue-ledger') {
+      const requestedDate = url.searchParams.get('date') || stockholmToday();
+      const selectedDay = DateTime.fromISO(requestedDate, { zone: 'Europe/Stockholm' });
+      if (!selectedDay.isValid) return errorResponse('Invalid date', 400);
+      const selectedDate = selectedDay.toISODate()!;
+
+      const sourceLabels: Record<string, string> = {
+        court_booking: 'Court Booking',
+        activity_registration: 'Activity',
+        day_pass: 'Day Pass',
+        membership: 'Membership',
+      };
+
+      const normalizeLedgerRows = (rows: any[]) => rows.map((row) => ({
+        ...row,
+        source_label: sourceLabels[row.source_type] || row.source_type,
+        amount_sek: Math.round(Number(row.amount_inc_vat_minor || 0)) / 100,
+        vat_sek: Math.round(Number(row.vat_amount_minor || 0)) / 100,
+      }));
+
+      const sumMinor = (rows: any[], field: string) =>
+        rows.reduce((sum, row) => sum + Math.round(Number(row[field] || 0)), 0);
+
+      const receiptTotalForLocalRange = async (startDay: DateTime, endDay: DateTime) => {
+        const start = startDay.startOf('day').toUTC().toISO()!;
+        const end = endDay.startOf('day').toUTC().toISO()!;
+        const { data, error: receiptErr } = await admin
+          .from('booking_receipts')
+          .select('id, total_inc_vat_sek, total_inc_vat')
+          .eq('venue_id', venueId)
+          .eq('payment_status', 'paid')
+          .gte('issued_at', start)
+          .lt('issued_at', end);
+        if (receiptErr) throw new Error(receiptErr.message);
+        return {
+          total_minor: (data || []).reduce((sum: number, row: any) => {
+            const amountSek = Number(row.total_inc_vat_sek ?? row.total_inc_vat ?? 0);
+            return sum + Math.round(amountSek * 100);
+          }, 0),
+          count: (data || []).length,
+        };
+      };
+
+      const ledgerForDateRange = async (startDate: string, endDate: string) => {
+        const { data, error: ledgerErr } = await admin
+          .from('ledger_entries')
+          .select('id, source_type, amount_inc_vat_minor, vat_amount_minor')
+          .eq('venue_id', venueId)
+          .gte('accounting_date', startDate)
+          .lt('accounting_date', endDate);
+        if (ledgerErr) throw new Error(ledgerErr.message);
+        return {
+          total_minor: sumMinor(data || [], 'amount_inc_vat_minor'),
+          vat_minor: sumMinor(data || [], 'vat_amount_minor'),
+          count: (data || []).length,
+        };
+      };
+
+      const daySummary = async (day: DateTime) => {
+        const start = day.toISODate()!;
+        const end = day.plus({ days: 1 }).toISODate()!;
+        const [ledger, receipts] = await Promise.all([
+          ledgerForDateRange(start, end),
+          receiptTotalForLocalRange(day, day.plus({ days: 1 })),
+        ]);
+        return { ledger, receipts, delta_minor: ledger.total_minor - receipts.total_minor };
+      };
+
+      const monthStart = DateTime.now().setZone('Europe/Stockholm').startOf('month');
+      const monthEnd = monthStart.plus({ months: 1 });
+      const monthSummary = async () => {
+        const [ledger, receipts] = await Promise.all([
+          ledgerForDateRange(monthStart.toISODate()!, monthEnd.toISODate()!),
+          receiptTotalForLocalRange(monthStart, monthEnd),
+        ]);
+        return { ledger, receipts, delta_minor: ledger.total_minor - receipts.total_minor };
+      };
+
+      const { data: rows, error: rowsErr } = await admin
+        .from('ledger_entries')
+        .select('id, venue_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
+        .eq('venue_id', venueId)
+        .eq('accounting_date', selectedDate)
+        .order('occurred_at', { ascending: false })
+        .limit(200);
+      if (rowsErr) return errorResponse(rowsErr.message);
+
+      const receiptIds = uniqueStrings((rows || []).map((row: any) => row.booking_receipt_id));
+      let receiptsById = new Map<string, any>();
+      if (receiptIds.length) {
+        const { data: receipts, error: receiptsErr } = await admin
+          .from('booking_receipts')
+          .select('id, receipt_number, customer_name, customer_email, customer_phone, product_description, purchase_type, total_inc_vat_sek, vat_amount_sek, vat_rate, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, issued_at')
+          .eq('venue_id', venueId)
+          .in('id', receiptIds);
+        if (receiptsErr) throw new Error(receiptsErr.message);
+        receiptsById = new Map((receipts || []).map((receipt: any) => [receipt.id, receipt]));
+      }
+
+      const entries = normalizeLedgerRows((rows || []).map((row: any) => ({
+        ...row,
+        receipt: row.booking_receipt_id ? receiptsById.get(row.booking_receipt_id) || null : null,
+      })));
+      const byType = Array.from(entries.reduce((map: Map<string, any>, row: any) => {
+        const current = map.get(row.source_type) || {
+          source_type: row.source_type,
+          label: row.source_label,
+          count: 0,
+          total_minor: 0,
+        };
+        current.count += 1;
+        current.total_minor += Number(row.amount_inc_vat_minor || 0);
+        map.set(row.source_type, current);
+        return map;
+      }, new Map()).values()).map((item: any) => ({
+        ...item,
+        total_sek: Math.round(Number(item.total_minor || 0)) / 100,
+      }));
+
+      const now = DateTime.now().setZone('Europe/Stockholm');
+      const [selected, today, yesterday, month] = await Promise.all([
+        daySummary(selectedDay),
+        daySummary(now),
+        daySummary(now.minus({ days: 1 })),
+        monthSummary(),
+      ]);
+
+      return jsonResponse({
+        date: selectedDate,
+        entries,
+        by_type: byType,
+        selected,
+        summary: {
+          today,
+          yesterday,
+          month,
+        },
+      }, 200, 10);
+    }
+
     // ── ADMIN OS ATTENTION SIGNALS ──
     if (req.method === 'GET' && path === 'attention') {
       const scopedVenueId = venueId!;
