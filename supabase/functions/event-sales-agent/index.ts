@@ -13,6 +13,7 @@ import {
   leadActivity,
 } from '../_shared/event_agents.ts';
 import {
+  buildEventOperationsRecommendation,
   createEventOperationsRecommendationActivity,
   logAgentRecommendationDecision,
 } from '../_shared/event_operations_agent.ts';
@@ -686,6 +687,194 @@ async function applyOfferResourcePlan(admin: any, lead: any, offerConfig: any) {
   return { resources: resourceNames, selectedResources };
 }
 
+async function prepareOfferDraftFromAgentApproval(admin: any, lead: any, recommendation: any, userId: string) {
+  if (!lead.event_id) throw new Error('Lead has no event yet');
+  const schedule = scheduleRangeFromInput(
+    recommendation.recommended_schedule?.event_date,
+    recommendation.recommended_schedule?.start_time,
+    recommendation.recommended_schedule?.end_time,
+  );
+
+  const recommendedResourceIds = uniqueStrings((recommendation.recommended_resources || [])
+    .map((row: any) => row.resource_catalog_id)
+    .filter(Boolean));
+  const { data: selectedResources, error: resourceError } = recommendedResourceIds.length
+    ? await admin
+      .from('event_resource_catalog')
+      .select('id, venue_id, resource_type, name, description, venue_court_id, venue_staff_id')
+      .eq('venue_id', lead.venue_id)
+      .in('id', recommendedResourceIds)
+    : { data: [], error: null };
+  if (resourceError) throw new Error(resourceError.message);
+
+  const resources = selectedResources || [];
+  const courtIds = uniqueStrings(resources.map((row: any) => row.venue_court_id).filter(Boolean));
+  const nonCourtNames = uniqueStrings(resources.filter((row: any) => row.resource_type !== 'court').map((row: any) => row.name));
+  const staffNames = uniqueStrings(resources.filter((row: any) => row.resource_type === 'staff').map((row: any) => row.name));
+  const resourceNames = uniqueStrings(resources.map((row: any) => row.name));
+
+  const eventUpdate: Record<string, unknown> = {
+    start_date: schedule.eventDate,
+    end_date: schedule.eventDate,
+    start_time: schedule.startTime,
+    end_time: schedule.endTime,
+    resources: nonCourtNames,
+  };
+  if (staffNames.length) eventUpdate.staffing = staffNames.join(', ');
+  const { data: eventRow, error: eventError } = await admin
+    .from('events')
+    .update(eventUpdate)
+    .eq('id', lead.event_id)
+    .eq('venue_id', lead.venue_id)
+    .select('*')
+    .single();
+  if (eventError || !eventRow) throw new Error(eventError?.message || 'Event not found');
+
+  if (courtIds.length > 0) {
+    await admin.from('event_courts').delete().eq('event_id', lead.event_id);
+    const { error: courtError } = await admin.from('event_courts').insert(courtIds.map((venueCourtId) => ({
+      event_id: lead.event_id,
+      venue_court_id: venueCourtId,
+    })));
+    if (courtError) throw new Error(courtError.message);
+  }
+
+  await admin
+    .from('event_resource_allocations')
+    .delete()
+    .eq('event_id', lead.event_id)
+    .eq('status', 'proposed');
+  if (resources.length) {
+    const { error: allocationError } = await admin.from('event_resource_allocations').insert(resources.map((row: any) => ({
+      venue_id: lead.venue_id,
+      event_id: lead.event_id,
+      resource_catalog_id: row.id,
+      venue_court_id: row.venue_court_id || null,
+      venue_staff_id: row.venue_staff_id || null,
+      resource_type: row.resource_type,
+      name: row.name,
+      quantity: 1,
+      start_at: schedule.range.startUtc,
+      end_at: schedule.range.endUtc,
+      status: 'proposed',
+    })));
+    if (allocationError) throw new Error(allocationError.message);
+  }
+
+  const { data: venue } = await admin
+    .from('venues')
+    .select('id, name, email, phone, address')
+    .eq('id', lead.venue_id)
+    .maybeSingle();
+  const offerConfig = {
+    package_type: recommendation.recommended_package?.key || lead.package_type,
+    package_title: recommendation.recommended_package?.title,
+    selected_resource_ids: recommendedResourceIds,
+    resources: resourceNames,
+    event_date: schedule.eventDate,
+    event_start_time: schedule.startTime,
+    event_end_time: schedule.endTime,
+    price_per_person: recommendation.recommended_package?.price_per_person,
+    total_price: recommendation.price_recommendation?.total_sek,
+  };
+  const payload = buildOfferPayload(lead, venue, offerConfig);
+  const html = buildOfferHtml(payload);
+  const sales = buildSalesDraft(payload);
+
+  const { data: existingOffer } = await admin
+    .from('event_offers')
+    .select('*')
+    .eq('event_lead_id', lead.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const canUpdateExisting = existingOffer && !['sent', 'booking_confirmed'].includes(String(existingOffer.status || ''));
+  const offerPayload = {
+    venue_id: lead.venue_id,
+    event_id: lead.event_id ?? null,
+    event_lead_id: lead.id,
+    title: payload.title,
+    package_type: payload.package.key,
+    price_per_person: payload.price_per_person || 0,
+    total_price: payload.total_price,
+    html_snapshot: html,
+    email_subject: sales.subject,
+    email_body: sales.emailBody,
+    sms_text: sales.smsText,
+    offer_payload: payload,
+    status: 'draft',
+  };
+  const { data: offer, error: offerError } = canUpdateExisting
+    ? await admin.from('event_offers').update(offerPayload).eq('id', existingOffer.id).select('*').single()
+    : await admin.from('event_offers').insert(offerPayload).select('*').single();
+  if (offerError || !offer) throw new Error(offerError?.message || 'Could not create offer draft');
+
+  await admin.from('event_leads').update({
+    status: 'offer_generated',
+    package_type: payload.package.key,
+    estimated_value: payload.total_price,
+  }).eq('id', lead.id);
+
+  let pdfUrl: string | null = null;
+  let pdfError: string | null = null;
+  try {
+    const pdfBytes = await buildOfferPdfBytes(payload);
+    const pdfPath = `${offer.venue_id}/${offer.event_lead_id}/${offer.id}.pdf`;
+    const { error: uploadErr } = await admin.storage.from('event-offers').upload(pdfPath, pdfBytes, {
+      contentType: 'application/pdf',
+      upsert: true,
+    });
+    if (uploadErr) throw uploadErr;
+    const { error: updatePdfErr } = await admin.from('event_offers').update({ pdf_url: pdfPath, status: 'pdf_ready' }).eq('id', offer.id);
+    if (updatePdfErr) throw updatePdfErr;
+    pdfUrl = pdfPath;
+    offer.pdf_url = pdfPath;
+    offer.status = 'pdf_ready';
+  } catch (err) {
+    pdfError = err instanceof Error ? err.message : 'PDF generation failed';
+  }
+
+  await admin.from('event_lead_activities').insert([
+    leadActivity({
+      lead,
+      offerId: offer.id,
+      type: 'offer_generated',
+      title: 'Offer generated',
+      body: `${payload.package.title} skapades från godkänd agentrekommendation.`,
+      actorUserId: userId,
+      metadata: {
+        source: 'agent_approval',
+        package_type: payload.package.key,
+        total_price: payload.total_price,
+        selected_resource_ids: recommendedResourceIds,
+        selected_resources: resourceNames,
+      },
+    }),
+    leadActivity({
+      lead,
+      offerId: offer.id,
+      type: 'offer_draft_ready',
+      title: 'Offer draft ready',
+      body: pdfUrl
+        ? 'Offertutkast och PDF är redo för manuell granskning.'
+        : 'Offertutkast är redo för manuell granskning. PDF kunde inte skapas automatiskt.',
+      actorUserId: userId,
+      metadata: { source: 'agent_approval', pdf_url: pdfUrl, pdf_error: pdfError },
+    }),
+  ]);
+
+  return {
+    event: eventRow,
+    offer,
+    payload,
+    sales,
+    pdf_url: pdfUrl,
+    pdf_error: pdfError,
+    selected_resources: resources,
+    proposed_allocations_count: resources.length,
+  };
+}
+
 function buildBookingConfirmationText({ lead, offer, eventRow, depositUrl, depositAmount }: any) {
   const date = normalizeDate(eventRow.start_date) || normalizeDate(lead.preferred_date) || 'enligt överenskommelse';
   const time = eventRow.start_time ? `${String(eventRow.start_time).slice(0, 5)}${eventRow.end_time ? `-${String(eventRow.end_time).slice(0, 5)}` : ''}` : 'tid enligt överenskommelse';
@@ -823,10 +1012,39 @@ Deno.serve(async (req) => {
       if (!await assertVenueAdmin(admin, userId, lead.venue_id)) return errorResponse('Forbidden', 403);
 
       if (action === 'approve' || action === 'reject') {
+        if (action === 'approve') {
+          const latest = await buildEventOperationsRecommendation(admin, lead.id);
+          const recommendation = latest.recommendation;
+          if (recommendation.risk === 'high' || recommendation.capacity_ok === false) {
+            return errorResponse('Kan inte godkänna förrän konflikt är löst', 409);
+          }
+
+          const activity = await logAgentRecommendationDecision(
+            admin,
+            lead,
+            'approved',
+            userId,
+            body.recommendationActivityId || null,
+          );
+          const draft = await prepareOfferDraftFromAgentApproval(admin, lead, recommendation, userId);
+          return jsonResponse({
+            ok: true,
+            activity,
+            recommendation,
+            offer: draft.offer,
+            pdf_url: draft.pdf_url,
+            pdf_error: draft.pdf_error,
+            event: draft.event,
+            selected_resources: draft.selected_resources,
+            proposed_allocations_count: draft.proposed_allocations_count,
+            next_state: 'offer_draft_ready',
+          });
+        }
+
         const activity = await logAgentRecommendationDecision(
           admin,
           lead,
-          action === 'approve' ? 'approved' : 'rejected',
+          'rejected',
           userId,
           body.recommendationActivityId || null,
         );

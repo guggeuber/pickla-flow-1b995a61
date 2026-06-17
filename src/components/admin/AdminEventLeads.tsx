@@ -22,6 +22,7 @@ const STATUS_LABELS: Record<string, string> = {
 const TIMELINE_LABELS: Record<string, string> = {
   lead_created: "Lead created",
   offer_generated: "Offer generated",
+  offer_draft_ready: "Offer draft ready",
   pdf_ready: "PDF ready",
   offer_sent: "Offer sent",
   followup_scheduled: "Follow-up scheduled",
@@ -213,6 +214,11 @@ function impactRegistrationCount(impact: any) {
 
 function latestAgentRecommendation(timeline: any[]) {
   return timeline.find((item) => item.activity_type === "agent_recommendation") || null;
+}
+
+function hasActivityAfter(timeline: any[], type: string, after?: string | null) {
+  const afterMs = after ? new Date(after).getTime() : 0;
+  return timeline.some((item) => item.activity_type === type && new Date(item.created_at || 0).getTime() >= afterMs);
 }
 
 function agentActionLabel(action?: string | null) {
@@ -449,7 +455,7 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     onSuccess: (_result, variables) => {
       toast.success(
         variables.action === "approve"
-          ? "Agentförslag godkänt"
+          ? "Offertutkast redo"
           : variables.action === "reject"
             ? "Agentförslag avvisat"
             : "Agenten har analyserat igen",
@@ -610,6 +616,8 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     const latestReply = timeline.find((item: any) => item.activity_type === "customer_reply_received");
     const agent = latestAgentRecommendation(timeline);
     const agentMeta = agent?.metadata || {};
+    const agentApproved = !!agent && hasActivityAfter(timeline, "agent_recommendation_approved", agent.created_at);
+    const offerDraftReady = !!agent && hasActivityAfter(timeline, "offer_draft_ready", agent.created_at);
     const eventUrl = lead.event_id ? `/hub/admin?event=${lead.event_id}` : null;
     const offerIsSent = offer?.status === "sent" || offer?.sent_at;
     const offerIsConfirmed = offer?.status === "booking_confirmed";
@@ -790,6 +798,11 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
             </div>
             {offer?.total_price != null && <p className="text-sm font-bold text-foreground">{formatSek(offer.total_price)}</p>}
           </div>
+          {offerDraftReady && (
+            <p className="mt-2 rounded-lg bg-court-free/10 px-2 py-1 text-[11px] font-bold text-court-free">
+              Offer Draft Ready · granska PDF/mail innan utskick.
+            </p>
+          )}
 
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
@@ -798,7 +811,7 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
               className="rounded-xl bg-muted px-3 py-3 text-xs font-bold text-foreground disabled:opacity-50"
             >
               {generateOffer.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1 inline h-3.5 w-3.5" />}
-              {offer ? "Skapa ny offert" : "Skapa offert"}
+              {agentApproved && offer ? "Edit draft" : offer ? "Skapa ny offert" : "Skapa offert"}
             </button>
             <button
               onClick={() => offer?.id ? previewSend.mutate(offer.id) : toast.info("Skapa offert först")}
