@@ -274,7 +274,7 @@ async function buildActivityPreview(client: any, {
 
   const sessionStartedAt = performance.now();
   const sessionQuery = client.from('activity_sessions')
-    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, is_active, publish_status, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, is_active, publish_status, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
     .eq('id', resolvedSessionId)
     .maybeSingle();
   const { data: session, error: sessionErr } = await sessionQuery;
@@ -333,6 +333,8 @@ async function buildActivityPreview(client: any, {
       capacity: session.capacity,
       price_sek: session.price_sek,
       product_key: session.product_key,
+      access_policy: session.access_policy,
+      metadata: session.metadata,
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
     },

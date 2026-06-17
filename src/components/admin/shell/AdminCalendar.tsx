@@ -47,6 +47,8 @@ interface MembershipEntitlement {
   value: number | null;
 }
 
+type SpecialPassPricingMode = "standard" | "fixed_ticket" | "member_discount";
+
 /* ───────── helpers ───────── */
 
 function todayStockholm() {
@@ -94,6 +96,10 @@ function tierEffectivePrice(rule: TierPricing | undefined, standardPrice: number
     return Math.max(0, Math.round(standardPrice * (1 - Number(rule.discount_percent || 0) / 100)));
   }
   return standardPrice;
+}
+
+function clampPercent(value: string | number) {
+  return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
 }
 
 /* Tone per kind. Used for timeline strip + chip color. */
@@ -383,6 +389,8 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   const [activityPrice, setActivityPrice] = useState("99");
   const [activityCapacity, setActivityCapacity] = useState("32");
   const [activityType, setActivityType] = useState("open_play");
+  const [pricingMode, setPricingMode] = useState<SpecialPassPricingMode>("standard");
+  const [memberDiscountPercent, setMemberDiscountPercent] = useState("10");
   const [activityNote, setActivityNote] = useState("");
   const [activityVisibility, setActivityVisibility] = useState<"public" | "private">("public");
   const [includedInDayPass, setIncludedInDayPass] = useState(true);
@@ -450,8 +458,62 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     const discountedMemberships: string[] = [];
     const standardMemberships: string[] = [];
     const paidPrices = new Set<number>(standardPrice > 0 ? [standardPrice] : []);
+    const discountPercent = clampPercent(memberDiscountPercent);
+
+    if (pricingMode === "fixed_ticket") {
+      activeTiers.forEach((tier) => standardMemberships.push(tier.name));
+      const lowestPaidPrice = standardPrice;
+      return {
+        modeLabel: "Fixed ticket price",
+        standardPrice,
+        capacity,
+        productKey,
+        activeTierCount: activeTiers.length,
+        includedMemberships,
+        discountedMemberships,
+        standardMemberships,
+        dayPassBehavior: "Dagsmedlemskap ger inte access. Alla köper biljett.",
+        maxRevenue: capacity * standardPrice,
+        lowestPaidPrice,
+        lowestPaidRevenue: capacity * lowestPaidPrice,
+        hasIncludedAccess: false,
+      };
+    }
+
+    if (pricingMode === "member_discount") {
+      const memberPrice = Math.max(0, Math.round(standardPrice * (1 - discountPercent / 100)));
+      activeTiers.forEach((tier) => {
+        if (memberPrice < standardPrice) {
+          discountedMemberships.push(`${tier.name} (${formatSek(memberPrice)})`);
+        } else {
+          standardMemberships.push(tier.name);
+        }
+      });
+      const lowestPaidPrice = memberPrice;
+      return {
+        modeLabel: "Member discount",
+        standardPrice,
+        capacity,
+        productKey,
+        activeTierCount: activeTiers.length,
+        includedMemberships,
+        discountedMemberships,
+        standardMemberships,
+        dayPassBehavior: "Dagsmedlemskap ger inte access. Medlemmar får endast biljett-rabatt.",
+        maxRevenue: capacity * standardPrice,
+        lowestPaidPrice,
+        lowestPaidRevenue: capacity * lowestPaidPrice,
+        hasIncludedAccess: false,
+      };
+    }
 
     activeTiers.forEach((tier) => {
+      if (!includedInUnlimited) {
+        standardMemberships.push(tier.name);
+        paidPrices.add(standardPrice);
+        return;
+      }
+
       const rule = allTierPricing.find((row) => row.tier_id === tier.id && row.product_type === productKey);
       const hasOpenPlayUnlimited = allTierEntitlements.some((row) =>
         row.tier_id === tier.id &&
@@ -483,6 +545,7 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     const lowestPaidPrice = paidPrices.size > 0 ? Math.min(...Array.from(paidPrices)) : 0;
 
     return {
+      modeLabel: "Standard pricing",
       standardPrice,
       capacity,
       productKey,
@@ -506,7 +569,9 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     allTierPricing,
     includedInDayPass,
     includedInUnlimited,
+    memberDiscountPercent,
     membershipTiers,
+    pricingMode,
   ]);
 
   const invalidateCalendar = () => {
@@ -552,14 +617,18 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
         publish_status: activityVisibility === "public" ? "published" : "hidden",
         access_policy: {
           sold_as: "activity_ticket",
-          allows_day_access: includedInDayPass,
+          allows_day_access: pricingMode === "standard" && includedInDayPass,
           includes_day_access: false,
-          member_benefit_key: includedInUnlimited ? "open_play_unlimited" : null,
+          member_benefit_key: pricingMode === "standard" && includedInUnlimited ? "open_play_unlimited" : null,
         },
         metadata: {
           public_note: activityNote.trim() || null,
           created_from: "admin_calendar",
           visibility: activityVisibility,
+          pricing_mode: pricingMode,
+          member_discount_percent: pricingMode === "member_discount" ? clampPercent(memberDiscountPercent) : null,
+          day_pass_included: pricingMode === "standard" ? includedInDayPass : false,
+          membership_included: pricingMode === "standard" ? includedInUnlimited : false,
         },
       }),
     onSuccess: () => {
@@ -861,6 +930,20 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
 
           {/* Pris & kapacitet */}
           <Step n={3} label="Pris & kapacitet">
+            <div className="mb-2">
+              <PadSelect value={pricingMode} onChange={(v) => setPricingMode(v as SpecialPassPricingMode)}>
+                <option value="standard">Standard pricing</option>
+                <option value="fixed_ticket">Fixed ticket price</option>
+                <option value="member_discount">Member discount</option>
+              </PadSelect>
+              <p className="mt-1.5 text-[11px]" style={{ color: ax("muted") }}>
+                {pricingMode === "fixed_ticket"
+                  ? "Alla betalar angivet pris. Medlemsrabatter och dagsmedlemskap används inte."
+                  : pricingMode === "member_discount"
+                  ? "Standardkunder betalar angivet pris. Aktiva medlemmar får rabatt."
+                  : "Använder befintliga medlems- och dagsmedlemskapsregler."}
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <PadInput
                 type="number"
@@ -877,18 +960,33 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
                 placeholder="Max"
               />
             </div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <Toggle
-                label="Day pass"
-                checked={includedInDayPass}
-                onChange={setIncludedInDayPass}
-              />
-              <Toggle
-                label="Membership"
-                checked={includedInUnlimited}
-                onChange={setIncludedInUnlimited}
-              />
-            </div>
+            {pricingMode === "standard" && (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Toggle
+                  label="Day pass"
+                  checked={includedInDayPass}
+                  onChange={setIncludedInDayPass}
+                />
+                <Toggle
+                  label="Membership"
+                  checked={includedInUnlimited}
+                  onChange={setIncludedInUnlimited}
+                />
+              </div>
+            )}
+            {pricingMode === "member_discount" && (
+              <div className="mt-2">
+                <PadInput
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={100}
+                  value={memberDiscountPercent}
+                  onChange={(e) => setMemberDiscountPercent(e.target.value)}
+                  placeholder="Medlemsrabatt %"
+                />
+              </div>
+            )}
             <PricingPreview preview={pricingPreview} />
           </Step>
 
@@ -1092,6 +1190,7 @@ function PricingPreview({
   preview,
 }: {
   preview: {
+    modeLabel: string;
     standardPrice: number;
     capacity: number;
     productKey: string;
@@ -1123,7 +1222,10 @@ function PricingPreview({
             Visar befintliga medlems- och dagsmedlemskapsregler innan publicering.
           </p>
         </div>
-        <AxChip tone="neutral">{preview.productKey}</AxChip>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <AxChip tone="neutral">{preview.modeLabel}</AxChip>
+          <AxChip tone="neutral">{preview.productKey}</AxChip>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">

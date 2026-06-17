@@ -8,6 +8,10 @@ function applyPercentDiscount(baseAmount: number, percent: number) {
   return Math.max(0, roundSek(baseAmount * (1 - (percent / 100))));
 }
 
+function clampPercent(value: unknown) {
+  return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
+}
+
 function defaultProductKeyForSession(sessionType?: string | null) {
   if (sessionType === 'open_play') return 'open_play_slot';
   if (sessionType === 'group_training') return 'group_training';
@@ -23,6 +27,12 @@ function formatSek(amount: number) {
 
 function isPositiveEntitlement(row: any, type: string) {
   return row?.entitlement_type === type && Number(row.value ?? 1) > 0;
+}
+
+function boolFromMetadata(value: unknown, fallback: boolean) {
+  if (typeof value === 'boolean') return value;
+  if (value == null) return fallback;
+  return String(value) === 'true';
 }
 
 export type ActivityPricingDecision = {
@@ -71,7 +81,7 @@ export async function resolveActivityPricingDecision({
     ? providedSession
     : (await client
       .from('activity_sessions')
-      .select('id, venue_id, name, session_type, price_sek, product_key, access_policy')
+      .select('id, venue_id, name, session_type, price_sek, product_key, access_policy, metadata')
       .eq('id', activitySessionId)
       .maybeSingle()).data;
 
@@ -121,6 +131,18 @@ export async function resolveActivityPricingDecision({
   let membershipTierName: string | null = null;
   let sourceId: string | null = null;
   let pricingReason = 'regular_price';
+  const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
+  const rawPricingMode = String(sessionMetadata.pricing_mode || 'standard');
+  const pricingMode = rawPricingMode === 'fixed_ticket' || rawPricingMode === 'member_discount'
+    ? rawPricingMode
+    : 'standard';
+  const memberDiscountPercent = clampPercent(sessionMetadata.member_discount_percent);
+  const dayPassIncluded = pricingMode === 'standard'
+    ? boolFromMetadata(sessionMetadata.day_pass_included, session.access_policy?.allows_day_access !== false)
+    : false;
+  const membershipIncluded = pricingMode === 'standard'
+    ? boolFromMetadata(sessionMetadata.membership_included, true)
+    : false;
   const debug: Record<string, unknown> = {
     session_product_key: session.product_key || null,
     requested_product_key: requestedProductKey || null,
@@ -129,9 +151,15 @@ export async function resolveActivityPricingDecision({
     purchase_kind: purchaseKind,
     product_base_amount_sek: product?.base_price_sek ?? null,
     base_amount_sek: baseAmountSek,
+    pricing_mode: pricingMode,
+    member_discount_percent: memberDiscountPercent,
+    day_pass_included: dayPassIncluded,
+    membership_included: membershipIncluded,
   };
 
-  if (userId) {
+  if (pricingMode === 'fixed_ticket' && purchaseKind === 'activity_ticket') {
+    pricingReason = 'session_fixed_ticket_price';
+  } else if (userId) {
     const { data: dayAccess } = await client
       .from('access_entitlements')
       .select('id, source_id')
@@ -143,13 +171,43 @@ export async function resolveActivityPricingDecision({
       .limit(1)
       .maybeSingle();
 
-    if (purchaseKind === 'activity_ticket' && dayAccess?.id) {
+    if (purchaseKind === 'activity_ticket' && dayPassIncluded && dayAccess?.id) {
       finalAmountSek = 0;
       accessDecision = 'day_access_included';
       entitlementType = 'day_access';
       pricingReason = 'active_day_access';
       sourceId = dayAccess.id;
       debug.day_access_entitlement_id = dayAccess.id;
+    }
+
+    if (purchaseKind === 'activity_ticket' && pricingMode === 'member_discount' && finalAmountSek > 0) {
+      const { data: membership } = await client
+        .from('memberships')
+        .select('id, tier_id, venue_id')
+        .eq('user_id', userId)
+        .eq('venue_id', venueId)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (membership?.tier_id) {
+        membershipId = membership.id;
+        const { data: tier } = await client
+          .from('membership_tiers')
+          .select('name')
+          .eq('id', membership.tier_id)
+          .maybeSingle();
+        membershipTierName = tier?.name || null;
+        finalAmountSek = applyPercentDiscount(baseAmountSek, memberDiscountPercent);
+        if (finalAmountSek <= 0) {
+          accessDecision = 'membership_included';
+          entitlementType = 'session_member_discount';
+        }
+        pricingReason = 'session_member_discount';
+        debug.membership_tier_name = membershipTierName;
+        debug.pricing_source = 'session_member_discount';
+      }
     }
 
     if (finalAmountSek > 0) {
@@ -186,7 +244,7 @@ export async function resolveActivityPricingDecision({
 
         const ents = (entitlements || []).filter((row: any) => (row.sport_type || 'pickleball') === 'pickleball');
         const openPlayUnlimited = ents.find((row: any) => isPositiveEntitlement(row, 'open_play_unlimited'));
-        if (purchaseKind === 'activity_ticket' && openPlayUnlimited && (session.session_type || 'open_play') === 'open_play') {
+        if (purchaseKind === 'activity_ticket' && membershipIncluded && openPlayUnlimited && (session.session_type || 'open_play') === 'open_play') {
           finalAmountSek = 0;
           accessDecision = 'membership_included';
           entitlementType = 'open_play_unlimited';
@@ -194,7 +252,7 @@ export async function resolveActivityPricingDecision({
           debug.entitlement = 'open_play_unlimited';
         }
 
-        if (finalAmountSek > 0) {
+        if (finalAmountSek > 0 && (purchaseKind !== 'activity_ticket' || membershipIncluded)) {
           const tierPricingAmounts = (tierPricingRows || [])
             .filter((row: any) => row.fixed_price != null || row.discount_percent != null)
             .map((row: any) => {

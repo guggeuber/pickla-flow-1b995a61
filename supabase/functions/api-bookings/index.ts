@@ -421,6 +421,31 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
+  if (product_type === 'activity_ticket' && meta.entitlement_type === 'session_member_discount') {
+    const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+    const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+    if (activitySessionId) {
+      await adminFree.from('session_registrations').upsert({
+        venue_id,
+        activity_session_id: activitySessionId,
+        session_date: validDate,
+        user_id: entitlementUserId,
+        status: 'confirmed',
+        price_paid_sek: 0,
+        source_type: 'membership',
+        source_id: meta.membership_id || null,
+        metadata: {
+          session_type: meta.session_type || 'open_play',
+          session_name: meta.session_name || null,
+          entitlement_type: 'session_member_discount',
+          pricing_reason: meta.pricing_reason || 'session_member_discount',
+        },
+      }, { onConflict: 'activity_session_id,session_date,user_id' });
+    }
+
+    return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
+  }
+
   if (product_type === 'activity_ticket' && meta.entitlement_type === 'day_access') {
     const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
     const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
@@ -620,6 +645,8 @@ Deno.serve(async (req) => {
       meta.effective_amount_sek = String(activityPricingDecision.finalAmountSek);
       meta.entitlement_type = activityPricingDecision.entitlementType || '';
       meta.membership_id = activityPricingDecision.membershipId || '';
+      meta.pricing_reason = activityPricingDecision.pricingReason || '';
+      meta.pricing_mode = String(activityPricingDecision.debug?.pricing_mode || '');
       meta.access_entitlement_id = activityPricingDecision.entitlementType === 'day_access'
         ? activityPricingDecision.sourceId || ''
         : '';
@@ -911,6 +938,8 @@ Deno.serve(async (req) => {
       user_id:          String(meta.user_id          || ''),
       base_amount_sek:  String(meta.base_amount_sek  || baseAmountSek || ''),
       billed_amount_sek: String(billedAmountSek       || ''),
+      pricing_mode:     String(meta.pricing_mode      || ''),
+      pricing_reason:   String(meta.pricing_reason    || ''),
       product_key:      String(meta.product_key       || ''),
       product_kind:     String(meta.product_kind      || ''),
       membership_id:    String(meta.membership_id     || ''),
