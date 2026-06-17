@@ -1,22 +1,34 @@
 import { type InputHTMLAttributes, type TextareaHTMLAttributes, useEffect, useMemo, useState } from "react";
 import { DateTime } from "luxon";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Ban, CalendarDays, Clock, ExternalLink, Loader2, Plus, ShieldAlert, Ticket } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Ban,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  ExternalLink,
+  EyeOff,
+  Loader2,
+  Plus,
+  ShieldAlert,
+  Sparkles,
+  Users,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { apiPost } from "@/lib/api";
 import { useAdminCalendar, type AdminCalendarItem } from "@/hooks/useAdmin";
+import { ax, AX_GRID_BG } from "./axTheme";
+import { AX_TYPE, AxCard, AxChip, AxSectionLabel } from "./axPrimitives";
 
 interface Props {
   venueId: string | undefined;
   onOpenModule: (id: string) => void;
 }
 
-const toneClass: Record<string, string> = {
-  activity: "border-lime-400 bg-lime-400/10 text-lime-300",
-  event: "border-fuchsia-400 bg-fuchsia-400/10 text-fuchsia-200",
-  drift: "border-red-400 bg-red-400/10 text-red-200",
-  block: "border-amber-300 bg-amber-300/10 text-amber-200",
-};
+/* ───────── helpers ───────── */
 
 function todayStockholm() {
   return DateTime.now().setZone("Europe/Stockholm").toISODate()!;
@@ -46,54 +58,305 @@ function weekRange(selectedDate: string) {
   };
 }
 
-function itemSubtitle(item: AdminCalendarItem) {
-  const bits = [item.end_time ? `${item.time}-${item.end_time}` : item.time, kindLabel(item.kind)];
-  if (item.kind === "activity" && item.registrations_count != null) bits.push(`${item.registrations_count} anmälda`);
-  if (item.kind === "activity" && item.override_status && item.override_status !== "active") bits.push(item.override_status === "hidden" ? "Dold" : "Avbokad");
-  if (item.kind === "event" && item.visibility) bits.push(item.visibility);
-  if (item.kind === "block" && item.status) bits.push(item.status);
-  return bits.filter(Boolean).join(" · ");
-}
-
-function ActionInput(props: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={`rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs outline-none focus:border-primary/60 ${props.className || ""}`}
-    />
-  );
-}
-
-function ActionTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      {...props}
-      className={`min-h-20 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs outline-none focus:border-primary/60 ${props.className || ""}`}
-    />
-  );
-}
-
 function productKeyForSessionType(sessionType: string) {
   if (sessionType === "group_training") return "group_training";
   if (sessionType === "event") return "event_fee";
   return "open_play_slot";
 }
 
+/* Tone per kind. Used for timeline strip + chip color. */
+const KIND_TONE: Record<string, { strip: string; chipTone: "lime" | "magenta" | "danger" | "sun"; label: string; glow: string }> = {
+  activity: { strip: ax("lime"), chipTone: "lime", label: "AKTIVITET", glow: ax("lime", 0.35) },
+  event: { strip: ax("magenta"), chipTone: "magenta", label: "EVENT", glow: ax("magenta", 0.35) },
+  drift: { strip: ax("danger"), chipTone: "danger", label: "DRIFT", glow: ax("danger", 0.35) },
+  block: { strip: ax("sun"), chipTone: "sun", label: "BLOCK", glow: ax("sun", 0.35) },
+};
+
+/* ───────── small primitives ───────── */
+
+function PadInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`w-full rounded-xl px-3.5 py-3 text-sm outline-none transition ${props.className || ""}`}
+      style={{
+        background: ax("surface"),
+        border: `1px solid ${ax("border")}`,
+        color: "white",
+        fontSize: "16px", // iOS no-zoom
+      }}
+    />
+  );
+}
+
+function PadTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={`w-full min-h-20 rounded-xl px-3.5 py-3 text-sm outline-none ${props.className || ""}`}
+      style={{
+        background: ax("surface"),
+        border: `1px solid ${ax("border")}`,
+        color: "white",
+        fontSize: "16px",
+      }}
+    />
+  );
+}
+
+function PadSelect({
+  value,
+  onChange,
+  children,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-xl px-3.5 py-3 text-sm outline-none"
+      style={{
+        background: ax("surface"),
+        border: `1px solid ${ax("border")}`,
+        color: "white",
+        fontSize: "16px",
+      }}
+    >
+      {children}
+    </select>
+  );
+}
+
+/* ───────── Day strip (horizontal date picker) ───────── */
+
+function DayStrip({
+  selectedDate,
+  onSelect,
+  counts,
+}: {
+  selectedDate: string;
+  onSelect: (d: string) => void;
+  counts: Record<string, number>;
+}) {
+  const base = DateTime.fromISO(selectedDate, { zone: "Europe/Stockholm" });
+  const start = (base.isValid ? base : DateTime.now().setZone("Europe/Stockholm")).minus({ days: 3 });
+  const days = Array.from({ length: 7 }, (_, i) => start.plus({ days: i }));
+  const today = todayStockholm();
+  return (
+    <div className="flex gap-2 overflow-x-auto px-1 pb-1 [-webkit-overflow-scrolling:touch]">
+      {days.map((d) => {
+        const iso = d.toISODate()!;
+        const isSel = iso === selectedDate;
+        const isToday = iso === today;
+        const count = counts[iso] || 0;
+        return (
+          <motion.button
+            key={iso}
+            whileTap={{ scale: 0.94 }}
+            onClick={() => onSelect(iso)}
+            className="flex min-w-[64px] flex-col items-center gap-1 rounded-2xl px-3 py-2.5"
+            style={{
+              background: isSel ? ax("electric", 0.18) : ax("surfaceHi"),
+              border: `1px solid ${isSel ? ax("electric", 0.6) : ax("borderSoft")}`,
+              boxShadow: isSel ? `0 8px 24px -14px ${ax("electric", 0.7)}` : "none",
+            }}
+          >
+            <span
+              className="text-[9px] font-mono font-bold uppercase tracking-[0.18em]"
+              style={{ color: isSel ? ax("electricSoft") : ax("muted") }}
+            >
+              {d.toFormat("ccc")}
+            </span>
+            <span
+              className="font-display text-xl font-black leading-none"
+              style={{ color: "white" }}
+            >
+              {d.toFormat("d")}
+            </span>
+            <span
+              className="flex h-1.5 w-1.5 rounded-full"
+              style={{
+                background: count > 0 ? ax("lime") : isToday ? ax("electric") : "transparent",
+              }}
+            />
+          </motion.button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ───────── Item card on timeline ───────── */
+
+function TimelineItem({
+  item,
+  onTap,
+}: {
+  item: AdminCalendarItem;
+  onTap: () => void;
+}) {
+  const tone = KIND_TONE[item.kind] || KIND_TONE.activity;
+  const disabled = item.override_status === "hidden" || item.override_status === "cancelled";
+  const time = item.end_time ? `${item.time}–${item.end_time}` : item.time;
+  const cap = item.capacity ?? null;
+  const reg = item.registrations_count ?? null;
+  const pct = cap && reg != null ? Math.min(100, Math.round((reg / cap) * 100)) : null;
+
+  return (
+    <motion.button
+      whileTap={{ scale: 0.985 }}
+      onClick={onTap}
+      className="relative flex w-full gap-3 overflow-hidden rounded-2xl p-3 text-left"
+      style={{
+        background: ax("surfaceHi"),
+        border: `1px solid ${ax("borderSoft")}`,
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {/* color strip */}
+      <span
+        aria-hidden
+        className="absolute inset-y-2 left-0 w-1 rounded-full"
+        style={{ background: tone.strip, boxShadow: `0 0 14px ${tone.glow}` }}
+      />
+      <div className="ml-2 flex w-14 shrink-0 flex-col items-start">
+        <span
+          className="font-mono text-[11px] font-bold tracking-wider"
+          style={{ color: ax("electricSoft") }}
+        >
+          {item.time}
+        </span>
+        {item.end_time && (
+          <span
+            className="font-mono text-[10px]"
+            style={{ color: ax("muted") }}
+          >
+            {item.end_time}
+          </span>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <AxChip tone={tone.chipTone}>{tone.label}</AxChip>
+          {item.kind === "activity" && item.override_status === "hidden" && <AxChip tone="neutral">DOLD</AxChip>}
+          {item.kind === "activity" && item.override_status === "cancelled" && <AxChip tone="danger">AVBOKAD</AxChip>}
+          {item.kind === "event" && item.visibility && <AxChip tone="neutral">{String(item.visibility).toUpperCase()}</AxChip>}
+        </div>
+        <p className="mt-1 truncate text-[15px] font-black leading-tight" style={{ color: "white" }}>
+          {item.title}
+        </p>
+        <div className="mt-1.5 flex items-center gap-3 text-[11px]" style={{ color: ax("muted") }}>
+          {reg != null && (
+            <span className="inline-flex items-center gap-1">
+              <Users className="h-3 w-3" />
+              {reg}
+              {cap ? `/${cap}` : ""}
+            </span>
+          )}
+          {pct != null && (
+            <span className="flex h-1 w-16 overflow-hidden rounded-full" style={{ background: ax("borderSoft") }}>
+              <span
+                className="h-full"
+                style={{
+                  width: `${pct}%`,
+                  background:
+                    pct >= 90 ? ax("danger") : pct >= 60 ? ax("sun") : ax("lime"),
+                }}
+              />
+            </span>
+          )}
+        </div>
+      </div>
+      <ChevronRight className="mt-1 h-4 w-4 shrink-0" style={{ color: ax("muted") }} />
+    </motion.button>
+  );
+}
+
+/* ───────── Bottom sheet (mobile-first) ───────── */
+
+function Sheet({
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="fixed inset-0 z-40"
+            style={{ background: "hsl(0 0% 0% / 0.65)", backdropFilter: "blur(6px)" }}
+          />
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 28, stiffness: 280 }}
+            className="fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-3xl pb-safe [-webkit-overflow-scrolling:touch]"
+            style={{
+              background: ax("surface"),
+              border: `1px solid ${ax("border")}`,
+              boxShadow: `0 -30px 60px -20px ${ax("electric", 0.25)}`,
+            }}
+          >
+            <div className="sticky top-0 z-10 flex items-center justify-between px-5 pb-3 pt-4" style={{ background: ax("surface") }}>
+              <div className="absolute left-1/2 top-1.5 h-1.5 w-10 -translate-x-1/2 rounded-full" style={{ background: ax("border") }} />
+              <h3 className="font-display text-lg font-black" style={{ color: "white" }}>
+                {title}
+              </h3>
+              <button
+                onClick={onClose}
+                className="flex h-9 w-9 items-center justify-center rounded-full"
+                style={{ background: ax("surfaceHi"), color: "white" }}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="px-5 pb-6">{children}</div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/* ───────── Main ───────── */
+
 export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   const qc = useQueryClient();
-  const [view, setView] = useState<"day" | "week">("day");
   const [selectedDate, setSelectedDate] = useState(todayStockholm());
-  const [activityTitle, setActivityTitle] = useState("Fredagsklubben Oasen Wednesday Midsummer Edition");
+  const [openItem, setOpenItem] = useState<AdminCalendarItem | null>(null);
+  const [openCreate, setOpenCreate] = useState(false);
+  const [openDrift, setOpenDrift] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState<AdminCalendarItem | null>(null);
+
+  // Specialpass form state
+  const [activityTitle, setActivityTitle] = useState("Fredagsklubben");
   const [activityDate, setActivityDate] = useState(todayStockholm());
   const [activityStart, setActivityStart] = useState("17:00");
   const [activityEnd, setActivityEnd] = useState("21:00");
   const [activityPrice, setActivityPrice] = useState("99");
   const [activityCapacity, setActivityCapacity] = useState("32");
   const [activityType, setActivityType] = useState("open_play");
-  const [activityNote, setActivityNote] = useState("Midsommarvärme, pickleball, musik och community.");
+  const [activityNote, setActivityNote] = useState("");
   const [activityVisibility, setActivityVisibility] = useState<"public" | "private">("public");
   const [includedInDayPass, setIncludedInDayPass] = useState(true);
   const [includedInUnlimited, setIncludedInUnlimited] = useState(true);
+
+  // Drift form state
   const [driftTitle, setDriftTitle] = useState("Driftavvikelse");
   const [driftStart, setDriftStart] = useState("18:00");
   const [driftEnd, setDriftEnd] = useState("21:00");
@@ -102,14 +365,24 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     setActivityDate(selectedDate);
   }, [selectedDate]);
 
-  const range = useMemo(() => view === "week"
-    ? weekRange(selectedDate)
-    : { from: selectedDate, to: selectedDate, dates: [selectedDate] },
-  [selectedDate, view]);
-
+  // Fetch 7-day range so DayStrip dots are accurate
+  const range = useMemo(() => weekRange(selectedDate), [selectedDate]);
   const calendarQ = useAdminCalendar(venueId, range.from, range.to);
   const items = calendarQ.data?.items || [];
-  const visibleDates = view === "week" ? (calendarQ.data?.dates || range.dates) : [selectedDate];
+
+  const dayItems = useMemo(
+    () =>
+      items
+        .filter((i) => i.date === selectedDate)
+        .sort((a, b) => (a.time || "").localeCompare(b.time || "")),
+    [items, selectedDate],
+  );
+
+  const countsByDate = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const i of items) m[i.date] = (m[i.date] || 0) + 1;
+    return m;
+  }, [items]);
 
   const invalidateCalendar = () => {
     qc.invalidateQueries({ queryKey: ["admin-calendar", venueId] });
@@ -119,295 +392,627 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   };
 
   const activityOverride = useMutation({
-    mutationFn: ({ item, status }: { item: AdminCalendarItem; status: "hidden" | "cancelled" }) => {
-      const registrations = Number(item.registrations_count || 0);
-      if (registrations > 0 && !window.confirm(`${item.title} har ${registrations} anmälda. Vill du fortsätta?`)) {
-        throw new Error("Avbrutet");
-      }
-      return apiPost("api-admin", "activity-session-overrides", {
+    mutationFn: ({ item, status }: { item: AdminCalendarItem; status: "hidden" | "cancelled" }) =>
+      apiPost("api-admin", "activity-session-overrides", {
         venueId,
         activity_session_id: item.activity_session_id || item.source_id,
         session_date: item.date,
         status,
         reason: "Calendar operation",
         confirm: true,
-      });
-    },
+      }),
     onSuccess: (_, vars) => {
       toast.success(vars.status === "hidden" ? "Aktivitet dold" : "Aktivitet avbokad");
       invalidateCalendar();
+      setOpenItem(null);
+      setConfirmCancel(null);
     },
-    onError: (error: Error) => {
-      if (error.message !== "Avbrutet") toast.error(error.message);
-    },
+    onError: (error: Error) => toast.error(error.message),
   });
 
   const createActivity = useMutation({
-    mutationFn: () => apiPost("api-admin", "activity-sessions", {
-      venueId,
-      name: activityTitle.trim(),
-      session_type: activityType,
-      product_key: productKeyForSessionType(activityType),
-      session_date: activityDate,
-      recurrence_days: null,
-      start_time: activityStart,
-      end_time: activityEnd,
-      price_sek: Math.max(0, Math.round(Number(activityPrice || 0))),
-      capacity: activityCapacity ? Math.max(0, Math.round(Number(activityCapacity))) : null,
-      is_active: true,
-      publish_status: activityVisibility === "public" ? "published" : "hidden",
-      access_policy: {
-        sold_as: "activity_ticket",
-        allows_day_access: includedInDayPass,
-        includes_day_access: false,
-        member_benefit_key: includedInUnlimited ? "open_play_unlimited" : null,
-      },
-      metadata: {
-        public_note: activityNote.trim() || null,
-        created_from: "admin_calendar",
-        visibility: activityVisibility,
-      },
-    }),
+    mutationFn: () =>
+      apiPost("api-admin", "activity-sessions", {
+        venueId,
+        name: activityTitle.trim(),
+        session_type: activityType,
+        product_key: productKeyForSessionType(activityType),
+        session_date: activityDate,
+        recurrence_days: null,
+        start_time: activityStart,
+        end_time: activityEnd,
+        price_sek: Math.max(0, Math.round(Number(activityPrice || 0))),
+        capacity: activityCapacity ? Math.max(0, Math.round(Number(activityCapacity))) : null,
+        is_active: true,
+        publish_status: activityVisibility === "public" ? "published" : "hidden",
+        access_policy: {
+          sold_as: "activity_ticket",
+          allows_day_access: includedInDayPass,
+          includes_day_access: false,
+          member_benefit_key: includedInUnlimited ? "open_play_unlimited" : null,
+        },
+        metadata: {
+          public_note: activityNote.trim() || null,
+          created_from: "admin_calendar",
+          visibility: activityVisibility,
+        },
+      }),
     onSuccess: () => {
-      toast.success("One-off aktivitet publicerad");
+      toast.success("Specialpass publicerat");
       setSelectedDate(activityDate);
       invalidateCalendar();
+      setOpenCreate(false);
     },
     onError: (error: Error) => toast.error(error.message),
   });
 
   const createDrift = useMutation({
-    mutationFn: () => apiPost("api-admin", "venue-operation-overrides", {
-      venueId,
-      title: driftTitle.trim() || "Driftavvikelse",
-      reason: "Created from Admin Calendar",
-      override_type: "other",
-      date: selectedDate,
-      start_time: driftStart,
-      end_time: driftEnd,
-      affects_entire_venue: true,
-      venue_court_ids: [],
-    }),
+    mutationFn: () =>
+      apiPost("api-admin", "venue-operation-overrides", {
+        venueId,
+        title: driftTitle.trim() || "Driftavvikelse",
+        reason: "Created from Admin Calendar",
+        override_type: "other",
+        date: selectedDate,
+        start_time: driftStart,
+        end_time: driftEnd,
+        affects_entire_venue: true,
+        venue_court_ids: [],
+      }),
     onSuccess: () => {
       toast.success("Drift skapad");
       invalidateCalendar();
+      setOpenDrift(false);
     },
     onError: (error: Error) => toast.error(error.message),
   });
 
-  const moveDate = (days: number) => {
+  const moveDay = (d: number) => {
     const base = DateTime.fromISO(selectedDate, { zone: "Europe/Stockholm" });
-    setSelectedDate(base.plus({ days: view === "week" ? days * 7 : days }).toISODate()!);
+    setSelectedDate(base.plus({ days: d }).toISODate()!);
   };
 
   if (!venueId) {
-    return <p className="py-8 text-center text-sm text-muted-foreground">Välj venue först.</p>;
+    return <p className="py-8 text-center text-sm" style={{ color: ax("muted") }}>Välj venue först.</p>;
   }
 
+  const isToday = selectedDate === todayStockholm();
+  const headerDate = DateTime.fromISO(selectedDate, { zone: "Europe/Stockholm" });
+
   return (
-    <div className="space-y-4">
-      <div className="rounded-2xl border border-border bg-card/70 p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
+    <div className="space-y-4 pb-32">
+      {/* ── HERO HEADER ── */}
+      <div
+        className="relative overflow-hidden rounded-3xl p-5"
+        style={{
+          background: `linear-gradient(135deg, ${ax("electric", 0.12)}, ${ax("magenta", 0.08)})`,
+          border: `1px solid ${ax("borderSoft")}`,
+        }}
+      >
+        <div className="absolute inset-0 opacity-40" style={AX_GRID_BG} />
+        <div className="relative">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <CalendarDays className="h-4 w-4 text-primary" />
-              <h2 className="font-display text-lg font-bold">Calendar</h2>
-              {calendarQ.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              <CalendarDays className="h-4 w-4" style={{ color: ax("electricSoft") }} />
+              <p className={AX_TYPE.micro} style={{ color: ax("electricSoft") }}>
+                CALENDAR · DAY OPS
+              </p>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">Aktiviteter, events, drift och block i samma tidslinje.</p>
+            {calendarQ.isFetching && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: ax("muted") }} />
+            )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => setView("day")} className={`rounded-xl px-3 py-2 text-xs font-bold ${view === "day" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>Day</button>
-            <button onClick={() => setView("week")} className={`rounded-xl px-3 py-2 text-xs font-bold ${view === "week" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>Week</button>
-            <button onClick={() => moveDate(-1)} className="rounded-xl bg-muted px-3 py-2 text-xs font-bold text-muted-foreground">Föregående</button>
-            <button onClick={() => setSelectedDate(todayStockholm())} className="rounded-xl bg-muted px-3 py-2 text-xs font-bold text-muted-foreground">Idag</button>
-            <button onClick={() => moveDate(1)} className="rounded-xl bg-muted px-3 py-2 text-xs font-bold text-muted-foreground">Nästa</button>
+          <div className="mt-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="font-display text-3xl font-black capitalize leading-none" style={{ color: "white" }}>
+                {headerDate.toFormat("cccc")}
+              </p>
+              <p className="mt-1 font-mono text-sm" style={{ color: ax("muted") }}>
+                {headerDate.toFormat("d LLLL yyyy")}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={() => moveDay(-1)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl"
+                style={{ background: ax("surfaceHi"), color: "white" }}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setSelectedDate(todayStockholm())}
+                className="rounded-xl px-3.5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wider"
+                style={{
+                  background: isToday ? ax("electric") : ax("surfaceHi"),
+                  color: isToday ? "hsl(220 25% 10%)" : "white",
+                }}
+              >
+                Idag
+              </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={() => moveDay(1)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl"
+                style={{ background: ax("surfaceHi"), color: "white" }}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </motion.button>
+            </div>
           </div>
         </div>
       </div>
 
-      {view === "week" && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {range.dates.map((date) => (
-            <button
-              key={date}
-              onClick={() => setSelectedDate(date)}
-              className={`min-w-[92px] rounded-xl border px-3 py-2 text-left text-xs ${selectedDate === date ? "border-primary bg-primary/10 text-foreground" : "border-border bg-muted/30 text-muted-foreground"}`}
+      {/* ── DAY STRIP ── */}
+      <DayStrip selectedDate={selectedDate} onSelect={setSelectedDate} counts={countsByDate} />
+
+      {/* ── QUICK ACTIONS ── */}
+      <div className="grid grid-cols-2 gap-2.5">
+        <motion.button
+          whileTap={{ scale: 0.97 }}
+          onClick={() => setOpenCreate(true)}
+          className="relative flex items-center gap-3 overflow-hidden rounded-2xl p-4 text-left"
+          style={{
+            background: `linear-gradient(135deg, ${ax("electric", 0.18)}, ${ax("magenta", 0.12)})`,
+            border: `1px solid ${ax("electric", 0.45)}`,
+            boxShadow: `0 10px 28px -16px ${ax("electric", 0.6)}`,
+          }}
+        >
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-xl"
+            style={{ background: ax("electric"), color: "hsl(220 25% 10%)" }}
+          >
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[15px] font-black leading-tight" style={{ color: "white" }}>
+              Skapa specialpass
+            </p>
+            <p className="mt-0.5 text-[11px]" style={{ color: ax("muted") }}>
+              One-off, publikt & betalt
+            </p>
+          </div>
+        </motion.button>
+
+        <motion.button
+          whileTap={{ scale: 0.97 }}
+          onClick={() => setOpenDrift(true)}
+          className="relative flex items-center gap-3 overflow-hidden rounded-2xl p-4 text-left"
+          style={{
+            background: ax("surfaceHi"),
+            border: `1px dashed ${ax("danger", 0.5)}`,
+          }}
+        >
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-xl"
+            style={{ background: ax("danger", 0.18), color: ax("danger") }}
+          >
+            <ShieldAlert className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[15px] font-black leading-tight" style={{ color: "white" }}>
+              Drift
+            </p>
+            <p className="mt-0.5 text-[11px]" style={{ color: ax("muted") }}>
+              Operativ exception
+            </p>
+          </div>
+        </motion.button>
+      </div>
+
+      {/* ── TIMELINE ── */}
+      <div className="space-y-2.5">
+        <AxSectionLabel icon={Clock} accent={ax("electricSoft")}>
+          {dayItems.length === 0 ? "Inget planerat" : `${dayItems.length} på schemat`}
+        </AxSectionLabel>
+
+        {calendarQ.isLoading ? (
+          <div className="flex justify-center py-10">
+            <Loader2 className="h-5 w-5 animate-spin" style={{ color: ax("muted") }} />
+          </div>
+        ) : dayItems.length === 0 ? (
+          <AxCard>
+            <div className="flex items-center gap-3 py-2">
+              <div
+                className="flex h-10 w-10 items-center justify-center rounded-xl"
+                style={{ background: ax("surface"), border: `1px solid ${ax("border")}` }}
+              >
+                <CalendarDays className="h-4 w-4" style={{ color: ax("muted") }} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-bold" style={{ color: "white" }}>
+                  Tom dag
+                </p>
+                <p className="text-[11px]" style={{ color: ax("muted") }}>
+                  Skapa ett specialpass eller lägg in drift för {labelDate(selectedDate, true)}.
+                </p>
+              </div>
+            </div>
+          </AxCard>
+        ) : (
+          dayItems.map((item) => (
+            <TimelineItem key={item.id} item={item} onTap={() => setOpenItem(item)} />
+          ))
+        )}
+      </div>
+
+      {/* ── ITEM ACTION SHEET ── */}
+      <Sheet open={!!openItem} onClose={() => setOpenItem(null)} title={openItem?.title || ""}>
+        {openItem && (
+          <ItemActions
+            item={openItem}
+            onOpenModule={(id) => {
+              setOpenItem(null);
+              onOpenModule(id);
+            }}
+            onHide={() => activityOverride.mutate({ item: openItem, status: "hidden" })}
+            onCancel={() => setConfirmCancel(openItem)}
+            isPending={activityOverride.isPending}
+          />
+        )}
+      </Sheet>
+
+      {/* ── CANCEL CONFIRM ── */}
+      <Sheet open={!!confirmCancel} onClose={() => setConfirmCancel(null)} title="Avboka pass?">
+        {confirmCancel && (
+          <div className="space-y-4 pt-2">
+            <div
+              className="rounded-2xl p-4"
+              style={{
+                background: ax("danger", 0.1),
+                border: `1px solid ${ax("danger", 0.4)}`,
+              }}
             >
-              <span className="block font-bold">{labelDate(date, true)}</span>
-              <span>{items.filter((item) => item.date === date).length} saker</span>
+              <p className="text-sm font-bold" style={{ color: "white" }}>
+                {confirmCancel.title}
+              </p>
+              <p className="mt-1 text-xs" style={{ color: ax("muted") }}>
+                {labelDate(confirmCancel.date)} · {confirmCancel.time}
+                {confirmCancel.end_time ? `–${confirmCancel.end_time}` : ""}
+              </p>
+              {Number(confirmCancel.registrations_count || 0) > 0 && (
+                <p className="mt-3 text-xs font-bold" style={{ color: ax("danger") }}>
+                  ⚠ {confirmCancel.registrations_count} anmälda kommer att meddelas.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={() => activityOverride.mutate({ item: confirmCancel, status: "cancelled" })}
+              disabled={activityOverride.isPending}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl py-4 font-display text-sm font-black disabled:opacity-50"
+              style={{ background: ax("danger"), color: "white" }}
+            >
+              {activityOverride.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Ban className="h-4 w-4" />
+              )}
+              Ja, avboka passet
             </button>
-          ))}
-        </div>
-      )}
-
-      <div className="rounded-2xl border border-border bg-card/70 p-4">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <Ticket className="h-4 w-4 text-primary" />
-              <p className="text-sm font-bold">Create paid one-off</p>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">Ett publikt aktivitetspass för valt datum. Upprepas inte nästa vecka.</p>
+            <button
+              onClick={() => setConfirmCancel(null)}
+              className="w-full rounded-2xl py-3 text-sm font-bold"
+              style={{ background: ax("surfaceHi"), color: "white" }}
+            >
+              Avbryt
+            </button>
           </div>
-          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary">One-off</span>
-        </div>
+        )}
+      </Sheet>
 
-        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]">
-          <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
-            <div className="mb-2 flex items-center gap-2">
-              <Clock className="h-3.5 w-3.5 text-primary" />
-              <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">1. Pick time</p>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <ActionInput type="date" value={activityDate} onChange={(e) => setActivityDate(e.target.value)} />
-              <ActionInput type="time" value={activityStart} onChange={(e) => setActivityStart(e.target.value)} />
-              <ActionInput type="time" value={activityEnd} onChange={(e) => setActivityEnd(e.target.value)} />
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
-            <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">2. Add title</p>
-            <ActionInput value={activityTitle} onChange={(e) => setActivityTitle(e.target.value)} placeholder="Titel" />
+      {/* ── SPECIALPASS CREATE SHEET ── */}
+      <Sheet open={openCreate} onClose={() => setOpenCreate(false)} title="Skapa specialpass">
+        <div className="space-y-5 pt-2">
+          {/* Vad */}
+          <Step n={1} label="Vad?">
+            <PadInput
+              value={activityTitle}
+              onChange={(e) => setActivityTitle(e.target.value)}
+              placeholder="Titel (t.ex. Fredagsklubben)"
+            />
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <select value={activityType} onChange={(e) => setActivityType(e.target.value)} className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs outline-none">
+              <PadSelect value={activityType} onChange={setActivityType}>
                 <option value="club_night">Klubbkväll</option>
                 <option value="open_play">Open Play</option>
                 <option value="group_training">Gruppträning</option>
                 <option value="event">Event</option>
-              </select>
-              <select value={activityVisibility} onChange={(e) => setActivityVisibility(e.target.value as "public" | "private")} className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs outline-none">
-                <option value="public">Public</option>
-                <option value="private">Private</option>
-              </select>
+              </PadSelect>
+              <PadSelect value={activityVisibility} onChange={(v) => setActivityVisibility(v as "public" | "private")}>
+                <option value="public">Publikt</option>
+                <option value="private">Privat</option>
+              </PadSelect>
             </div>
-          </div>
+          </Step>
 
-          <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
-            <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">3. Price/capacity</p>
+          {/* När */}
+          <Step n={2} label="När?">
+            <div className="grid grid-cols-3 gap-2">
+              <PadInput type="date" value={activityDate} onChange={(e) => setActivityDate(e.target.value)} />
+              <PadInput type="time" value={activityStart} onChange={(e) => setActivityStart(e.target.value)} />
+              <PadInput type="time" value={activityEnd} onChange={(e) => setActivityEnd(e.target.value)} />
+            </div>
+          </Step>
+
+          {/* Pris & kapacitet */}
+          <Step n={3} label="Pris & kapacitet">
             <div className="grid grid-cols-2 gap-2">
-              <ActionInput type="number" value={activityPrice} onChange={(e) => setActivityPrice(e.target.value)} placeholder="Pris" />
-              <ActionInput type="number" value={activityCapacity} onChange={(e) => setActivityCapacity(e.target.value)} placeholder="Max" />
+              <PadInput
+                type="number"
+                inputMode="numeric"
+                value={activityPrice}
+                onChange={(e) => setActivityPrice(e.target.value)}
+                placeholder="Pris (kr)"
+              />
+              <PadInput
+                type="number"
+                inputMode="numeric"
+                value={activityCapacity}
+                onChange={(e) => setActivityCapacity(e.target.value)}
+                placeholder="Max"
+              />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <label className="flex items-center justify-between rounded-xl bg-background/50 px-2.5 py-2 text-[11px] font-semibold text-muted-foreground">
-                Day pass
-                <input type="checkbox" checked={includedInDayPass} onChange={(e) => setIncludedInDayPass(e.target.checked)} />
-              </label>
-              <label className="flex items-center justify-between rounded-xl bg-background/50 px-2.5 py-2 text-[11px] font-semibold text-muted-foreground">
-                Membership
-                <input type="checkbox" checked={includedInUnlimited} onChange={(e) => setIncludedInUnlimited(e.target.checked)} />
-              </label>
+              <Toggle
+                label="Day pass"
+                checked={includedInDayPass}
+                onChange={setIncludedInDayPass}
+              />
+              <Toggle
+                label="Membership"
+                checked={includedInUnlimited}
+                onChange={setIncludedInUnlimited}
+              />
             </div>
-          </div>
+          </Step>
+
+          {/* Publicering */}
+          <Step n={4} label="Publicering">
+            <PadTextarea
+              value={activityNote}
+              onChange={(e) => setActivityNote(e.target.value)}
+              placeholder="Publik beskrivning (valfritt)"
+            />
+          </Step>
 
           <button
             onClick={() => createActivity.mutate()}
-            disabled={!activityTitle.trim() || !activityDate || !activityStart || !activityEnd || !activityPrice || !activityCapacity || createActivity.isPending}
-            className="flex min-h-28 items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground disabled:opacity-50"
+            disabled={
+              !activityTitle.trim() ||
+              !activityDate ||
+              !activityStart ||
+              !activityEnd ||
+              !activityPrice ||
+              !activityCapacity ||
+              createActivity.isPending
+            }
+            className="sticky bottom-0 flex w-full items-center justify-center gap-2 rounded-2xl py-4 font-display text-base font-black disabled:opacity-50"
+            style={{
+              background: `linear-gradient(135deg, ${ax("electric")}, ${ax("magenta")})`,
+              color: "white",
+              boxShadow: `0 14px 32px -16px ${ax("electric", 0.7)}`,
+            }}
           >
-            {createActivity.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            4. Publish
+            {createActivity.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
+            Publicera specialpass
           </button>
         </div>
+      </Sheet>
 
-        <ActionTextarea
-          value={activityNote}
-          onChange={(e) => setActivityNote(e.target.value)}
-          placeholder="Public note"
-          className="mt-3 w-full"
+      {/* ── DRIFT CREATE SHEET ── */}
+      <Sheet open={openDrift} onClose={() => setOpenDrift(false)} title="Skapa drift">
+        <div className="space-y-4 pt-2">
+          <div
+            className="flex items-start gap-3 rounded-2xl p-3"
+            style={{
+              background: ax("danger", 0.08),
+              border: `1px solid ${ax("danger", 0.3)}`,
+            }}
+          >
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" style={{ color: ax("danger") }} />
+            <p className="text-[12px] leading-relaxed" style={{ color: ax("muted") }}>
+              Drift är en operativ exception — t.ex. städ, läckage eller stängt. Gäller hela
+              hallen för valt tidsfönster på {labelDate(selectedDate, true)}.
+            </p>
+          </div>
+          <PadInput
+            value={driftTitle}
+            onChange={(e) => setDriftTitle(e.target.value)}
+            placeholder="Vad händer? (t.ex. Stängt för städ)"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <PadInput type="time" value={driftStart} onChange={(e) => setDriftStart(e.target.value)} />
+            <PadInput type="time" value={driftEnd} onChange={(e) => setDriftEnd(e.target.value)} />
+          </div>
+          <button
+            onClick={() => createDrift.mutate()}
+            disabled={createDrift.isPending}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl py-4 font-display text-sm font-black disabled:opacity-50"
+            style={{ background: ax("danger"), color: "white" }}
+          >
+            {createDrift.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Ban className="h-4 w-4" />
+            )}
+            Skapa drift {labelDate(selectedDate, true)}
+          </button>
+        </div>
+      </Sheet>
+    </div>
+  );
+}
+
+/* ───────── Item action sheet body ───────── */
+
+function ItemActions({
+  item,
+  onOpenModule,
+  onHide,
+  onCancel,
+  isPending,
+}: {
+  item: AdminCalendarItem;
+  onOpenModule: (id: string) => void;
+  onHide: () => void;
+  onCancel: () => void;
+  isPending: boolean;
+}) {
+  const tone = KIND_TONE[item.kind] || KIND_TONE.activity;
+  const disabled = item.override_status === "hidden" || item.override_status === "cancelled";
+  const time = item.end_time ? `${item.time}–${item.end_time}` : item.time;
+  const cap = item.capacity ?? null;
+  const reg = item.registrations_count ?? null;
+  return (
+    <div className="space-y-4 pt-2">
+      <div
+        className="relative overflow-hidden rounded-2xl p-4"
+        style={{
+          background: ax("surfaceHi"),
+          border: `1px solid ${ax("borderSoft")}`,
+        }}
+      >
+        <span
+          aria-hidden
+          className="absolute inset-y-3 left-0 w-1 rounded-full"
+          style={{ background: tone.strip, boxShadow: `0 0 14px ${tone.glow}` }}
         />
-      </div>
-
-      <div className="grid gap-3 md:grid-cols-1">
-        <div className="rounded-2xl border border-border bg-card/70 p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4 text-primary" />
-            <p className="text-sm font-bold">Skapa drift</p>
-          </div>
-          <div className="space-y-2">
-            <ActionInput value={driftTitle} onChange={(e) => setDriftTitle(e.target.value)} placeholder="Titel" />
-            <div className="grid grid-cols-2 gap-2">
-              <ActionInput type="time" value={driftStart} onChange={(e) => setDriftStart(e.target.value)} />
-              <ActionInput type="time" value={driftEnd} onChange={(e) => setDriftEnd(e.target.value)} />
+        <div className="ml-3 flex flex-wrap items-center gap-1.5">
+          <AxChip tone={tone.chipTone}>{tone.label}</AxChip>
+          <span className="font-mono text-[11px] font-bold" style={{ color: ax("electricSoft") }}>
+            {time}
+          </span>
+        </div>
+        <div className="ml-3 mt-3 grid grid-cols-2 gap-3 text-[11px]" style={{ color: ax("muted") }}>
+          {reg != null && (
+            <div>
+              <p className="font-mono uppercase tracking-wider">Anmälda</p>
+              <p className="mt-0.5 font-display text-lg font-black" style={{ color: "white" }}>
+                {reg}
+                {cap ? ` / ${cap}` : ""}
+              </p>
             </div>
-            <button
-              onClick={() => createDrift.mutate()}
-              disabled={createDrift.isPending}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-destructive/15 py-2.5 text-sm font-bold text-destructive disabled:opacity-50"
-            >
-              {createDrift.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
-              Skapa drift {labelDate(selectedDate, true)}
-            </button>
-          </div>
+          )}
+          {item.visibility && (
+            <div>
+              <p className="font-mono uppercase tracking-wider">Synlighet</p>
+              <p className="mt-0.5 font-display text-lg font-black capitalize" style={{ color: "white" }}>
+                {item.visibility}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="space-y-3">
-        {visibleDates.map((date) => {
-          const dayItems = items.filter((item) => item.date === date);
-          return (
-            <section key={date} className="rounded-2xl border border-border bg-card/70 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-display text-base font-bold capitalize">{labelDate(date)}</h3>
-                <span className="text-xs text-muted-foreground">{dayItems.length} poster</span>
-              </div>
-              {calendarQ.isLoading ? (
-                <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-              ) : dayItems.length === 0 ? (
-                <p className="rounded-xl bg-muted/30 p-4 text-sm text-muted-foreground">Inget planerat.</p>
-              ) : (
-                <div className="space-y-2">
-                  {dayItems.map((item) => {
-                    const disabled = item.override_status === "hidden" || item.override_status === "cancelled";
-                    return (
-                      <div key={item.id} className={`rounded-xl border-l-4 bg-muted/20 p-3 ${toneClass[item.kind] || "border-primary"}`}>
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-mono font-bold uppercase tracking-[0.16em] opacity-80">
-                              {item.end_time ? `${item.time}-${item.end_time}` : item.time}
-                            </p>
-                            <p className="truncate text-sm font-black text-foreground">{item.title}</p>
-                            <p className="mt-1 text-xs text-muted-foreground">{itemSubtitle(item)}</p>
-                          </div>
-                          <div className="flex flex-wrap gap-2 sm:justify-end">
-                            {item.moduleTarget && (
-                              <button
-                                onClick={() => onOpenModule(item.moduleTarget!)}
-                                className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground"
-                              >
-                                Öppna <ExternalLink className="h-3 w-3" />
-                              </button>
-                            )}
-                            {item.kind === "activity" && (
-                              <>
-                                <button
-                                  disabled={disabled || activityOverride.isPending}
-                                  onClick={() => activityOverride.mutate({ item, status: "hidden" })}
-                                  className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-foreground disabled:opacity-40"
-                                >
-                                  Dölj
-                                </button>
-                                <button
-                                  disabled={disabled || activityOverride.isPending}
-                                  onClick={() => activityOverride.mutate({ item, status: "cancelled" })}
-                                  className="rounded-full bg-destructive/15 px-2.5 py-1.5 text-[10px] font-bold text-destructive disabled:opacity-40"
-                                >
-                                  Avboka
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-          );
-        })}
+      {/* Actions */}
+      <div className="space-y-2">
+        {item.moduleTarget && (
+          <button
+            onClick={() => onOpenModule(item.moduleTarget!)}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 font-display text-sm font-black"
+            style={{
+              background: ax("electric"),
+              color: "hsl(220 25% 10%)",
+            }}
+          >
+            Öppna <ExternalLink className="h-4 w-4" />
+          </button>
+        )}
+        {item.kind === "activity" && (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              disabled={disabled || isPending}
+              onClick={onHide}
+              className="flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold disabled:opacity-40"
+              style={{
+                background: ax("surfaceHi"),
+                border: `1px solid ${ax("border")}`,
+                color: "white",
+              }}
+            >
+              <EyeOff className="h-4 w-4" /> Dölj
+            </button>
+            <button
+              disabled={disabled || isPending}
+              onClick={onCancel}
+              className="flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold disabled:opacity-40"
+              style={{
+                background: ax("danger", 0.15),
+                border: `1px solid ${ax("danger", 0.5)}`,
+                color: ax("danger"),
+              }}
+            >
+              <Ban className="h-4 w-4" /> Avboka
+            </button>
+          </div>
+        )}
+        {!item.moduleTarget && item.kind !== "activity" && (
+          <p className="text-center text-[11px]" style={{ color: ax("muted") }}>
+            Inga snabbåtgärder för denna typ.
+          </p>
+        )}
       </div>
     </div>
+  );
+}
+
+/* ───────── Step + Toggle helpers ───────── */
+
+function Step({ n, label, children }: { n: number; label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span
+          className="flex h-6 w-6 items-center justify-center rounded-lg font-mono text-[11px] font-black"
+          style={{ background: ax("electric"), color: "hsl(220 25% 10%)" }}
+        >
+          {n}
+        </span>
+        <p className="font-display text-sm font-black" style={{ color: "white" }}>
+          {label}
+        </p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Toggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="flex items-center justify-between rounded-xl px-3.5 py-3 text-[12px] font-bold"
+      style={{
+        background: checked ? ax("lime", 0.12) : ax("surfaceHi"),
+        border: `1px solid ${checked ? ax("lime", 0.5) : ax("border")}`,
+        color: checked ? ax("lime") : "white",
+      }}
+    >
+      <span>{label}</span>
+      <span
+        className="flex h-5 w-9 items-center rounded-full p-0.5 transition"
+        style={{ background: checked ? ax("lime", 0.6) : ax("border") }}
+      >
+        <motion.span
+          animate={{ x: checked ? 16 : 0 }}
+          transition={{ type: "spring", stiffness: 400, damping: 30 }}
+          className="h-4 w-4 rounded-full"
+          style={{ background: "white" }}
+        />
+      </span>
+    </button>
   );
 }
