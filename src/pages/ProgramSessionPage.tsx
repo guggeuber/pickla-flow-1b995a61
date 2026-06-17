@@ -80,7 +80,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     queryFn: async () => {
       const { data: row, error: sessionError } = await supabase
         .from("activity_sessions")
-        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata")
         .eq("id", sessionId!)
         .maybeSingle();
       if (sessionError) throw sessionError;
@@ -152,6 +152,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const socialProofLabel = activitySocialProofLabel(registrationCount, interestedCount);
   const backendPricing = data?.activityTicketPricing || data?.pricing || null;
   const dayPassPricing = data?.dayPassPricing || null;
+  const pricingDebug = backendPricing?.debug || {};
+  const pricingMode = String(pricingDebug.pricing_mode || session?.metadata?.pricing_mode || "standard");
+  const hasSpecialPricingOverride = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
+  const onlinePrice = Number(pricingDebug.online_price_sek ?? session?.metadata?.online_price_sek ?? backendPricing?.baseAmountSek ?? session?.price_sek ?? 0);
+  const deskPrice = Number(pricingDebug.desk_price_sek ?? session?.metadata?.desk_price_sek ?? onlinePrice);
+  const memberDiscountPercent = Number(pricingDebug.member_discount_percent ?? session?.metadata?.member_discount_percent ?? 0);
+  const specialMemberPrice = pricingMode === "member_discount"
+    ? Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100)
+    : onlinePrice;
+  const dayPassIncludedForDisplay = pricingMode === "standard" && Boolean(pricingDebug.day_pass_included ?? session?.metadata?.day_pass_included ?? session?.access_policy?.allows_day_access);
   const pricingPending = !!user?.id && (
     waitForAccessSnapshot ||
     accessSnapshotForResolvedSession.isLoading ||
@@ -541,26 +551,55 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   </div>
 
                   <div className="rounded-[24px] bg-[#f8fafc] p-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Biljettpris</p>
-                        <p className="mt-1 text-[17px] font-semibold text-neutral-500" style={{ fontFamily: FONT_HEADING }}>
-                          {basePrice > 0 ? formatSek(basePrice) : "Ingår"}
-                        </p>
+                    {hasSpecialPricingOverride ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-2xl bg-white p-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Playpickla.com</p>
+                            <p className="mt-1 text-[28px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                              {formatSek(onlinePrice)}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl bg-white p-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Drop-in på plats</p>
+                            <p className="mt-1 text-[28px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                              {formatSek(deskPrice)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[12px] font-semibold text-neutral-500">
+                            {pricingMode === "fixed_ticket"
+                              ? `Alla betalar ${formatSek(onlinePrice)} online.`
+                              : `Medlemmar betalar ${formatSek(specialMemberPrice)} online.`}
+                          </p>
+                          <p className="text-right text-[12px] font-black" style={{ color: GREEN }}>
+                            Billigare online
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: GREEN }}>Ditt pris</p>
-                        <p className="mt-1 text-[30px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                          {checkoutLabel}
-                        </p>
+                    ) : (
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Biljettpris</p>
+                          <p className="mt-1 text-[17px] font-semibold text-neutral-500" style={{ fontFamily: FONT_HEADING }}>
+                            {basePrice > 0 ? formatSek(basePrice) : "Ingår"}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: GREEN }}>Ditt pris</p>
+                          <p className="mt-1 text-[30px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
+                            {checkoutLabel}
+                          </p>
+                        </div>
                       </div>
-                    </div>
+                    )}
                     {pricingPending && (
                       <p className="mt-2 text-[12px] font-semibold text-neutral-500">
                         Vi kontrollerar medlemskap, dagsaccess och entitlements.
                       </p>
                     )}
-                    {!pricingPending && savingsSek > 0 && (
+                    {!hasSpecialPricingOverride && !pricingPending && savingsSek > 0 && (
                       <p className="mt-2 text-[12px] font-semibold text-neutral-500">
                         Du sparar {formatSek(savingsSek)} på det här passet.
                       </p>
@@ -573,6 +612,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   </div>
 
                   {(() => {
+                    if (hasSpecialPricingOverride) return null;
                     const upsellRows = [
                       !userHasMembership ? {
                         kind: "access" as const,
@@ -586,7 +626,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                         value: "Ingår",
                         helper: "Ingår när aktiviteten täcks av Play+",
                       } : null,
-                      !hasDayAccess && (dayPassPricing || pricingPending) ? {
+                      dayPassIncludedForDisplay && !hasDayAccess && (dayPassPricing || pricingPending) ? {
                         kind: "day" as const,
                         label: `Spela hela dagen`,
                         value: dayPassPricing?.checkoutLabel || "Hämtar pris...",

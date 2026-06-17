@@ -9,7 +9,7 @@ import { DateTime } from "luxon";
 import { useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
-import { activityPriceLabels, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
+import { activityPriceLabels, formatSek, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
@@ -79,7 +79,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     queryFn: async () => {
       const { data } = await supabase
         .from("activity_sessions")
-        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata")
         .eq("id", eventLookupId)
         .maybeSingle();
       return data;
@@ -223,6 +223,15 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
     const isFull = spotsLeft === 0;
     const backendPricing = publicActivityPreview?.activityTicketPricing || publicActivityPreview?.pricing || null;
+    const pricingDebug = backendPricing?.debug || {};
+    const pricingMode = String(pricingDebug.pricing_mode || (effectiveProgramSession as any).metadata?.pricing_mode || "standard");
+    const hasSpecialPricingOverride = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
+    const onlinePrice = Number(pricingDebug.online_price_sek ?? (effectiveProgramSession as any).metadata?.online_price_sek ?? effectiveProgramSession.price_sek ?? 0);
+    const deskPrice = Number(pricingDebug.desk_price_sek ?? (effectiveProgramSession as any).metadata?.desk_price_sek ?? onlinePrice);
+    const memberDiscountPercent = Number(pricingDebug.member_discount_percent ?? (effectiveProgramSession as any).metadata?.member_discount_percent ?? 0);
+    const specialMemberPrice = pricingMode === "member_discount"
+      ? Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100)
+      : onlinePrice;
     const pricing = mergeBackendActivityPricing(activityPriceLabels({
       basePrice: Number(effectiveProgramSession.price_sek || 165),
       productKey: (effectiveProgramSession as any).product_key,
@@ -411,17 +420,25 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
           <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <Ticket style={{ width: 14, height: 14 }} />
-              {pricing.publicChips[0]}
+              {hasSpecialPricingOverride ? `Playpickla.com ${formatSek(onlinePrice)}` : pricing.publicChips[0]}
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-              {pricing.publicChips[1]}
+              {hasSpecialPricingOverride ? `Drop-in ${formatSek(deskPrice)}` : pricing.publicChips[1]}
             </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-              {pricing.includedLabel || "Unlimited ingår"}
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-              Dag ingår
-            </span>
+            {hasSpecialPricingOverride ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
+                {pricingMode === "fixed_ticket" ? `Alla ${formatSek(onlinePrice)}` : `Medlem ${formatSek(specialMemberPrice)}`}
+              </span>
+            ) : (
+              <>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
+                  {pricing.includedLabel || "Unlimited ingår"}
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
+                  Dag ingår
+                </span>
+              </>
+            )}
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <CalendarClock style={{ width: 14, height: 14 }} />
               {sessionType}{timeStr ? ` · ${timeStr}` : ""}

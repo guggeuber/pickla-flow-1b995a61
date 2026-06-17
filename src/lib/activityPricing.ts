@@ -32,8 +32,9 @@ export const PICKLA_ACCESS_LABEL = "Play";
 export const PICKLA_UNLIMITED_LABEL = "Play+";
 
 export function formatSek(amount: number) {
-  return `${amount.toLocaleString("sv-SE", {
-    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+  const rounded = Math.round(Number(amount || 0) * 100) / 100;
+  return `${rounded.toLocaleString("sv-SE", {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
     maximumFractionDigits: 2,
   })} kr`;
 }
@@ -136,6 +137,14 @@ export type BackendActivityPricingDecision = {
   requiresCheckout?: boolean | null;
   accessDecision?: "paid" | "membership_included" | "day_access_included" | "free_day_pass" | string | null;
   productKey?: string | null;
+  debug?: {
+    pricing_mode?: string | null;
+    member_discount_percent?: number | null;
+    online_price_sek?: number | null;
+    desk_price_sek?: number | null;
+    day_pass_included?: boolean | null;
+    membership_included?: boolean | null;
+  } | null;
 };
 
 export function mergeBackendActivityPricing(
@@ -146,13 +155,44 @@ export function mergeBackendActivityPricing(
 
   const backendBase = Number(decision.baseAmountSek ?? labels.basePrice);
   const backendFinal = Number(decision.effectivePriceSek ?? decision.finalAmountSek ?? labels.finalPrice);
-  const basePrice = Number.isFinite(backendBase) ? Math.round(backendBase) : labels.basePrice;
-  const finalPrice = Number.isFinite(backendFinal) ? Math.round(backendFinal) : labels.finalPrice;
+  const basePrice = Number.isFinite(backendBase) ? Math.round(backendBase * 100) / 100 : labels.basePrice;
+  const finalPrice = Number.isFinite(backendFinal) ? Math.round(backendFinal * 100) / 100 : labels.finalPrice;
+  const pricingMode = decision.debug?.pricing_mode || "standard";
+  const specialPricing = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
+  const onlinePrice = Number(decision.debug?.online_price_sek ?? basePrice);
+  const deskPrice = Number(decision.debug?.desk_price_sek ?? onlinePrice);
+  const memberDiscountPercent = Number(decision.debug?.member_discount_percent || 0);
+  const memberPrice = Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100);
   const includedLabel = decision.requiresCheckout === false
     ? decision.accessDecision === "day_access_included"
       ? "Ingår idag"
       : "Ingår"
     : null;
+
+  if (specialPricing) {
+    return {
+      ...labels,
+      basePrice,
+      finalPrice,
+      includedLabel,
+      hasDiscount: finalPrice > 0 && finalPrice < basePrice,
+      checkoutLabel: includedLabel || formatSek(finalPrice),
+      publicChips: pricingMode === "fixed_ticket"
+        ? [`Playpickla.com ${formatSek(onlinePrice)}`, `Drop-in ${formatSek(deskPrice)}`, `Alla ${formatSek(onlinePrice)}`]
+        : [`Playpickla.com ${formatSek(onlinePrice)}`, `Drop-in ${formatSek(deskPrice)}`, `Medlem ${formatSek(memberPrice)}`],
+      detailRows: pricingMode === "fixed_ticket"
+        ? [
+          { label: "Playpickla.com", value: formatSek(onlinePrice) },
+          { label: "Drop-in på plats", value: formatSek(deskPrice) },
+          { label: "Medlemspris", value: formatSek(onlinePrice) },
+        ]
+        : [
+          { label: "Playpickla.com", value: formatSek(onlinePrice) },
+          { label: "Drop-in på plats", value: formatSek(deskPrice) },
+          { label: "Medlemmar", value: formatSek(memberPrice) },
+        ],
+    };
+  }
 
   return {
     ...labels,
