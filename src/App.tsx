@@ -21,6 +21,7 @@ import PlayPage from "./pages/PlayPage";
 import EventsListPage from "./pages/EventsListPage";
 import OpenPlayPage from "./pages/OpenPlayPage";
 import TodayPage from "./pages/TodayPage";
+import SelfCheckinPage from "./pages/SelfCheckinPage";
 import ProgramSessionPage from "./pages/ProgramSessionPage";
 import EventPage from "./pages/EventPage";
 import EventPlanPublic from "./pages/EventPlanPublic";
@@ -109,6 +110,7 @@ function AppRoutes() {
             <Route path="/admin/event-products" element={<ProtectedRoute><AdminEventProductsPage /></ProtectedRoute>} />
             <Route path="/ops" element={<ProtectedRoute><OpsCenterPage /></ProtectedRoute>} />
             <Route path="/today" element={<TodayPage />} />
+            <Route path="/checkin/:venueSlug" element={<ProtectedRoute><SelfCheckinPage /></ProtectedRoute>} />
             <Route path="/activity" element={<Navigate to="/today" replace />} />
             <Route path="/my" element={<MyPage />} />
             <Route path="/stats" element={<ProtectedRoute><StatsPage /></ProtectedRoute>} />

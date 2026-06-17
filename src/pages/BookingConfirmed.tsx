@@ -9,6 +9,8 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
 const TIMEOUT_MS   = 30_000;
+const safeLocalPath = (path: string | null | undefined) =>
+  path && path.startsWith("/") && !path.startsWith("//") ? path : "";
 
 type BookingBySessionResponse = {
   pending?: boolean;
@@ -24,7 +26,9 @@ export default function BookingConfirmed() {
   const [searchParams] = useSearchParams();
   const session  = searchParams.get("session") ?? "";
   const type     = searchParams.get("type") ?? "";
-  const next     = searchParams.get("next") ?? "/my";
+  const storedCheckinReturn =
+    typeof window !== "undefined" ? safeLocalPath(sessionStorage.getItem("pickla_checkin_return")) : "";
+  const next     = safeLocalPath(searchParams.get("next")) || storedCheckinReturn || "/my";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user, loading: authLoading } = useAuth();
@@ -44,9 +48,14 @@ export default function BookingConfirmed() {
   // Standalone day passes are active immediately; paid activity tickets wait for the webhook below.
   useEffect(() => {
     if (!isInstantAccess) return;
-    const id = setTimeout(() => navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true }), 1800);
+    const id = setTimeout(() => {
+      if (storedCheckinReturn && next === storedCheckinReturn) {
+        sessionStorage.removeItem("pickla_checkin_return");
+      }
+      navigate(next, { replace: true });
+    }, 1800);
     return () => clearTimeout(id);
-  }, [isInstantAccess, navigate, next]);
+  }, [isInstantAccess, navigate, next, storedCheckinReturn]);
 
   // Poll until the webhook has created the booking (typically < 2 s)
   const { data } = useQuery<BookingBySessionResponse>({
@@ -69,14 +78,19 @@ export default function BookingConfirmed() {
       if (data.registration_id) params.set("registration", data.registration_id);
       if (venueSlug) params.set("v", venueSlug);
       const myPath = params.toString() ? `/my?${params.toString()}` : "/my";
-      navigate(user ? myPath : next.startsWith("/") && !next.startsWith("//") ? next : "/my", { replace: true });
+      if (storedCheckinReturn) {
+        sessionStorage.removeItem("pickla_checkin_return");
+        navigate(storedCheckinReturn, { replace: true });
+        return;
+      }
+      navigate(user ? myPath : next, { replace: true });
       return;
     }
     if (bookingRef && !authLoading) {
       const venueParam = venueSlug ? `&v=${encodeURIComponent(venueSlug)}` : "";
       navigate(user ? `/my?booking=${encodeURIComponent(bookingRef)}${venueParam}` : `/b/${encodeURIComponent(bookingRef)}`, { replace: true });
     }
-  }, [authLoading, data, isSessionTicket, navigate, next, user]);
+  }, [authLoading, data, isSessionTicket, navigate, next, storedCheckinReturn, user]);
 
   // Fallback: give up after TIMEOUT_MS and show a static message
   useEffect(() => {

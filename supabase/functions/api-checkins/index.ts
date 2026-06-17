@@ -8,6 +8,7 @@ const STOCKHOLM_ZONE = 'Europe/Stockholm';
 const entitlementPriority: Record<string, number> = {
   booking: 1,
   session_ticket: 2,
+  activity_registration: 2,
   membership: 3,
   membership_access: 3,
   day_access: 4,
@@ -80,6 +81,41 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
       starts_at: booking.start_time,
       ends_at: booking.end_time,
       priority: entitlementPriority.booking,
+    });
+  }
+
+  const { data: registrations } = await serviceClient
+    .from('session_registrations')
+    .select('id, activity_session_id, session_date, status, price_paid_sek, activity_sessions(name, session_type, start_time, end_time)')
+    .eq('user_id', targetUserId)
+    .eq('venue_id', venueId)
+    .eq('session_date', today)
+    .in('status', ['confirmed', 'checked_in'])
+    .order('created_at', { ascending: false });
+
+  const registration = (registrations || []).find((row: any) => {
+    const session = row.activity_sessions;
+    if (!session?.start_time || !session?.end_time) return true;
+    const start = DateTime.fromISO(`${today}T${String(session.start_time).slice(0, 5)}:00`, { zone: STOCKHOLM_ZONE });
+    const end = DateTime.fromISO(`${today}T${String(session.end_time).slice(0, 5)}:00`, { zone: STOCKHOLM_ZONE });
+    if (!start.isValid || !end.isValid) return true;
+    const now = DateTime.now().setZone(STOCKHOLM_ZONE);
+    return now >= start.minus({ minutes: 30 }) && now <= end;
+  });
+
+  if (registration) {
+    const session = (registration as any).activity_sessions;
+    entitlements.push({
+      type: 'session_ticket',
+      id: registration.id,
+      source_type: 'session_registration',
+      source_id: registration.id,
+      label: session?.name || 'Aktivitetsbiljett',
+      activity_session_id: registration.activity_session_id,
+      session_date: registration.session_date,
+      starts_at: session?.start_time || null,
+      ends_at: session?.end_time || null,
+      priority: entitlementPriority.session_ticket,
     });
   }
 
@@ -171,6 +207,77 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
   };
 }
 
+async function resolveVenueForSelfCheckin(serviceClient: any, params: { venueId?: string | null; venueSlug?: string | null }) {
+  if (params.venueId) {
+    const { data } = await serviceClient
+      .from('venues')
+      .select('id, name, slug')
+      .eq('id', params.venueId)
+      .maybeSingle();
+    return data || null;
+  }
+
+  if (params.venueSlug) {
+    const slug = String(params.venueSlug).trim();
+    const candidates = [slug, slug === 'solna' ? 'pickla-arena-sthlm' : slug];
+    const { data } = await serviceClient
+      .from('venues')
+      .select('id, name, slug')
+      .in('slug', candidates)
+      .limit(1)
+      .maybeSingle();
+    return data || null;
+  }
+
+  return null;
+}
+
+async function purchaseOptionsForVenue(serviceClient: any, venue: any) {
+  const { today } = stockholmNow();
+  const options: any[] = [
+    {
+      type: 'day_pass',
+      label: 'Köp dagsmedlemskap',
+      href: `/openplay?v=${encodeURIComponent(venue.slug || '')}`,
+    },
+    {
+      type: 'membership',
+      label: 'Bli medlem',
+      href: `/membership?v=${encodeURIComponent(venue.slug || '')}`,
+    },
+  ];
+
+  const { data: sessions } = await serviceClient
+    .from('activity_sessions')
+    .select('id, name, session_date, recurrence_days, start_time, end_time, price_sek')
+    .eq('venue_id', venue.id)
+    .eq('is_active', true)
+    .eq('publish_status', 'published')
+    .order('start_time', { ascending: true })
+    .limit(20);
+
+  const now = DateTime.now().setZone(STOCKHOLM_ZONE);
+  const weekday = now.weekday % 7;
+  const session = (sessions || []).find((row: any) => {
+    if (row.session_date && row.session_date !== today) return false;
+    if (!row.session_date && (!Array.isArray(row.recurrence_days) || !row.recurrence_days.includes(weekday))) return false;
+    if (!row.end_time) return true;
+    const [hour = 0, minute = 0] = String(row.end_time).slice(0, 5).split(':').map(Number);
+    return now.set({ hour, minute, second: 0, millisecond: 0 }) > now;
+  });
+
+  if (session) {
+    options.unshift({
+      type: 'activity_ticket',
+      label: `Köp biljett: ${session.name}`,
+      href: `/program/${session.id}?date=${encodeURIComponent(today)}&v=${encodeURIComponent(venue.slug || '')}`,
+      price_sek: session.price_sek || 0,
+    });
+  }
+
+  return options;
+}
+
 async function findActiveCheckin(serviceClient: any, params: {
   venueId: string;
   today: string;
@@ -214,6 +321,111 @@ Deno.serve(async (req) => {
   const path = url.pathname.split('/').pop() || '';
 
   try {
+    // POST /api-checkins/self — customer-led venue QR check-in.
+    if (req.method === 'POST' && path === 'self') {
+      const { client, userId, error } = await getAuthenticatedClient(req);
+      if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+      const body = await req.json();
+      const serviceClient = getServiceClient();
+      const venue = await resolveVenueForSelfCheckin(serviceClient, {
+        venueId: body.venue_id || body.venueId || null,
+        venueSlug: body.venue_slug || body.venueSlug || null,
+      });
+      if (!venue?.id) return errorResponse('Venue not found', 404);
+
+      const access = await resolveUserAccess(serviceClient, venue.id, userId);
+      const profile = access.profile;
+
+      if (access.already_checked_in && access.existingCheckin) {
+        return jsonResponse({
+          checked_in: true,
+          already_checked_in: true,
+          checkin: access.existingCheckin,
+          access,
+          venue,
+        });
+      }
+
+      if (!access.allowed || !access.best) {
+        return jsonResponse({
+          checked_in: false,
+          allowed: false,
+          venue,
+          access,
+          purchase_options: await purchaseOptionsForVenue(serviceClient, venue),
+        }, 200);
+      }
+
+      const best = access.best;
+      const playerName = profileName(profile);
+      const existingCheckin = await findActiveCheckin(serviceClient, {
+        venueId: venue.id,
+        today: access.today,
+        entryType: best.type,
+        entitlementId: best.id,
+        targetUserId: userId,
+      });
+
+      if (existingCheckin) {
+        return jsonResponse({
+          checked_in: true,
+          already_checked_in: true,
+          checkin: existingCheckin,
+          access,
+          venue,
+        });
+      }
+
+      const { data, error: insertErr } = await serviceClient
+        .from('venue_checkins')
+        .insert({
+          venue_id: venue.id,
+          user_id: userId,
+          player_name: playerName,
+          entry_type: best.type,
+          entitlement_id: best.id || null,
+          checked_in_by: userId,
+          session_date: access.today,
+        })
+        .select()
+        .single();
+
+      if (insertErr) {
+        if (insertErr.code === '23505') {
+          const retry = await findActiveCheckin(serviceClient, {
+            venueId: venue.id,
+            today: access.today,
+            entryType: best.type,
+            entitlementId: best.id,
+            targetUserId: userId,
+          });
+          if (retry) {
+            return jsonResponse({
+              checked_in: true,
+              already_checked_in: true,
+              checkin: retry,
+              access,
+              venue,
+            });
+          }
+        }
+        return errorResponse(insertErr.message);
+      }
+
+      return jsonResponse({
+        checked_in: true,
+        already_checked_in: false,
+        checkin: data,
+        access: {
+          ...access,
+          existingCheckin: data,
+          already_checked_in: true,
+        },
+        venue,
+      }, 201);
+    }
+
     // POST /api-checkins/code — self-service check-in via booking access code (no auth required)
     if (req.method === 'POST' && path === 'code') {
       const body = await req.json();

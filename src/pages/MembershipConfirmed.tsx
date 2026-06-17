@@ -7,13 +7,16 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
+const safeLocalPath = (path: string | null | undefined) =>
+  path && path.startsWith("/") && !path.startsWith("//") ? path : "";
 
 export default function MembershipConfirmed() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
-  const rawReturnTo = searchParams.get("returnTo");
-  const returnTo = rawReturnTo && rawReturnTo.startsWith("/") && !rawReturnTo.startsWith("//") ? rawReturnTo : "";
+  const storedCheckinReturn =
+    typeof window !== "undefined" ? safeLocalPath(sessionStorage.getItem("pickla_checkin_return")) : "";
+  const returnTo = safeLocalPath(searchParams.get("returnTo")) || storedCheckinReturn;
   const nextPath = returnTo || "/my";
 
   useEffect(() => {
@@ -56,11 +59,16 @@ export default function MembershipConfirmed() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.4 }}
-        onClick={() => navigate(nextPath)}
+        onClick={() => {
+          if (storedCheckinReturn && nextPath === storedCheckinReturn) {
+            sessionStorage.removeItem("pickla_checkin_return");
+          }
+          navigate(nextPath);
+        }}
         className="mt-2 px-6 py-2.5 rounded-xl text-[13px] font-bold"
         style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_MONO }}
       >
-        {returnTo ? "tillbaka till aktiviteten →" : "min sida →"}
+        {returnTo ? "fortsätt checka in →" : "min sida →"}
       </motion.button>
     </div>
   );

@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
 import { apiGet } from "@/lib/api";
+import { supabase } from "@/integrations/supabase/client";
 
 // Define types for court status and display
 type CourtStatus = "free" | "active" | "soon" | "vip";
@@ -81,6 +82,7 @@ const TodayScreen = () => {
   const queryClient = useQueryClient();
   const [selectedCourt, setSelectedCourt] = useState<CourtDisplay | null>(null);
   const [showScanner, setShowScanner] = useState(false);
+  const [newArrivalIds, setNewArrivalIds] = useState<Set<string>>(new Set());
 
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
   const venueId = staffVenue?.venue_id;
@@ -147,6 +149,35 @@ const TodayScreen = () => {
   const occupancy = totalCourts > 0 ? Math.round((activeCourts / totalCourts) * 100) : 0;
   const venueStatus = getVenueStatus(occupancy);
   const recentCheckins = useMemo(() => checkins.slice(0, 6), [checkins]);
+
+  useEffect(() => {
+    if (!venueId) return;
+    const channel = supabase
+      .channel(`desk-checkins-${venueId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "venue_checkins", filter: `venue_id=eq.${venueId}` },
+        (payload) => {
+          const id = String((payload.new as any)?.id || "");
+          if (id) {
+            setNewArrivalIds((current) => new Set([...current, id]));
+            window.setTimeout(() => {
+              setNewArrivalIds((current) => {
+                const next = new Set(current);
+                next.delete(id);
+                return next;
+              });
+            }, 12_000);
+          }
+          queryClient.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [queryClient, venueId]);
   const courtBookingCount = useMemo(
     () => bookings?.filter((booking) => booking.kind !== "activity_registration").length || 0,
     [bookings]
@@ -274,11 +305,19 @@ const TodayScreen = () => {
             {recentCheckins.map((checkin) => {
               const label = checkinLabels[checkin.entry_type] || checkin.entry_type;
               const name = checkin.player_name || (checkin.entry_type === "booking_code" ? "Bokningskod" : "Gäst");
+              const isNewArrival = newArrivalIds.has(checkin.id);
               const checkedInAt = DateTime.fromISO(checkin.checked_in_at, { zone: "utc" })
                 .setZone("Europe/Stockholm")
                 .toFormat("HH:mm");
               return (
-                <div key={checkin.id} className="flex items-center gap-3 rounded-xl px-2 py-2" style={{ background: "hsl(var(--surface-1))" }}>
+                <div
+                  key={checkin.id}
+                  className="flex items-center gap-3 rounded-xl px-2 py-2 transition"
+                  style={{
+                    background: isNewArrival ? "hsl(var(--court-free) / 0.16)" : "hsl(var(--surface-1))",
+                    border: isNewArrival ? "1px solid hsl(var(--court-free) / 0.45)" : "1px solid transparent",
+                  }}
+                >
                   <div className="w-8 h-8 rounded-lg bg-court-free/15 flex items-center justify-center">
                     <Check className="w-4 h-4 text-court-free" />
                   </div>
@@ -286,7 +325,9 @@ const TodayScreen = () => {
                     <p className="text-sm font-semibold truncate">{name}</p>
                     <p className="text-[10px] text-muted-foreground">{label} · {checkedInAt}</p>
                   </div>
-                  <span className="status-chip bg-court-free/15 text-court-free text-[9px] font-bold">Inne</span>
+                  <span className="status-chip bg-court-free/15 text-court-free text-[9px] font-bold">
+                    {isNewArrival ? "Ny" : "Inne"}
+                  </span>
                 </div>
               );
             })}
