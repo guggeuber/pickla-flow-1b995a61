@@ -1,7 +1,7 @@
-import { type InputHTMLAttributes, useMemo, useState } from "react";
+import { type InputHTMLAttributes, type TextareaHTMLAttributes, useEffect, useMemo, useState } from "react";
 import { DateTime } from "luxon";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Ban, CalendarDays, CalendarPlus, ExternalLink, Loader2, Plus, ShieldAlert } from "lucide-react";
+import { Ban, CalendarDays, Clock, ExternalLink, Loader2, Plus, ShieldAlert, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { apiPost } from "@/lib/api";
 import { useAdminCalendar, type AdminCalendarItem } from "@/hooks/useAdmin";
@@ -64,17 +64,43 @@ function ActionInput(props: InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
+function ActionTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={`min-h-20 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs outline-none focus:border-primary/60 ${props.className || ""}`}
+    />
+  );
+}
+
+function productKeyForSessionType(sessionType: string) {
+  if (sessionType === "group_training") return "group_training";
+  if (sessionType === "event") return "event_fee";
+  return "open_play_slot";
+}
+
 export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   const qc = useQueryClient();
   const [view, setView] = useState<"day" | "week">("day");
   const [selectedDate, setSelectedDate] = useState(todayStockholm());
-  const [eventTitle, setEventTitle] = useState("Fredagsklubben Oasen Wednesday Midsummer Edition");
-  const [eventStart, setEventStart] = useState("19:00");
-  const [eventEnd, setEventEnd] = useState("21:00");
-  const [eventPublic, setEventPublic] = useState(true);
+  const [activityTitle, setActivityTitle] = useState("Fredagsklubben Oasen Wednesday Midsummer Edition");
+  const [activityDate, setActivityDate] = useState(todayStockholm());
+  const [activityStart, setActivityStart] = useState("17:00");
+  const [activityEnd, setActivityEnd] = useState("21:00");
+  const [activityPrice, setActivityPrice] = useState("99");
+  const [activityCapacity, setActivityCapacity] = useState("32");
+  const [activityType, setActivityType] = useState("open_play");
+  const [activityNote, setActivityNote] = useState("Midsommarvärme, pickleball, musik och community.");
+  const [activityVisibility, setActivityVisibility] = useState<"public" | "private">("public");
+  const [includedInDayPass, setIncludedInDayPass] = useState(true);
+  const [includedInUnlimited, setIncludedInUnlimited] = useState(true);
   const [driftTitle, setDriftTitle] = useState("Driftavvikelse");
   const [driftStart, setDriftStart] = useState("18:00");
   const [driftEnd, setDriftEnd] = useState("21:00");
+
+  useEffect(() => {
+    setActivityDate(selectedDate);
+  }, [selectedDate]);
 
   const range = useMemo(() => view === "week"
     ? weekRange(selectedDate)
@@ -116,23 +142,35 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     },
   });
 
-  const createEvent = useMutation({
-    mutationFn: () => apiPost("api-events", "create", {
-      name: eventTitle.trim(),
-      eventType: "calendar_event",
-      format: "one_off",
+  const createActivity = useMutation({
+    mutationFn: () => apiPost("api-admin", "activity-sessions", {
       venueId,
-      startDate: selectedDate,
-      startTime: eventStart,
-      endTime: eventEnd,
-      numberOfCourts: 1,
-      planningStatus: eventPublic ? "published" : "booked",
-      visibility: eventPublic ? "public" : "internal",
-      isPublic: eventPublic,
-      internalNotes: "Created from Admin Calendar",
+      name: activityTitle.trim(),
+      session_type: activityType,
+      product_key: productKeyForSessionType(activityType),
+      session_date: activityDate,
+      recurrence_days: null,
+      start_time: activityStart,
+      end_time: activityEnd,
+      price_sek: Math.max(0, Math.round(Number(activityPrice || 0))),
+      capacity: activityCapacity ? Math.max(0, Math.round(Number(activityCapacity))) : null,
+      is_active: true,
+      publish_status: activityVisibility === "public" ? "published" : "hidden",
+      access_policy: {
+        sold_as: "activity_ticket",
+        allows_day_access: includedInDayPass,
+        includes_day_access: false,
+        member_benefit_key: includedInUnlimited ? "open_play_unlimited" : null,
+      },
+      metadata: {
+        public_note: activityNote.trim() || null,
+        created_from: "admin_calendar",
+        visibility: activityVisibility,
+      },
     }),
     onSuccess: () => {
-      toast.success("Event skapat");
+      toast.success("One-off aktivitet publicerad");
+      setSelectedDate(activityDate);
       invalidateCalendar();
     },
     onError: (error: Error) => toast.error(error.message),
@@ -203,33 +241,85 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="rounded-2xl border border-border bg-card/70 p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <CalendarPlus className="h-4 w-4 text-primary" />
-            <p className="text-sm font-bold">Skapa one-off event</p>
-          </div>
-          <div className="space-y-2">
-            <ActionInput value={eventTitle} onChange={(e) => setEventTitle(e.target.value)} placeholder="Eventnamn" />
-            <div className="grid grid-cols-2 gap-2">
-              <ActionInput type="time" value={eventStart} onChange={(e) => setEventStart(e.target.value)} />
-              <ActionInput type="time" value={eventEnd} onChange={(e) => setEventEnd(e.target.value)} />
+      <div className="rounded-2xl border border-border bg-card/70 p-4">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Ticket className="h-4 w-4 text-primary" />
+              <p className="text-sm font-bold">Create paid one-off</p>
             </div>
-            <label className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
-              Publicera event
-              <input type="checkbox" checked={eventPublic} onChange={(e) => setEventPublic(e.target.checked)} />
-            </label>
-            <button
-              onClick={() => createEvent.mutate()}
-              disabled={!eventTitle.trim() || createEvent.isPending}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 text-sm font-bold text-primary-foreground disabled:opacity-50"
-            >
-              {createEvent.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              Skapa event {labelDate(selectedDate, true)}
-            </button>
+            <p className="mt-1 text-xs text-muted-foreground">Ett publikt aktivitetspass för valt datum. Upprepas inte nästa vecka.</p>
           </div>
+          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary">One-off</span>
         </div>
 
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]">
+          <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <Clock className="h-3.5 w-3.5 text-primary" />
+              <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">1. Pick time</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <ActionInput type="date" value={activityDate} onChange={(e) => setActivityDate(e.target.value)} />
+              <ActionInput type="time" value={activityStart} onChange={(e) => setActivityStart(e.target.value)} />
+              <ActionInput type="time" value={activityEnd} onChange={(e) => setActivityEnd(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
+            <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">2. Add title</p>
+            <ActionInput value={activityTitle} onChange={(e) => setActivityTitle(e.target.value)} placeholder="Titel" />
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <select value={activityType} onChange={(e) => setActivityType(e.target.value)} className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs outline-none">
+                <option value="club_night">Klubbkväll</option>
+                <option value="open_play">Open Play</option>
+                <option value="group_training">Gruppträning</option>
+                <option value="event">Event</option>
+              </select>
+              <select value={activityVisibility} onChange={(e) => setActivityVisibility(e.target.value as "public" | "private")} className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs outline-none">
+                <option value="public">Public</option>
+                <option value="private">Private</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
+            <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">3. Price/capacity</p>
+            <div className="grid grid-cols-2 gap-2">
+              <ActionInput type="number" value={activityPrice} onChange={(e) => setActivityPrice(e.target.value)} placeholder="Pris" />
+              <ActionInput type="number" value={activityCapacity} onChange={(e) => setActivityCapacity(e.target.value)} placeholder="Max" />
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="flex items-center justify-between rounded-xl bg-background/50 px-2.5 py-2 text-[11px] font-semibold text-muted-foreground">
+                Day pass
+                <input type="checkbox" checked={includedInDayPass} onChange={(e) => setIncludedInDayPass(e.target.checked)} />
+              </label>
+              <label className="flex items-center justify-between rounded-xl bg-background/50 px-2.5 py-2 text-[11px] font-semibold text-muted-foreground">
+                Membership
+                <input type="checkbox" checked={includedInUnlimited} onChange={(e) => setIncludedInUnlimited(e.target.checked)} />
+              </label>
+            </div>
+          </div>
+
+          <button
+            onClick={() => createActivity.mutate()}
+            disabled={!activityTitle.trim() || !activityDate || !activityStart || !activityEnd || !activityPrice || !activityCapacity || createActivity.isPending}
+            className="flex min-h-28 items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground disabled:opacity-50"
+          >
+            {createActivity.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            4. Publish
+          </button>
+        </div>
+
+        <ActionTextarea
+          value={activityNote}
+          onChange={(e) => setActivityNote(e.target.value)}
+          placeholder="Public note"
+          className="mt-3 w-full"
+        />
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-1">
         <div className="rounded-2xl border border-border bg-card/70 p-4">
           <div className="mb-3 flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-primary" />
