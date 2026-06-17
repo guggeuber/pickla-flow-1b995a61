@@ -583,7 +583,7 @@ Deno.serve(async (req) => {
       const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
       const { data: activitySession } = await adminCheckout
         .from('activity_sessions')
-        .select('price_sek, venue_id, name, session_type, access_policy')
+        .select('price_sek, venue_id, name, session_type, access_policy, metadata')
         .eq('id', activitySessionId)
         .maybeSingle();
 
@@ -591,9 +591,15 @@ Deno.serve(async (req) => {
         // A scheduled session is the concrete thing being sold, so its price
         // must override the reusable product baseline (e.g. Fredagsklubben
         // can share the day_access product but still cost 99 kr).
-        baseAmountSek = Number(activitySession.price_sek);
+        const sessionMetadata = activitySession.metadata && typeof activitySession.metadata === 'object'
+          ? activitySession.metadata
+          : {};
+        baseAmountSek = Number(sessionMetadata.online_price_sek ?? activitySession.price_sek);
         finalAmountSek = baseAmountSek;
         meta.base_amount_sek = String(baseAmountSek);
+        meta.online_price_sek = String(sessionMetadata.online_price_sek ?? baseAmountSek);
+        meta.desk_price_sek = String(sessionMetadata.desk_price_sek ?? baseAmountSek);
+        meta.pricing_channel_mode = String(sessionMetadata.pricing_channel_mode || '');
         meta.activity_session_id = activitySessionId;
         meta.session_name = meta.session_name || activitySession.name;
         meta.session_type = activitySession.session_type || 'open_play';
@@ -647,6 +653,9 @@ Deno.serve(async (req) => {
       meta.membership_id = activityPricingDecision.membershipId || '';
       meta.pricing_reason = activityPricingDecision.pricingReason || '';
       meta.pricing_mode = String(activityPricingDecision.debug?.pricing_mode || '');
+      meta.online_price_sek = String(activityPricingDecision.debug?.online_price_sek || '');
+      meta.desk_price_sek = String(activityPricingDecision.debug?.desk_price_sek || '');
+      meta.pricing_channel_mode = String(activityPricingDecision.debug?.pricing_channel_mode || '');
       meta.access_entitlement_id = activityPricingDecision.entitlementType === 'day_access'
         ? activityPricingDecision.sourceId || ''
         : '';
@@ -940,6 +949,9 @@ Deno.serve(async (req) => {
       billed_amount_sek: String(billedAmountSek       || ''),
       pricing_mode:     String(meta.pricing_mode      || ''),
       pricing_reason:   String(meta.pricing_reason    || ''),
+      online_price_sek: String(meta.online_price_sek  || ''),
+      desk_price_sek:   String(meta.desk_price_sek    || ''),
+      pricing_channel_mode: String(meta.pricing_channel_mode || ''),
       product_key:      String(meta.product_key       || ''),
       product_kind:     String(meta.product_kind      || ''),
       membership_id:    String(meta.membership_id     || ''),

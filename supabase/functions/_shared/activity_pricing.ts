@@ -116,9 +116,12 @@ export async function resolveActivityPricingDecision({
   const fallbackBaseAmountSek = productKey === 'day_access'
     ? DEFAULT_DAY_ACCESS_PRICE_SEK
     : Number(requestedAmountSek || 0);
+  const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
+  const onlinePriceSek = Number(sessionMetadata.online_price_sek ?? session.price_sek ?? 0);
+  const deskPriceSek = Number(sessionMetadata.desk_price_sek ?? onlinePriceSek);
   const baseAmountSek = roundSek(
-    purchaseKind !== 'day_pass' && session.price_sek != null
-      ? Number(session.price_sek)
+    purchaseKind !== 'day_pass' && onlinePriceSek > 0
+      ? onlinePriceSek
       : productBaseAmountSek > 0
       ? productBaseAmountSek
       : fallbackBaseAmountSek,
@@ -131,7 +134,6 @@ export async function resolveActivityPricingDecision({
   let membershipTierName: string | null = null;
   let sourceId: string | null = null;
   let pricingReason = 'regular_price';
-  const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
   const rawPricingMode = String(sessionMetadata.pricing_mode || 'standard');
   const pricingMode = rawPricingMode === 'fixed_ticket' || rawPricingMode === 'member_discount'
     ? rawPricingMode
@@ -151,6 +153,9 @@ export async function resolveActivityPricingDecision({
     purchase_kind: purchaseKind,
     product_base_amount_sek: product?.base_price_sek ?? null,
     base_amount_sek: baseAmountSek,
+    online_price_sek: onlinePriceSek || null,
+    desk_price_sek: deskPriceSek || null,
+    pricing_channel_mode: sessionMetadata.pricing_channel_mode || null,
     pricing_mode: pricingMode,
     member_discount_percent: memberDiscountPercent,
     day_pass_included: dayPassIncluded,

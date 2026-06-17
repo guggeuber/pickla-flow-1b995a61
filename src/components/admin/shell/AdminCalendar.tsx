@@ -48,6 +48,11 @@ interface MembershipEntitlement {
 }
 
 type SpecialPassPricingMode = "standard" | "fixed_ticket" | "member_discount";
+type ActivitySessionMetadata = {
+  online_price_sek?: number | null;
+  desk_price_sek?: number | null;
+  pricing_channel_mode?: string | null;
+};
 
 /* ───────── helpers ───────── */
 
@@ -100,6 +105,14 @@ function tierEffectivePrice(rule: TierPricing | undefined, standardPrice: number
 
 function clampPercent(value: string | number) {
   return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
+}
+
+function parseSek(value: string | number) {
+  return Math.max(0, Math.round(Number(value || 0)));
+}
+
+function deskPriceForOnline(value: string | number) {
+  return parseSek(value) + 20;
 }
 
 /* Tone per kind. Used for timeline strip + chip color. */
@@ -387,6 +400,8 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   const [activityStart, setActivityStart] = useState("17:00");
   const [activityEnd, setActivityEnd] = useState("21:00");
   const [activityPrice, setActivityPrice] = useState("99");
+  const [activityDeskPrice, setActivityDeskPrice] = useState("119");
+  const [deskPriceTouched, setDeskPriceTouched] = useState(false);
   const [activityCapacity, setActivityCapacity] = useState("32");
   const [activityType, setActivityType] = useState("open_play");
   const [pricingMode, setPricingMode] = useState<SpecialPassPricingMode>("standard");
@@ -404,6 +419,11 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   useEffect(() => {
     setActivityDate(selectedDate);
   }, [selectedDate]);
+
+  const handleOnlinePriceChange = (value: string) => {
+    setActivityPrice(value);
+    if (!deskPriceTouched) setActivityDeskPrice(String(deskPriceForOnline(value)));
+  };
 
   // Fetch 7-day range so DayStrip dots are accurate
   const range = useMemo(() => weekRange(selectedDate), [selectedDate]);
@@ -450,8 +470,10 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   }, [items]);
 
   const pricingPreview = useMemo(() => {
-    const standardPrice = Math.max(0, Math.round(Number(activityPrice || 0)));
-    const capacity = Math.max(0, Math.round(Number(activityCapacity || 0)));
+    const standardPrice = parseSek(activityPrice);
+    const deskPrice = parseSek(activityDeskPrice || deskPriceForOnline(activityPrice));
+    const deskDifference = deskPrice - standardPrice;
+    const capacity = parseSek(activityCapacity);
     const productKey = productKeyForSessionType(activityType);
     const activeTiers = membershipTiers.filter((tier) => tier.is_active);
     const includedMemberships: string[] = [];
@@ -466,6 +488,8 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
       return {
         modeLabel: "Fixed ticket price",
         standardPrice,
+        deskPrice,
+        deskDifference,
         capacity,
         productKey,
         activeTierCount: activeTiers.length,
@@ -493,6 +517,8 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
       return {
         modeLabel: "Member discount",
         standardPrice,
+        deskPrice,
+        deskDifference,
         capacity,
         productKey,
         activeTierCount: activeTiers.length,
@@ -547,6 +573,8 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     return {
       modeLabel: "Standard pricing",
       standardPrice,
+      deskPrice,
+      deskDifference,
       capacity,
       productKey,
       activeTierCount: activeTiers.length,
@@ -563,6 +591,7 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
     };
   }, [
     activityCapacity,
+    activityDeskPrice,
     activityPrice,
     activityType,
     allTierEntitlements,
@@ -611,8 +640,8 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
         recurrence_days: null,
         start_time: activityStart,
         end_time: activityEnd,
-        price_sek: Math.max(0, Math.round(Number(activityPrice || 0))),
-        capacity: activityCapacity ? Math.max(0, Math.round(Number(activityCapacity))) : null,
+        price_sek: parseSek(activityPrice),
+        capacity: activityCapacity ? parseSek(activityCapacity) : null,
         is_active: true,
         publish_status: activityVisibility === "public" ? "published" : "hidden",
         access_policy: {
@@ -629,6 +658,9 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
           member_discount_percent: pricingMode === "member_discount" ? clampPercent(memberDiscountPercent) : null,
           day_pass_included: pricingMode === "standard" ? includedInDayPass : false,
           membership_included: pricingMode === "standard" ? includedInUnlimited : false,
+          online_price_sek: parseSek(activityPrice),
+          desk_price_sek: parseSek(activityDeskPrice || deskPriceForOnline(activityPrice)),
+          pricing_channel_mode: "online_discount",
         },
       }),
     onSuccess: () => {
@@ -949,9 +981,24 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
                 type="number"
                 inputMode="numeric"
                 value={activityPrice}
-                onChange={(e) => setActivityPrice(e.target.value)}
-                placeholder="Pris (kr)"
+                onChange={(e) => handleOnlinePriceChange(e.target.value)}
+                placeholder="Onlinepris"
               />
+              <PadInput
+                type="number"
+                inputMode="numeric"
+                value={activityDeskPrice}
+                onChange={(e) => {
+                  setDeskPriceTouched(true);
+                  setActivityDeskPrice(e.target.value);
+                }}
+                placeholder="Deskpris"
+              />
+            </div>
+            <p className="mt-1.5 text-[11px] font-bold" style={{ color: ax("lime") }}>
+              Billigare online – styr gäster till playpickla.com
+            </p>
+            <div className="mt-2">
               <PadInput
                 type="number"
                 inputMode="numeric"
@@ -1091,6 +1138,8 @@ function ItemActions({
   const time = item.end_time ? `${item.time}–${item.end_time}` : item.time;
   const cap = item.capacity ?? null;
   const reg = item.registrations_count ?? null;
+  const onlinePrice = Number(item.online_price_sek ?? item.price_sek ?? 0);
+  const deskPrice = Number(item.desk_price_sek ?? item.price_sek ?? 0);
   return (
     <div className="space-y-4 pt-2">
       <div
@@ -1112,6 +1161,17 @@ function ItemActions({
           </span>
         </div>
         <div className="ml-3 mt-3 grid grid-cols-2 gap-3 text-[11px]" style={{ color: ax("muted") }}>
+          {item.kind === "activity" && (onlinePrice > 0 || deskPrice > 0) && (
+            <div>
+              <p className="font-mono uppercase tracking-wider">Pris</p>
+              <p className="mt-0.5 font-display text-lg font-black" style={{ color: "white" }}>
+                Online {formatSek(onlinePrice)}
+              </p>
+              <p className="text-[10px] font-bold" style={{ color: ax("lime") }}>
+                Desk {formatSek(deskPrice)}
+              </p>
+            </div>
+          )}
           {reg != null && (
             <div>
               <p className="font-mono uppercase tracking-wider">Anmälda</p>
@@ -1192,6 +1252,8 @@ function PricingPreview({
   preview: {
     modeLabel: string;
     standardPrice: number;
+    deskPrice: number;
+    deskDifference: number;
     capacity: number;
     productKey: string;
     activeTierCount: number;
@@ -1229,10 +1291,14 @@ function PricingPreview({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <PreviewMetric label="Standardkund" value={formatSek(preview.standardPrice)} />
-        <PreviewMetric label="Aktiva tiers" value={String(preview.activeTierCount)} />
+        <PreviewMetric label="Online" value={formatSek(preview.standardPrice)} />
         <PreviewMetric
-          label="Förväntad maxintäkt"
+          label="Desk"
+          value={formatSek(preview.deskPrice)}
+          helper={`${preview.deskDifference >= 0 ? "+" : ""}${formatSek(preview.deskDifference)} vid desk`}
+        />
+        <PreviewMetric
+          label="Online maxintäkt"
           value={formatSek(preview.maxRevenue)}
           helper={`${preview.capacity} x ${formatSek(preview.standardPrice)}`}
         />
@@ -1242,8 +1308,19 @@ function PricingPreview({
           helper={`${preview.capacity} x ${formatSek(preview.lowestPaidPrice)}`}
         />
       </div>
+      <p
+        className="rounded-xl px-3 py-2 text-[11px] font-bold"
+        style={{
+          background: ax("lime", 0.08),
+          border: `1px solid ${ax("lime", 0.24)}`,
+          color: ax("lime"),
+        }}
+      >
+        Billigare online – styr gäster till playpickla.com
+      </p>
 
       <div className="space-y-2">
+        <PreviewLine label="Aktiva tiers" value={`${preview.activeTierCount} tiers kontrolleras`} />
         <PreviewLine
           label="Ingår för"
           value={preview.includedMemberships.length > 0 ? preview.includedMemberships.join(", ") : "Inga tiers får fri access via nuvarande regler."}

@@ -171,6 +171,9 @@ export type AdminCalendarItem = {
   registrations_count?: number;
   override_status?: string | null;
   price_sek?: number;
+  online_price_sek?: number;
+  desk_price_sek?: number;
+  pricing_channel_mode?: string | null;
   capacity?: number | null;
   planning_status?: string | null;
   visibility?: string | null;
