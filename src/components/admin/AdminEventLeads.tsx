@@ -240,6 +240,49 @@ function agentRiskClass(risk?: string | null) {
   return "border-court-free/35 bg-court-free/10 text-court-free";
 }
 
+function leadStateBanner({
+  hasHighRiskConflict,
+  agent,
+  agentApproved,
+  offerDraftReady,
+  canConfirmBooking,
+}: {
+  hasHighRiskConflict: boolean;
+  agent: any;
+  agentApproved: boolean;
+  offerDraftReady: boolean;
+  canConfirmBooking: boolean;
+}) {
+  if (hasHighRiskConflict) {
+    return {
+      text: "Konflikt: välj ny tid innan offert",
+      className: "border-destructive/35 bg-destructive/10 text-destructive",
+    };
+  }
+  if (!agent || !agentApproved) {
+    return {
+      text: "Agentförslag väntar på godkännande",
+      className: "border-primary/30 bg-primary/10 text-primary",
+    };
+  }
+  if (canConfirmBooking) {
+    return {
+      text: "Redo att bekräfta bokning",
+      className: "border-court-free/35 bg-court-free/10 text-court-free",
+    };
+  }
+  if (offerDraftReady) {
+    return {
+      text: "Offertutkast klart",
+      className: "border-court-free/35 bg-court-free/10 text-court-free",
+    };
+  }
+  return {
+    text: "Agentförslag godkänt",
+    className: "border-court-free/35 bg-court-free/10 text-court-free",
+  };
+}
+
 function cleanReplyPreview(value?: string | null) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -497,6 +540,21 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     setBookingPreview({ ...refreshed, schedule_edit: eventScheduleFromPreview(refreshed) });
   };
 
+  const chooseAlternativeSlot = async (lead: any, slot: any) => {
+    if (!lead?.id) return;
+    if (!slot?.event_date || !slot?.start_time || !slot?.end_time) {
+      toast.info("Ingen föreslagen alternativ tid hittades. Kör Re-analyze eller justera leadet.");
+      return;
+    }
+    await updateSchedule.mutateAsync({
+      leadId: lead.id,
+      eventDate: slot.event_date,
+      startTime: slot.start_time,
+      endTime: slot.end_time,
+    });
+    agentRecommendation.mutate({ leadId: lead.id, action: "reanalyze" });
+  };
+
   const formatDateTime = (value?: string | null) => {
     if (!value) return "";
     return new Date(value).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "short" });
@@ -621,6 +679,19 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
     const eventUrl = lead.event_id ? `/hub/admin?event=${lead.event_id}` : null;
     const offerIsSent = offer?.status === "sent" || offer?.sent_at;
     const offerIsConfirmed = offer?.status === "booking_confirmed";
+    const offerAccepted = ["accepted", "customer_accepted"].includes(String(offer?.status || "")) || lead.status === "ready_to_book";
+    const hasHighRiskConflict = !!agent && (agentMeta.risk === "high" || agentMeta.capacity_ok === false);
+    const firstAlternativeSlot = Array.isArray(agentMeta.alternative_times) ? agentMeta.alternative_times[0] : null;
+    const canConfirmBooking = Boolean(
+      offer?.id
+      && agentApproved
+      && !hasHighRiskConflict
+      && !offerIsConfirmed
+      && (offerIsSent || offerAccepted)
+    );
+    const canSendOffer = Boolean(offer?.id && agentApproved && !hasHighRiskConflict && !offerIsSent && !offerIsConfirmed);
+    const canShowOfferDraftControls = Boolean(offer?.id && agentApproved && offerDraftReady && !hasHighRiskConflict);
+    const banner = leadStateBanner({ hasHighRiskConflict, agent, agentApproved, offerDraftReady, canConfirmBooking });
     return (
       <div key={lead.id} className="glass-card rounded-2xl p-4 space-y-3">
         <div className="flex items-start gap-3">
@@ -652,6 +723,10 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
         {lead.message && (
           <p className="rounded-xl bg-muted/50 p-3 text-xs text-muted-foreground">{lead.message}</p>
         )}
+
+        <div className={`rounded-xl border px-3 py-2 text-xs font-black ${banner.className}`}>
+          {banner.text}
+        </div>
 
         <div className={`rounded-xl border p-3 ${agentRiskClass(agentMeta.risk)}`}>
           <div className="flex items-start justify-between gap-3">
@@ -740,35 +815,71 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                <button
-                  type="button"
-                  onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "approve", recommendationActivityId: agent.id })}
-                  disabled={agentRecommendation.isPending}
-                  className="rounded-xl bg-court-free/15 px-3 py-2.5 text-xs font-bold text-court-free disabled:opacity-50"
-                >
-                  <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reject", recommendationActivityId: agent.id })}
-                  disabled={agentRecommendation.isPending}
-                  className="rounded-xl bg-destructive/15 px-3 py-2.5 text-xs font-bold text-destructive disabled:opacity-50"
-                >
-                  <XCircle className="mr-1 inline h-3.5 w-3.5" />
-                  Reject
-                </button>
-                <button
-                  type="button"
-                  onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reanalyze" })}
-                  disabled={agentRecommendation.isPending}
-                  className="rounded-xl bg-background px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
-                >
-                  {agentRecommendation.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 inline h-3.5 w-3.5" />}
-                  Re-analyze
-                </button>
-              </div>
+              {agentApproved && !hasHighRiskConflict ? (
+                <div className="rounded-xl bg-court-free/10 px-3 py-2 text-xs font-bold text-court-free">
+                  Agentförslag godkänt. Fortsätt i offertsteget nedan.
+                </div>
+              ) : hasHighRiskConflict ? (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <button
+                    type="button"
+                    onClick={() => chooseAlternativeSlot(lead, firstAlternativeSlot)}
+                    disabled={agentRecommendation.isPending || updateSchedule.isPending}
+                    className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50 sm:col-span-1"
+                  >
+                    {updateSchedule.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <CalendarDays className="mr-1 inline h-3.5 w-3.5" />}
+                    Välj alternativ tid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reanalyze" })}
+                    disabled={agentRecommendation.isPending}
+                    className="rounded-xl bg-background px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
+                  >
+                    {agentRecommendation.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 inline h-3.5 w-3.5" />}
+                    Re-analyze
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reject", recommendationActivityId: agent.id })}
+                    disabled={agentRecommendation.isPending}
+                    className="rounded-xl bg-destructive/15 px-3 py-2.5 text-xs font-bold text-destructive disabled:opacity-50"
+                  >
+                    <XCircle className="mr-1 inline h-3.5 w-3.5" />
+                    Reject
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <button
+                    type="button"
+                    onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "approve", recommendationActivityId: agent.id })}
+                    disabled={agentRecommendation.isPending}
+                    className="rounded-xl bg-court-free/15 px-3 py-2.5 text-xs font-bold text-court-free disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reject", recommendationActivityId: agent.id })}
+                    disabled={agentRecommendation.isPending}
+                    className="rounded-xl bg-destructive/15 px-3 py-2.5 text-xs font-bold text-destructive disabled:opacity-50"
+                  >
+                    <XCircle className="mr-1 inline h-3.5 w-3.5" />
+                    Reject
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => agentRecommendation.mutate({ leadId: lead.id, action: "reanalyze" })}
+                    disabled={agentRecommendation.isPending}
+                    className="rounded-xl bg-background px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
+                  >
+                    {agentRecommendation.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 inline h-3.5 w-3.5" />}
+                    Re-analyze
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="mt-3 space-y-3 text-xs">
@@ -804,61 +915,85 @@ export default function AdminEventLeads({ venueId }: { venueId: string }) {
             </p>
           )}
 
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <button
-              onClick={() => setOfferBuilder(createOfferBuilderState(lead, offerCatalog))}
-              disabled={generateOffer.isPending}
-              className="rounded-xl bg-muted px-3 py-3 text-xs font-bold text-foreground disabled:opacity-50"
-            >
-              {generateOffer.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1 inline h-3.5 w-3.5" />}
-              {agentApproved && offer ? "Edit draft" : offer ? "Skapa ny offert" : "Skapa offert"}
-            </button>
-            <button
-              onClick={() => offer?.id ? previewSend.mutate(offer.id) : toast.info("Skapa offert först")}
-              disabled={!offer?.id || offerIsSent || offerIsConfirmed || previewSend.isPending}
-              className="rounded-xl bg-primary px-3 py-3 text-xs font-bold text-primary-foreground disabled:opacity-50"
-            >
-              {previewSend.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 inline h-3.5 w-3.5" />}
-              {offerIsSent ? "Offert skickad" : "Skicka offert"}
-            </button>
-            <button
-              onClick={() => offer?.id ? generateDraft.mutate(offer.id) : toast.info("Skapa offert först")}
-              disabled={!offer?.id}
-              className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
-            >
-              <Mail className="mr-1 inline h-3.5 w-3.5" />
-              Visa mailutkast
-            </button>
-            <button
-              onClick={() => offer?.id ? openPdf(offer.id) : toast.info("PDF skapas efter offert")}
-              disabled={!offer?.id}
-              className="rounded-xl bg-muted px-3 py-2.5 text-xs font-bold text-foreground disabled:opacity-50"
-            >
-              <FileText className="mr-1 inline h-3.5 w-3.5" />
-              Öppna PDF
-            </button>
-          </div>
+          {canShowOfferDraftControls ? (
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <button
+                onClick={() => setOfferBuilder(createOfferBuilderState(lead, offerCatalog))}
+                disabled={generateOffer.isPending}
+                className="rounded-xl bg-muted px-3 py-3 text-xs font-bold text-foreground disabled:opacity-50"
+              >
+                {generateOffer.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1 inline h-3.5 w-3.5" />}
+                Edit Draft
+              </button>
+              <button
+                onClick={() => offer?.id ? openPdf(offer.id) : toast.info("PDF saknas")}
+                disabled={!offer?.pdf_url}
+                className="rounded-xl bg-muted px-3 py-3 text-xs font-bold text-foreground disabled:opacity-50"
+              >
+                <FileText className="mr-1 inline h-3.5 w-3.5" />
+                Öppna PDF
+              </button>
+              <button
+                onClick={() => offer?.id ? previewSend.mutate(offer.id) : toast.info("Skapa offert först")}
+                disabled={!canSendOffer || !offer?.pdf_url || previewSend.isPending}
+                className="rounded-xl bg-primary px-3 py-3 text-xs font-bold text-primary-foreground disabled:opacity-50"
+              >
+                {previewSend.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 inline h-3.5 w-3.5" />}
+                {offerIsSent ? "Offert skickad" : "Skicka offert"}
+              </button>
+            </div>
+          ) : !offer?.id && agentApproved && !hasHighRiskConflict ? (
+            <div className="mt-3">
+              <button
+                onClick={() => setOfferBuilder(createOfferBuilderState(lead, offerCatalog))}
+                disabled={generateOffer.isPending}
+                className="w-full rounded-xl bg-primary px-3 py-3 text-xs font-bold text-primary-foreground disabled:opacity-50"
+              >
+                {generateOffer.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1 inline h-3.5 w-3.5" />}
+                Create draft
+              </button>
+            </div>
+          ) : (
+            <p className="mt-3 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              Offertsteg låses upp när agentförslaget är giltigt och godkänt.
+            </p>
+          )}
         </div>
 
         <div className="rounded-xl border border-border bg-background/70 p-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Closure</p>
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <button
-              onClick={() => updateLead.mutate({ leadId: lead.id, status: "ready_to_book" })}
-              disabled={lead.status === "booking_confirmed"}
-              className="rounded-xl bg-court-free/15 px-3 py-2.5 text-xs font-bold text-court-free disabled:opacity-50"
-            >
-              <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
-              Ready to book
-            </button>
-            <button
-              onClick={() => offer?.id ? previewBooking.mutate({ leadId: lead.id, offerId: offer.id }) : toast.info("Skapa offert först")}
-              disabled={previewBooking.isPending || lead.status === "booking_confirmed"}
-              className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50"
-            >
-              {previewBooking.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <CalendarDays className="mr-1 inline h-3.5 w-3.5" />}
-              Confirm Booking
-            </button>
+            {hasHighRiskConflict ? (
+              <p className="rounded-xl bg-destructive/10 px-3 py-2.5 text-xs font-bold text-destructive sm:col-span-2">
+                Bokning låst tills agentkonflikten är löst.
+              </p>
+            ) : (
+              <>
+                {offer?.id && agentApproved && offerIsSent && !offerAccepted && !offerIsConfirmed && (
+                  <button
+                    onClick={() => updateLead.mutate({ leadId: lead.id, status: "ready_to_book" })}
+                    className="rounded-xl bg-court-free/15 px-3 py-2.5 text-xs font-bold text-court-free disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                    Ready to book
+                  </button>
+                )}
+                {canConfirmBooking ? (
+                  <button
+                    onClick={() => offer?.id ? previewBooking.mutate({ leadId: lead.id, offerId: offer.id }) : toast.info("Skapa offert först")}
+                    disabled={previewBooking.isPending}
+                    className="rounded-xl bg-primary px-3 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-50"
+                  >
+                    {previewBooking.isPending ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <CalendarDays className="mr-1 inline h-3.5 w-3.5" />}
+                    Confirm Booking
+                  </button>
+                ) : (
+                  <p className="rounded-xl bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground sm:col-span-2">
+                    Bokning kan bekräftas först efter giltig agentstatus och skickad/accepterad offert.
+                  </p>
+                )}
+              </>
+            )}
             <button
               onClick={() => {
                 if (!lead.email) return toast.info("Leadet saknar email");
