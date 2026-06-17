@@ -156,6 +156,44 @@ export function useAdminRevenueLedger(venueId: string | undefined, date: string 
   });
 }
 
+export type AdminCalendarItem = {
+  id: string;
+  source_id: string;
+  date: string;
+  time: string;
+  end_time?: string | null;
+  title: string;
+  kind: "activity" | "event" | "drift" | "block" | string;
+  tone: "lime" | "magenta" | "sun" | "danger" | string;
+  moduleTarget?: string | null;
+  activity_session_id?: string;
+  session_type?: string;
+  registrations_count?: number;
+  override_status?: string | null;
+  price_sek?: number;
+  capacity?: number | null;
+  planning_status?: string | null;
+  visibility?: string | null;
+  status?: string | null;
+  resource_name?: string | null;
+};
+
+export type AdminCalendarResponse = {
+  from: string;
+  to: string;
+  dates: string[];
+  items: AdminCalendarItem[];
+};
+
+export function useAdminCalendar(venueId: string | undefined, from: string | undefined, to: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-calendar", venueId, from, to],
+    enabled: !!venueId && !!from && !!to,
+    queryFn: () => apiGet<AdminCalendarResponse>("api-admin", "calendar", { venueId: venueId!, from: from!, to: to! }),
+    refetchInterval: 60000,
+  });
+}
+
 export type AdminAttentionItem = {
   id: string;
   kind: "lead" | "drift" | "event" | "block";

@@ -57,6 +57,7 @@ import AdminVenueOperations from "@/components/admin/AdminVenueOperations";
 import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
 import AdminToday from "@/components/admin/shell/AdminToday";
+import AdminCalendar from "@/components/admin/shell/AdminCalendar";
 import AdminSettings from "@/components/admin/shell/AdminSettings";
 import AdminSoon from "@/components/admin/shell/AdminSoon";
 import {
@@ -341,17 +342,7 @@ const AdminPage = () => {
               <AdminToday venueId={venueId} venueName={currentVenue?.name} onOpenSettings={openSettingsModule} />
             )}
             {active === "calendar" && (
-              <AdminSoon
-                icon={Calendar}
-                phase="Phase 2"
-                title="Calendar"
-                tagline="Hela huset i en gemensam tidsaxel — vecka, dag, månad."
-                bullets={[
-                  { title: "Lager", desc: "Aktiviteter, events, bokningar, blockeringar och drift på samma yta." },
-                  { title: "Drag-to-create", desc: "Markera ett tidsfönster på resursen → snabbformulär för event eller block." },
-                  { title: "Konfliktdetektering", desc: "Krockar visas direkt visuellt innan du sparar." },
-                ]}
-              />
+              <AdminCalendar venueId={venueId} onOpenModule={openSettingsModule} />
             )}
             {active === "pipeline" && (
               <AdminSoon

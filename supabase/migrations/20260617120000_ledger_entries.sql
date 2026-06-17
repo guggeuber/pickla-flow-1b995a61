@@ -45,7 +45,7 @@ CREATE POLICY "Staff can view venue ledger_entries"
       WHERE venue_staff.user_id = auth.uid()
         AND venue_staff.venue_id = ledger_entries.venue_id
         AND venue_staff.is_active = true
-        AND venue_staff.role IN ('owner', 'admin', 'venue_admin', 'desk')
+        AND venue_staff.role IN ('super_admin', 'admin', 'venue_admin', 'desk')
     )
     OR public.is_super_admin()
   );

@@ -189,6 +189,20 @@ function localDatesBetween(startsAtIso: string, endsAtIso: string) {
   return dates;
 }
 
+function localDateStringsBetween(startDate: string, endDate: string) {
+  const start = DateTime.fromISO(String(startDate || '').slice(0, 10), { zone: 'Europe/Stockholm' }).startOf('day');
+  const end = DateTime.fromISO(String(endDate || '').slice(0, 10), { zone: 'Europe/Stockholm' }).startOf('day');
+  if (!start.isValid || !end.isValid || end < start) return [];
+
+  const dates: string[] = [];
+  let cursor = start;
+  while (cursor <= end && dates.length < 14) {
+    dates.push(cursor.toISODate()!);
+    cursor = cursor.plus({ days: 1 });
+  }
+  return dates;
+}
+
 function resourceForBlockRow(block: any) {
   const resource = block.event_resource_catalog;
   return Array.isArray(resource) ? resource[0] : resource;
@@ -721,6 +735,169 @@ Deno.serve(async (req) => {
           month,
         },
       }, 200, 10);
+    }
+
+    // ── ADMIN OS CALENDAR ──
+    if (req.method === 'GET' && path === 'calendar') {
+      const scopedVenueId = venueId!;
+      const fromDate = (url.searchParams.get('from') || stockholmToday()).slice(0, 10);
+      const toDate = (url.searchParams.get('to') || fromDate).slice(0, 10);
+      const dates = localDateStringsBetween(fromDate, toDate);
+      if (!dates.length) return errorResponse('Invalid date range', 400);
+
+      const startRange = stockholmDayRangeUtc(dates[0]);
+      const endRange = stockholmDayRangeUtc(dates[dates.length - 1]);
+      const items: any[] = [];
+
+      const { data: sessions, error: sessionsError } = await admin
+        .from('activity_sessions')
+        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity')
+        .eq('venue_id', scopedVenueId)
+        .eq('is_active', true)
+        .order('start_time', { ascending: true })
+        .limit(800);
+      if (sessionsError) return errorResponse(sessionsError.message);
+
+      const activitySamples: any[] = [];
+      for (const date of dates) {
+        const weekday = DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7;
+        for (const session of sessions || []) {
+          const isConcrete = session.session_date === date;
+          const isRecurring = !session.session_date && Array.isArray(session.recurrence_days) && session.recurrence_days.includes(weekday);
+          if (!isConcrete && !isRecurring) continue;
+          activitySamples.push({
+            id: `activity-${session.id}-${date}`,
+            source_id: session.id,
+            activity_session_id: session.id,
+            date,
+            time: cleanTime(session.start_time) || '--:--',
+            end_time: cleanTime(session.end_time) || null,
+            title: session.name || 'Aktivitet',
+            kind: 'activity',
+            tone: 'lime',
+            session_type: session.session_type || 'open_play',
+            price_sek: session.price_sek || 0,
+            capacity: session.capacity || null,
+            moduleTarget: 'schedule',
+          });
+        }
+      }
+
+      const sampleSessionIds = uniqueStrings(activitySamples.map((sample) => sample.activity_session_id));
+      const [registrationCounts, activityOverrides] = await Promise.all([
+        activityRegistrationCounts(admin, sampleSessionIds, dates[0], dates[dates.length - 1]),
+        activityOverrideMap(admin, scopedVenueId, sampleSessionIds, dates[0], dates[dates.length - 1]),
+      ]);
+
+      for (const activity of activitySamples) {
+        const key = activityOverrideKey(activity.activity_session_id, activity.date);
+        const override = activityOverrides.get(key);
+        items.push({
+          ...activity,
+          registrations_count: registrationCounts.get(key) || 0,
+          override_status: override?.status || null,
+          activity_session_override_id: override?.id || null,
+        });
+      }
+
+      const { data: events, error: eventsError } = await admin
+        .from('events')
+        .select('id, name, display_name, start_date, start_time, end_time, planning_status, visibility, customer_name, expected_participants')
+        .eq('venue_id', scopedVenueId)
+        .gte('start_date', dates[0])
+        .lte('start_date', dates[dates.length - 1])
+        .neq('planning_status', 'cancelled')
+        .order('start_date', { ascending: true })
+        .order('start_time', { ascending: true });
+      if (eventsError) return errorResponse(eventsError.message);
+
+      for (const event of events || []) {
+        const date = normalizeDateForResponse(event.start_date);
+        if (!date) continue;
+        items.push({
+          id: `event-${event.id}`,
+          source_id: event.id,
+          date,
+          time: cleanTime(event.start_time) || '--:--',
+          end_time: cleanTime(event.end_time) || null,
+          title: eventDisplayTitle(event),
+          kind: 'event',
+          tone: 'magenta',
+          planning_status: event.planning_status || null,
+          visibility: event.visibility || null,
+          customer_name: event.customer_name || null,
+          expected_participants: event.expected_participants || null,
+          moduleTarget: 'events',
+        });
+      }
+
+      const { data: blocks, error: blocksError } = await admin
+        .from('event_resource_blocks')
+        .select('id, title, reason, status, starts_at, ends_at, resource_catalog_id, event_resource_catalog(id, name, venue_court_id)')
+        .eq('venue_id', scopedVenueId)
+        .in('status', ['hold', 'confirmed'])
+        .lt('starts_at', endRange.end)
+        .gt('ends_at', startRange.start)
+        .order('starts_at', { ascending: true })
+        .limit(300);
+      if (blocksError) return errorResponse(blocksError.message);
+
+      for (const block of blocks || []) {
+        const starts = DateTime.fromISO(block.starts_at, { zone: 'utc' }).setZone('Europe/Stockholm');
+        const resource = resourceForBlockRow(block);
+        items.push({
+          id: `block-${block.id}`,
+          source_id: block.id,
+          date: starts.isValid ? starts.toISODate() : dates[0],
+          time: stockholmTimeFromIso(block.starts_at) || '--:--',
+          end_time: stockholmTimeFromIso(block.ends_at) || null,
+          title: block.title || resource?.name || 'Resursblockering',
+          kind: 'block',
+          tone: block.reason === 'event' ? 'magenta' : 'sun',
+          status: block.status,
+          resource_name: resource?.name || null,
+          moduleTarget: 'resourceBlocks',
+        });
+      }
+
+      const { data: overrides, error: overridesError } = await admin
+        .from('venue_operation_overrides')
+        .select('id, title, reason, override_type, starts_at, ends_at, affects_entire_venue, status')
+        .eq('venue_id', scopedVenueId)
+        .eq('status', 'active')
+        .lt('starts_at', endRange.end)
+        .gt('ends_at', startRange.start)
+        .order('starts_at', { ascending: true })
+        .limit(200);
+      if (overridesError) return errorResponse(overridesError.message);
+
+      for (const override of overrides || []) {
+        const starts = DateTime.fromISO(override.starts_at, { zone: 'utc' }).setZone('Europe/Stockholm');
+        items.push({
+          id: `drift-${override.id}`,
+          source_id: override.id,
+          date: starts.isValid ? starts.toISODate() : dates[0],
+          time: stockholmTimeFromIso(override.starts_at) || '--:--',
+          end_time: stockholmTimeFromIso(override.ends_at) || null,
+          title: override.title || 'Driftavvikelse',
+          kind: 'drift',
+          tone: 'danger',
+          override_type: override.override_type,
+          affects_entire_venue: override.affects_entire_venue,
+          moduleTarget: 'operations',
+        });
+      }
+
+      items.sort((a, b) => {
+        const ad = String(a.date || '');
+        const bd = String(b.date || '');
+        if (ad !== bd) return ad.localeCompare(bd);
+        const at = /^\d{2}:\d{2}$/.test(a.time) ? a.time : '99:99';
+        const bt = /^\d{2}:\d{2}$/.test(b.time) ? b.time : '99:99';
+        return at.localeCompare(bt) || String(a.title || '').localeCompare(String(b.title || ''));
+      });
+
+      return jsonResponse({ from: dates[0], to: dates[dates.length - 1], dates, items }, 200, 5);
     }
 
     // ── ADMIN OS ATTENTION SIGNALS ──
