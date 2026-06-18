@@ -16,6 +16,7 @@ import {
   buildOperationsBookingDetailFromRows,
   type OperationsBookingDetail,
 } from "@/components/operations/OperationsBookingDrawer";
+import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 // Define types for court status and display
 type CourtStatus = "free" | "active" | "soon" | "vip";
@@ -31,6 +32,7 @@ interface CourtDisplay {
 
 interface TodayCheckin {
   id: string;
+  user_id?: string | null;
   player_name: string | null;
   entry_type: string;
   checked_in_at: string;
@@ -209,6 +211,7 @@ const TodayScreen = () => {
   const [showScanner, setShowScanner] = useState(false);
   const [showEntryQr, setShowEntryQr] = useState(false);
   const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
+  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
   const [newArrivalIds, setNewArrivalIds] = useState<Set<string>>(new Set());
 
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
@@ -466,9 +469,12 @@ const TodayScreen = () => {
                 .setZone("Europe/Stockholm")
                 .toFormat("HH:mm");
               return (
-                <div
+                <button
                   key={checkin.id}
-                  className="flex items-center gap-3 rounded-xl px-2 py-2 transition"
+                  type="button"
+                  onClick={() => checkin.user_id && setCustomer360UserId(checkin.user_id)}
+                  disabled={!checkin.user_id}
+                  className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition disabled:cursor-default"
                   style={{
                     background: isNewArrival ? "hsl(var(--court-free) / 0.16)" : "hsl(var(--surface-1))",
                     border: isNewArrival ? "1px solid hsl(var(--court-free) / 0.45)" : "1px solid transparent",
@@ -484,7 +490,7 @@ const TodayScreen = () => {
                   <span className="status-chip bg-court-free/15 text-court-free text-[9px] font-bold">
                     {isNewArrival ? "Ny" : "Inne"}
                   </span>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -621,6 +627,12 @@ const TodayScreen = () => {
         open={!!openBooking}
         booking={openBooking}
         onClose={() => setOpenBooking(null)}
+      />
+      <Customer360Drawer
+        open={!!customer360UserId}
+        venueId={venueId}
+        userId={customer360UserId}
+        onClose={() => setCustomer360UserId(null)}
       />
 
       {/* Court Action Sheet */}

@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { CalendarClock, CheckCircle2, CreditCard, FileText, Mail, MapPin, Phone, ReceiptText, UserRound, X } from "lucide-react";
 import { DateTime } from "luxon";
+import { useState } from "react";
+import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 export type OperationsCourt = {
   id?: string | null;
@@ -13,6 +15,9 @@ export type OperationsBookingDetail = {
   id?: string;
   source_id?: string;
   source_ids?: string[];
+  venue_id?: string | null;
+  user_id?: string | null;
+  customer_user_id?: string | null;
   booking_group_key?: string;
   booking_refs?: string[];
   booking_ref?: string | null;
@@ -79,6 +84,9 @@ export function buildOperationsBookingDetailFromRows(rows: any[]): OperationsBoo
     id: `booking-${bookingGroupKey(first)}`,
     source_id: first.id,
     source_ids: bookingRows.map((row) => row.id).filter(Boolean),
+    venue_id: first.venue_id || null,
+    user_id: first.user_id || null,
+    customer_user_id: first.customer_user_id || first.user_id || null,
     booking_group_key: bookingGroupKey(first),
     booking_refs: bookingRows.map((row) => row.booking_ref).filter(Boolean),
     booking_ref: first.booking_ref || null,
@@ -169,28 +177,32 @@ export function OperationsBookingDrawer({
   onClose: () => void;
   booking: OperationsBookingDetail | null;
 }) {
+  const [customerUserId, setCustomerUserId] = useState<string | null>(null);
   const checkedAt = formatCheckedInAt(booking?.checked_in_at);
   const amount = Number(booking?.amount_sek ?? booking?.total_price ?? 0);
   const courts = booking?.courts?.length ? booking.courts : booking?.court_name ? [{ name: booking.court_name }] : [];
+  const bookingCustomerUserId = booking?.customer_user_id || booking?.user_id || null;
+  const canOpenCustomer = Boolean(booking?.venue_id && bookingCustomerUserId);
 
   return (
-    <AnimatePresence>
-      {open && booking && (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-md"
-          />
-          <motion.div
-            initial={{ y: "100%" }}
-            animate={{ y: 0 }}
-            exit={{ y: "100%" }}
-            transition={{ type: "spring", damping: 28, stiffness: 280 }}
-            className="fixed inset-x-0 bottom-0 z-[91] max-h-[92vh] overflow-y-auto rounded-t-3xl border border-white/10 bg-[#111626] px-5 pb-6 pt-4 shadow-2xl"
-          >
+    <>
+      <AnimatePresence>
+        {open && booking && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={onClose}
+              className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 28, stiffness: 280 }}
+              className="fixed inset-x-0 bottom-0 z-[91] max-h-[92vh] overflow-y-auto rounded-t-3xl border border-white/10 bg-[#111626] px-5 pb-6 pt-4 shadow-2xl"
+            >
             <div className="sticky top-0 z-10 -mx-5 mb-3 flex items-center justify-between bg-[#111626] px-5 pb-3">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">Operations Truth</p>
@@ -211,9 +223,19 @@ export function OperationsBookingDrawer({
                     {booking.checked_in ? `Incheckad${checkedAt ? ` ${checkedAt}` : ""}` : "Ej incheckad"}
                   </span>
                 </div>
-                <h4 className="mt-3 text-2xl font-black leading-tight text-white">
-                  {booking.customer_name || "Okänd kund"}
-                </h4>
+                {canOpenCustomer ? (
+                  <button
+                    type="button"
+                    onClick={() => setCustomerUserId(bookingCustomerUserId)}
+                    className="mt-3 text-left text-2xl font-black leading-tight text-white underline-offset-4 hover:underline"
+                  >
+                    {booking.customer_name || "Okänd kund"}
+                  </button>
+                ) : (
+                  <h4 className="mt-3 text-2xl font-black leading-tight text-white">
+                    {booking.customer_name || "Okänd kund"}
+                  </h4>
+                )}
                 <p className="mt-1 text-sm font-semibold text-white/55">{formatTimeRange(booking)}</p>
               </div>
 
@@ -241,9 +263,16 @@ export function OperationsBookingDrawer({
                 </div>
               </div>
             </div>
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+      <Customer360Drawer
+        open={!!customerUserId}
+        venueId={booking?.venue_id}
+        userId={customerUserId}
+        onClose={() => setCustomerUserId(null)}
+      />
+    </>
   );
 }

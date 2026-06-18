@@ -545,6 +545,9 @@ async function groupedCourtBookingItems(admin: any, venueId: string, startIso: s
       id: `booking-${groupKey}`,
       source_id: first.id,
       source_ids: groupRows.map((row: any) => row.id),
+      venue_id: first.venue_id || venueId,
+      user_id: first.user_id || null,
+      customer_user_id: first.user_id || null,
       booking_group_key: groupKey,
       booking_refs: groupRows.map((row: any) => row.booking_ref).filter(Boolean),
       date: starts.isValid ? starts.toISODate() : normalizeDateForResponse(first.start_time),
@@ -1261,7 +1264,7 @@ Deno.serve(async (req) => {
       if (receiptIds.length) {
         const { data: receipts, error: receiptsErr } = await admin
           .from('booking_receipts')
-          .select('id, receipt_number, customer_name, customer_email, customer_phone, product_description, purchase_type, total_inc_vat_sek, vat_amount_sek, vat_rate, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, issued_at')
+          .select('id, user_id, receipt_number, customer_name, customer_email, customer_phone, product_description, purchase_type, total_inc_vat_sek, vat_amount_sek, vat_rate, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, issued_at')
           .eq('venue_id', venueId)
           .in('id', receiptIds);
         if (receiptsErr) throw new Error(receiptsErr.message);

@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useVenueForStaff } from "@/hooks/useDesk";
 import { supabase } from "@/integrations/supabase/client";
+import Customer360Drawer from "@/components/customers/Customer360Drawer";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 
@@ -159,9 +160,14 @@ const CreateCustomerModal = ({ venueId, onClose, onCreated }: { venueId: string;
   );
 };
 
-const CustomersScreen = () => {
+type CustomersScreenProps = {
+  venueId?: string;
+};
+
+const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}) => {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
@@ -171,7 +177,7 @@ const CustomersScreen = () => {
   const [checkedInIds, setCheckedInIds] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
   const { data: staffVenue } = useVenueForStaff();
-  const venueId = staffVenue?.venue_id;
+  const venueId = venueIdOverride || staffVenue?.venue_id;
 
   const normalizedSearch = search.trim();
 
@@ -195,6 +201,7 @@ const CustomersScreen = () => {
   );
 
   const selected = profiles?.find((p: any) => p.id === selectedId);
+  const selected360Profile = profiles?.find((p: any) => p.auth_user_id === customer360UserId);
 
   const { data: membershipTiers } = useQuery({
     queryKey: ["membership-tiers", venueId],
@@ -476,8 +483,7 @@ const CustomersScreen = () => {
                 transition={{ delay: i * 0.04 }}
                 className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3"
               >
-                {/* Tap name area to go to detail */}
-                <button onClick={() => setSelectedId(profile.id)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+                <button onClick={() => setCustomer360UserId(profile.auth_user_id)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
                   <div className={`w-10 h-10 rounded-xl ${t.bg} ${t.text} flex items-center justify-center text-sm font-display font-bold flex-shrink-0`}>{initials}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -545,6 +551,17 @@ const CustomersScreen = () => {
           />
         )}
       </AnimatePresence>
+
+      <Customer360Drawer
+        open={!!customer360UserId}
+        venueId={venueId}
+        userId={customer360UserId}
+        onClose={() => setCustomer360UserId(null)}
+        onManageProfile={selected360Profile ? () => {
+          setSelectedId(selected360Profile.id);
+          setCustomer360UserId(null);
+        } : undefined}
+      />
     </div>
   );
 };

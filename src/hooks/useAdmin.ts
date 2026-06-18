@@ -111,6 +111,7 @@ export type AdminLedgerEntry = {
   booking_receipt_id?: string | null;
   receipt?: {
     id: string;
+    user_id?: string | null;
     receipt_number: string;
     customer_name?: string | null;
     customer_email?: string | null;
@@ -253,6 +254,9 @@ export type AdminCalendarItem = {
   status?: string | null;
   resource_name?: string | null;
   booking_group_key?: string;
+  venue_id?: string | null;
+  user_id?: string | null;
+  customer_user_id?: string | null;
   booking_refs?: string[];
   customer_name?: string | null;
   customer_phone?: string | null;
@@ -344,6 +348,9 @@ export type AdminTodaysPlanItem = {
   href?: string | null;
   moduleTarget?: string | null;
   booking_group_key?: string;
+  venue_id?: string | null;
+  user_id?: string | null;
+  customer_user_id?: string | null;
   booking_refs?: string[];
   customer_name?: string | null;
   customer_phone?: string | null;

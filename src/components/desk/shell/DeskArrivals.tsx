@@ -7,6 +7,7 @@ import { apiGet } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
+import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 const checkinLabels: Record<string, string> = {
   booking_code: "Bokning",
@@ -22,6 +23,8 @@ const checkinLabels: Record<string, string> = {
 
 interface TodayCheckin {
   id: string;
+  venue_id?: string | null;
+  user_id?: string | null;
   player_name: string | null;
   entry_type: string;
   checked_in_at: string;
@@ -36,6 +39,7 @@ interface Props {
 export default function DeskArrivals({ venueId, onScan }: Props) {
   const queryClient = useQueryClient();
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
+  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
 
   const { data: checkins = [], isLoading } = useQuery<TodayCheckin[]>({
     queryKey: ["desk-checkins-today", venueId],
@@ -133,7 +137,13 @@ export default function DeskArrivals({ venueId, onScan }: Props) {
                 initial={isNew ? { scale: 0.96, opacity: 0 } : false}
                 animate={{ scale: 1, opacity: 1 }}
               >
-                <AxCard glow={isNew ? ax("lime", 0.7) : undefined} pad="card">
+                <button
+                  type="button"
+                  onClick={() => c.user_id && setCustomer360UserId(c.user_id)}
+                  disabled={!c.user_id}
+                  className="w-full text-left disabled:cursor-default"
+                >
+                  <AxCard glow={isNew ? ax("lime", 0.7) : undefined} pad="card">
                   <div className="flex items-center gap-3">
                     <div
                       className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
@@ -154,12 +164,19 @@ export default function DeskArrivals({ venueId, onScan }: Props) {
                       </p>
                     </div>
                   </div>
-                </AxCard>
+                  </AxCard>
+                </button>
               </motion.div>
             );
           })}
         </div>
       )}
+      <Customer360Drawer
+        open={!!customer360UserId}
+        venueId={venueId}
+        userId={customer360UserId}
+        onClose={() => setCustomer360UserId(null)}
+      />
     </div>
   );
 }

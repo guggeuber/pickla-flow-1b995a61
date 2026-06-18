@@ -55,6 +55,7 @@ import AdminEventProducts from "@/components/admin/AdminEventProducts";
 import AdminResourceBlocks from "@/components/admin/AdminResourceBlocks";
 import AdminVenueOperations from "@/components/admin/AdminVenueOperations";
 import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
+import CustomersScreen from "@/screens/CustomersScreen";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
 import AdminToday from "@/components/admin/shell/AdminToday";
 import AdminCalendar from "@/components/admin/shell/AdminCalendar";
@@ -371,17 +372,7 @@ const AdminPage = () => {
               />
             )}
             {active === "people" && (
-              <AdminSoon
-                icon={Users}
-                phase="Phase 5"
-                title="People"
-                tagline="En kund — alla deras bokningar, medlemskap, kvitton och check-ins."
-                bullets={[
-                  { title: "Customer 360", desc: "Slår ihop player_profiles, memberships, corporate och leads." },
-                  { title: "Sök överallt", desc: "⌘K-sök från headern hittar kunden direkt, oavsett ursprung." },
-                  { title: "Snabb-åtgärder", desc: "Lägg till medlemskap, skicka mail, skapa booking på kunden." },
-                ]}
-              />
+              <CustomersScreen venueId={venueId} />
             )}
             {active === "catalog" && (
               <AdminSoon

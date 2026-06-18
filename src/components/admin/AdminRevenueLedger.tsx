@@ -10,6 +10,7 @@ import {
 } from "@/hooks/useAdmin";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 interface Props {
   venueId: string;
@@ -60,6 +61,7 @@ function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerP
 
 export default function AdminRevenueLedger({ venueId }: Props) {
   const [date, setDate] = useState(stockholmToday());
+  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
   const ledgerQ = useAdminRevenueLedger(venueId, date);
   const zettleQ = useAdminZettleStatus(venueId);
   const zettleConnect = useAdminZettleConnect(venueId);
@@ -265,6 +267,15 @@ export default function AdminRevenueLedger({ venueId }: Props) {
                       </summary>
                       <div className="mt-2 rounded-md border border-border/70 bg-background/60 p-2 text-left text-[11px] text-muted-foreground sm:w-56">
                         <p className="font-semibold text-foreground">{entry.receipt?.product_description || entry.source_label}</p>
+                        {entry.receipt?.user_id ? (
+                          <button
+                            type="button"
+                            onClick={() => setCustomer360UserId(entry.receipt?.user_id || null)}
+                            className="font-semibold text-primary hover:underline"
+                          >
+                            Öppna kund
+                          </button>
+                        ) : null}
                         <p>{entry.receipt?.customer_email || "Ingen e-post"}</p>
                         <p>{entry.receipt?.payment_method || entry.payment_method || "Stripe"} · {entry.receipt?.payment_status || entry.payment_status}</p>
                         {entry.receipt?.stripe_payment_intent_id && <p className="truncate">PI {entry.receipt.stripe_payment_intent_id}</p>}
@@ -280,6 +291,12 @@ export default function AdminRevenueLedger({ venueId }: Props) {
           </div>
         )}
       </div>
+      <Customer360Drawer
+        open={!!customer360UserId}
+        venueId={venueId}
+        userId={customer360UserId}
+        onClose={() => setCustomer360UserId(null)}
+      />
     </div>
   );
 }
