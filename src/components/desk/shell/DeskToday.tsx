@@ -54,12 +54,13 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const { data: revenue } = useTodayRevenue(venueId);
   const { data: courts } = useVenueCourts(venueId);
 
+  const rows = (bookings as any[] | undefined) || [];
   const courtRows = useMemo(
-    () => (bookings || []).filter((b: any) => b.kind !== "activity_registration"),
+    () => rows.filter((b: any) => b.kind !== "activity_registration"),
     [bookings]
   );
   const activityRows = useMemo(
-    () => (bookings || []).filter((b: any) => b.kind === "activity_registration"),
+    () => rows.filter((b: any) => b.kind === "activity_registration"),
     [bookings]
   );
 
