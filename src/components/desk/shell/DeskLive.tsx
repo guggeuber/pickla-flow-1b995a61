@@ -82,7 +82,8 @@ export default function DeskLive({ venueId }: Props) {
   const live = courtCells.filter((c) => c.status !== "free");
   const liveActivities = useMemo(() => {
     const nowMs = tick;
-    return (bookings || [])
+    const rows = (bookings as any[] | undefined) || [];
+    return rows
       .filter((b: any) => b.kind === "activity_registration")
       .filter((b: any) => +new Date(b.start_time) <= nowMs && +new Date(b.end_time) > nowMs);
   }, [bookings, tick]);
