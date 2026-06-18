@@ -9,8 +9,10 @@ import {
   LucideIcon,
   Plus,
   Radio,
+  ReceiptText,
   ShieldAlert,
   Sparkles,
+  Store,
   Ticket,
   TrendingDown,
   TrendingUp,
@@ -20,7 +22,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useAdminAgentInbox, useAdminAttention, useAdminHistory, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
+import { useAdminAgentInbox, useAdminAttention, useAdminHistory, useAdminRevenueLedger, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
 import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
 import { AX, ax, AX_GRID_BG } from "./axTheme";
 import {
@@ -83,6 +85,10 @@ function nextActionLabel(action: string | undefined) {
     review: "Granska",
   };
   return labels[String(action || "review")] || String(action || "Granska").replace(/_/g, " ");
+}
+
+function formatSekFromMinor(value: number | undefined | null) {
+  return `${Math.round(Number(value || 0) / 100).toLocaleString("sv-SE")} kr`;
 }
 
 /* ───────────── Atoms ───────────── */
@@ -230,9 +236,14 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
   const attentionQ = useAdminAttention(venueId);
   const agentInboxQ = useAdminAgentInbox(venueId);
   const planQ = useAdminTodaysPlan(venueId, todayIso);
+  const ledgerQ = useAdminRevenueLedger(venueId, todayIso);
   const stats = (statsQ.data as any) || {};
   const history = (histQ.data as any[]) || [];
   const statsLoading = statsQ.isLoading;
+  const todayLedger = ledgerQ.data?.summary.today.ledger;
+  const picklaRevenueMinor = todayLedger?.channels?.pickla_minor ?? Number(todayLedger?.total_minor || 0);
+  const zettleRevenueMinor = todayLedger?.channels?.zettle_minor ?? 0;
+  const totalRevenueMinor = todayLedger?.channels?.total_minor ?? Number(todayLedger?.total_minor || 0);
 
   const revenueSpark = history.map((d: any) => d.revenue);
   const bookingsSpark = history.map((d: any) => d.bookings);
@@ -350,10 +361,10 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
           ) : (
             <>
               <MetricBlock
-                value={(stats?.todayRevenue || 0).toLocaleString("sv-SE")}
+                value={Math.round(totalRevenueMinor / 100).toLocaleString("sv-SE")}
                 label="SEK idag"
                 icon={TrendingUp}
-                cur={stats?.todayRevenue}
+                cur={Math.round(totalRevenueMinor / 100)}
                 prev={stats?.yesterdayRevenue}
                 spark={revenueSpark}
                 color={`hsl(${AX.electric})`}
@@ -380,6 +391,59 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
           )}
         </div>
       </div>
+
+      <section
+        className={`relative ${AX_RADIUS.card} p-4 overflow-hidden`}
+        style={{ background: ax("surface"), border: `1px solid ${ax("border")}` }}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <ReceiptText className="h-4 w-4" style={{ color: ax("electric") }} />
+              <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em]" style={{ color: ax("muted") }}>
+                Revenue today
+              </p>
+            </div>
+            <p className="mt-1 text-xs" style={{ color: ax("muted") }}>
+              Pickla + Zettle från ledgern
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenSettings("revenueLedger")}
+            className="text-[10px] font-mono font-bold uppercase tracking-[0.16em]"
+            style={{ color: ax("electric") }}
+          >
+            Öppna ledger
+          </button>
+        </div>
+        {ledgerQ.isLoading ? (
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <AxMetricSkeleton />
+            <AxMetricSkeleton />
+            <AxMetricSkeleton />
+          </div>
+        ) : (
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className={`${AX_RADIUS.card} p-3`} style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+              <p className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: ax("muted") }}>
+                <ReceiptText className="h-3 w-3" /> Pickla
+              </p>
+              <p className="mt-1 text-lg font-black" style={{ color: "white" }}>{formatSekFromMinor(picklaRevenueMinor)}</p>
+            </div>
+            <div className={`${AX_RADIUS.card} p-3`} style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+              <p className="flex items-center gap-1.5 text-[10px] font-bold" style={{ color: ax("muted") }}>
+                <Store className="h-3 w-3" /> Zettle
+              </p>
+              <p className="mt-1 text-lg font-black" style={{ color: "white" }}>{formatSekFromMinor(zettleRevenueMinor)}</p>
+            </div>
+            <div className={`${AX_RADIUS.card} p-3`} style={{ background: ax("electric", 0.12), border: `1px solid ${ax("electric", 0.35)}` }}>
+              <p className="text-[10px] font-bold" style={{ color: ax("muted") }}>Total</p>
+              <p className="mt-1 text-lg font-black" style={{ color: "white" }}>{formatSekFromMinor(totalRevenueMinor)}</p>
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* ── Agent inbox ── */}
       <section className="space-y-2">

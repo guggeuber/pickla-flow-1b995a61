@@ -130,7 +130,18 @@ export type AdminLedgerEntry = {
 };
 
 export type AdminLedgerPeriodSummary = {
-  ledger: { total_minor: number; vat_minor: number; count: number };
+  ledger: {
+    total_minor: number;
+    vat_minor: number;
+    count: number;
+    channels?: {
+      pickla_minor: number;
+      pickla_count: number;
+      zettle_minor: number;
+      zettle_count: number;
+      total_minor: number;
+    };
+  };
   receipts: { total_minor: number; count: number };
   delta_minor: number;
 };
@@ -153,6 +164,67 @@ export function useAdminRevenueLedger(venueId: string | undefined, date: string 
     enabled: !!venueId && !!date,
     queryFn: () => apiGet<AdminRevenueLedger>("api-admin", "revenue-ledger", { venueId: venueId!, date: date! }),
     refetchInterval: 60000,
+  });
+}
+
+export type AdminZettleStatus = {
+  configured: boolean;
+  auth_mode: "api_key" | "oauth" | "unconfigured" | string;
+  connected: boolean;
+  redirect_uri: string;
+  required_secrets: string[];
+  connection?: {
+    id: string;
+    venue_id: string;
+    status: string;
+    organization_uuid?: string | null;
+    zettle_user_uuid?: string | null;
+    token_expires_at?: string | null;
+    scopes?: string[] | null;
+    last_import_started_at?: string | null;
+    last_import_finished_at?: string | null;
+    last_import_from?: string | null;
+    last_import_to?: string | null;
+    last_import_count?: number | null;
+    last_import_error?: string | null;
+    updated_at?: string | null;
+    created_at?: string | null;
+  } | null;
+};
+
+export function useAdminZettleStatus(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["admin-zettle-status", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet<AdminZettleStatus>("api-admin", "zettle-status", { venueId: venueId! }),
+    refetchInterval: 60000,
+  });
+}
+
+export function useAdminZettleConnect(venueId: string | undefined) {
+  return useMutation({
+    mutationFn: (returnUrl: string) =>
+      apiPost<{ authorization_url: string; redirect_uri: string; expires_at: string }>(
+        "api-admin",
+        `zettle-connect?venueId=${venueId}`,
+        { returnUrl }
+      ),
+  });
+}
+
+export function useAdminZettleImport(venueId: string | undefined, date: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiPost<{ date: string; imported_count: number; ledger_source_type: string }>(
+        "api-admin",
+        `zettle-import?venueId=${venueId}`,
+        { date }
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-revenue-ledger", venueId, date] });
+      queryClient.invalidateQueries({ queryKey: ["admin-zettle-status", venueId] });
+    },
   });
 }
 

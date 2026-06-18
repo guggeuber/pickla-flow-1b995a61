@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import { DateTime } from "luxon";
-import { FileText, Loader2, ReceiptText } from "lucide-react";
-import { useAdminRevenueLedger, type AdminLedgerPeriodSummary } from "@/hooks/useAdmin";
+import { ExternalLink, FileText, Loader2, ReceiptText, RefreshCw, Store } from "lucide-react";
+import {
+  useAdminRevenueLedger,
+  useAdminZettleConnect,
+  useAdminZettleImport,
+  useAdminZettleStatus,
+  type AdminLedgerPeriodSummary,
+} from "@/hooks/useAdmin";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -29,6 +35,8 @@ function formatDate(value: string) {
 
 function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerPeriodSummary }) {
   const delta = Number(summary?.delta_minor || 0);
+  const pickla = Number(summary?.ledger.channels?.pickla_minor ?? summary?.ledger.total_minor ?? 0);
+  const zettle = Number(summary?.ledger.channels?.zettle_minor ?? 0);
   return (
     <div className="rounded-lg border border-border bg-card/70 p-3">
       <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
@@ -38,6 +46,10 @@ function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerP
       <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
         <span>{summary?.ledger.count || 0} poster</span>
         <span>Kvitton {formatSekFromMinor(summary?.receipts.total_minor)}</span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-1 text-[11px]">
+        <span className="rounded bg-background/50 px-2 py-1 text-muted-foreground">Pickla {formatSekFromMinor(pickla)}</span>
+        <span className="rounded bg-background/50 px-2 py-1 text-muted-foreground">Zettle {formatSekFromMinor(zettle)}</span>
       </div>
       <p className={`mt-1 text-[11px] ${delta === 0 ? "text-emerald-500" : "text-destructive"}`}>
         Diff {formatSekFromMinor(delta)}
@@ -49,13 +61,23 @@ function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerP
 export default function AdminRevenueLedger({ venueId }: Props) {
   const [date, setDate] = useState(stockholmToday());
   const ledgerQ = useAdminRevenueLedger(venueId, date);
+  const zettleQ = useAdminZettleStatus(venueId);
+  const zettleConnect = useAdminZettleConnect(venueId);
+  const zettleImport = useAdminZettleImport(venueId, date);
   const data = ledgerQ.data;
 
   const selectedTotal = data?.selected?.ledger.total_minor || 0;
   const selectedReceiptTotal = data?.selected?.receipts.total_minor || 0;
+  const selectedPickla = data?.selected?.ledger.channels?.pickla_minor ?? selectedTotal;
+  const selectedZettle = data?.selected?.ledger.channels?.zettle_minor ?? 0;
 
-  const receiptDelta = selectedTotal - selectedReceiptTotal;
+  const receiptDelta = selectedPickla - selectedReceiptTotal;
   const sourceRows = useMemo(() => data?.by_type || [], [data?.by_type]);
+
+  const handleConnectZettle = async () => {
+    const result = await zettleConnect.mutateAsync(window.location.href);
+    window.location.assign(result.authorization_url);
+  };
 
   return (
     <div className="space-y-4">
@@ -67,7 +89,7 @@ export default function AdminRevenueLedger({ venueId }: Props) {
               <h2 className="font-display text-lg font-bold">Revenue Ledger</h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Daglig försäljning från betalda Stripe-flöden. Append-only, read-only.
+              Daglig försäljning från Pickla och Zettle. Append-only, read-only.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -80,6 +102,84 @@ export default function AdminRevenueLedger({ venueId }: Props) {
             <Button variant="outline" size="sm" onClick={() => setDate(stockholmToday())}>
               Idag
             </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        <div className="rounded-lg border border-border bg-card/70 p-3">
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">Pickla</p>
+          <p className="mt-1 text-xl font-display font-bold text-foreground">{formatSekFromMinor(selectedPickla)}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Webb, medlemskap och bokningar</p>
+        </div>
+        <div className="rounded-lg border border-border bg-card/70 p-3">
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">Zettle</p>
+          <p className="mt-1 text-xl font-display font-bold text-foreground">{formatSekFromMinor(selectedZettle)}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Importerade POS-köp</p>
+        </div>
+        <div className="rounded-lg border border-primary/40 bg-primary/5 p-3">
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground">Total</p>
+          <p className="mt-1 text-xl font-display font-bold text-foreground">{formatSekFromMinor(selectedTotal)}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Pickla + Zettle</p>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card/70 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Store className="h-4 w-4 text-primary" />
+              <p className="text-sm font-bold text-foreground">Zettle</p>
+              {zettleQ.data?.connected ? (
+                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-500">
+                  Connected
+                </span>
+              ) : (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold uppercase text-muted-foreground">
+                  Not connected
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Importerar purchases för vald dag till ledgern som <span className="font-mono">source_type=zettle</span>.
+            </p>
+            {zettleQ.data?.auth_mode === "api_key" && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                API key-läge är aktivt. OAuth connect behövs inte.
+              </p>
+            )}
+            {zettleQ.data?.connection?.last_import_finished_at && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Senast importerat: {formatTime(zettleQ.data.connection.last_import_finished_at)} · {zettleQ.data.connection.last_import_count || 0} köp
+              </p>
+            )}
+            {zettleQ.data?.connection?.last_import_error && (
+              <p className="mt-1 text-[11px] text-destructive">{zettleQ.data.connection.last_import_error}</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {!zettleQ.data?.configured && (
+              <span className="text-xs text-destructive">Saknar Zettle secrets</span>
+            )}
+            {!zettleQ.data?.connected ? (
+              <Button
+                size="sm"
+                onClick={handleConnectZettle}
+                disabled={!zettleQ.data?.configured || zettleConnect.isPending}
+              >
+                {zettleConnect.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="mr-2 h-3.5 w-3.5" />}
+                Connect Zettle
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={() => zettleImport.mutate()}
+                disabled={zettleImport.isPending}
+              >
+                {zettleImport.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+                Importera vald dag
+              </Button>
+            )}
           </div>
         </div>
       </div>

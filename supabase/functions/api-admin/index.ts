@@ -3,6 +3,10 @@ import { getAuthenticatedClient } from '../_shared/auth.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
+const ZETTLE_OAUTH_BASE_URL = 'https://oauth.zettle.com';
+const ZETTLE_PURCHASE_BASE_URL = 'https://purchase.izettle.com';
+const ZETTLE_SCOPES = ['READ:PURCHASE'];
+
 async function isAdmin(userId: string): Promise<{ ok: boolean; venueId: string | null }> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -108,6 +112,206 @@ function stockholmDayRangeUtc(date: string) {
 
 function stockholmToday() {
   return DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+}
+
+function localAccountingDateFromIso(value: string) {
+  const parsed = DateTime.fromISO(value, { zone: 'utc' }).setZone('Europe/Stockholm');
+  return parsed.isValid ? parsed.toISODate()! : stockholmToday();
+}
+
+function zettleConfig() {
+  return {
+    clientId: Deno.env.get('ZETTLE_CLIENT_ID') || '',
+    clientSecret: Deno.env.get('ZETTLE_CLIENT_SECRET') || '',
+    apiKey: Deno.env.get('ZETTLE_API_KEY') || '',
+    redirectUri: Deno.env.get('ZETTLE_REDIRECT_URI') || '',
+  };
+}
+
+function zettleAuthMode() {
+  const { clientId, clientSecret, apiKey } = zettleConfig();
+  if (clientId && apiKey) return 'api_key';
+  if (clientId && clientSecret) return 'oauth';
+  return 'unconfigured';
+}
+
+function zettleRedirectUri(supabaseUrl: string) {
+  const configured = zettleConfig().redirectUri;
+  if (configured) return configured;
+  return `${supabaseUrl}/functions/v1/api-admin/zettle-callback`;
+}
+
+function safeReturnUrl(value: unknown) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'https://playpickla.com/hub/admin';
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return 'https://playpickla.com/hub/admin';
+    return parsed.toString();
+  } catch (_error) {
+    return 'https://playpickla.com/hub/admin';
+  }
+}
+
+function zettleStatusFromPurchase(purchase: any) {
+  if (purchase.refunded === true || purchase.refund === true) return 'refunded';
+  if (purchase.refundedAmount || purchase.refundAmount) return 'partially_refunded';
+  return 'paid';
+}
+
+function zettlePaymentMethod(purchase: any) {
+  const methods = Array.isArray(purchase.payments)
+    ? purchase.payments.map((payment: any) => String(payment.type || payment.paymentType || '').trim()).filter(Boolean)
+    : [];
+  return Array.from(new Set(methods)).join(', ') || 'zettle';
+}
+
+function zettlePurchaseUuid(purchase: any) {
+  return String(purchase.purchaseUUID || purchase.purchaseUuid || purchase.uuid || purchase.purchaseUuid1 || '').trim();
+}
+
+function zettlePurchaseNumber(purchase: any) {
+  return String(purchase.purchaseNumber || purchase.globalPurchaseNumber || purchase.receiptNumber || '').trim() || null;
+}
+
+function zettleOccurredAt(purchase: any) {
+  const raw = String(purchase.timestamp || purchase.created || purchase.createdAt || '').trim();
+  const parsed = DateTime.fromISO(raw, { zone: 'utc' });
+  return parsed.isValid ? parsed.toUTC().toISO()! : DateTime.now().toUTC().toISO()!;
+}
+
+async function exchangeZettleToken(params: Record<string, string>) {
+  const { clientId, clientSecret } = zettleConfig();
+  if (!clientId) throw new Error('Zettle is not configured. Missing ZETTLE_CLIENT_ID.');
+  if (!clientSecret && params.grant_type !== 'urn:ietf:params:oauth:grant-type:jwt-bearer') {
+    throw new Error('Zettle OAuth is not configured. Missing ZETTLE_CLIENT_SECRET.');
+  }
+
+  const body = new URLSearchParams({
+    ...params,
+    client_id: clientId,
+  });
+  if (clientSecret && params.grant_type !== 'urn:ietf:params:oauth:grant-type:jwt-bearer') {
+    body.set('client_secret', clientSecret);
+  }
+  const response = await fetch(`${ZETTLE_OAUTH_BASE_URL}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(json.error_description || json.error || `Zettle token request failed (${response.status})`);
+  }
+  return json;
+}
+
+async function zettleApiKeyAccessToken() {
+  const { apiKey } = zettleConfig();
+  if (!apiKey) throw new Error('Zettle API key is not configured. Missing ZETTLE_API_KEY.');
+  const token = await exchangeZettleToken({
+    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    assertion: apiKey,
+  });
+  return token.access_token;
+}
+
+async function getZettleUserInfo(accessToken: string) {
+  const response = await fetch(`${ZETTLE_OAUTH_BASE_URL}/users/self`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return null;
+  return await response.json().catch(() => null);
+}
+
+async function validZettleAccessToken(admin: any, connection: any) {
+  if (zettleAuthMode() === 'api_key') {
+    return await zettleApiKeyAccessToken();
+  }
+
+  const expiresAt = connection.token_expires_at
+    ? DateTime.fromISO(connection.token_expires_at, { zone: 'utc' })
+    : null;
+  if (connection.access_token && expiresAt?.isValid && expiresAt > DateTime.utc().plus({ minutes: 5 })) {
+    return connection.access_token;
+  }
+  if (!connection.refresh_token) throw new Error('Zettle connection has no refresh token. Reconnect Zettle.');
+
+  const token = await exchangeZettleToken({
+    grant_type: 'refresh_token',
+    refresh_token: connection.refresh_token,
+  });
+  const tokenExpiresAt = DateTime.utc().plus({ seconds: Number(token.expires_in || 7200) }).toISO();
+  const { error } = await admin
+    .from('zettle_connections')
+    .update({
+      access_token: token.access_token,
+      refresh_token: token.refresh_token || connection.refresh_token,
+      token_expires_at: tokenExpiresAt,
+      updated_at: new Date().toISOString(),
+      last_import_error: null,
+    })
+    .eq('id', connection.id);
+  if (error) throw new Error(error.message);
+  return token.access_token;
+}
+
+async function fetchZettlePurchases(accessToken: string, startIso: string, endIso: string) {
+  const purchases: any[] = [];
+  let lastPurchaseHash: string | null = null;
+  for (let page = 0; page < 20; page += 1) {
+    const url = new URL(`${ZETTLE_PURCHASE_BASE_URL}/purchases/v2`);
+    url.searchParams.set('startDate', startIso);
+    url.searchParams.set('endDate', endIso);
+    url.searchParams.set('limit', '100');
+    url.searchParams.set('descending', 'false');
+    if (lastPurchaseHash) url.searchParams.set('lastPurchaseHash', lastPurchaseHash);
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(json.message || json.error || `Zettle purchase import failed (${response.status})`);
+    }
+    const pageRows = Array.isArray(json.purchases) ? json.purchases : [];
+    purchases.push(...pageRows);
+    if (!pageRows.length || !json.lastPurchaseHash || json.lastPurchaseHash === lastPurchaseHash) break;
+    lastPurchaseHash = json.lastPurchaseHash;
+  }
+  return purchases;
+}
+
+function zettleLedgerEntry(venueId: string, purchase: any) {
+  const purchaseUuid = zettlePurchaseUuid(purchase);
+  const occurredAt = zettleOccurredAt(purchase);
+  const amount = Math.max(0, Math.round(Number(purchase.amount || purchase.totalAmount || 0)));
+  const vat = Math.max(0, Math.round(Number(purchase.vatAmount || purchase.totalVatAmount || 0)));
+  const paymentMethod = zettlePaymentMethod(purchase);
+  return {
+    venue_id: venueId,
+    source_type: 'zettle',
+    source_id: purchaseUuid,
+    accounting_date: localAccountingDateFromIso(occurredAt),
+    occurred_at: occurredAt,
+    customer_name: null,
+    amount_inc_vat_minor: amount,
+    vat_amount_minor: vat,
+    payment_status: zettleStatusFromPurchase(purchase),
+    payment_method: paymentMethod,
+    stripe_session_id: null,
+    receipt_number: zettlePurchaseNumber(purchase),
+    booking_receipt_id: null,
+    metadata: {
+      provider: 'zettle',
+      currency: purchase.currency || purchase.currencyId || null,
+      purchase_uuid: purchaseUuid,
+      purchase_number: zettlePurchaseNumber(purchase),
+      products: Array.isArray(purchase.products) ? purchase.products : [],
+      payments: Array.isArray(purchase.payments) ? purchase.payments : [],
+      raw: purchase,
+    },
+  };
 }
 
 function stockholmTimeFromIso(value: string | null | undefined) {
@@ -571,6 +775,61 @@ Deno.serve(async (req) => {
   const path = url.pathname.split('/').pop() || '';
 
   try {
+    if (req.method === 'GET' && path === 'zettle-callback') {
+      const state = url.searchParams.get('state') || '';
+      const code = url.searchParams.get('code') || '';
+      if (!state || !code) return errorResponse('Missing Zettle OAuth state or code', 400);
+
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const admin = createClient(supabaseUrl, serviceKey);
+      const { data: connection, error: connectionErr } = await admin
+        .from('zettle_connections')
+        .select('*')
+        .eq('oauth_state', state)
+        .maybeSingle();
+      if (connectionErr) return errorResponse(connectionErr.message, 500);
+      if (!connection) return errorResponse('Invalid Zettle OAuth state', 400);
+      const expiresAt = connection.oauth_state_expires_at
+        ? DateTime.fromISO(connection.oauth_state_expires_at, { zone: 'utc' })
+        : null;
+      if (!expiresAt?.isValid || expiresAt < DateTime.utc()) return errorResponse('Expired Zettle OAuth state', 400);
+
+      const token = await exchangeZettleToken({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: zettleRedirectUri(supabaseUrl),
+      });
+      const userInfo = token.access_token ? await getZettleUserInfo(token.access_token) : null;
+      const tokenExpiresAt = DateTime.utc().plus({ seconds: Number(token.expires_in || 7200) }).toISO();
+      const returnUrl = safeReturnUrl(connection.metadata?.return_url);
+
+      const { error: updateErr } = await admin
+        .from('zettle_connections')
+        .update({
+          status: 'connected',
+          organization_uuid: userInfo?.organizationUuid || connection.organization_uuid || null,
+          zettle_user_uuid: userInfo?.uuid || connection.zettle_user_uuid || null,
+          oauth_state: null,
+          oauth_state_expires_at: null,
+          access_token: token.access_token,
+          refresh_token: token.refresh_token,
+          token_expires_at: tokenExpiresAt,
+          last_import_error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', connection.id);
+      if (updateErr) return errorResponse(updateErr.message, 500);
+
+      return new Response(null, {
+        status: 302,
+        headers: {
+          ...corsHeaders,
+          Location: `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}zettle=connected`,
+        },
+      });
+    }
+
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
@@ -716,6 +975,188 @@ Deno.serve(async (req) => {
       return jsonResponse(results, 200, 5);
     }
 
+    // ── ZETTLE REVENUE MVP ──
+    if (req.method === 'GET' && path === 'zettle-status') {
+      const { data: connection, error: connectionErr } = await admin
+        .from('zettle_connections')
+        .select('id, venue_id, status, organization_uuid, zettle_user_uuid, token_expires_at, scopes, last_import_started_at, last_import_finished_at, last_import_from, last_import_to, last_import_count, last_import_error, updated_at, created_at')
+        .eq('venue_id', venueId)
+        .maybeSingle();
+      if (connectionErr) return errorResponse(connectionErr.message);
+
+      const mode = zettleAuthMode();
+      return jsonResponse({
+        configured: mode !== 'unconfigured',
+        auth_mode: mode,
+        connected: mode === 'api_key' || connection?.status === 'connected',
+        connection: connection || null,
+        required_secrets: mode === 'api_key'
+          ? ['ZETTLE_CLIENT_ID', 'ZETTLE_API_KEY']
+          : ['ZETTLE_CLIENT_ID', 'ZETTLE_CLIENT_SECRET'],
+        redirect_uri: zettleRedirectUri(supabaseUrl),
+      }, 200, 10);
+    }
+
+    if (req.method === 'POST' && path === 'zettle-connect') {
+      const body = await req.json().catch(() => ({}));
+      const { clientId, clientSecret } = zettleConfig();
+      if (zettleAuthMode() === 'api_key') {
+        return jsonResponse({
+          connected: true,
+          auth_mode: 'api_key',
+          message: 'Zettle API key mode is configured. OAuth connect is not required.',
+        }, 200, 10);
+      }
+      if (!clientId || !clientSecret) {
+        return errorResponse('Zettle is not configured. Add ZETTLE_CLIENT_ID and ZETTLE_CLIENT_SECRET as Supabase secrets.', 400);
+      }
+
+      const state = crypto.randomUUID();
+      const returnUrl = safeReturnUrl(body.returnUrl);
+      const redirectUri = zettleRedirectUri(supabaseUrl);
+      const expiresAt = DateTime.utc().plus({ minutes: 15 }).toISO();
+      const { error: upsertErr } = await admin
+        .from('zettle_connections')
+        .upsert({
+          venue_id: venueId,
+          status: 'pending',
+          oauth_state: state,
+          oauth_state_expires_at: expiresAt,
+          scopes: ZETTLE_SCOPES,
+          metadata: { return_url: returnUrl },
+          created_by: userId,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'venue_id' });
+      if (upsertErr) return errorResponse(upsertErr.message);
+
+      const authorizeUrl = new URL(`${ZETTLE_OAUTH_BASE_URL}/authorize`);
+      authorizeUrl.searchParams.set('response_type', 'code');
+      authorizeUrl.searchParams.set('scope', ZETTLE_SCOPES.join(' '));
+      authorizeUrl.searchParams.set('client_id', clientId);
+      authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+      authorizeUrl.searchParams.set('state', state);
+
+      return jsonResponse({
+        authorization_url: authorizeUrl.toString(),
+        redirect_uri: redirectUri,
+        expires_at: expiresAt,
+      }, 200, 10);
+    }
+
+    if (req.method === 'POST' && path === 'zettle-import') {
+      const body = await req.json().catch(() => ({}));
+      const requestedDate = String(body.date || stockholmToday()).slice(0, 10);
+      const startDay = DateTime.fromISO(requestedDate, { zone: 'Europe/Stockholm' });
+      if (!startDay.isValid) return errorResponse('Invalid date', 400);
+      const endDay = startDay.plus({ days: 1 });
+      const startIso = startDay.startOf('day').toUTC().toISO()!;
+      const endIso = endDay.startOf('day').toUTC().toISO()!;
+
+      const { data: connection, error: connectionErr } = await admin
+        .from('zettle_connections')
+        .select('*')
+        .eq('venue_id', venueId)
+        .maybeSingle();
+      if (connectionErr) return errorResponse(connectionErr.message);
+      const apiKeyMode = zettleAuthMode() === 'api_key';
+      if (!apiKeyMode && (!connection || connection.status !== 'connected')) return errorResponse('Zettle is not connected for this venue', 400);
+
+      let importConnection = connection;
+      if (apiKeyMode && !importConnection) {
+        const { data: apiKeyConnection, error: apiKeyConnectionErr } = await admin
+          .from('zettle_connections')
+          .upsert({
+            venue_id: venueId,
+            status: 'connected',
+            scopes: ZETTLE_SCOPES,
+            metadata: { auth_mode: 'api_key' },
+            created_by: userId,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'venue_id' })
+          .select('*')
+          .single();
+        if (apiKeyConnectionErr) return errorResponse(apiKeyConnectionErr.message);
+        importConnection = apiKeyConnection;
+      }
+      if (!importConnection) return errorResponse('Zettle connection could not be prepared', 500);
+
+      await admin
+        .from('zettle_connections')
+        .update({
+          last_import_started_at: new Date().toISOString(),
+          last_import_error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', importConnection.id);
+
+      try {
+        const accessToken = await validZettleAccessToken(admin, importConnection);
+        const purchases = await fetchZettlePurchases(accessToken, startIso, endIso);
+        const validPurchases = purchases.filter((purchase) => zettlePurchaseUuid(purchase));
+
+        if (validPurchases.length) {
+          const rawRows = validPurchases.map((purchase) => {
+            const occurredAt = zettleOccurredAt(purchase);
+            return {
+              venue_id: venueId,
+              connection_id: importConnection.id,
+              purchase_uuid: zettlePurchaseUuid(purchase),
+              purchase_number: zettlePurchaseNumber(purchase),
+              occurred_at: occurredAt,
+              amount_inc_vat_minor: Math.max(0, Math.round(Number(purchase.amount || purchase.totalAmount || 0))),
+              vat_amount_minor: Math.max(0, Math.round(Number(purchase.vatAmount || purchase.totalVatAmount || 0))),
+              currency: purchase.currency || purchase.currencyId || null,
+              payment_method: zettlePaymentMethod(purchase),
+              payment_status: zettleStatusFromPurchase(purchase),
+              raw_payload: purchase,
+              imported_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            };
+          });
+          const { error: rawErr } = await admin
+            .from('zettle_purchases')
+            .upsert(rawRows, { onConflict: 'venue_id,purchase_uuid' });
+          if (rawErr) throw new Error(rawErr.message);
+
+          const ledgerRows = validPurchases.map((purchase) => zettleLedgerEntry(venueId!, purchase));
+          const { error: ledgerErr } = await admin
+            .from('ledger_entries')
+            .upsert(ledgerRows, { onConflict: 'source_type,source_id', ignoreDuplicates: true });
+          if (ledgerErr) throw new Error(ledgerErr.message);
+        }
+
+        await admin
+          .from('zettle_connections')
+          .update({
+            status: 'connected',
+            last_import_finished_at: new Date().toISOString(),
+            last_import_from: startIso,
+            last_import_to: endIso,
+            last_import_count: validPurchases.length,
+            last_import_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', importConnection.id);
+
+        return jsonResponse({
+          date: requestedDate,
+          imported_count: validPurchases.length,
+          ledger_source_type: 'zettle',
+        }, 200, 10);
+      } catch (importErr) {
+        const message = importErr instanceof Error ? importErr.message : 'Zettle import failed';
+        await admin
+          .from('zettle_connections')
+          .update({
+            last_import_finished_at: new Date().toISOString(),
+            last_import_error: message,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', importConnection.id);
+        return errorResponse(message, 500);
+      }
+    }
+
     // ── REVENUE LEDGER ──
     if (req.method === 'GET' && path === 'revenue-ledger') {
       const requestedDate = url.searchParams.get('date') || stockholmToday();
@@ -728,6 +1169,7 @@ Deno.serve(async (req) => {
         activity_registration: 'Activity',
         day_pass: 'Day Pass',
         membership: 'Membership',
+        zettle: 'Zettle',
       };
 
       const normalizeLedgerRows = (rows: any[]) => rows.map((row) => ({
@@ -768,10 +1210,20 @@ Deno.serve(async (req) => {
           .gte('accounting_date', startDate)
           .lt('accounting_date', endDate);
         if (ledgerErr) throw new Error(ledgerErr.message);
+        const rows = data || [];
+        const zettleRows = rows.filter((row: any) => row.source_type === 'zettle');
+        const picklaRows = rows.filter((row: any) => row.source_type !== 'zettle');
         return {
-          total_minor: sumMinor(data || [], 'amount_inc_vat_minor'),
-          vat_minor: sumMinor(data || [], 'vat_amount_minor'),
-          count: (data || []).length,
+          total_minor: sumMinor(rows, 'amount_inc_vat_minor'),
+          vat_minor: sumMinor(rows, 'vat_amount_minor'),
+          count: rows.length,
+          channels: {
+            pickla_minor: sumMinor(picklaRows, 'amount_inc_vat_minor'),
+            pickla_count: picklaRows.length,
+            zettle_minor: sumMinor(zettleRows, 'amount_inc_vat_minor'),
+            zettle_count: zettleRows.length,
+            total_minor: sumMinor(rows, 'amount_inc_vat_minor'),
+          },
         };
       };
 
@@ -782,7 +1234,7 @@ Deno.serve(async (req) => {
           ledgerForDateRange(start, end),
           receiptTotalForLocalRange(day, day.plus({ days: 1 })),
         ]);
-        return { ledger, receipts, delta_minor: ledger.total_minor - receipts.total_minor };
+        return { ledger, receipts, delta_minor: ledger.channels.pickla_minor - receipts.total_minor };
       };
 
       const monthStart = DateTime.now().setZone('Europe/Stockholm').startOf('month');
@@ -792,7 +1244,7 @@ Deno.serve(async (req) => {
           ledgerForDateRange(monthStart.toISODate()!, monthEnd.toISODate()!),
           receiptTotalForLocalRange(monthStart, monthEnd),
         ]);
-        return { ledger, receipts, delta_minor: ledger.total_minor - receipts.total_minor };
+        return { ledger, receipts, delta_minor: ledger.channels.pickla_minor - receipts.total_minor };
       };
 
       const { data: rows, error: rowsErr } = await admin
