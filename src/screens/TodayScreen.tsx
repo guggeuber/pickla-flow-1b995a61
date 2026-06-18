@@ -1,13 +1,15 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, Users, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine, UserCheck } from "lucide-react";
+import { Activity, Users, Zap, Check, Clock, ChevronRight, Timer, Plus, ArrowRight, X, AlertCircle, ScanLine, UserCheck, QrCode, Download, Printer } from "lucide-react";
 import QrScanner from "@/components/desk/QrScanner";
 import { BookingsSection } from "@/components/desk/BookingsSection";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { useVenueForStaff, useVenueCourts, useTodayBookings, useTodayRevenue } from "@/hooks/useDesk";
 import { apiGet } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
+import { QRCodeCanvas } from "qrcode.react";
+import picklaLogo from "@/assets/pickla-logo.svg";
 
 // Define types for court status and display
 type CourtStatus = "free" | "active" | "soon" | "vip";
@@ -42,6 +44,123 @@ const courtActions = [
   { label: "Add Drinks", icon: Plus, color: "bg-sell/15 text-sell" },
   { label: "Move Court", icon: ArrowRight, color: "bg-badge-vip/15 text-badge-vip" },
 ];
+
+const publicCheckinSlug = (slug?: string | null) => {
+  if (!slug) return "solna";
+  return slug === "pickla-arena-sthlm" ? "solna" : slug;
+};
+
+function EntryQrModal({
+  venueName,
+  venueSlug,
+  onClose,
+}: {
+  venueName: string;
+  venueSlug: string;
+  onClose: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const qrUrl = `https://playpickla.com/checkin/${encodeURIComponent(publicCheckinSlug(venueSlug))}`;
+
+  const downloadPng = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const link = document.createElement("a");
+    link.download = `pickla-entrance-qr-${publicCheckinSlug(venueSlug)}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] bg-white text-neutral-950">
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          .entry-qr-printable, .entry-qr-printable * { visibility: visible !important; }
+          .entry-qr-printable {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100vw !important;
+            min-height: 100vh !important;
+            box-shadow: none !important;
+          }
+          .entry-qr-actions { display: none !important; }
+          @page { margin: 0; }
+        }
+      `}</style>
+
+      <div className="entry-qr-printable flex min-h-[100dvh] flex-col items-center justify-between px-6 py-[calc(env(safe-area-inset-top,0px)+24px)] text-center">
+        <div className="entry-qr-actions flex w-full max-w-xl items-center justify-between">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center rounded-xl bg-neutral-100 text-neutral-700"
+            aria-label="Stäng entré-QR"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={downloadPng}
+              className="flex h-10 items-center gap-2 rounded-xl bg-neutral-100 px-3 text-xs font-bold text-neutral-700"
+            >
+              <Download className="h-4 w-4" />
+              PNG
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-3 text-xs font-bold text-white"
+            >
+              <Printer className="h-4 w-4" />
+              Skriv ut
+            </button>
+          </div>
+        </div>
+
+        <div className="flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-8">
+          <img src={picklaLogo} alt="Pickla" className="h-10 w-auto" />
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.28em] text-neutral-400">Scan to check in</p>
+            <h1 className="mt-3 text-4xl font-display font-black tracking-tight text-neutral-950">
+              Checka in här
+            </h1>
+            <p className="mt-3 text-base font-semibold text-neutral-500">{venueName}</p>
+          </div>
+
+          <div className="rounded-[2rem] border border-neutral-200 bg-white p-5 shadow-2xl shadow-neutral-200">
+            <QRCodeCanvas
+              key={qrUrl}
+              ref={canvasRef}
+              value={qrUrl}
+              size={300}
+              bgColor="#ffffff"
+              fgColor="#111111"
+              marginSize={2}
+              level="H"
+              imageSettings={{
+                src: picklaLogo,
+                height: 34,
+                width: 92,
+                excavate: true,
+              }}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-bold text-neutral-700">Öppna kameran och scanna QR-koden</p>
+            <p className="break-all font-mono text-[11px] text-neutral-400">{qrUrl}</p>
+          </div>
+        </div>
+
+        <p className="pb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-neutral-300">
+          playpickla.com
+        </p>
+      </div>
+    </div>
+  );
+}
 
 const checkinLabels: Record<string, string> = {
   booking_code: "Bokning",
@@ -82,6 +201,7 @@ const TodayScreen = () => {
   const queryClient = useQueryClient();
   const [selectedCourt, setSelectedCourt] = useState<CourtDisplay | null>(null);
   const [showScanner, setShowScanner] = useState(false);
+  const [showEntryQr, setShowEntryQr] = useState(false);
   const [newArrivalIds, setNewArrivalIds] = useState<Set<string>>(new Set());
 
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
@@ -230,16 +350,26 @@ const TodayScreen = () => {
         </div>
       </div>
 
-      {/* Scan QR Button */}
+      {/* Check-in Actions */}
       {venueId && (
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={() => setShowScanner(true)}
-          className="w-full bg-court-free text-white rounded-2xl py-4 font-bold text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-court-free/25"
-        >
-          <ScanLine className="w-5 h-5" />
-          Skanna incheckning
-        </motion.button>
+        <div className="grid grid-cols-2 gap-2">
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={() => setShowScanner(true)}
+            className="bg-court-free text-white rounded-2xl py-4 font-bold text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-court-free/25"
+          >
+            <ScanLine className="w-5 h-5" />
+            Skanna
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={() => setShowEntryQr(true)}
+            className="rounded-2xl border border-primary/30 bg-primary/10 py-4 text-sm font-bold text-primary flex items-center justify-center gap-2.5"
+          >
+            <QrCode className="w-5 h-5" />
+            Visa entré-QR
+          </motion.button>
+        </div>
       )}
 
       {/* Revenue Strip */}
@@ -441,6 +571,16 @@ const TodayScreen = () => {
             onCheckedIn={() => {
               queryClient.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
             }}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showEntryQr && staffVenue?.venues && (
+          <EntryQrModal
+            venueName={(staffVenue.venues as any).name || "Pickla"}
+            venueSlug={(staffVenue.venues as any).slug || "solna"}
+            onClose={() => setShowEntryQr(false)}
           />
         )}
       </AnimatePresence>
