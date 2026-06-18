@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAdminAgentInbox, useAdminAttention, useAdminHistory, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
+import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
 import { AX, ax, AX_GRID_BG } from "./axTheme";
 import {
   AxCard,
@@ -221,6 +222,7 @@ function QuickAction({
 /* ───────────── Main ───────────── */
 
 export default function AdminToday({ venueId, venueName, onOpenSettings }: Props) {
+  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
   const statsQ = useAdminStats(venueId);
   const histQ = useAdminHistory(venueId);
   const [now, setNow] = useState(new Date());
@@ -545,7 +547,13 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
                 key={item.id}
                 type="button"
                 whileTap={{ scale: 0.99 }}
-                onClick={() => item.moduleTarget && onOpenSettings(item.moduleTarget)}
+                onClick={() => {
+                  if (item.booking_group_key) {
+                    setOpenBooking(item as OperationsBookingDetail);
+                    return;
+                  }
+                  item.moduleTarget && onOpenSettings(item.moduleTarget);
+                }}
                 className="relative flex w-full items-center gap-3 px-3.5 py-3 text-left"
                 style={{
                   borderTop: i === 0 ? "none" : `1px solid ${ax("borderSoft")}`,
@@ -622,6 +630,11 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
       >
         ⌁ PICKLA ADMIN OS · v0.1 · BUILT FOR SPEED ⌁
       </p>
+      <OperationsBookingDrawer
+        open={!!openBooking}
+        booking={openBooking}
+        onClose={() => setOpenBooking(null)}
+      />
     </div>
   );
 }

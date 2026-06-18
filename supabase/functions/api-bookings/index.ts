@@ -16,6 +16,15 @@ function nameFromBookingNotes(notes?: string | null) {
   return (notes || '').split(' | ')[0].trim();
 }
 
+function bookingContactFromNotes(notes?: string | null) {
+  const parts = String(notes || '').split(' | ').map((part) => part.trim());
+  return {
+    name: parts[0] || null,
+    phone: parts[1] || null,
+    email: parts[2] || null,
+  };
+}
+
 function applyPercentDiscount(baseAmount: number, percent: number) {
   return Math.max(0, Math.round(baseAmount * (1 - (percent / 100)) * 100) / 100);
 }
@@ -1824,10 +1833,51 @@ Deno.serve(async (req) => {
       const { data, error: qErr } = await query;
       if (qErr) return errorResponse(qErr.message);
 
+      const bookingRows = data || [];
+      const bookingIds = Array.from(new Set(bookingRows.map((booking: any) => booking.id).filter(Boolean)));
+      const stripeIds = Array.from(new Set(bookingRows.map((booking: any) => booking.stripe_session_id).filter(Boolean)));
+      const lookupClient = getServiceClient();
+      const [receiptsResult, checkinsResult] = await Promise.all([
+        stripeIds.length
+          ? lookupClient
+            .from('booking_receipts')
+            .select('id, receipt_number, customer_name, customer_email, customer_phone, payment_method, payment_status, stripe_session_id, total_inc_vat_sek')
+            .in('stripe_session_id', stripeIds)
+          : Promise.resolve({ data: [], error: null }),
+        bookingIds.length
+          ? lookupClient
+            .from('venue_checkins')
+            .select('id, entitlement_id, entry_type, player_name, checked_in_at, checked_out_at')
+            .eq('venue_id', venueId)
+            .in('entitlement_id', bookingIds)
+            .is('checked_out_at', null)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (receiptsResult.error) return errorResponse(receiptsResult.error.message);
+      if (checkinsResult.error) return errorResponse(checkinsResult.error.message);
+
+      const receiptByStripe = new Map((receiptsResult.data || []).map((receipt: any) => [receipt.stripe_session_id, receipt]));
+      const checkinByBookingId = new Map((checkinsResult.data || []).map((checkin: any) => [checkin.entitlement_id, checkin]));
+
       const courtBookings = (data || []).map((booking: any) => ({
         ...booking,
         kind: 'court_booking',
         booking_type: 'Banbokning',
+        customer_contact: bookingContactFromNotes(booking.notes),
+        receipt: booking.stripe_session_id ? receiptByStripe.get(booking.stripe_session_id) || null : null,
+        payment_status: booking.stripe_session_id && receiptByStripe.get(booking.stripe_session_id)?.payment_status
+          ? receiptByStripe.get(booking.stripe_session_id)?.payment_status
+          : Number(booking.total_price || 0) <= 0
+          ? 'free'
+          : booking.stripe_session_id
+          ? 'paid'
+          : booking.status === 'pending'
+          ? 'pending'
+          : 'unknown',
+        payment_method: booking.stripe_session_id ? (receiptByStripe.get(booking.stripe_session_id)?.payment_method || 'Stripe') : null,
+        receipt_number: booking.stripe_session_id ? receiptByStripe.get(booking.stripe_session_id)?.receipt_number || null : null,
+        checked_in: Boolean(checkinByBookingId.get(booking.id)),
+        checked_in_at: checkinByBookingId.get(booking.id)?.checked_in_at || null,
       }));
 
       let activityRegistrations: any[] = [];

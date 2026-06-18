@@ -159,6 +159,7 @@ export function useAdminRevenueLedger(venueId: string | undefined, date: string 
 export type AdminCalendarItem = {
   id: string;
   source_id: string;
+  source_ids?: string[];
   date: string;
   time: string;
   end_time?: string | null;
@@ -179,6 +180,24 @@ export type AdminCalendarItem = {
   visibility?: string | null;
   status?: string | null;
   resource_name?: string | null;
+  booking_group_key?: string;
+  booking_refs?: string[];
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  customer_email?: string | null;
+  courts?: Array<{ id?: string | null; name?: string | null; court_number?: number | null; sport_type?: string | null }>;
+  court_name?: string | null;
+  amount_sek?: number | null;
+  payment_status?: string | null;
+  payment_method?: string | null;
+  receipt_number?: string | null;
+  booking_receipt_id?: string | null;
+  checked_in?: boolean | null;
+  checked_in_at?: string | null;
+  checked_in_count?: number | null;
+  notes?: string | null;
+  access_code?: string | null;
+  stripe_session_id?: string | null;
 };
 
 export type AdminCalendarResponse = {
@@ -243,12 +262,33 @@ export function useAdminAgentInbox(venueId: string | undefined) {
 
 export type AdminTodaysPlanItem = {
   id: string;
+  source_id?: string;
+  source_ids?: string[];
   time: string;
+  end_time?: string | null;
   title: string;
   kind: string;
   tone: "electric" | "lime" | "magenta" | "sun" | "danger";
   href?: string | null;
   moduleTarget?: string | null;
+  booking_group_key?: string;
+  booking_refs?: string[];
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  customer_email?: string | null;
+  courts?: Array<{ id?: string | null; name?: string | null; court_number?: number | null; sport_type?: string | null }>;
+  court_name?: string | null;
+  amount_sek?: number | null;
+  payment_status?: string | null;
+  payment_method?: string | null;
+  receipt_number?: string | null;
+  booking_receipt_id?: string | null;
+  checked_in?: boolean | null;
+  checked_in_at?: string | null;
+  checked_in_count?: number | null;
+  notes?: string | null;
+  access_code?: string | null;
+  stripe_session_id?: string | null;
 };
 
 export function useAdminTodaysPlan(venueId: string | undefined, date: string | undefined) {

@@ -10,6 +10,12 @@ import { apiGet } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { QRCodeCanvas } from "qrcode.react";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import {
+  OperationsBookingDrawer,
+  bookingRowsForGroup,
+  buildOperationsBookingDetailFromRows,
+  type OperationsBookingDetail,
+} from "@/components/operations/OperationsBookingDrawer";
 
 // Define types for court status and display
 type CourtStatus = "free" | "active" | "soon" | "vip";
@@ -202,6 +208,7 @@ const TodayScreen = () => {
   const [selectedCourt, setSelectedCourt] = useState<CourtDisplay | null>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [showEntryQr, setShowEntryQr] = useState(false);
+  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
   const [newArrivalIds, setNewArrivalIds] = useState<Set<string>>(new Set());
 
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
@@ -302,6 +309,18 @@ const TodayScreen = () => {
     () => bookings?.filter((booking) => booking.kind !== "activity_registration").length || 0,
     [bookings]
   );
+  const courtBookingRows = useMemo(
+    () => bookings?.filter((booking) => booking.kind !== "activity_registration") || [],
+    [bookings]
+  );
+  const openBookingFromRow = (booking: any, sourceRows = courtBookingRows) => {
+    const detail = buildOperationsBookingDetailFromRows(bookingRowsForGroup(sourceRows, booking));
+    if (detail) setOpenBooking(detail);
+  };
+  const openFirstBooking = () => {
+    const row = courtBookingRows[0];
+    if (row) openBookingFromRow(row);
+  };
   const activityRegistrationCount = useMemo(
     () => bookings?.filter((booking) => booking.kind === "activity_registration").length || 0,
     [bookings]
@@ -314,6 +333,10 @@ const TodayScreen = () => {
       .filter((b) => new Date(b.start_time).getTime() > nowMs && b.status !== "cancelled")
       .slice(0, 6);
   }, [bookings, now]);
+  const openFirstUpcomingBooking = () => {
+    const row = upcomingBookings.find((booking) => booking.kind !== "activity_registration");
+    if (row) openBookingFromRow(row);
+  };
 
   if (!venueLoading && !staffVenue) {
     return (
@@ -392,23 +415,26 @@ const TodayScreen = () => {
       {/* Quick Stats */}
       <div className="grid grid-cols-4 gap-2">
         {[
-          { label: "Courts", value: `${activeCourts}/${totalCourts}`, icon: Activity },
-          { label: "Bookings", value: String(courtBookingCount), icon: Zap },
-          { label: "Aktivitet", value: String(activityRegistrationCount), icon: Users },
-          { label: "Upcoming", value: String(upcomingBookings.length), icon: Users },
+          { label: "Courts", value: `${activeCourts}/${totalCourts}`, icon: Activity, onClick: undefined },
+          { label: "Bookings", value: String(courtBookingCount), icon: Zap, onClick: courtBookingCount > 0 ? openFirstBooking : undefined },
+          { label: "Aktivitet", value: String(activityRegistrationCount), icon: Users, onClick: undefined },
+          { label: "Upcoming", value: String(upcomingBookings.length), icon: Users, onClick: upcomingBookings.some((booking) => booking.kind !== "activity_registration") ? openFirstUpcomingBooking : undefined },
         ].map((stat, i) => (
-          <motion.div
+          <motion.button
             key={stat.label}
+            type="button"
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="rounded-xl p-2.5 text-center"
+            onClick={stat.onClick}
+            disabled={!stat.onClick}
+            className="rounded-xl p-2.5 text-center disabled:cursor-default"
             style={{ background: "hsl(var(--surface-1))" }}
           >
             <stat.icon className="w-3.5 h-3.5 text-primary mx-auto mb-1" />
             <p className="text-base font-display font-bold">{stat.value}</p>
             <p className="text-[9px] text-muted-foreground">{stat.label}</p>
-          </motion.div>
+          </motion.button>
         ))}
       </div>
 
@@ -518,7 +544,7 @@ const TodayScreen = () => {
       </div>
 
       {/* All Bookings with date picker */}
-      <BookingsSection venueId={venueId} />
+      <BookingsSection venueId={venueId} onOpenBooking={openBookingFromRow} />
 
       {/* Upcoming Bookings */}
       <div>
@@ -531,13 +557,19 @@ const TodayScreen = () => {
               const courtName = isActivity
                 ? booking.activity_session?.name || booking.notes || "Aktivitet"
                 : (booking.venue_courts as any)?.name || "–";
+              const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
+              const paymentLabel = paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
+              const paymentTone = paymentStatus === "paid" || paymentStatus === "free" ? "bg-badge-paid/15 text-badge-paid" : "bg-badge-unpaid/15 text-badge-unpaid";
               return (
-                <motion.div
+                <motion.button
                   key={booking.id}
+                  type="button"
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.3 + i * 0.06 }}
-                  className="glass-card rounded-2xl p-3 flex items-center gap-3"
+                  onClick={() => !isActivity && openBookingFromRow(booking)}
+                  disabled={isActivity}
+                  className="glass-card w-full rounded-2xl p-3 flex items-center gap-3 text-left disabled:cursor-default"
                 >
                   <div className="text-center min-w-[40px]">
                     <p className="text-sm font-display font-bold text-primary">
@@ -550,10 +582,10 @@ const TodayScreen = () => {
                       {courtName}{isActivity ? " · Aktivitet" : ""}
                     </p>
                   </div>
-                  <span className={`status-chip text-[9px] ${booking.status === "confirmed" ? "bg-badge-paid/15 text-badge-paid" : "bg-badge-unpaid/15 text-badge-unpaid"}`}>
-                    {isActivity ? "Aktivitet" : booking.status === "confirmed" ? "Paid" : booking.status}
+                  <span className={`status-chip text-[9px] ${isActivity ? "bg-primary/15 text-primary" : paymentTone}`}>
+                    {isActivity ? "Aktivitet" : paymentLabel}
                   </span>
-                </motion.div>
+                </motion.button>
               );
             })}
           </div>
@@ -584,6 +616,12 @@ const TodayScreen = () => {
           />
         )}
       </AnimatePresence>
+
+      <OperationsBookingDrawer
+        open={!!openBooking}
+        booking={openBooking}
+        onClose={() => setOpenBooking(null)}
+      />
 
       {/* Court Action Sheet */}
       <AnimatePresence>

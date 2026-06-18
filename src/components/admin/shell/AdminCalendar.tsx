@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAdminCalendar, type AdminCalendarItem } from "@/hooks/useAdmin";
+import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
 import { ax, AX_GRID_BG } from "./axTheme";
 import { AX_TYPE, AxCard, AxChip, AxSectionLabel } from "./axPrimitives";
 
@@ -116,8 +117,9 @@ function deskPriceForOnline(value: string | number) {
 }
 
 /* Tone per kind. Used for timeline strip + chip color. */
-const KIND_TONE: Record<string, { strip: string; chipTone: "lime" | "magenta" | "danger" | "sun"; label: string; glow: string }> = {
+const KIND_TONE: Record<string, { strip: string; chipTone: "lime" | "electric" | "magenta" | "danger" | "sun"; label: string; glow: string }> = {
   activity: { strip: ax("lime"), chipTone: "lime", label: "AKTIVITET", glow: ax("lime", 0.35) },
+  court_booking: { strip: ax("electric"), chipTone: "electric", label: "BOKNING", glow: ax("electric", 0.35) },
   event: { strip: ax("magenta"), chipTone: "magenta", label: "EVENT", glow: ax("magenta", 0.35) },
   drift: { strip: ax("danger"), chipTone: "danger", label: "DRIFT", glow: ax("danger", 0.35) },
   block: { strip: ax("sun"), chipTone: "sun", label: "BLOCK", glow: ax("sun", 0.35) },
@@ -255,6 +257,7 @@ function TimelineItem({
   const cap = item.capacity ?? null;
   const reg = item.registrations_count ?? null;
   const pct = cap && reg != null ? Math.min(100, Math.round((reg / cap) * 100)) : null;
+  const paymentStatus = item.payment_status === "paid" ? "Betald" : item.payment_status === "free" ? "Gratis" : item.payment_status === "pending" ? "Väntar" : "Okänd";
 
   return (
     <motion.button
@@ -295,11 +298,21 @@ function TimelineItem({
           {item.kind === "activity" && item.override_status === "hidden" && <AxChip tone="neutral">DOLD</AxChip>}
           {item.kind === "activity" && item.override_status === "cancelled" && <AxChip tone="danger">AVBOKAD</AxChip>}
           {item.kind === "event" && item.visibility && <AxChip tone="neutral">{String(item.visibility).toUpperCase()}</AxChip>}
+          {item.kind === "court_booking" && <AxChip tone={item.payment_status === "paid" || item.payment_status === "free" ? "lime" : "sun"}>{paymentStatus}</AxChip>}
+          {item.kind === "court_booking" && <AxChip tone={item.checked_in ? "lime" : "sun"}>{item.checked_in ? "Incheckad" : "Ej incheckad"}</AxChip>}
         </div>
         <p className="mt-1 truncate text-[15px] font-black leading-tight" style={{ color: "white" }}>
           {item.title}
         </p>
         <div className="mt-1.5 flex items-center gap-3 text-[11px]" style={{ color: ax("muted") }}>
+          {item.kind === "court_booking" && (
+            <span className="inline-flex items-center gap-1 truncate">
+              {item.court_name || item.courts?.map((court) => court.name).filter(Boolean).join(", ")}
+            </span>
+          )}
+          {item.kind === "court_booking" && item.amount_sek != null && (
+            <span>{Math.round(Number(item.amount_sek || 0)).toLocaleString("sv-SE")} kr</span>
+          )}
           {reg != null && (
             <span className="inline-flex items-center gap-1">
               <Users className="h-3 w-3" />
@@ -390,6 +403,7 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   const qc = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(todayStockholm());
   const [openItem, setOpenItem] = useState<AdminCalendarItem | null>(null);
+  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
   const [openDrift, setOpenDrift] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState<AdminCalendarItem | null>(null);
@@ -858,10 +872,26 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
           </AxCard>
         ) : (
           dayItems.map((item) => (
-            <TimelineItem key={item.id} item={item} onTap={() => setOpenItem(item)} />
+            <TimelineItem
+              key={item.id}
+              item={item}
+              onTap={() => {
+                if (item.kind === "court_booking") {
+                  setOpenBooking(item as OperationsBookingDetail);
+                  return;
+                }
+                setOpenItem(item);
+              }}
+            />
           ))
         )}
       </div>
+
+      <OperationsBookingDrawer
+        open={!!openBooking}
+        booking={openBooking}
+        onClose={() => setOpenBooking(null)}
+      />
 
       {/* ── ITEM ACTION SHEET ── */}
       <Sheet open={!!openItem} onClose={() => setOpenItem(null)} title={openItem?.title || ""}>

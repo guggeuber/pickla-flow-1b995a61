@@ -11,9 +11,10 @@ import { apiGet } from "@/lib/api";
 
 interface BookingsSectionProps {
   venueId: string | undefined;
+  onOpenBooking?: (booking: any, bookings: any[]) => void;
 }
 
-export function BookingsSection({ venueId }: BookingsSectionProps) {
+export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const queryClient = useQueryClient();
   const dateStr = format(selectedDate, "yyyy-MM-dd");
@@ -99,22 +100,33 @@ export function BookingsSection({ venueId }: BookingsSectionProps) {
               ? booking.activity_session?.name || booking.notes || "Aktivitet"
               : (booking.venue_courts as any)?.name || "–";
             const customer = booking.booked_by || booking.notes || "Gäst";
+            const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
             const statusLabel = isActivity
               ? "Aktivitet"
-              : booking.status === "confirmed"
+              : paymentStatus === "paid"
                 ? "Betald"
-                : booking.status === "pending"
+                : paymentStatus === "free"
+                  ? "Gratis"
+                  : paymentStatus === "pending"
                   ? "Väntande"
                   : booking.status === "cancelled"
                     ? "Avbokad"
-                    : booking.status;
+                    : "Okänd";
+            const statusTone = paymentStatus === "paid" || paymentStatus === "free"
+              ? "bg-court-free/15 text-court-free"
+              : paymentStatus === "pending"
+              ? "bg-court-soon/15 text-court-soon"
+              : statusColors[booking.status] || "bg-secondary text-secondary-foreground";
 
             return (
-              <motion.div
+              <motion.button
                 key={booking.id}
+                type="button"
+                onClick={() => !isActivity && onOpenBooking?.(booking, sortedBookings)}
                 initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="glass-card rounded-2xl p-3 flex items-center gap-3"
+                className="glass-card w-full rounded-2xl p-3 flex items-center gap-3 text-left disabled:cursor-default"
+                disabled={isActivity || !onOpenBooking}
               >
                 <div className="text-center min-w-[55px]">
                   <p className="text-sm font-display font-bold text-primary">
@@ -137,11 +149,11 @@ export function BookingsSection({ venueId }: BookingsSectionProps) {
                       {Math.round(booking.total_price)} kr
                     </span>
                   )}
-                  <span className={`status-chip text-[9px] ${statusColors[booking.status] || "bg-secondary text-secondary-foreground"}`}>
+                  <span className={`status-chip text-[9px] ${statusTone}`}>
                     {statusLabel}
                   </span>
                 </div>
-              </motion.div>
+              </motion.button>
             );
           })}
         </div>

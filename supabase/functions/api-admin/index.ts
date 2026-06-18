@@ -253,6 +253,126 @@ async function activityOverrideMap(admin: any, venueId: string, activitySessionI
   return overrides;
 }
 
+function bookingGroupKey(row: any) {
+  if (row.stripe_session_id) return `stripe:${row.stripe_session_id}`;
+  if (row.access_code) return `code:${row.access_code}`;
+  const notesKey = String(row.notes || row.booked_by || row.user_id || row.id).trim();
+  if (notesKey && row.start_time && row.end_time) return `fallback:${row.start_time}:${row.end_time}:${notesKey}`;
+  return `booking:${row.id}`;
+}
+
+function bookingNoteParts(notes?: string | null) {
+  const parts = String(notes || '').split(' | ').map((part) => part.trim());
+  return {
+    name: parts[0] || null,
+    phone: parts[1] || null,
+    email: parts[2] || null,
+  };
+}
+
+async function groupedCourtBookingItems(admin: any, venueId: string, startIso: string, endIso: string) {
+  const { data: rows, error } = await admin
+    .from('bookings')
+    .select('id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, user_id, booked_by, notes, start_time, end_time, status, total_price, created_at, venue_courts(id, name, court_number, sport_type)')
+    .eq('venue_id', venueId)
+    .neq('status', 'cancelled')
+    .lt('start_time', endIso)
+    .gt('end_time', startIso)
+    .order('start_time', { ascending: true })
+    .limit(800);
+  if (error) throw new Error(error.message);
+  const bookings = rows || [];
+  if (!bookings.length) return [];
+
+  const stripeIds = uniqueStrings(bookings.map((row: any) => row.stripe_session_id));
+  const bookingIds = uniqueStrings(bookings.map((row: any) => row.id));
+  const [receiptsResult, checkinsResult] = await Promise.all([
+    stripeIds.length
+      ? admin
+        .from('booking_receipts')
+        .select('id, receipt_number, customer_name, customer_email, customer_phone, payment_method, payment_status, stripe_session_id, total_inc_vat_sek')
+        .in('stripe_session_id', stripeIds)
+      : Promise.resolve({ data: [], error: null }),
+    bookingIds.length
+      ? admin
+        .from('venue_checkins')
+        .select('id, entitlement_id, entry_type, player_name, checked_in_at, checked_out_at')
+        .eq('venue_id', venueId)
+        .in('entitlement_id', bookingIds)
+        .is('checked_out_at', null)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (receiptsResult.error) throw new Error(receiptsResult.error.message);
+  if (checkinsResult.error) throw new Error(checkinsResult.error.message);
+
+  const receiptByStripe = new Map((receiptsResult.data || []).map((receipt: any) => [receipt.stripe_session_id, receipt]));
+  const checkinByBookingId = new Map((checkinsResult.data || []).map((checkin: any) => [checkin.entitlement_id, checkin]));
+  const groups = new Map<string, any[]>();
+  for (const row of bookings) {
+    const key = bookingGroupKey(row);
+    const current = groups.get(key) || [];
+    current.push(row);
+    groups.set(key, current);
+  }
+
+  return Array.from(groups.entries()).map(([groupKey, groupRows]) => {
+    groupRows.sort((a, b) => String(a.venue_courts?.name || '').localeCompare(String(b.venue_courts?.name || '')));
+    const first = groupRows[0];
+    const receipt = first.stripe_session_id ? receiptByStripe.get(first.stripe_session_id) : null;
+    const noteParts = bookingNoteParts(first.notes);
+    const starts = DateTime.fromISO(first.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+    const ends = DateTime.fromISO(first.end_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+    const amount = groupRows.reduce((sum: number, row: any) => sum + Number(row.total_price || 0), 0);
+    const checkedRows = groupRows
+      .map((row: any) => checkinByBookingId.get(row.id))
+      .filter(Boolean);
+    const courts = groupRows.map((row: any) => ({
+      id: row.venue_court_id,
+      name: row.venue_courts?.name || row.venue_court_id,
+      court_number: row.venue_courts?.court_number || null,
+      sport_type: row.venue_courts?.sport_type || null,
+    }));
+    const courtLabel = courts.map((court: any) => court.name).filter(Boolean).join(', ') || 'Bana';
+    const customerName = receipt?.customer_name || noteParts.name || first.booked_by || 'Bokning';
+    const paymentStatus = receipt?.payment_status
+      || (amount <= 0 ? 'free' : first.stripe_session_id ? 'paid' : first.status === 'pending' ? 'pending' : 'unknown');
+
+    return {
+      id: `booking-${groupKey}`,
+      source_id: first.id,
+      source_ids: groupRows.map((row: any) => row.id),
+      booking_group_key: groupKey,
+      booking_refs: groupRows.map((row: any) => row.booking_ref).filter(Boolean),
+      date: starts.isValid ? starts.toISODate() : normalizeDateForResponse(first.start_time),
+      time: starts.isValid ? starts.toFormat('HH:mm') : '--:--',
+      end_time: ends.isValid ? ends.toFormat('HH:mm') : null,
+      starts_at: first.start_time,
+      ends_at: first.end_time,
+      title: `${customerName} · ${courtLabel}`,
+      kind: 'court_booking',
+      tone: 'electric',
+      moduleTarget: 'bookings',
+      customer_name: customerName,
+      customer_phone: receipt?.customer_phone || noteParts.phone || null,
+      customer_email: receipt?.customer_email || noteParts.email || null,
+      courts,
+      court_name: courtLabel,
+      amount_sek: amount,
+      payment_status: paymentStatus,
+      payment_method: receipt?.payment_method || (first.stripe_session_id ? 'Stripe' : null),
+      receipt_number: receipt?.receipt_number || null,
+      booking_receipt_id: receipt?.id || null,
+      stripe_session_id: first.stripe_session_id || null,
+      access_code: first.access_code || null,
+      checked_in: checkedRows.length > 0,
+      checked_in_at: checkedRows[0]?.checked_in_at || null,
+      checked_in_count: checkedRows.length,
+      status: groupRows.every((row: any) => row.status === first.status) ? first.status : 'mixed',
+      notes: first.notes || null,
+    };
+  });
+}
+
 async function activeBookableCourtResources(admin: any, venueId: string) {
   const { data, error } = await admin
     .from('event_resource_catalog')
@@ -749,6 +869,9 @@ Deno.serve(async (req) => {
       const endRange = stockholmDayRangeUtc(dates[dates.length - 1]);
       const items: any[] = [];
 
+      const bookingItems = await groupedCourtBookingItems(admin, scopedVenueId, startRange.start!, endRange.end!);
+      items.push(...bookingItems);
+
       const { data: sessions, error: sessionsError } = await admin
         .from('activity_sessions')
         .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity, metadata')
@@ -1147,6 +1270,17 @@ Deno.serve(async (req) => {
       const range = stockholmDayRangeUtc(date);
       const weekday = day.weekday % 7;
       const items: any[] = [];
+
+      const bookingItems = await groupedCourtBookingItems(admin, scopedVenueId, range.start!, range.end!);
+      for (const booking of bookingItems) {
+        items.push({
+          ...booking,
+          kind: 'bokning',
+          tone: 'electric',
+          href: null,
+          moduleTarget: 'bookings',
+        });
+      }
 
       const { data: sessions, error: sessionsError } = await admin
         .from('activity_sessions')
