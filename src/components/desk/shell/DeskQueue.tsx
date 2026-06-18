@@ -14,7 +14,7 @@ export default function DeskQueue({ venueId, onOpenBooking }: Props) {
   const { data: bookings } = useTodayBookings(venueId);
 
   const courtRows = useMemo(
-    () => (bookings || []).filter((b: any) => b.kind !== "activity_registration"),
+    () => ((bookings as any[] | undefined) || []).filter((b: any) => b.kind !== "activity_registration"),
     [bookings]
   );
 
