@@ -198,8 +198,8 @@ export default function Customer360Drawer({ open, onClose, venueId, userId, onMa
                       <Row
                         key={registration.id}
                         title={registration.activity_sessions?.name || "Aktivitet"}
-                        meta={`${formatDate(registration.session_date)} ${formatSessionTime(registration.activity_sessions)}`}
-                        aside={registration.status || undefined}
+                        meta={`${formatDate(registration.session_date)} ${formatSessionTime(registration.activity_sessions)}${registration.checked_in_at ? ` · Incheckad ${formatDateTime(registration.checked_in_at)}` : ""}`}
+                        aside={registration.checked_in || registration.consumed || registration.status === "checked_in" ? "Använd" : registration.status || undefined}
                       />
                     )) : <Empty text="Inga kommande aktivitetsregistreringar." />}
                   </Section>

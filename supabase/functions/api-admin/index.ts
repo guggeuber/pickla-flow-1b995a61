@@ -437,6 +437,42 @@ async function activityRegistrationCounts(admin: any, activitySessionIds: string
   return counts;
 }
 
+async function activityCheckedInCounts(admin: any, venueId: string, activitySessionIds: string[], startDate: string, endDate: string) {
+  const cleanIds = [...new Set(activitySessionIds.filter(Boolean))];
+  const counts = new Map<string, number>();
+  if (!cleanIds.length || !startDate || !endDate) return counts;
+
+  const { data: registrations, error } = await admin
+    .from('session_registrations')
+    .select('id, activity_session_id, session_date, status')
+    .eq('venue_id', venueId)
+    .in('activity_session_id', cleanIds)
+    .gte('session_date', startDate)
+    .lte('session_date', endDate)
+    .neq('status', 'cancelled');
+  if (error) throw new Error(error.message);
+
+  const registrationIds = uniqueStrings((registrations || []).map((row: any) => row.id));
+  if (!registrationIds.length) return counts;
+
+  const { data: checkins, error: checkinError } = await admin
+    .from('venue_checkins')
+    .select('entitlement_id')
+    .eq('venue_id', venueId)
+    .in('entry_type', ['session_ticket', 'activity_registration'])
+    .in('entitlement_id', registrationIds);
+  if (checkinError) throw new Error(checkinError.message);
+
+  const checkedRegistrationIds = new Set((checkins || []).map((row: any) => row.entitlement_id).filter(Boolean));
+  for (const row of registrations || []) {
+    if (row.status !== 'checked_in' && !checkedRegistrationIds.has(row.id)) continue;
+    const key = activityOverrideKey(row.activity_session_id, row.session_date);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  return counts;
+}
+
 async function activityOverrideMap(admin: any, venueId: string, activitySessionIds: string[], startDate: string, endDate: string) {
   const cleanIds = [...new Set(activitySessionIds.filter(Boolean))];
   const overrides = new Map<string, any>();
@@ -716,14 +752,16 @@ async function analyzeOperationImpact(
   const sampleSessionIds = activitySamples.map((sample) => sample.activity_session_id);
   const startDate = dates[0] || '';
   const endDate = dates[dates.length - 1] || '';
-  const [registrationCounts, overrides] = await Promise.all([
+  const [registrationCounts, checkedInCounts, overrides] = await Promise.all([
     activityRegistrationCounts(admin, sampleSessionIds, startDate, endDate),
+    activityCheckedInCounts(admin, venueId, sampleSessionIds, startDate, endDate),
     activityOverrideMap(admin, venueId, sampleSessionIds, startDate, endDate),
   ]);
   for (const sample of activitySamples) {
     const key = activityOverrideKey(sample.activity_session_id, sample.session_date);
     const override = overrides.get(key);
     sample.registrations_count = registrationCounts.get(key) || 0;
+    sample.checked_in_count = checkedInCounts.get(key) || 0;
     sample.override_status = override?.status || null;
     sample.activity_session_override_id = override?.id || null;
   }
@@ -1365,8 +1403,9 @@ Deno.serve(async (req) => {
       }
 
       const sampleSessionIds = uniqueStrings(activitySamples.map((sample) => sample.activity_session_id));
-      const [registrationCounts, activityOverrides] = await Promise.all([
+      const [registrationCounts, checkedInCounts, activityOverrides] = await Promise.all([
         activityRegistrationCounts(admin, sampleSessionIds, dates[0], dates[dates.length - 1]),
+        activityCheckedInCounts(admin, scopedVenueId, sampleSessionIds, dates[0], dates[dates.length - 1]),
         activityOverrideMap(admin, scopedVenueId, sampleSessionIds, dates[0], dates[dates.length - 1]),
       ]);
 
@@ -1376,6 +1415,7 @@ Deno.serve(async (req) => {
         items.push({
           ...activity,
           registrations_count: registrationCounts.get(key) || 0,
+          checked_in_count: checkedInCounts.get(key) || 0,
           override_status: override?.status || null,
           activity_session_override_id: override?.id || null,
         });

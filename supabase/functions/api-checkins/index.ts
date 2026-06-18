@@ -312,6 +312,22 @@ async function findActiveCheckin(serviceClient: any, params: {
   return data || null;
 }
 
+async function markSessionRegistrationCheckedIn(serviceClient: any, params: {
+  venueId: string;
+  entryType?: string | null;
+  entitlementId?: string | null;
+}) {
+  if (!params.entitlementId) return;
+  if (!['session_ticket', 'activity_registration'].includes(String(params.entryType || ''))) return;
+
+  await serviceClient
+    .from('session_registrations')
+    .update({ status: 'checked_in' })
+    .eq('id', params.entitlementId)
+    .eq('venue_id', params.venueId)
+    .neq('status', 'cancelled');
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -338,6 +354,11 @@ Deno.serve(async (req) => {
       const profile = access.profile;
 
       if (access.already_checked_in && access.existingCheckin) {
+        await markSessionRegistrationCheckedIn(serviceClient, {
+          venueId: venue.id,
+          entryType: access.existingCheckin.entry_type,
+          entitlementId: access.existingCheckin.entitlement_id,
+        });
         return jsonResponse({
           checked_in: true,
           already_checked_in: true,
@@ -368,6 +389,11 @@ Deno.serve(async (req) => {
       });
 
       if (existingCheckin) {
+        await markSessionRegistrationCheckedIn(serviceClient, {
+          venueId: venue.id,
+          entryType: existingCheckin.entry_type,
+          entitlementId: existingCheckin.entitlement_id,
+        });
         return jsonResponse({
           checked_in: true,
           already_checked_in: true,
@@ -401,6 +427,11 @@ Deno.serve(async (req) => {
             targetUserId: userId,
           });
           if (retry) {
+            await markSessionRegistrationCheckedIn(serviceClient, {
+              venueId: venue.id,
+              entryType: retry.entry_type,
+              entitlementId: retry.entitlement_id,
+            });
             return jsonResponse({
               checked_in: true,
               already_checked_in: true,
@@ -412,6 +443,12 @@ Deno.serve(async (req) => {
         }
         return errorResponse(insertErr.message);
       }
+
+      await markSessionRegistrationCheckedIn(serviceClient, {
+        venueId: venue.id,
+        entryType: data.entry_type,
+        entitlementId: data.entitlement_id,
+      });
 
       return jsonResponse({
         checked_in: true,
@@ -674,6 +711,11 @@ Deno.serve(async (req) => {
         const access = await resolveUserAccess(serviceClient, venue_id, target_user_id);
 
         if (access.already_checked_in && access.existingCheckin) {
+          await markSessionRegistrationCheckedIn(serviceClient, {
+            venueId: venue_id,
+            entryType: access.existingCheckin.entry_type,
+            entitlementId: access.existingCheckin.entitlement_id,
+          });
           return jsonResponse({
             ...access.existingCheckin,
             already_checked_in: true,
@@ -705,7 +747,14 @@ Deno.serve(async (req) => {
           playerPhone: player_phone,
           playerName: player_name,
         });
-        if (existingCheckin) return jsonResponse({ ...existingCheckin, already_checked_in: true });
+        if (existingCheckin) {
+          await markSessionRegistrationCheckedIn(serviceClient, {
+            venueId: venue_id,
+            entryType: existingCheckin.entry_type,
+            entitlementId: existingCheckin.entitlement_id,
+          });
+          return jsonResponse({ ...existingCheckin, already_checked_in: true });
+        }
       }
 
       const { data, error: insertErr } = await client
@@ -732,10 +781,22 @@ Deno.serve(async (req) => {
             entitlementId: entitlement_id,
             targetUserId: target_user_id,
           });
-          if (retry) return jsonResponse({ ...retry, already_checked_in: true });
+          if (retry) {
+            await markSessionRegistrationCheckedIn(serviceClient, {
+              venueId: venue_id,
+              entryType: retry.entry_type,
+              entitlementId: retry.entitlement_id,
+            });
+            return jsonResponse({ ...retry, already_checked_in: true });
+          }
         }
         return errorResponse(insertErr.message);
       }
+      await markSessionRegistrationCheckedIn(serviceClient, {
+        venueId: venue_id,
+        entryType: data.entry_type,
+        entitlementId: data.entitlement_id,
+      });
       return jsonResponse({ ...data, already_checked_in: false });
     }
 
@@ -747,12 +808,15 @@ Deno.serve(async (req) => {
       const venueId = url.searchParams.get('venueId');
       if (!venueId) return errorResponse('Missing venueId');
 
-      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+      const nowSthlm = DateTime.now().setZone('Europe/Stockholm');
+      const today = nowSthlm.toISODate()!;
+      const todayStartUtc = nowSthlm.startOf('day').toUTC().toISO()!;
+      const todayEndUtc = nowSthlm.plus({ days: 1 }).startOf('day').toUTC().toISO()!;
       const { data, error: qErr } = await client
         .from('venue_checkins')
         .select('*')
         .eq('venue_id', venueId)
-        .eq('session_date', today)
+        .or(`session_date.eq.${today},and(session_date.is.null,checked_in_at.gte.${todayStartUtc},checked_in_at.lt.${todayEndUtc})`)
         .is('checked_out_at', null)
         .order('checked_in_at', { ascending: false });
 

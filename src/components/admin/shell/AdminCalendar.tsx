@@ -256,6 +256,7 @@ function TimelineItem({
   const time = item.end_time ? `${item.time}–${item.end_time}` : item.time;
   const cap = item.capacity ?? null;
   const reg = item.registrations_count ?? null;
+  const checkedIn = item.checked_in_count ?? null;
   const pct = cap && reg != null ? Math.min(100, Math.round((reg / cap) * 100)) : null;
   const paymentStatus = item.payment_status === "paid" ? "Betald" : item.payment_status === "free" ? "Gratis" : item.payment_status === "pending" ? "Väntar" : "Okänd";
 
@@ -319,6 +320,9 @@ function TimelineItem({
               {reg}
               {cap ? `/${cap}` : ""}
             </span>
+          )}
+          {checkedIn != null && reg != null && reg > 0 && (
+            <span>{checkedIn} incheckade</span>
           )}
           {pct != null && (
             <span className="flex h-1 w-16 overflow-hidden rounded-full" style={{ background: ax("borderSoft") }}>
@@ -1168,6 +1172,7 @@ function ItemActions({
   const time = item.end_time ? `${item.time}–${item.end_time}` : item.time;
   const cap = item.capacity ?? null;
   const reg = item.registrations_count ?? null;
+  const checkedIn = item.checked_in_count ?? null;
   const onlinePrice = Number(item.online_price_sek ?? item.price_sek ?? 0);
   const deskPrice = Number(item.desk_price_sek ?? item.price_sek ?? 0);
   return (
@@ -1209,6 +1214,11 @@ function ItemActions({
                 {reg}
                 {cap ? ` / ${cap}` : ""}
               </p>
+              {checkedIn != null && reg > 0 && (
+                <p className="text-[10px] font-bold" style={{ color: ax("lime") }}>
+                  {checkedIn} incheckade
+                </p>
+              )}
             </div>
           )}
           {item.visibility && (

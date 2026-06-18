@@ -566,6 +566,7 @@ const TodayScreen = () => {
               const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
               const paymentLabel = paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
               const paymentTone = paymentStatus === "paid" || paymentStatus === "free" ? "bg-badge-paid/15 text-badge-paid" : "bg-badge-unpaid/15 text-badge-unpaid";
+              const activityCheckedIn = isActivity && (booking.checked_in || booking.consumed || booking.status === "checked_in");
               return (
                 <motion.button
                   key={booking.id}
@@ -588,8 +589,8 @@ const TodayScreen = () => {
                       {courtName}{isActivity ? " · Aktivitet" : ""}
                     </p>
                   </div>
-                  <span className={`status-chip text-[9px] ${isActivity ? "bg-primary/15 text-primary" : paymentTone}`}>
-                    {isActivity ? "Aktivitet" : paymentLabel}
+                  <span className={`status-chip text-[9px] ${isActivity ? activityCheckedIn ? "bg-court-free/15 text-court-free" : "bg-primary/15 text-primary" : paymentTone}`}>
+                    {isActivity ? activityCheckedIn ? "Incheckad" : "Aktivitet" : paymentLabel}
                   </span>
                 </motion.button>
               );

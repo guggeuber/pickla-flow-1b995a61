@@ -1892,7 +1892,9 @@ Deno.serve(async (req) => {
         if (regErr) return errorResponse(regErr.message);
 
         const userIds = Array.from(new Set((registrations || []).map((row: any) => row.user_id).filter(Boolean)));
+        const registrationIds = Array.from(new Set((registrations || []).map((row: any) => row.id).filter(Boolean)));
         const profilesByUserId = new Map<string, any>();
+        const checkinByRegistrationId = new Map<string, any>();
 
         if (userIds.length > 0) {
           const { data: profiles, error: profilesErr } = await client
@@ -1906,11 +1908,27 @@ Deno.serve(async (req) => {
           }
         }
 
+        if (registrationIds.length > 0) {
+          const { data: registrationCheckins, error: registrationCheckinsErr } = await lookupClient
+            .from('venue_checkins')
+            .select('id, entitlement_id, entry_type, player_name, checked_in_at, checked_out_at')
+            .eq('venue_id', venueId)
+            .in('entitlement_id', registrationIds)
+            .in('entry_type', ['session_ticket', 'activity_registration'])
+            .order('checked_in_at', { ascending: false });
+
+          if (registrationCheckinsErr) return errorResponse(registrationCheckinsErr.message);
+          for (const checkin of registrationCheckins || []) {
+            checkinByRegistrationId.set(checkin.entitlement_id, checkin);
+          }
+        }
+
         activityRegistrations = (registrations || []).map((registration: any) => {
           const session = registration.activity_sessions || {};
           const startTime = stockholmSessionIso(registration.session_date, session.start_time, false);
           const endTime = stockholmSessionIso(registration.session_date, session.end_time, true);
           const participantName = profileDisplayName(profilesByUserId.get(registration.user_id)) || 'Deltagare';
+          const checkin = checkinByRegistrationId.get(registration.id);
 
           return {
             id: `session_registration:${registration.id}`,
@@ -1926,6 +1944,9 @@ Deno.serve(async (req) => {
             status: registration.status || 'confirmed',
             total_price: registration.price_paid_sek,
             booked_by: participantName,
+            checked_in: Boolean(checkin) || registration.status === 'checked_in',
+            checked_in_at: checkin?.checked_in_at || null,
+            consumed: Boolean(checkin) || registration.status === 'checked_in',
             notes: session.name || 'Aktivitet',
             booking_ref: null,
             venue_courts: null,

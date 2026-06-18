@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Search, Phone, Mail, Calendar, ChevronRight, UserPlus, Edit3, Check, ArrowLeft, Crown, X, UserCheck, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { DateTime } from "luxon";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useVenueForStaff } from "@/hooks/useDesk";
 import { supabase } from "@/integrations/supabase/client";
@@ -23,6 +24,10 @@ type DeskCustomer = PlayerProfile & {
     monthly_price?: number | null;
     discount_percent?: number | null;
   } | null;
+  last_purchase_at?: string | null;
+  last_purchase_label?: string | null;
+  last_checkin_at?: string | null;
+  last_checkin_type?: string | null;
 };
 
 const customerTitle = (customer: Partial<DeskCustomer>) =>
@@ -64,6 +69,12 @@ const tierConfig: Record<string, { bg: string; text: string; dot: string }> = {
   VIP: { bg: "bg-badge-vip/15", text: "text-badge-vip", dot: "bg-badge-vip" },
   Play: { bg: "bg-primary/15", text: "text-primary", dot: "bg-primary" },
   "Drop-in": { bg: "bg-muted", text: "text-muted-foreground", dot: "bg-muted-foreground" },
+};
+
+const formatCustomerTimestamp = (value?: string | null) => {
+  if (!value) return null;
+  const parsed = DateTime.fromISO(value, { zone: "utc" }).setZone("Europe/Stockholm");
+  return parsed.isValid ? parsed.toFormat("d LLL HH:mm") : null;
 };
 
 // ═══ Inline check-in helper ═══
@@ -474,6 +485,8 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
             const title = customerTitle(profile);
             const initials = customerInitials(profile);
             const activeTier = profile.active_membership_tier;
+            const lastPurchaseAt = formatCustomerTimestamp(profile.last_purchase_at);
+            const lastCheckinAt = formatCustomerTimestamp(profile.last_checkin_at);
 
             return (
               <motion.div
@@ -509,7 +522,15 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
                           {activeTier.name}
                         </span>
                       )}
-                      {!profile.phone && !activeTier && (
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                      {lastPurchaseAt && (
+                        <span>Senaste köp: {profile.last_purchase_label || "Köp"} · {lastPurchaseAt}</span>
+                      )}
+                      {lastCheckinAt && (
+                        <span>Senaste check-in: {lastCheckinAt}</span>
+                      )}
+                      {!lastPurchaseAt && !lastCheckinAt && (
                         <span>{profile.total_matches || 0} matcher · Rating {profile.pickla_rating || 0}</span>
                       )}
                     </div>

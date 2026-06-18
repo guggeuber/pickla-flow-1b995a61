@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
       const authUsersPromise = admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
       const receiptsPromise = authUserIds.length > 0
         ? admin.from('booking_receipts')
-          .select('user_id, customer_name, customer_email, customer_phone, issued_at, created_at')
+          .select('user_id, customer_name, customer_email, customer_phone, product_description, purchase_type, issued_at, created_at')
           .in('user_id', authUserIds)
           .order('issued_at', { ascending: false })
         : Promise.resolve({ data: [], error: null });
@@ -93,12 +93,23 @@ Deno.serve(async (req) => {
           .eq('status', 'active')
           .in('user_id', authUserIds)
         : Promise.resolve({ data: [], error: null });
+      const checkinsPromise = venueId && authUserIds.length > 0
+        ? admin.from('venue_checkins')
+          .select('user_id, entry_type, checked_in_at, session_date')
+          .eq('venue_id', venueId)
+          .in('user_id', authUserIds)
+          .order('checked_in_at', { ascending: false })
+          .limit(1000)
+        : Promise.resolve({ data: [], error: null });
 
-      const [authUsersResult, receiptsResult, membershipsResult] = await Promise.all([
+      const [authUsersResult, receiptsResult, membershipsResult, checkinsResult] = await Promise.all([
         authUsersPromise,
         receiptsPromise,
         membershipsPromise,
+        checkinsPromise,
       ]);
+      const listError = [receiptsResult.error, membershipsResult.error, checkinsResult.error].find(Boolean);
+      if (listError) return errorResponse(listError.message, 500);
 
       const usersById = new Map((authUsersResult.data?.users || []).map((user: any) => [user.id, user]));
 
@@ -116,9 +127,17 @@ Deno.serve(async (req) => {
         }
       }
 
+      const checkinByUserId = new Map<string, any>();
+      for (const checkin of checkinsResult.data || []) {
+        if (checkin.user_id && !checkinByUserId.has(checkin.user_id)) {
+          checkinByUserId.set(checkin.user_id, checkin);
+        }
+      }
+
       const enriched = (profiles || []).map((profile: any) => {
         const authUser = usersById.get(profile.auth_user_id);
         const receipt = receiptByUserId.get(profile.auth_user_id);
+        const checkin = checkinByUserId.get(profile.auth_user_id);
         const displayName = cleanString(profile.display_name);
         const fullName = profileFullName(profile);
         const receiptName = cleanString(receipt?.customer_name);
@@ -137,6 +156,10 @@ Deno.serve(async (req) => {
           identity_initials: buildInitialsSeed(initialsSeed),
           active_membership_tier: membership?.membership_tiers || null,
           has_active_membership: Boolean(membership),
+          last_purchase_at: receipt?.issued_at || receipt?.created_at || null,
+          last_purchase_label: receipt?.product_description || receipt?.purchase_type || null,
+          last_checkin_at: checkin?.checked_in_at || null,
+          last_checkin_type: checkin?.entry_type || null,
         };
       });
 
@@ -252,8 +275,10 @@ Deno.serve(async (req) => {
       const profile = profileResult.data || null;
       const authUser = authUserResult.data?.user || null;
       const receipts = receiptsResult.data || [];
+      const registrations = registrationsResult.data || [];
       const receiptIds = Array.from(new Set(receipts.map((row: any) => row.id).filter(Boolean)));
       const stripeSessionIds = Array.from(new Set(receipts.map((row: any) => row.stripe_session_id).filter(Boolean)));
+      const registrationIds = Array.from(new Set(registrations.map((row: any) => row.id).filter(Boolean)));
 
       const ledgerById = new Map<string, any>();
       if (receiptIds.length > 0) {
@@ -265,6 +290,18 @@ Deno.serve(async (req) => {
         if (ledgerErr) return errorResponse(ledgerErr.message, 500);
         for (const row of data || []) ledgerById.set(row.id, row);
       }
+      let registrationCheckins: any[] = [];
+      if (registrationIds.length > 0) {
+        const { data, error: checkinErr } = await admin.from('venue_checkins')
+          .select('id, entitlement_id, entry_type, checked_in_at, checked_out_at')
+          .eq('venue_id', venueId)
+          .in('entitlement_id', registrationIds)
+          .in('entry_type', ['session_ticket', 'activity_registration'])
+          .order('checked_in_at', { ascending: false });
+        if (checkinErr) return errorResponse(checkinErr.message, 500);
+        registrationCheckins = data || [];
+      }
+      const checkinByRegistrationId = new Map(registrationCheckins.map((row: any) => [row.entitlement_id, row]));
       if (stripeSessionIds.length > 0) {
         const { data, error: ledgerErr } = await admin.from('ledger_entries')
           .select('id, venue_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
@@ -301,7 +338,15 @@ Deno.serve(async (req) => {
         membership_badge: activeMembership?.membership_tiers || null,
         active_membership: activeMembership,
         upcoming_bookings: bookingsResult.data || [],
-        activity_registrations: registrationsResult.data || [],
+        activity_registrations: registrations.map((registration: any) => {
+          const checkin = checkinByRegistrationId.get(registration.id);
+          return {
+            ...registration,
+            checked_in: Boolean(checkin) || registration.status === 'checked_in',
+            checked_in_at: checkin?.checked_in_at || null,
+            consumed: Boolean(checkin) || registration.status === 'checked_in',
+          };
+        }),
         day_passes: dayPassesResult.data || [],
         memberships: membershipsResult.data || [],
         checkins: checkinsResult.data || [],

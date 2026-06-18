@@ -102,7 +102,9 @@ export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps
             const customer = booking.booked_by || booking.notes || "Gäst";
             const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
             const statusLabel = isActivity
-              ? "Aktivitet"
+              ? booking.checked_in || booking.consumed || booking.status === "checked_in"
+                ? "Incheckad"
+                : "Aktivitet"
               : paymentStatus === "paid"
                 ? "Betald"
                 : paymentStatus === "free"
@@ -112,7 +114,9 @@ export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps
                   : booking.status === "cancelled"
                     ? "Avbokad"
                     : "Okänd";
-            const statusTone = paymentStatus === "paid" || paymentStatus === "free"
+            const statusTone = isActivity && (booking.checked_in || booking.consumed || booking.status === "checked_in")
+              ? "bg-court-free/15 text-court-free"
+              : paymentStatus === "paid" || paymentStatus === "free"
               ? "bg-court-free/15 text-court-free"
               : paymentStatus === "pending"
               ? "bg-court-soon/15 text-court-soon"
