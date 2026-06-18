@@ -37,8 +37,9 @@ export default function DeskLive({ venueId }: Props) {
   const courtCells = useMemo(() => {
     if (!Array.isArray(courts)) return [] as any[];
     const nowMs = tick;
+    const rows = (bookings as any[] | undefined) || [];
     return (courts as any[]).map((court) => {
-      const courtBookings = (bookings || []).filter(
+      const courtBookings = rows.filter(
         (b: any) =>
           b.kind !== "activity_registration" &&
           b.venue_court_id === court.id &&
