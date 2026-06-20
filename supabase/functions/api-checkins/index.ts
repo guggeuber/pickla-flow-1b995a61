@@ -44,6 +44,26 @@ function profileName(profile: any) {
     'Spelare';
 }
 
+async function canStaffOperateVenue(serviceClient: any, userId: string, venueId: string) {
+  const [{ data: superRole }, { data: venueStaff }] = await Promise.all([
+    serviceClient
+      .from('user_roles')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('role', 'super_admin')
+      .maybeSingle(),
+    serviceClient
+      .from('venue_staff')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .maybeSingle(),
+  ]);
+
+  return Boolean(superRole || venueStaff);
+}
+
 async function resolveUserAccess(serviceClient: any, venueId: string, targetUserId: string) {
   const { today, nowIso, bookingWindowEndIso } = stockholmNow();
   const profile = await getProfile(serviceClient, targetUserId);
@@ -337,6 +357,127 @@ Deno.serve(async (req) => {
   const path = url.pathname.split('/').pop() || '';
 
   try {
+    // POST /api-checkins/booking — staff checks in a concrete booking/group.
+    if (req.method === 'POST' && path === 'booking') {
+      const { userId, error } = await getAuthenticatedClient(req);
+      if (error || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+      const body = await req.json();
+      const venueId = String(body.venue_id || body.venueId || '').trim();
+      const requestedBookingIds = Array.isArray(body.booking_ids)
+        ? body.booking_ids.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+        : [String(body.booking_id || body.bookingId || '').trim()].filter(Boolean);
+      if (!venueId || requestedBookingIds.length === 0) return errorResponse('Missing venue_id or booking_ids', 400);
+
+      const serviceClient = getServiceClient();
+      const canOperate = await canStaffOperateVenue(serviceClient, userId, venueId);
+      if (!canOperate) return errorResponse('Forbidden', 403);
+
+      const { today, nowSthlm } = stockholmNow();
+      const { data: baseBooking, error: baseErr } = await serviceClient
+        .from('bookings')
+        .select('id, user_id, venue_id, start_time, end_time, status, total_price, stripe_session_id, access_code, notes, booked_by')
+        .eq('venue_id', venueId)
+        .eq('id', requestedBookingIds[0])
+        .maybeSingle();
+      if (baseErr) return errorResponse(baseErr.message, 500);
+      if (!baseBooking) return errorResponse('Booking not found', 404);
+
+      let groupQuery = serviceClient
+        .from('bookings')
+        .select('id, user_id, venue_id, start_time, end_time, status, total_price, stripe_session_id, access_code, notes, booked_by')
+        .eq('venue_id', venueId)
+        .eq('start_time', baseBooking.start_time)
+        .eq('end_time', baseBooking.end_time)
+        .neq('status', 'cancelled');
+
+      if (requestedBookingIds.length > 1) {
+        groupQuery = groupQuery.in('id', requestedBookingIds);
+      } else if (baseBooking.stripe_session_id) {
+        groupQuery = groupQuery.eq('stripe_session_id', baseBooking.stripe_session_id);
+      } else if (baseBooking.access_code) {
+        groupQuery = groupQuery.eq('access_code', baseBooking.access_code);
+      } else {
+        groupQuery = groupQuery.eq('id', baseBooking.id);
+      }
+
+      const { data: groupRows, error: groupErr } = await groupQuery;
+      if (groupErr) return errorResponse(groupErr.message, 500);
+      const bookings = groupRows || [];
+      if (!bookings.length) return errorResponse('Booking group not found', 404);
+
+      const start = DateTime.fromISO(baseBooking.start_time, { zone: 'utc' }).setZone(STOCKHOLM_ZONE);
+      const end = DateTime.fromISO(baseBooking.end_time, { zone: 'utc' }).setZone(STOCKHOLM_ZONE);
+      if (!start.isValid || !end.isValid) return errorResponse('Invalid booking time', 400);
+      if (start.toISODate() !== today) return errorResponse('Bokningen gäller inte idag', 400);
+      if (nowSthlm.toMillis() < start.minus({ minutes: 30 }).toMillis()) {
+        return errorResponse(`För tidigt — incheckning öppnar ${start.minus({ minutes: 30 }).toFormat('HH:mm')}`, 400);
+      }
+      if (nowSthlm.toMillis() > end.toMillis()) return errorResponse('Bokningstiden har passerat', 400);
+
+      const statusOk = bookings.every((booking: any) => ['confirmed', 'completed'].includes(String(booking.status || '')));
+      if (!statusOk) return errorResponse('Bokningen är inte bekräftad', 409);
+
+      const totalAmount = bookings.reduce((sum: number, booking: any) => sum + Number(booking.total_price || 0), 0);
+      const paymentOk = totalAmount <= 0 || bookings.some((booking: any) => Boolean(booking.stripe_session_id));
+      if (!paymentOk) return errorResponse('Bokningen saknar betald status', 409);
+
+      const bookingIds = bookings.map((booking: any) => booking.id).filter(Boolean);
+      const { data: existingRows, error: existingErr } = await serviceClient
+        .from('venue_checkins')
+        .select('*')
+        .eq('venue_id', venueId)
+        .eq('session_date', today)
+        .in('entitlement_id', bookingIds)
+        .is('checked_out_at', null);
+      if (existingErr) return errorResponse(existingErr.message, 500);
+
+      const existingIds = new Set((existingRows || []).map((row: any) => row.entitlement_id));
+      const playerName = String(body.customer_name || body.customerName || nameFromBookingNotes(baseBooking.notes) || baseBooking.booked_by || '').trim() || null;
+      const rowsToInsert = bookings
+        .filter((booking: any) => !existingIds.has(booking.id))
+        .map((booking: any) => ({
+          venue_id: venueId,
+          user_id: booking.user_id || null,
+          player_name: playerName,
+          entry_type: 'booking',
+          entitlement_id: booking.id,
+          checked_in_by: userId,
+          session_date: today,
+        }));
+
+      let insertedRows: any[] = [];
+      if (rowsToInsert.length > 0) {
+        const { data: checkins, error: insertErr } = await serviceClient
+          .from('venue_checkins')
+          .insert(rowsToInsert)
+          .select();
+        if (insertErr) {
+          if (insertErr.code !== '23505') return errorResponse(insertErr.message, 500);
+          const { data: retryRows, error: retryErr } = await serviceClient
+            .from('venue_checkins')
+            .select('*')
+            .eq('venue_id', venueId)
+            .eq('session_date', today)
+            .in('entitlement_id', bookingIds)
+            .is('checked_out_at', null);
+          if (retryErr) return errorResponse(retryErr.message, 500);
+          return jsonResponse({
+            already_checked_in: true,
+            checkins: retryRows || [],
+            booking_ids: bookingIds,
+          });
+        }
+        insertedRows = checkins || [];
+      }
+
+      return jsonResponse({
+        already_checked_in: rowsToInsert.length === 0,
+        checkins: [...(existingRows || []), ...insertedRows],
+        booking_ids: bookingIds,
+      }, rowsToInsert.length > 0 ? 201 : 200);
+    }
+
     // POST /api-checkins/self — customer-led venue QR check-in.
     if (req.method === 'POST' && path === 'self') {
       const { client, userId, error } = await getAuthenticatedClient(req);

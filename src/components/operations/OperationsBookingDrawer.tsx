@@ -1,7 +1,10 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarClock, CheckCircle2, CreditCard, FileText, Mail, MapPin, Phone, ReceiptText, UserRound, X } from "lucide-react";
+import { CalendarClock, CheckCircle2, CreditCard, FileText, Loader2, Mail, MapPin, Phone, ReceiptText, UserRound, X } from "lucide-react";
 import { DateTime } from "luxon";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { apiPost } from "@/lib/api";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 export type OperationsCourt = {
@@ -155,6 +158,25 @@ function statusTone(status?: string | null) {
   return "bg-neutral-500/15 text-neutral-300 border-neutral-500/25";
 }
 
+function checkinEligibility(booking: OperationsBookingDetail | null) {
+  if (!booking?.venue_id || !booking.source_ids?.length) return { ok: false };
+  const startIso = booking.starts_at || booking.start_time;
+  const endIso = booking.ends_at || booking.end_time;
+  if (!startIso || !endIso) return { ok: false };
+
+  const now = DateTime.now().setZone("Europe/Stockholm");
+  const start = DateTime.fromISO(startIso, { zone: "utc" }).setZone("Europe/Stockholm");
+  const end = DateTime.fromISO(endIso, { zone: "utc" }).setZone("Europe/Stockholm");
+  if (!start.isValid || !end.isValid) return { ok: false };
+  if (start.toISODate() !== now.toISODate()) return { ok: false };
+  if (now < start.minus({ minutes: 30 }) || now > end) return { ok: false };
+
+  const amount = Number(booking.amount_sek ?? booking.total_price ?? 0);
+  const paymentOk = booking.payment_status === "paid" || booking.payment_status === "free" || amount <= 0;
+  const statusOk = !booking.status || ["confirmed", "completed"].includes(String(booking.status));
+  return { ok: paymentOk && statusOk };
+}
+
 function Field({ icon: Icon, label, value }: { icon: typeof UserRound; label: string; value?: string | number | null }) {
   if (value == null || value === "") return null;
   return (
@@ -178,11 +200,44 @@ export function OperationsBookingDrawer({
   booking: OperationsBookingDetail | null;
 }) {
   const [customerUserId, setCustomerUserId] = useState<string | null>(null);
-  const checkedAt = formatCheckedInAt(booking?.checked_in_at);
+  const [localCheckedInAt, setLocalCheckedInAt] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const effectiveCheckedIn = Boolean(booking?.checked_in || localCheckedInAt);
+  const checkedAt = formatCheckedInAt(localCheckedInAt || booking?.checked_in_at);
   const amount = Number(booking?.amount_sek ?? booking?.total_price ?? 0);
   const courts = booking?.courts?.length ? booking.courts : booking?.court_name ? [{ name: booking.court_name }] : [];
   const bookingCustomerUserId = booking?.customer_user_id || booking?.user_id || null;
   const canOpenCustomer = Boolean(booking?.venue_id && bookingCustomerUserId);
+  const canCheckIn = !effectiveCheckedIn && checkinEligibility(booking).ok;
+
+  useEffect(() => {
+    setLocalCheckedInAt(null);
+  }, [booking?.id]);
+
+  const checkInMutation = useMutation({
+    mutationFn: async () => {
+      if (!booking?.venue_id || !booking.source_ids?.length) throw new Error("Bokningsdata saknas");
+      return apiPost("api-checkins", "booking", {
+        venue_id: booking.venue_id,
+        booking_ids: booking.source_ids,
+        customer_name: booking.customer_name || null,
+      });
+    },
+    onSuccess: () => {
+      const nowIso = DateTime.now().toUTC().toISO();
+      setLocalCheckedInAt(nowIso);
+      toast.success("Kunden är incheckad");
+      if (booking?.venue_id) {
+        queryClient.invalidateQueries({ queryKey: ["today-bookings", booking.venue_id] });
+        queryClient.invalidateQueries({ queryKey: ["desk-checkins-today", booking.venue_id] });
+        queryClient.invalidateQueries({ queryKey: ["admin-calendar"] });
+        queryClient.invalidateQueries({ queryKey: ["admin-todays-plan"] });
+      }
+    },
+    onError: (error: any) => {
+      toast.error(error?.message || "Kunde inte checka in kunden");
+    },
+  });
 
   return (
     <>
@@ -219,8 +274,8 @@ export function OperationsBookingDrawer({
                   <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${statusTone(booking.payment_status)}`}>
                     {paymentLabel(booking.payment_status)}
                   </span>
-                  <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${booking.checked_in ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
-                    {booking.checked_in ? `Incheckad${checkedAt ? ` ${checkedAt}` : ""}` : "Ej incheckad"}
+                  <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${effectiveCheckedIn ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
+                    {effectiveCheckedIn ? `Incheckad${checkedAt ? ` ${checkedAt}` : ""}` : "Ej incheckad"}
                   </span>
                 </div>
                 {canOpenCustomer ? (
@@ -237,6 +292,17 @@ export function OperationsBookingDrawer({
                   </h4>
                 )}
                 <p className="mt-1 text-sm font-semibold text-white/55">{formatTimeRange(booking)}</p>
+                {canCheckIn && (
+                  <button
+                    type="button"
+                    onClick={() => checkInMutation.mutate()}
+                    disabled={checkInMutation.isPending}
+                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-neutral-950 disabled:opacity-60"
+                  >
+                    {checkInMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                    Checka in kund
+                  </button>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -247,7 +313,7 @@ export function OperationsBookingDrawer({
                 <Field icon={MapPin} label="Bana" value={courts.map((court) => court.name).filter(Boolean).join(", ")} />
                 <Field icon={CreditCard} label="Belopp" value={`${Math.round(amount).toLocaleString("sv-SE")} kr`} />
                 <Field icon={ReceiptText} label="Kvitto" value={booking.receipt_number} />
-                <Field icon={CheckCircle2} label="Check-in" value={booking.checked_in ? `Ja${checkedAt ? `, ${checkedAt}` : ""}` : "Nej"} />
+                <Field icon={CheckCircle2} label="Check-in" value={effectiveCheckedIn ? `Ja${checkedAt ? `, ${checkedAt}` : ""}` : "Nej"} />
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
