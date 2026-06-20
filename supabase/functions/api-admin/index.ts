@@ -1,11 +1,80 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient } from '../_shared/auth.ts';
+import { auditMutation, requireSuperAdmin, requireVenueRole, writeAuditLog } from '../_shared/authorization.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const ZETTLE_OAUTH_BASE_URL = 'https://oauth.zettle.com';
 const ZETTLE_PURCHASE_BASE_URL = 'https://purchase.izettle.com';
 const ZETTLE_SCOPES = ['READ:PURCHASE'];
+
+const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact']);
+const SENSITIVE_AUDIT_KEYS = new Set([
+  'access_token',
+  'refresh_token',
+  'token',
+  'secret',
+  'password',
+  'client_secret',
+  'api_key',
+]);
+
+function adminEntityTableForPath(path: string) {
+  const map: Record<string, string> = {
+    venues: 'venues',
+    venue: 'venues',
+    staff: 'venue_staff',
+    courts: 'venue_courts',
+    'venue-operation-overrides': 'venue_operation_overrides',
+    'activity-session-overrides': 'activity_session_overrides',
+    'resource-blocks': 'event_resource_blocks',
+    'display-devices': 'display_devices',
+    hours: 'opening_hours',
+    pricing: 'pricing_rules',
+    products: 'access_products',
+    'activity-series': 'activity_series',
+    'activity-sessions': 'activity_sessions',
+    links: 'venue_links',
+    'event-categories': 'venue_event_categories',
+    'zettle-connect': 'zettle_connections',
+    'zettle-import': 'zettle_purchases',
+  };
+  return map[path] || path || 'api_admin';
+}
+
+function adminEntityIdFromRequest(path: string, method: string, body: Record<string, any>, url: URL) {
+  if (path === 'venues' && method === 'POST') return body.slug || null;
+  if (path === 'venue') return body.id || url.searchParams.get('venueId') || null;
+  if (path === 'staff') return body.staffId || url.searchParams.get('staffId');
+  if (path === 'courts') return body.courtId || url.searchParams.get('courtId');
+  if (path === 'venue-operation-overrides') return body.overrideId || body.id || null;
+  if (path === 'activity-session-overrides') return body.activity_session_id || body.activitySessionId || null;
+  if (path === 'resource-blocks') return body.blockId || body.id || url.searchParams.get('blockId') || url.searchParams.get('blockIds');
+  if (path === 'display-devices') return body.deviceId || body.id || url.searchParams.get('deviceId');
+  if (path === 'hours') return body.dayOfWeek || body.day_of_week || null;
+  if (path === 'pricing') return body.ruleId || url.searchParams.get('ruleId');
+  if (path === 'products') return body.productId || body.product_key || url.searchParams.get('productId');
+  if (path === 'activity-series') return body.seriesId || url.searchParams.get('seriesId');
+  if (path === 'activity-sessions') return body.sessionId || url.searchParams.get('sessionId');
+  if (path === 'links') return body.linkId || url.searchParams.get('linkId');
+  if (path === 'event-categories') return body.id || body.categoryKey || url.searchParams.get('id');
+  if (path === 'zettle-import') return body.date || null;
+  return body.id || null;
+}
+
+function sanitizeAuditValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => sanitizeAuditValue(item));
+  if (!value || typeof value !== 'object') return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    const lowerKey = key.toLowerCase();
+    sanitized[key] = SENSITIVE_AUDIT_KEYS.has(lowerKey) || lowerKey.includes('secret') || lowerKey.includes('password')
+      ? '[redacted]'
+      : sanitizeAuditValue(nestedValue);
+  }
+  return sanitized;
+}
 
 async function isAdmin(userId: string): Promise<{ ok: boolean; venueId: string | null }> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -836,6 +905,19 @@ Deno.serve(async (req) => {
         : null;
       if (!expiresAt?.isValid || expiresAt < DateTime.utc()) return errorResponse('Expired Zettle OAuth state', 400);
 
+      await writeAuditLog(admin, {
+        venue_id: connection.venue_id || null,
+        actor_user_id: connection.created_by || null,
+        actor_type: connection.created_by ? 'user' : 'system',
+        action: 'api-admin.zettle-callback.get',
+        entity_table: 'zettle_connections',
+        entity_id: connection.id,
+        request_id: req.headers.get('x-request-id') || crypto.randomUUID(),
+        metadata: { path, method: req.method, oauth_state: '[redacted]' },
+        ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null,
+        user_agent: req.headers.get('user-agent') || null,
+      });
+
       const token = await exchangeZettleToken({
         grant_type: 'authorization_code',
         code,
@@ -877,14 +959,47 @@ Deno.serve(async (req) => {
     const { ok, venueId: adminVenueId } = await isAdmin(userId);
     if (!ok) return errorResponse('Forbidden: admin only', 403);
 
-    const venueId = url.searchParams.get('venueId') || adminVenueId;
-    const canResolveVenueFromBody = ['venue-operation-impact', 'venue-operation-overrides', 'activity-session-overrides'].includes(path)
-      && ['POST', 'PATCH'].includes(req.method);
-    if (!venueId && !canResolveVenueFromBody) return errorResponse('No venue found', 400);
-
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(supabaseUrl, serviceKey);
+    const isWriteMethod = ['POST', 'PATCH', 'DELETE'].includes(req.method);
+    const mutationBody = isWriteMethod ? await req.clone().json().catch(() => ({})) : {};
+    const bodyVenueId = mutationBody.venueId || mutationBody.venue_id || null;
+    const venueId = url.searchParams.get('venueId') || bodyVenueId || adminVenueId;
+    const isVenueScopedWrite = isWriteMethod && !(req.method === 'POST' && path === 'venues');
+    const shouldAuditMutation = isWriteMethod && !NON_AUDITED_ADMIN_POSTS.has(path);
+
+    if (!venueId && path !== 'venues') return errorResponse('No venue found', 400);
+
+    try {
+      if (req.method === 'POST' && path === 'venues') {
+        await requireSuperAdmin(admin, userId);
+      } else if (isVenueScopedWrite && venueId) {
+        await requireVenueRole(admin, userId, venueId, ['venue_admin']);
+      }
+
+      if (shouldAuditMutation) {
+        await auditMutation(admin, {
+          req,
+          userId,
+          action: `api-admin.${path}.${req.method.toLowerCase()}`,
+          entityTable: adminEntityTableForPath(path),
+          entityId: adminEntityIdFromRequest(path, req.method, mutationBody, url),
+          venueId: path === 'venues' ? null : venueId,
+          metadata: {
+            path,
+            method: req.method,
+            query: Object.fromEntries(url.searchParams.entries()),
+            body: sanitizeAuditValue(mutationBody),
+          },
+        });
+      }
+    } catch (authOrAuditError) {
+      const message = authOrAuditError instanceof Error ? authOrAuditError.message : 'Authorization failed';
+      if (message.startsWith('Forbidden')) return errorResponse(message, 403);
+      if (message.startsWith('Missing')) return errorResponse(message, 400);
+      return errorResponse(message, 500);
+    }
 
     // ── CHECK ROLE ──
     if (req.method === 'GET' && path === 'check') {
@@ -1962,7 +2077,8 @@ Deno.serve(async (req) => {
       const updates: any = {};
       if (role) updates.role = role;
       if (isActive !== undefined) updates.is_active = isActive;
-      const { data, error: e } = await admin.from('venue_staff').update(updates).eq('id', staffId).select().single();
+      const { data, error: e } = await admin.from('venue_staff')
+        .update(updates).eq('id', staffId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
@@ -1970,7 +2086,7 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'staff') {
       const staffId = url.searchParams.get('staffId');
       if (!staffId) return errorResponse('Missing staffId');
-      const { error: e } = await admin.from('venue_staff').delete().eq('id', staffId);
+      const { error: e } = await admin.from('venue_staff').delete().eq('id', staffId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
     }
@@ -1995,7 +2111,8 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'courts') {
       const { courtId, ...updates } = await req.json();
       if (!courtId) return errorResponse('Missing courtId');
-      const { data, error: e } = await admin.from('venue_courts').update(updates).eq('id', courtId).select().single();
+      const { data, error: e } = await admin.from('venue_courts')
+        .update(updates).eq('id', courtId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
@@ -2003,7 +2120,7 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'courts') {
       const courtId = url.searchParams.get('courtId');
       if (!courtId) return errorResponse('Missing courtId');
-      const { error: e } = await admin.from('venue_courts').delete().eq('id', courtId);
+      const { error: e } = await admin.from('venue_courts').delete().eq('id', courtId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
     }
@@ -2580,7 +2697,8 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'pricing') {
       const { ruleId, ...updates } = await req.json();
       if (!ruleId) return errorResponse('Missing ruleId');
-      const { data, error: e } = await admin.from('pricing_rules').update(updates).eq('id', ruleId).select().single();
+      const { data, error: e } = await admin.from('pricing_rules')
+        .update(updates).eq('id', ruleId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
@@ -2588,7 +2706,7 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'pricing') {
       const ruleId = url.searchParams.get('ruleId');
       if (!ruleId) return errorResponse('Missing ruleId');
-      const { error: e } = await admin.from('pricing_rules').delete().eq('id', ruleId);
+      const { error: e } = await admin.from('pricing_rules').delete().eq('id', ruleId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
     }
@@ -2759,7 +2877,8 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'links') {
       const { linkId, ...updates } = await req.json();
       if (!linkId) return errorResponse('Missing linkId');
-      const { data, error: e } = await admin.from('venue_links').update(updates).eq('id', linkId).select().single();
+      const { data, error: e } = await admin.from('venue_links')
+        .update(updates).eq('id', linkId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
@@ -2767,7 +2886,7 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'links') {
       const linkId = url.searchParams.get('linkId');
       if (!linkId) return errorResponse('Missing linkId');
-      const { error: e } = await admin.from('venue_links').delete().eq('id', linkId);
+      const { error: e } = await admin.from('venue_links').delete().eq('id', linkId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
     }
@@ -2797,7 +2916,7 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'event-categories') {
       const catId = url.searchParams.get('id');
       if (!catId) return errorResponse('Missing id');
-      const { error: e } = await admin.from('venue_event_categories').delete().eq('id', catId);
+      const { error: e } = await admin.from('venue_event_categories').delete().eq('id', catId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
     }
