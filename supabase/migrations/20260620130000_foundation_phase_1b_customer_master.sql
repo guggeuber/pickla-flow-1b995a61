@@ -283,13 +283,6 @@ BEGIN
   WHERE vc.customer_id IS NULL
     AND vc.user_id = c.auth_user_id;
 
-  UPDATE public.ledger_entries le
-  SET customer_id = br.customer_id
-  FROM public.booking_receipts br
-  WHERE le.customer_id IS NULL
-    AND le.booking_receipt_id = br.id
-    AND br.customer_id IS NOT NULL;
-
   INSERT INTO public.customer_venue_profiles (
     customer_id,
     venue_id,
