@@ -4,11 +4,12 @@ Status: canonical implementation plan
 Scope: architecture foundation only  
 Last updated: 2026-06-20
 
-This document reconciles three inputs:
+This document reconciles four inputs:
 
 1. Claude CTO review: identified architectural blockers.
 2. Codex Foundation Phase 1 audit: mapped current schema/functions/RLS risks.
 3. `pickla-target-erd-central-membership.md`: target ERD for central membership ownership and franchise scaling.
+4. Claude AI-first architecture review: future substrate required before safe autonomous agents.
 
 This is the source of truth for future implementation sessions. Do not implement from older chat context if it conflicts with this document.
 
@@ -33,6 +34,301 @@ The key decision:
 **Membership is ultimately owned by `organization`, not by `venue`.**
 
 Phase 1 will create the foundation for that model, but it will not cut checkout, booking, check-in, Stripe, or membership entitlement runtime over to the new model yet.
+
+## Future AI-First Direction
+
+This section captures future direction only. It does not expand Phase 1 implementation scope.
+
+Phase 1 still remains:
+
+- organization / franchisee spine
+- customer master
+- central membership foundation
+- shared authorization
+- audit log
+
+The purpose of this section is to prevent Phase 1 decisions from locking Pickla into a venue-only architecture that cannot later support autonomous agents, ambassadors, affiliates, pop-ups, parks, or franchise-scale operations.
+
+### 1. Resource-First Architecture
+
+Long-term, Pickla should model the world as playable resources grouped by containers.
+
+Target concepts:
+
+- `playable_resource`: anything a session can happen on.
+  - Examples: indoor court, dart board, outdoor seasonal court, pop-up court, park-cluster court, community-hosted court, event-only resource.
+- `resource_container`: operating context that groups resources.
+  - Examples: staffed venue, franchise venue, seasonal site, pop-up, park cluster, community host.
+- `venue`: one concrete container type.
+  - In Phase 1, `venue` remains the only implemented container type.
+
+Direction:
+
+- Agents reason about resources: capacity, availability, utilization, demand, conflicts, and revenue attribution.
+- `venue_id` should remain valid for current operations, but new architecture should avoid assuming every resource is an indoor staffed venue.
+- Future tables should be able to resolve `resource -> container -> franchisee -> organization`.
+
+Phase 1 implication:
+
+- Do not build generic resource containers yet.
+- Do not rewrite booking/check-in around resources yet.
+- But do avoid new hardcoded venue-only assumptions where an organization/franchise/resource relationship will be needed later.
+
+### 2. Host/Ambassador Progression Model
+
+Long-term, Pickla's growth path is not only staff-operated venues.
+
+Target progression:
+
+```text
+customer
+  -> host
+  -> ambassador
+  -> affiliate
+  -> operator
+  -> franchisee
+```
+
+This should be modeled as capabilities on a principal, not as disconnected user tables.
+
+Definitions:
+
+- Customer: normal player/customer identity.
+- Host: customer allowed to create sessions on approved resources.
+- Ambassador: customer allowed to recruit/community-build with attribution.
+- Affiliate: customer/principal allowed to earn commission or rewards.
+- Operator: principal with operational capability for a resource container.
+- Franchisee: legal/operator entity under organization.
+
+Phase 1 implication:
+
+- Customer master must not assume every customer is only a buyer.
+- Authorization must eventually support non-staff principals with scoped capabilities.
+- Do not build host/ambassador/affiliate payout or progression features in Phase 1.
+
+### 3. Affiliate Progression Model
+
+Affiliate behavior requires attribution, permissions, and ledger support.
+
+Future model:
+
+- Referral and affiliate attribution should attach to domain events:
+  - `created_by_principal`
+  - `referred_by_principal`
+  - `affiliate_code`
+  - `correlation_id`
+- Affiliate earning should become ledger/settlement lines later.
+- Fraud/risk checks should be agent-readable but approval-bound.
+
+Phase 1 implication:
+
+- Customer and audit models should support actor/principal identity cleanly.
+- Ledger line/reversal/commission model is not Phase 1.
+- Do not bolt affiliate identity onto membership tiers or venue staff.
+
+### 4. Event Architecture
+
+Future AI agents need events as a perception and coordination layer.
+
+Two logs should remain separate:
+
+1. Domain event log
+   - Immutable facts that happened.
+   - Examples: `BookingConfirmed`, `CheckinRecorded`, `PaymentSettled`, `LeadReceived`, `SessionPublished`, `ResourceBlocked`.
+   - Scoped by organization, franchisee/container/venue, resource, customer, principal.
+   - Typed, versioned, idempotent, append-only.
+   - Carries `event_id`, `correlation_id`, `caused_by_event_id`.
+
+2. Agent activity log
+   - What an agent perceived, proposed, decided, and attempted.
+   - Separate from world facts because an agent proposal is not a fact about the business.
+
+Future read models:
+
+- Operations Truth
+- Customer 360
+- Revenue Ledger summaries
+- Agent Inbox
+
+These should become projections of facts over time, not independent parallel truths.
+
+Phase 1 implication:
+
+- Phase 1 audit log is not the full domain event log.
+- Do not build event-stream infrastructure yet.
+- But audit records should include enough actor/scope/entity/correlation metadata to evolve toward this.
+
+### 5. Agent Contracts
+
+Every future agent must have a machine-readable contract.
+
+Contract fields:
+
+- Consumes:
+  - event types
+  - read scopes
+  - allowed projections
+- Emits:
+  - closed set of typed proposed actions
+  - never arbitrary writes
+- Per-action guards:
+  - preconditions
+  - capacity checks
+  - consent checks
+  - amount caps
+  - target state checks
+- Effect class:
+  - `read`
+  - `reversible_write`
+  - `irreversible`
+  - `money_moving`
+  - `customer_facing`
+- Blast radius:
+  - record
+  - resource
+  - venue
+  - franchisee
+  - organization
+
+Phase 1 implication:
+
+- Do not build the full agent contract framework yet.
+- Shared authorization and audit log should be designed so agent contracts can later use the same permission/action vocabulary humans use.
+
+### 6. Agent Permissions
+
+Agents should be principals with scoped capabilities.
+
+Future permission shape:
+
+```text
+principal x capability x scope x constraints
+```
+
+Examples:
+
+- `offer.draft` scoped to a venue.
+- `offer.send` scoped to a venue and customer-facing approval policy.
+- `resource.recommend_reallocation` scoped to a resource/container.
+- `credit.apply` scoped to organization with amount cap.
+
+Constraints:
+
+- monetary cap
+- per-action rate limit
+- daily cap
+- allowed hours
+- consent required
+- customer-facing approval required
+- franchisee opt-out/threshold
+
+Future write path:
+
+- Humans and agents should use the same guarded action gateway.
+- No agent should write through a private service-role side door.
+
+Phase 1 implication:
+
+- Implement shared authorization for humans first.
+- Do not introduce autonomous agent write permissions in Phase 1.
+- Do not create a separate agent-only authorization path.
+
+### 7. Agent Memory
+
+Future agent memory has three categories:
+
+1. Working memory
+   - Per-run context.
+   - Ephemeral and reconstructable.
+
+2. Episodic memory
+   - History with a customer, lead, venue, resource, or event.
+   - Should derive from domain events and projections.
+
+3. Semantic/operational memory
+   - Playbooks, learned preferences, embeddings, operational patterns.
+   - The only genuinely new memory store.
+
+Rules:
+
+- Memory is scoped by organization/franchisee/venue/resource/customer.
+- Venue-private customer notes stay in `customer_venue_profiles`, not global customer memory.
+- Customer memory is personal data and must support retention and erasure.
+- Agent memory reads need permission checks.
+- Memory should be versioned enough to explain what an agent knew at decision time.
+
+Phase 1 implication:
+
+- Do not build agent memory in Phase 1.
+- Customer master and venue-private profile split must be designed so future memory does not leak cross-venue data.
+
+### 8. Approval Boundaries
+
+Approval must be policy-driven, not hardcoded per agent.
+
+Future approval outcomes:
+
+- `auto_execute`
+- `approve_by_venue_staff`
+- `approve_by_franchisee`
+- `approve_by_hq`
+- `forbidden`
+
+Policy inputs:
+
+- effect class
+- scope
+- amount/value
+- customer-facing impact
+- reversibility
+- confidence
+- venue/franchisee thresholds
+- historical override/rejection rate
+
+Graduation model:
+
+1. Shadow:
+   - agent proposes only
+   - measure would-approve rate
+2. Approval-required:
+   - human approves before execution
+3. Auto-within-bounds:
+   - only for low-risk actions under explicit caps
+
+Phase 1 implication:
+
+- Do not grant autonomy in Phase 1.
+- Audit log should record approval/rejection decisions where they exist.
+- Existing Agent Inbox remains approval-first.
+
+### 9. Multi-Agent Architecture
+
+Future multi-agent design should be event-driven, not one central brain.
+
+Principles:
+
+- Choreography over orchestration:
+  - agents react to typed events and emit typed proposals/actions.
+- Idempotency:
+  - every trigger/action needs dedupe keys.
+- Leases/claims:
+  - only one agent instance should own a given mutable workflow at a time.
+- Conflict arbitration:
+  - resource/capacity conflicts need priority policy.
+- Sagas and compensation:
+  - multi-step workflows must be reversible step-by-step.
+- Correlation IDs:
+  - every chain of proposals/actions should be traceable as one workflow.
+- Kill switch:
+  - per agent, capability, venue, franchisee, organization.
+- Observability:
+  - run tracing, override rate, rejection rate, drift, latency, cost.
+
+Phase 1 implication:
+
+- Do not build multi-agent orchestration in Phase 1.
+- Audit and authorization should include the scope/correlation concepts needed later.
+- Ledger reversal model is required before safe money-moving multi-agent workflows, but it is not Phase 1.
 
 ## Current Blockers
 
