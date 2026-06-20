@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, Loader2, LogOut, Settings, RefreshCw, UserCheck, Gauge, Radio, AlertTriangle, ScanLine, Search, X } from "lucide-react";
+import { AlertCircle, Loader2, LogOut, Settings, RefreshCw, UserCheck, Gauge, Radio, AlertTriangle, ScanLine } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
@@ -12,8 +12,8 @@ import DeskArrivals from "@/components/desk/shell/DeskArrivals";
 import DeskToday from "@/components/desk/shell/DeskToday";
 import DeskLive from "@/components/desk/shell/DeskLive";
 import DeskQueue from "@/components/desk/shell/DeskQueue";
+import DeskCommandBar from "@/components/desk/shell/DeskCommandBar";
 import QrScanner from "@/components/desk/QrScanner";
-import CustomersScreen from "@/screens/CustomersScreen";
 import {
   OperationsBookingDrawer,
   bookingRowsForGroup,
@@ -40,7 +40,6 @@ const Index = () => {
 
   const [active, setActive] = useState<DeskSurfaceId>("arrivals");
   const [showScanner, setShowScanner] = useState(false);
-  const [showCustomerSearch, setShowCustomerSearch] = useState(false);
   const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
   const now = useClock();
 
@@ -140,14 +139,6 @@ const Index = () => {
                 </span>
               </div>
               <button
-                onClick={() => setShowCustomerSearch(true)}
-                className="hidden sm:flex h-10 items-center gap-2 rounded-xl px-3 text-xs font-black uppercase tracking-wider"
-                style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: "white" }}
-              >
-                <Search className="w-4 h-4" />
-                Kund
-              </button>
-              <button
                 onClick={() => queryClient.invalidateQueries()}
                 className="w-10 h-10 rounded-xl flex items-center justify-center"
                 style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: ax("muted") }}
@@ -186,15 +177,14 @@ const Index = () => {
           <div className="mt-3">
             <DeskTopNav surfaces={surfaces} active={active} onChange={setActive} />
           </div>
-          <button
-            type="button"
-            onClick={() => setShowCustomerSearch(true)}
-            className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl text-sm font-black sm:hidden"
-            style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: "white" }}
-          >
-            <Search className="h-4 w-4" />
-            Sök kund
-          </button>
+          <div className="mt-3">
+            <DeskCommandBar
+              venueId={venueId}
+              venueSlug={(staffVenue as any)?.venues?.slug || "solna"}
+              bookings={courtRows}
+              onOpenBooking={openBookingFromRow}
+            />
+          </div>
         </div>
       </header>
 
@@ -220,45 +210,6 @@ const Index = () => {
           </motion.div>
         </AnimatePresence>
       </main>
-
-      <AnimatePresence>
-        {showCustomerSearch && venueId && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowCustomerSearch(false)}
-              className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-md"
-            />
-            <motion.div
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", damping: 28, stiffness: 280 }}
-              className="fixed inset-x-0 bottom-0 z-[81] mx-auto flex max-h-[92vh] max-w-3xl flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-[#101524] shadow-2xl"
-            >
-              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: ax("muted") }}>Desk</p>
-                  <h2 className="text-xl font-black text-white">Sök kund</h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowCustomerSearch(false)}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white"
-                  aria-label="Stäng kundsök"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto py-4">
-                <CustomersScreen venueId={venueId} />
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
 
       <AnimatePresence>
         {showScanner && venueId && (

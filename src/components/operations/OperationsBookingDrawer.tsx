@@ -4,7 +4,7 @@ import { DateTime } from "luxon";
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiPost } from "@/lib/api";
+import { checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 export type OperationsCourt = {
@@ -158,25 +158,6 @@ function statusTone(status?: string | null) {
   return "bg-neutral-500/15 text-neutral-300 border-neutral-500/25";
 }
 
-function checkinEligibility(booking: OperationsBookingDetail | null) {
-  if (!booking?.venue_id || !booking.source_ids?.length) return { ok: false };
-  const startIso = booking.starts_at || booking.start_time;
-  const endIso = booking.ends_at || booking.end_time;
-  if (!startIso || !endIso) return { ok: false };
-
-  const now = DateTime.now().setZone("Europe/Stockholm");
-  const start = DateTime.fromISO(startIso, { zone: "utc" }).setZone("Europe/Stockholm");
-  const end = DateTime.fromISO(endIso, { zone: "utc" }).setZone("Europe/Stockholm");
-  if (!start.isValid || !end.isValid) return { ok: false };
-  if (start.toISODate() !== now.toISODate()) return { ok: false };
-  if (now < start.minus({ minutes: 30 }) || now > end) return { ok: false };
-
-  const amount = Number(booking.amount_sek ?? booking.total_price ?? 0);
-  const paymentOk = booking.payment_status === "paid" || booking.payment_status === "free" || amount <= 0;
-  const statusOk = !booking.status || ["confirmed", "completed"].includes(String(booking.status));
-  return { ok: paymentOk && statusOk };
-}
-
 function Field({ icon: Icon, label, value }: { icon: typeof UserRound; label: string; value?: string | number | null }) {
   if (value == null || value === "") return null;
   return (
@@ -208,7 +189,7 @@ export function OperationsBookingDrawer({
   const courts = booking?.courts?.length ? booking.courts : booking?.court_name ? [{ name: booking.court_name }] : [];
   const bookingCustomerUserId = booking?.customer_user_id || booking?.user_id || null;
   const canOpenCustomer = Boolean(booking?.venue_id && bookingCustomerUserId);
-  const canCheckIn = !effectiveCheckedIn && checkinEligibility(booking).ok;
+  const canCheckIn = !effectiveCheckedIn && deskBookingCheckinEligibility(booking).ok;
 
   useEffect(() => {
     setLocalCheckedInAt(null);
@@ -217,11 +198,7 @@ export function OperationsBookingDrawer({
   const checkInMutation = useMutation({
     mutationFn: async () => {
       if (!booking?.venue_id || !booking.source_ids?.length) throw new Error("Bokningsdata saknas");
-      return apiPost("api-checkins", "booking", {
-        venue_id: booking.venue_id,
-        booking_ids: booking.source_ids,
-        customer_name: booking.customer_name || null,
-      });
+      return checkInDeskBooking(booking);
     },
     onSuccess: () => {
       const nowIso = DateTime.now().toUTC().toISO();

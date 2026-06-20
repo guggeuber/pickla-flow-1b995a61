@@ -965,6 +965,46 @@ Deno.serve(async (req) => {
       return jsonResponse(data, 200, 5);
     }
 
+    // GET /api-checkins/ops?venueId=X — deterministic desk attention signals.
+    if (req.method === 'GET' && path === 'ops') {
+      const { userId, error } = await getAuthenticatedClient(req);
+      if (error || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+      const venueId = url.searchParams.get('venueId');
+      if (!venueId) return errorResponse('Missing venueId');
+
+      const serviceClient = getServiceClient();
+      const canOperate = await canStaffOperateVenue(serviceClient, userId, venueId);
+      if (!canOperate) return errorResponse('Forbidden', 403);
+
+      const { today } = stockholmNow();
+      const { data: staleRows, error: staleErr } = await serviceClient
+        .from('venue_checkins')
+        .select('id, player_name, entry_type, checked_in_at, session_date')
+        .eq('venue_id', venueId)
+        .lt('session_date', today)
+        .is('checked_out_at', null)
+        .order('checked_in_at', { ascending: false })
+        .limit(20);
+      if (staleErr) return errorResponse(staleErr.message, 500);
+
+      const { data: unclearRows, error: unclearErr } = await serviceClient
+        .from('venue_checkins')
+        .select('id, player_name, entry_type, checked_in_at')
+        .eq('venue_id', venueId)
+        .eq('session_date', today)
+        .is('entitlement_id', null)
+        .is('checked_out_at', null)
+        .order('checked_in_at', { ascending: false })
+        .limit(20);
+      if (unclearErr) return errorResponse(unclearErr.message, 500);
+
+      return jsonResponse({
+        stale_checkins: staleRows || [],
+        unclear_checkins: unclearRows || [],
+      }, 200, 10);
+    }
+
     // ── Legacy event-based endpoints ──
 
     const { client: authClient, userId: authUserId, error: authError } = await getAuthenticatedClient(req);

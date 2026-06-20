@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { CalendarClock, CheckCircle2, CreditCard, Crown, FileText, Loader2, Mail, Phone, ReceiptText, ShieldCheck, Ticket, UserRound, X } from "lucide-react";
 import { DateTime } from "luxon";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { apiGet } from "@/lib/api";
-import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { apiGet, apiPost } from "@/lib/api";
 
 type Customer360Response = {
   customer: {
@@ -92,7 +92,22 @@ function Row({ title, meta, aside }: { title: string; meta?: string | null; asid
   );
 }
 
+function CommandButton({ icon: Icon, label, onClick }: { icon: typeof UserRound; label: string; onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.06] px-3 py-2 text-sm font-black text-white disabled:opacity-45"
+      disabled={!onClick}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+  );
+}
+
 export default function Customer360Drawer({ open, onClose, venueId, userId, onManageProfile }: Props) {
+  const queryClient = useQueryClient();
   const customerQ = useQuery<Customer360Response>({
     queryKey: ["customer-360", venueId, userId],
     enabled: open && !!venueId && !!userId,
@@ -103,6 +118,34 @@ export default function Customer360Drawer({ open, onClose, venueId, userId, onMa
   const data = customerQ.data;
   const customer = data?.customer;
   const membershipName = data?.membership_badge?.name || data?.active_membership?.membership_tiers?.name || null;
+  const today = DateTime.now().setZone(tz).toISODate();
+  const activeCheckin = data?.checkins?.find((row) => row.session_date === today && !row.checked_out_at);
+  const todayDayPass = data?.day_passes?.find((row) => row.valid_date === today && row.status === "active");
+  const todayRegistration = data?.activity_registrations?.find((row) => row.session_date === today);
+  const todayAccess = activeCheckin
+    ? `Incheckad via ${activeCheckin.entry_type || "access"}`
+    : todayRegistration
+      ? `${todayRegistration.activity_sessions?.name || "Aktivitet"} idag`
+      : todayDayPass
+        ? "Aktivt dagspass idag"
+        : membershipName
+          ? `${membershipName} aktivt`
+          : "Ingen tydlig access idag";
+  const checkinMutation = useMutation({
+    mutationFn: () => apiPost("api-checkins", "checkin", {
+      venue_id: venueId,
+      target_user_id: userId,
+      entry_type: "auto",
+      player_name: customer?.name || null,
+    }),
+    onSuccess: () => {
+      toast.success("Kunden är incheckad");
+      queryClient.invalidateQueries({ queryKey: ["customer-360", venueId, userId] });
+      queryClient.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
+      queryClient.invalidateQueries({ queryKey: ["today-bookings", venueId] });
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte checka in"),
+  });
 
   return (
     <AnimatePresence>
@@ -143,17 +186,17 @@ export default function Customer360Drawer({ open, onClose, venueId, userId, onMa
                 </div>
               ) : data && customer ? (
                 <div className="space-y-5">
-                  <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-4">
+                  <div className="overflow-hidden rounded-3xl border border-white/10 bg-white/[0.06] p-4">
                     <div className="flex items-start gap-3">
-                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-lg font-black text-white">
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-xl font-black text-white">
                         {(customer.name || customer.email || "?").slice(0, 2).toUpperCase()}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="truncate text-2xl font-black text-white">{customer.name || "Kund utan namn"}</h3>
+                        <div className="min-w-0">
+                          <h3 className="break-words text-2xl font-black leading-tight text-white">{customer.name || "Kund utan namn"}</h3>
                           {membershipName && (
                             <span
-                              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white"
+                              className="mt-2 inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-white"
                               style={{ background: data.membership_badge?.color || "hsl(var(--primary))" }}
                             >
                               <Crown className="h-3 w-3" />
@@ -161,26 +204,63 @@ export default function Customer360Drawer({ open, onClose, venueId, userId, onMa
                             </span>
                           )}
                         </div>
-                        <div className="mt-2 space-y-1 text-sm text-white/55">
-                          {customer.email && <p className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" />{customer.email}</p>}
-                          {customer.phone && <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5" />{customer.phone}</p>}
+                        <div className="mt-3 space-y-1 text-sm text-white/55">
+                          {customer.email && <p className="flex min-w-0 items-center gap-2 break-all"><Mail className="h-3.5 w-3.5 shrink-0" />{customer.email}</p>}
+                          {customer.phone && <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 shrink-0" />{customer.phone}</p>}
                           {customer.created_at && <p className="text-xs">Kund sedan {formatDateTime(customer.created_at)}</p>}
                         </div>
                       </div>
                     </div>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {onManageProfile && (
-                        <Button type="button" size="sm" variant="secondary" onClick={onManageProfile}>
-                          Hantera profil
-                        </Button>
-                      )}
-                      {(data.safe_actions || []).map((action) => (
-                        <span key={action} className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white/45">
-                          {action.replace(/_/g, " ")}
-                        </span>
-                      ))}
+                  </div>
+
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Dagens access</p>
+                    <div className="mt-2 flex items-start gap-3">
+                      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${activeCheckin ? "bg-emerald-400/15 text-emerald-300" : "bg-white/10 text-white/65"}`}>
+                        <ShieldCheck className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-lg font-black leading-tight text-white">{todayAccess}</p>
+                        <p className="mt-1 text-xs text-white/45">
+                          {activeCheckin?.checked_in_at ? `Incheckad ${formatDateTime(activeCheckin.checked_in_at)}` : "Visar bara verifierad data från dagens bokningar, pass, medlemskap och check-ins."}
+                        </p>
+                      </div>
                     </div>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <CommandButton
+                      icon={checkinMutation.isPending ? Loader2 : CheckCircle2}
+                      label={activeCheckin ? "Redan inne" : checkinMutation.isPending ? "Checkar in" : "Checka in"}
+                      onClick={!activeCheckin && venueId && userId ? () => checkinMutation.mutate() : undefined}
+                    />
+                    <CommandButton icon={UserRound} label="Profil" onClick={onManageProfile} />
+                    <CommandButton icon={Crown} label="Medlemskap" onClick={onManageProfile} />
+                    <a
+                      href="/openplay"
+                      className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.06] px-3 py-2 text-sm font-black text-white"
+                    >
+                      <Ticket className="h-4 w-4" />
+                      Dagspass
+                    </a>
+                  </div>
+
+                  {data.active_membership && (
+                    <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Medlemskap</p>
+                          <p className="mt-1 text-xl font-black text-white">{membershipName || "Aktivt medlemskap"}</p>
+                          <p className="mt-1 text-xs text-white/50">
+                            Status: {data.active_membership.status || "aktiv"}
+                            {data.active_membership.starts_at ? ` · Från ${formatDateTime(data.active_membership.starts_at)}` : ""}
+                            {data.active_membership.expires_at ? ` · Till ${formatDateTime(data.active_membership.expires_at)}` : ""}
+                          </p>
+                        </div>
+                        <Crown className="h-5 w-5 shrink-0 text-white/60" />
+                      </div>
+                    </section>
+                  )}
 
                   <Section title="Kommande bokningar" icon={CalendarClock}>
                     {data.upcoming_bookings.length ? data.upcoming_bookings.map((booking) => (
