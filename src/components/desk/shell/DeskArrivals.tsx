@@ -24,6 +24,7 @@ const checkinLabels: Record<string, string> = {
 interface TodayCheckin {
   id: string;
   venue_id?: string | null;
+  customer_id?: string | null;
   user_id?: string | null;
   player_name: string | null;
   entry_type: string;
@@ -39,7 +40,7 @@ interface Props {
 export default function DeskArrivals({ venueId, onScan }: Props) {
   const queryClient = useQueryClient();
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
-  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
+  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
 
   const { data: checkins = [], isLoading } = useQuery<TodayCheckin[]>({
     queryKey: ["desk-checkins-today", venueId],
@@ -139,8 +140,8 @@ export default function DeskArrivals({ venueId, onScan }: Props) {
               >
                 <button
                   type="button"
-                  onClick={() => c.user_id && setCustomer360UserId(c.user_id)}
-                  disabled={!c.user_id}
+                  onClick={() => setCustomer360Target({ customerId: c.customer_id || null, userId: c.user_id || null })}
+                  disabled={!c.customer_id && !c.user_id}
                   className="w-full text-left disabled:cursor-default"
                 >
                   <AxCard glow={isNew ? ax("lime", 0.7) : undefined} pad="card">
@@ -172,10 +173,11 @@ export default function DeskArrivals({ venueId, onScan }: Props) {
         </div>
       )}
       <Customer360Drawer
-        open={!!customer360UserId}
+        open={!!customer360Target}
         venueId={venueId}
-        userId={customer360UserId}
-        onClose={() => setCustomer360UserId(null)}
+        customerId={customer360Target?.customerId}
+        userId={customer360Target?.userId}
+        onClose={() => setCustomer360Target(null)}
       />
     </div>
   );

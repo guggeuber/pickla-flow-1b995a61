@@ -8,7 +8,8 @@ import { apiGet, apiPost } from "@/lib/api";
 
 type Customer360Response = {
   customer: {
-    user_id: string;
+    customer_id?: string | null;
+    user_id?: string | null;
     profile_id?: string | null;
     name?: string | null;
     email?: string | null;
@@ -31,6 +32,7 @@ type Props = {
   open: boolean;
   onClose: () => void;
   venueId?: string | null;
+  customerId?: string | null;
   userId?: string | null;
   onManageProfile?: () => void;
 };
@@ -106,17 +108,22 @@ function CommandButton({ icon: Icon, label, onClick }: { icon: typeof UserRound;
   );
 }
 
-export default function Customer360Drawer({ open, onClose, venueId, userId, onManageProfile }: Props) {
+export default function Customer360Drawer({ open, onClose, venueId, customerId, userId, onManageProfile }: Props) {
   const queryClient = useQueryClient();
   const customerQ = useQuery<Customer360Response>({
-    queryKey: ["customer-360", venueId, userId],
-    enabled: open && !!venueId && !!userId,
-    queryFn: () => apiGet("api-customers", "360", { venueId: venueId!, userId: userId! }),
+    queryKey: ["customer-360", venueId, customerId, userId],
+    enabled: open && !!venueId && (!!customerId || !!userId),
+    queryFn: () => apiGet("api-customers", "360", {
+      venueId: venueId!,
+      ...(customerId ? { customerId } : {}),
+      ...(userId ? { userId } : {}),
+    }),
     staleTime: 30_000,
   });
 
   const data = customerQ.data;
   const customer = data?.customer;
+  const resolvedUserId = customer?.user_id || userId || null;
   const membershipName = data?.membership_badge?.name || data?.active_membership?.membership_tiers?.name || null;
   const today = DateTime.now().setZone(tz).toISODate();
   const activeCheckin = data?.checkins?.find((row) => row.session_date === today && !row.checked_out_at);
@@ -134,13 +141,13 @@ export default function Customer360Drawer({ open, onClose, venueId, userId, onMa
   const checkinMutation = useMutation({
     mutationFn: () => apiPost("api-checkins", "checkin", {
       venue_id: venueId,
-      target_user_id: userId,
+      target_user_id: resolvedUserId,
       entry_type: "auto",
       player_name: customer?.name || null,
     }),
     onSuccess: () => {
       toast.success("Kunden är incheckad");
-      queryClient.invalidateQueries({ queryKey: ["customer-360", venueId, userId] });
+      queryClient.invalidateQueries({ queryKey: ["customer-360", venueId, customerId, userId] });
       queryClient.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
       queryClient.invalidateQueries({ queryKey: ["today-bookings", venueId] });
     },
@@ -232,7 +239,7 @@ export default function Customer360Drawer({ open, onClose, venueId, userId, onMa
                     <CommandButton
                       icon={checkinMutation.isPending ? Loader2 : CheckCircle2}
                       label={activeCheckin ? "Redan inne" : checkinMutation.isPending ? "Checkar in" : "Checka in"}
-                      onClick={!activeCheckin && venueId && userId ? () => checkinMutation.mutate() : undefined}
+                      onClick={!activeCheckin && venueId && resolvedUserId ? () => checkinMutation.mutate() : undefined}
                     />
                     <CommandButton icon={UserRound} label="Profil" onClick={onManageProfile} />
                     <CommandButton icon={Crown} label="Medlemskap" onClick={onManageProfile} />

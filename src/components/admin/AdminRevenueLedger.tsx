@@ -61,7 +61,7 @@ function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerP
 
 export default function AdminRevenueLedger({ venueId }: Props) {
   const [date, setDate] = useState(stockholmToday());
-  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
+  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const ledgerQ = useAdminRevenueLedger(venueId, date);
   const zettleQ = useAdminZettleStatus(venueId);
   const zettleConnect = useAdminZettleConnect(venueId);
@@ -267,10 +267,15 @@ export default function AdminRevenueLedger({ venueId }: Props) {
                       </summary>
                       <div className="mt-2 rounded-md border border-border/70 bg-background/60 p-2 text-left text-[11px] text-muted-foreground sm:w-56">
                         <p className="font-semibold text-foreground">{entry.receipt?.product_description || entry.source_label}</p>
-                        {entry.receipt?.user_id ? (
+                        {entry.receipt?.customer_id || entry.customer_id || entry.receipt?.user_id ? (
                           <button
                             type="button"
-                            onClick={() => setCustomer360UserId(entry.receipt?.user_id || null)}
+                            onClick={() =>
+                              setCustomer360Target({
+                                customerId: entry.receipt?.customer_id || entry.customer_id || null,
+                                userId: entry.receipt?.user_id || null,
+                              })
+                            }
                             className="font-semibold text-primary hover:underline"
                           >
                             Öppna kund
@@ -292,10 +297,11 @@ export default function AdminRevenueLedger({ venueId }: Props) {
         )}
       </div>
       <Customer360Drawer
-        open={!!customer360UserId}
+        open={!!customer360Target}
         venueId={venueId}
-        userId={customer360UserId}
-        onClose={() => setCustomer360UserId(null)}
+        customerId={customer360Target?.customerId}
+        userId={customer360Target?.userId}
+        onClose={() => setCustomer360Target(null)}
       />
     </div>
   );

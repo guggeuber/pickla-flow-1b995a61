@@ -29,6 +29,70 @@ const fullName = (profile: Record<string, unknown> | null | undefined) => {
     || cleanString(profile.display_name);
 };
 
+const uniqueStrings = (values: unknown[]) =>
+  Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+
+const asArrayResult = (result: any) => result?.data || [];
+
+function customerFullName(customer: Record<string, unknown> | null | undefined) {
+  if (!customer) return null;
+  return cleanString([customer.first_name, customer.last_name].filter(Boolean).join(' '))
+    || cleanString(customer.display_name);
+}
+
+function identityTitleFrom(row: {
+  display_name?: string | null;
+  full_name?: string | null;
+  email?: string | null;
+  receipt_name?: string | null;
+}) {
+  return cleanString(row.display_name)
+    || cleanString(row.email)
+    || cleanString(row.full_name)
+    || cleanString(row.receipt_name)
+    || 'Kund utan namn';
+}
+
+async function fetchByCustomerOrUser(admin: ReturnType<typeof getServiceClient>, table: string, select: string, params: {
+  venueId?: string | null;
+  customerIds?: string[];
+  userIds?: string[];
+  orderColumn?: string;
+  ascending?: boolean;
+  limit?: number;
+  extra?: (query: any) => any;
+}) {
+  const queries: Promise<any>[] = [];
+  const customerIds = uniqueStrings(params.customerIds || []);
+  const userIds = uniqueStrings(params.userIds || []);
+
+  if (customerIds.length > 0) {
+    let query = admin.from(table).select(select).in('customer_id', customerIds);
+    if (params.venueId) query = query.eq('venue_id', params.venueId);
+    if (params.extra) query = params.extra(query);
+    if (params.orderColumn) query = query.order(params.orderColumn, { ascending: params.ascending ?? false });
+    if (params.limit) query = query.limit(params.limit);
+    queries.push(query);
+  }
+
+  if (userIds.length > 0) {
+    let query = admin.from(table).select(select).in('user_id', userIds);
+    if (params.venueId) query = query.eq('venue_id', params.venueId);
+    if (params.extra) query = params.extra(query);
+    if (params.orderColumn) query = query.order(params.orderColumn, { ascending: params.ascending ?? false });
+    if (params.limit) query = query.limit(params.limit);
+    queries.push(query);
+  }
+
+  if (queries.length === 0) return { data: [], error: null };
+  const results = await Promise.all(queries);
+  const firstError = results.find((result) => result.error)?.error;
+  if (firstError) return { data: [], error: firstError };
+  const rows = new Map<string, any>();
+  for (const row of results.flatMap(asArrayResult)) rows.set(row.id || `${row.customer_id || row.user_id}:${rows.size}`, row);
+  return { data: Array.from(rows.values()), error: null };
+}
+
 async function assertCanListCustomers(admin: ReturnType<typeof getServiceClient>, userId: string, venueId: string) {
   const [{ data: globalRole }, { data: venueStaff }] = await Promise.all([
     admin.from('user_roles')
@@ -72,34 +136,60 @@ Deno.serve(async (req) => {
       }
 
       const fetchLimit = search ? 500 : limit;
+      const venueProfilesResult = venueId
+        ? await admin.from('customer_venue_profiles')
+          .select('customer_id, first_seen_at, last_seen_at, visit_count')
+          .eq('venue_id', venueId)
+          .order('last_seen_at', { ascending: false, nullsFirst: false })
+          .limit(fetchLimit)
+        : { data: [], error: null };
+      if (venueProfilesResult.error) return errorResponse(venueProfilesResult.error.message);
+
+      const venueCustomerIds = uniqueStrings((venueProfilesResult.data || []).map((row: any) => row.customer_id));
+      let customerQuery = admin
+        .from('customers')
+        .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, email_normalized, phone_e164, created_at, updated_at, status')
+        .eq('status', 'active')
+        .limit(fetchLimit);
+      if (venueId) {
+        if (venueCustomerIds.length > 0) {
+          customerQuery = customerQuery.in('id', venueCustomerIds);
+        } else {
+          customerQuery = customerQuery.limit(0);
+        }
+      } else {
+        customerQuery = customerQuery.order('updated_at', { ascending: false });
+      }
+      const { data: customers, error: customersErr } = await customerQuery;
+      if (customersErr) return errorResponse(customersErr.message);
+
       const { data: profiles, error: qErr } = await admin.from('player_profiles').select('*')
         .order('pickla_rating', { ascending: false })
         .limit(fetchLimit);
       if (qErr) return errorResponse(qErr.message);
 
-      const authUserIds = [...new Set((profiles || []).map((profile: any) => profile.auth_user_id).filter(Boolean))];
+      const customerIds = uniqueStrings((customers || []).map((customer: any) => customer.id));
+      const authUserIds = uniqueStrings([
+        ...(customers || []).map((customer: any) => customer.auth_user_id),
+        ...(profiles || []).map((profile: any) => profile.auth_user_id),
+      ]);
+      const profileByCustomerId = new Map((profiles || []).filter((profile: any) => profile.customer_id).map((profile: any) => [profile.customer_id, profile]));
+      const profileByUserId = new Map((profiles || []).filter((profile: any) => profile.auth_user_id).map((profile: any) => [profile.auth_user_id, profile]));
+      const venueProfileByCustomerId = new Map((venueProfilesResult.data || []).map((row: any) => [row.customer_id, row]));
 
       const authUsersPromise = admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      const receiptsPromise = authUserIds.length > 0
-        ? admin.from('booking_receipts')
-          .select('user_id, customer_name, customer_email, customer_phone, product_description, purchase_type, issued_at, created_at')
-          .in('user_id', authUserIds)
-          .order('issued_at', { ascending: false })
+      const receiptsPromise = fetchByCustomerOrUser(admin, 'booking_receipts',
+        'id, customer_id, user_id, customer_name, customer_email, customer_phone, product_description, purchase_type, issued_at, created_at',
+        { venueId, customerIds, userIds: authUserIds, orderColumn: 'issued_at', ascending: false, limit: 1000 });
+      const membershipsPromise = venueId
+        ? fetchByCustomerOrUser(admin, 'memberships',
+          'id, customer_id, user_id, status, membership_tiers(id, name, color, monthly_price, discount_percent)',
+          { venueId, customerIds, userIds: authUserIds, extra: (query) => query.eq('status', 'active'), limit: 1000 })
         : Promise.resolve({ data: [], error: null });
-      const membershipsPromise = venueId && authUserIds.length > 0
-        ? admin.from('memberships')
-          .select('user_id, status, membership_tiers(id, name, color, monthly_price, discount_percent)')
-          .eq('venue_id', venueId)
-          .eq('status', 'active')
-          .in('user_id', authUserIds)
-        : Promise.resolve({ data: [], error: null });
-      const checkinsPromise = venueId && authUserIds.length > 0
-        ? admin.from('venue_checkins')
-          .select('user_id, entry_type, checked_in_at, session_date')
-          .eq('venue_id', venueId)
-          .in('user_id', authUserIds)
-          .order('checked_in_at', { ascending: false })
-          .limit(1000)
+      const checkinsPromise = venueId
+        ? fetchByCustomerOrUser(admin, 'venue_checkins',
+          'id, customer_id, user_id, entry_type, checked_in_at, session_date',
+          { venueId, customerIds, userIds: authUserIds, orderColumn: 'checked_in_at', ascending: false, limit: 1000 })
         : Promise.resolve({ data: [], error: null });
 
       const [authUsersResult, receiptsResult, membershipsResult, checkinsResult] = await Promise.all([
@@ -113,47 +203,56 @@ Deno.serve(async (req) => {
 
       const usersById = new Map((authUsersResult.data?.users || []).map((user: any) => [user.id, user]));
 
-      const receiptByUserId = new Map<string, any>();
+      const receiptByKey = new Map<string, any>();
       for (const receipt of receiptsResult.data || []) {
-        if (receipt.user_id && !receiptByUserId.has(receipt.user_id)) {
-          receiptByUserId.set(receipt.user_id, receipt);
-        }
+        if (receipt.customer_id && !receiptByKey.has(`customer:${receipt.customer_id}`)) receiptByKey.set(`customer:${receipt.customer_id}`, receipt);
+        if (receipt.user_id && !receiptByKey.has(`user:${receipt.user_id}`)) receiptByKey.set(`user:${receipt.user_id}`, receipt);
       }
 
-      const membershipByUserId = new Map<string, any>();
+      const membershipByKey = new Map<string, any>();
       for (const membership of membershipsResult.data || []) {
-        if (membership.user_id && !membershipByUserId.has(membership.user_id)) {
-          membershipByUserId.set(membership.user_id, membership);
-        }
+        if (membership.customer_id && !membershipByKey.has(`customer:${membership.customer_id}`)) membershipByKey.set(`customer:${membership.customer_id}`, membership);
+        if (membership.user_id && !membershipByKey.has(`user:${membership.user_id}`)) membershipByKey.set(`user:${membership.user_id}`, membership);
       }
 
-      const checkinByUserId = new Map<string, any>();
+      const checkinByKey = new Map<string, any>();
       for (const checkin of checkinsResult.data || []) {
-        if (checkin.user_id && !checkinByUserId.has(checkin.user_id)) {
-          checkinByUserId.set(checkin.user_id, checkin);
-        }
+        if (checkin.customer_id && !checkinByKey.has(`customer:${checkin.customer_id}`)) checkinByKey.set(`customer:${checkin.customer_id}`, checkin);
+        if (checkin.user_id && !checkinByKey.has(`user:${checkin.user_id}`)) checkinByKey.set(`user:${checkin.user_id}`, checkin);
       }
 
-      const enriched = (profiles || []).map((profile: any) => {
-        const authUser = usersById.get(profile.auth_user_id);
-        const receipt = receiptByUserId.get(profile.auth_user_id);
-        const checkin = checkinByUserId.get(profile.auth_user_id);
-        const displayName = cleanString(profile.display_name);
-        const fullName = profileFullName(profile);
+      const enrichedFromCustomers = (customers || []).map((customer: any) => {
+        const profile = profileByCustomerId.get(customer.id) || profileByUserId.get(customer.auth_user_id);
+        const authUser = customer.auth_user_id ? usersById.get(customer.auth_user_id) : null;
+        const receipt = receiptByKey.get(`customer:${customer.id}`) || (customer.auth_user_id ? receiptByKey.get(`user:${customer.auth_user_id}`) : null);
+        const checkin = checkinByKey.get(`customer:${customer.id}`) || (customer.auth_user_id ? checkinByKey.get(`user:${customer.auth_user_id}`) : null);
+        const displayName = cleanString(customer.display_name) || cleanString(profile?.display_name);
+        const fullName = customerFullName(customer) || profileFullName(profile || {});
         const receiptName = cleanString(receipt?.customer_name);
-        const email = cleanString(authUser?.email) || cleanString(receipt?.customer_email);
-        const phone = cleanString(profile.phone) || cleanString(receipt?.customer_phone);
-        const identityTitle = displayName || email || fullName || receiptName || 'Kund utan namn';
+        const email = cleanString(customer.primary_email) || cleanString(authUser?.email) || cleanString(receipt?.customer_email);
+        const phone = cleanString(customer.primary_phone) || cleanString(profile?.phone) || cleanString(receipt?.customer_phone);
+        const identityTitle = identityTitleFrom({ display_name: displayName, email, full_name: fullName, receipt_name: receiptName });
         const initialsSeed = displayName || fullName || receiptName || email;
-        const membership = membershipByUserId.get(profile.auth_user_id);
+        const membership = membershipByKey.get(`customer:${customer.id}`) || (customer.auth_user_id ? membershipByKey.get(`user:${customer.auth_user_id}`) : null);
+        const venueProfile = venueProfileByCustomerId.get(customer.id);
 
         return {
-          ...profile,
+          ...(profile || {}),
+          id: customer.id,
+          customer_id: customer.id,
+          profile_id: profile?.id || null,
+          auth_user_id: customer.auth_user_id || profile?.auth_user_id || null,
+          display_name: displayName,
+          first_name: cleanString(customer.first_name) || profile?.first_name || null,
+          last_name: cleanString(customer.last_name) || profile?.last_name || null,
           email,
           phone,
           full_name: fullName || receiptName,
           identity_title: identityTitle,
           identity_initials: buildInitialsSeed(initialsSeed),
+          first_seen_at: venueProfile?.first_seen_at || null,
+          last_seen_at: venueProfile?.last_seen_at || null,
+          visit_count: venueProfile?.visit_count || 0,
           active_membership_tier: membership?.membership_tiers || null,
           has_active_membership: Boolean(membership),
           last_purchase_at: receipt?.issued_at || receipt?.created_at || null,
@@ -163,9 +262,46 @@ Deno.serve(async (req) => {
         };
       });
 
+      const customerKeys = new Set([
+        ...enrichedFromCustomers.map((row: any) => row.customer_id ? `customer:${row.customer_id}` : ''),
+        ...enrichedFromCustomers.map((row: any) => row.auth_user_id ? `user:${row.auth_user_id}` : ''),
+      ].filter(Boolean));
+      const enrichedFallbackProfiles = (profiles || [])
+        .filter((profile: any) => !customerKeys.has(`customer:${profile.customer_id}`) && !customerKeys.has(`user:${profile.auth_user_id}`))
+        .map((profile: any) => {
+          const authUser = usersById.get(profile.auth_user_id);
+          const receipt = receiptByKey.get(`user:${profile.auth_user_id}`);
+          const checkin = checkinByKey.get(`user:${profile.auth_user_id}`);
+          const displayName = cleanString(profile.display_name);
+          const fullName = profileFullName(profile);
+          const receiptName = cleanString(receipt?.customer_name);
+          const email = cleanString(authUser?.email) || cleanString(receipt?.customer_email);
+          const phone = cleanString(profile.phone) || cleanString(receipt?.customer_phone);
+          const membership = membershipByKey.get(`user:${profile.auth_user_id}`);
+          return {
+            ...profile,
+            customer_id: profile.customer_id || null,
+            profile_id: profile.id,
+            email,
+            phone,
+            full_name: fullName || receiptName,
+            identity_title: identityTitleFrom({ display_name: displayName, email, full_name: fullName, receipt_name: receiptName }),
+            identity_initials: buildInitialsSeed(displayName || fullName || receiptName || email),
+            active_membership_tier: membership?.membership_tiers || null,
+            has_active_membership: Boolean(membership),
+            last_purchase_at: receipt?.issued_at || receipt?.created_at || null,
+            last_purchase_label: receipt?.product_description || receipt?.purchase_type || null,
+            last_checkin_at: checkin?.checked_in_at || null,
+            last_checkin_type: checkin?.entry_type || null,
+          };
+        });
+      const enriched = [...enrichedFromCustomers, ...enrichedFallbackProfiles];
+
       const needle = search.toLowerCase();
       const filtered = needle
         ? enriched.filter((customer: any) => [
+          customer.customer_id,
+          customer.auth_user_id,
           customer.display_name,
           customer.first_name,
           customer.last_name,
@@ -191,11 +327,12 @@ Deno.serve(async (req) => {
       return jsonResponse(data, 200, 10);
     }
 
-    // GET /api-customers/360?venueId=X&userId=Y
+    // GET /api-customers/360?venueId=X&customerId=Y or userId=Y
     if (req.method === 'GET' && path === '360') {
       const venueId = cleanString(url.searchParams.get('venueId'));
-      const targetUserId = cleanString(url.searchParams.get('userId'));
-      if (!venueId || !targetUserId) return errorResponse('Missing venueId or userId', 400);
+      const requestedCustomerId = cleanString(url.searchParams.get('customerId')) || cleanString(url.searchParams.get('customer_id'));
+      const requestedUserId = cleanString(url.searchParams.get('userId'));
+      if (!venueId || (!requestedCustomerId && !requestedUserId)) return errorResponse('Missing venueId and customerId or userId', 400);
 
       const admin = getServiceClient();
       const canList = await assertCanListCustomers(admin, userId, venueId);
@@ -203,9 +340,69 @@ Deno.serve(async (req) => {
 
       const today = new Date().toISOString().slice(0, 10);
       const nowIso = new Date().toISOString();
+      let customer: any = null;
+      let profile: any = null;
+      let targetCustomerId = requestedCustomerId;
+      let targetUserId = requestedUserId;
+
+      if (targetCustomerId) {
+        const { data: customerRow, error: customerErr } = await admin
+          .from('customers')
+          .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, created_at, status')
+          .eq('id', targetCustomerId)
+          .maybeSingle();
+        if (customerErr) return errorResponse(customerErr.message, 500);
+        if (!customerRow) return errorResponse('Customer not found', 404);
+        customer = customerRow;
+        targetUserId = targetUserId || cleanString(customer.auth_user_id);
+      }
+
+      if (targetUserId) {
+        const { data: profileRow, error: profileErr } = await admin.from('player_profiles')
+          .select('*')
+          .eq('auth_user_id', targetUserId)
+          .maybeSingle();
+        if (profileErr) return errorResponse(profileErr.message, 500);
+        profile = profileRow || null;
+        targetCustomerId = targetCustomerId || cleanString(profile?.customer_id);
+
+        if (!customer && targetCustomerId) {
+          const { data: customerRow, error: customerErr } = await admin
+            .from('customers')
+            .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, created_at, status')
+            .eq('id', targetCustomerId)
+            .maybeSingle();
+          if (customerErr) return errorResponse(customerErr.message, 500);
+          customer = customerRow || null;
+        }
+
+        if (!customer) {
+          const { data: customerRow, error: customerErr } = await admin
+            .from('customers')
+            .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, created_at, status')
+            .eq('auth_user_id', targetUserId)
+            .maybeSingle();
+          if (customerErr) return errorResponse(customerErr.message, 500);
+          customer = customerRow || null;
+          targetCustomerId = targetCustomerId || cleanString(customer?.id);
+        }
+      }
+
+      if (!profile && customer?.auth_user_id) {
+        const { data: profileRow, error: profileErr } = await admin.from('player_profiles')
+          .select('*')
+          .eq('auth_user_id', customer.auth_user_id)
+          .maybeSingle();
+        if (profileErr) return errorResponse(profileErr.message, 500);
+        profile = profileRow || null;
+        targetUserId = targetUserId || cleanString(customer.auth_user_id);
+      }
+
+      if (!targetCustomerId && !targetUserId) return errorResponse('Customer has no linked identity yet', 404);
+      const customerIds = targetCustomerId ? [targetCustomerId] : [];
+      const userIds = targetUserId ? [targetUserId] : [];
 
       const [
-        profileResult,
         authUserResult,
         bookingsResult,
         registrationsResult,
@@ -214,55 +411,28 @@ Deno.serve(async (req) => {
         checkinsResult,
         receiptsResult,
       ] = await Promise.all([
-        admin.from('player_profiles')
-          .select('*')
-          .eq('auth_user_id', targetUserId)
-          .maybeSingle(),
-        admin.auth.admin.getUserById(targetUserId),
-        admin.from('bookings')
-          .select('id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, user_id, booked_by, notes, start_time, end_time, status, total_price, currency, created_at, venue_courts(id, name, court_number, sport_type)')
-          .eq('venue_id', venueId)
-          .eq('user_id', targetUserId)
-          .neq('status', 'cancelled')
-          .gte('end_time', nowIso)
-          .order('start_time', { ascending: true })
-          .limit(25),
-        admin.from('session_registrations')
-          .select('id, venue_id, activity_session_id, session_date, user_id, status, price_paid_sek, stripe_session_id, registered_at, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
-          .eq('venue_id', venueId)
-          .eq('user_id', targetUserId)
-          .neq('status', 'cancelled')
-          .gte('session_date', today)
-          .order('session_date', { ascending: true })
-          .limit(30),
-        admin.from('day_passes')
-          .select('id, venue_id, user_id, valid_date, purchase_date, status, price, currency, stripe_session_id, created_at')
-          .eq('venue_id', venueId)
-          .eq('user_id', targetUserId)
-          .order('valid_date', { ascending: false })
-          .limit(30),
-        admin.from('memberships')
-          .select('id, venue_id, user_id, tier_id, status, starts_at, expires_at, notes, created_at, updated_at, membership_tiers(id, name, color, discount_percent, monthly_price)')
-          .eq('venue_id', venueId)
-          .eq('user_id', targetUserId)
-          .order('created_at', { ascending: false })
-          .limit(20),
-        admin.from('venue_checkins')
-          .select('id, venue_id, user_id, player_name, player_phone, entry_type, entitlement_id, checked_in_at, checked_out_at, session_date, created_at')
-          .eq('venue_id', venueId)
-          .eq('user_id', targetUserId)
-          .order('checked_in_at', { ascending: false })
-          .limit(30),
-        admin.from('booking_receipts')
-          .select('id, receipt_number, booking_refs, stripe_session_id, venue_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, issued_at, created_at')
-          .eq('venue_id', venueId)
-          .eq('user_id', targetUserId)
-          .order('issued_at', { ascending: false })
-          .limit(50),
+        targetUserId ? admin.auth.admin.getUserById(targetUserId) : Promise.resolve({ data: { user: null }, error: null }),
+        fetchByCustomerOrUser(admin, 'bookings',
+          'id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, customer_id, user_id, booked_by, notes, start_time, end_time, status, total_price, currency, created_at, venue_courts(id, name, court_number, sport_type)',
+          { venueId, customerIds, userIds, extra: (query) => query.neq('status', 'cancelled').gte('end_time', nowIso), orderColumn: 'start_time', ascending: true, limit: 25 }),
+        fetchByCustomerOrUser(admin, 'session_registrations',
+          'id, venue_id, customer_id, activity_session_id, session_date, user_id, status, price_paid_sek, stripe_session_id, registered_at, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)',
+          { venueId, customerIds, userIds, extra: (query) => query.neq('status', 'cancelled').gte('session_date', today), orderColumn: 'session_date', ascending: true, limit: 30 }),
+        fetchByCustomerOrUser(admin, 'day_passes',
+          'id, venue_id, customer_id, user_id, valid_date, purchase_date, status, price, currency, stripe_session_id, created_at',
+          { venueId, customerIds, userIds, orderColumn: 'valid_date', ascending: false, limit: 30 }),
+        fetchByCustomerOrUser(admin, 'memberships',
+          'id, venue_id, customer_id, user_id, tier_id, status, starts_at, expires_at, notes, created_at, updated_at, membership_tiers(id, name, color, discount_percent, monthly_price)',
+          { venueId, customerIds, userIds, orderColumn: 'created_at', ascending: false, limit: 20 }),
+        fetchByCustomerOrUser(admin, 'venue_checkins',
+          'id, venue_id, customer_id, user_id, player_name, player_phone, entry_type, entitlement_id, checked_in_at, checked_out_at, session_date, created_at',
+          { venueId, customerIds, userIds, orderColumn: 'checked_in_at', ascending: false, limit: 30 }),
+        fetchByCustomerOrUser(admin, 'booking_receipts',
+          'id, receipt_number, booking_refs, stripe_session_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, issued_at, created_at',
+          { venueId, customerIds, userIds, orderColumn: 'issued_at', ascending: false, limit: 50 }),
       ]);
 
       const firstError = [
-        profileResult.error,
         bookingsResult.error,
         registrationsResult.error,
         dayPassesResult.error,
@@ -272,7 +442,6 @@ Deno.serve(async (req) => {
       ].find(Boolean);
       if (firstError) return errorResponse(firstError.message, 500);
 
-      const profile = profileResult.data || null;
       const authUser = authUserResult.data?.user || null;
       const receipts = receiptsResult.data || [];
       const registrations = registrationsResult.data || [];
@@ -283,7 +452,7 @@ Deno.serve(async (req) => {
       const ledgerById = new Map<string, any>();
       if (receiptIds.length > 0) {
         const { data, error: ledgerErr } = await admin.from('ledger_entries')
-          .select('id, venue_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
+          .select('id, venue_id, customer_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
           .eq('venue_id', venueId)
           .in('booking_receipt_id', receiptIds)
           .order('occurred_at', { ascending: false });
@@ -304,36 +473,48 @@ Deno.serve(async (req) => {
       const checkinByRegistrationId = new Map(registrationCheckins.map((row: any) => [row.entitlement_id, row]));
       if (stripeSessionIds.length > 0) {
         const { data, error: ledgerErr } = await admin.from('ledger_entries')
-          .select('id, venue_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
+          .select('id, venue_id, customer_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
           .eq('venue_id', venueId)
           .in('stripe_session_id', stripeSessionIds)
           .order('occurred_at', { ascending: false });
         if (ledgerErr) return errorResponse(ledgerErr.message, 500);
         for (const row of data || []) ledgerById.set(row.id, row);
       }
+      if (targetCustomerId) {
+        const { data, error: ledgerErr } = await admin.from('ledger_entries')
+          .select('id, venue_id, customer_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
+          .eq('venue_id', venueId)
+          .eq('customer_id', targetCustomerId)
+          .order('occurred_at', { ascending: false })
+          .limit(50);
+        if (ledgerErr) return errorResponse(ledgerErr.message, 500);
+        for (const row of data || []) ledgerById.set(row.id, row);
+      }
 
       const latestReceipt = receipts[0] || null;
-      const name = fullName(profile)
+      const name = customerFullName(customer)
+        || fullName(profile)
         || cleanString(latestReceipt?.customer_name)
         || cleanString(authUser?.user_metadata?.display_name)
         || cleanString(authUser?.email)
         || 'Kund utan namn';
-      const email = cleanString(authUser?.email) || cleanString(latestReceipt?.customer_email);
-      const phone = cleanString(profile?.phone) || cleanString(latestReceipt?.customer_phone);
+      const email = cleanString(customer?.primary_email) || cleanString(authUser?.email) || cleanString(latestReceipt?.customer_email);
+      const phone = cleanString(customer?.primary_phone) || cleanString(profile?.phone) || cleanString(latestReceipt?.customer_phone);
       const activeMembership = (membershipsResult.data || []).find((row: any) => row.status === 'active') || null;
 
       return jsonResponse({
         customer: {
-          user_id: targetUserId,
+          customer_id: targetCustomerId || null,
+          user_id: targetUserId || null,
           profile_id: profile?.id || null,
           name,
           email,
           phone,
           avatar_url: profile?.avatar_url || null,
-          display_name: profile?.display_name || null,
-          first_name: profile?.first_name || null,
-          last_name: profile?.last_name || null,
-          created_at: profile?.created_at || authUser?.created_at || null,
+          display_name: customer?.display_name || profile?.display_name || null,
+          first_name: customer?.first_name || profile?.first_name || null,
+          last_name: customer?.last_name || profile?.last_name || null,
+          created_at: customer?.created_at || profile?.created_at || authUser?.created_at || null,
         },
         membership_badge: activeMembership?.membership_tiers || null,
         active_membership: activeMembership,

@@ -19,6 +19,7 @@ export type OperationsBookingDetail = {
   source_id?: string;
   source_ids?: string[];
   venue_id?: string | null;
+  customer_id?: string | null;
   user_id?: string | null;
   customer_user_id?: string | null;
   booking_group_key?: string;
@@ -88,6 +89,7 @@ export function buildOperationsBookingDetailFromRows(rows: any[]): OperationsBoo
     source_id: first.id,
     source_ids: bookingRows.map((row) => row.id).filter(Boolean),
     venue_id: first.venue_id || null,
+    customer_id: first.customer_id || receipt?.customer_id || null,
     user_id: first.user_id || null,
     customer_user_id: first.customer_user_id || first.user_id || null,
     booking_group_key: bookingGroupKey(first),
@@ -180,7 +182,7 @@ export function OperationsBookingDrawer({
   onClose: () => void;
   booking: OperationsBookingDetail | null;
 }) {
-  const [customerUserId, setCustomerUserId] = useState<string | null>(null);
+  const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const [localCheckedInAt, setLocalCheckedInAt] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const effectiveCheckedIn = Boolean(booking?.checked_in || localCheckedInAt);
@@ -188,7 +190,8 @@ export function OperationsBookingDrawer({
   const amount = Number(booking?.amount_sek ?? booking?.total_price ?? 0);
   const courts = booking?.courts?.length ? booking.courts : booking?.court_name ? [{ name: booking.court_name }] : [];
   const bookingCustomerUserId = booking?.customer_user_id || booking?.user_id || null;
-  const canOpenCustomer = Boolean(booking?.venue_id && bookingCustomerUserId);
+  const bookingCustomerId = booking?.customer_id || null;
+  const canOpenCustomer = Boolean(booking?.venue_id && (bookingCustomerId || bookingCustomerUserId));
   const canCheckIn = !effectiveCheckedIn && deskBookingCheckinEligibility(booking).ok;
 
   useEffect(() => {
@@ -258,7 +261,7 @@ export function OperationsBookingDrawer({
                 {canOpenCustomer ? (
                   <button
                     type="button"
-                    onClick={() => setCustomerUserId(bookingCustomerUserId)}
+                    onClick={() => setCustomerTarget({ customerId: bookingCustomerId, userId: bookingCustomerUserId })}
                     className="mt-3 text-left text-2xl font-black leading-tight text-white underline-offset-4 hover:underline"
                   >
                     {booking.customer_name || "Okänd kund"}
@@ -311,10 +314,11 @@ export function OperationsBookingDrawer({
         )}
       </AnimatePresence>
       <Customer360Drawer
-        open={!!customerUserId}
+        open={!!customerTarget}
         venueId={booking?.venue_id}
-        userId={customerUserId}
-        onClose={() => setCustomerUserId(null)}
+        customerId={customerTarget?.customerId}
+        userId={customerTarget?.userId}
+        onClose={() => setCustomerTarget(null)}
       />
     </>
   );

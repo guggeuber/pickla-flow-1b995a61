@@ -13,6 +13,9 @@ import type { Tables } from "@/integrations/supabase/types";
 type PlayerProfile = Tables<"player_profiles">;
 
 type DeskCustomer = PlayerProfile & {
+  customer_id?: string | null;
+  profile_id?: string | null;
+  auth_user_id?: string | null;
   email?: string | null;
   full_name?: string | null;
   identity_title?: string | null;
@@ -178,7 +181,7 @@ type CustomersScreenProps = {
 const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}) => {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
+  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
@@ -211,8 +214,11 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
     customerSearchText(p).includes(normalizedSearch.toLowerCase())
   );
 
-  const selected = profiles?.find((p: any) => p.id === selectedId);
-  const selected360Profile = profiles?.find((p: any) => p.auth_user_id === customer360UserId);
+  const selected = profiles?.find((p: any) => (p.customer_id || p.id) === selectedId);
+  const selected360Profile = profiles?.find((p: any) =>
+    (customer360Target?.customerId && p.customer_id === customer360Target.customerId)
+    || (customer360Target?.userId && p.auth_user_id === customer360Target.userId)
+  );
 
   const { data: membershipTiers } = useQuery({
     queryKey: ["membership-tiers", venueId],
@@ -254,6 +260,10 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
   const handleQuickCheckin = async (profile: any, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!venueId || checkingInId === profile.id) return;
+    if (!profile.auth_user_id) {
+      toast.error("Kunden saknar inloggningsidentitet för check-in");
+      return;
+    }
     setCheckingInId(profile.id);
     try {
       await performCheckin(venueId, profile);
@@ -280,7 +290,7 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
     };
     const saveEdit = () => {
       updateProfile.mutate({
-        id: selected.id,
+        id: selected.profile_id || selected.id,
         display_name: editName,
         phone: editPhone,
       });
@@ -299,7 +309,7 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
         <motion.button
           whileTap={{ scale: 0.96 }}
           onClick={() => !isCheckedIn && handleQuickCheckin(selected)}
-          disabled={isCheckedIn || checkingInId === selected.id}
+          disabled={isCheckedIn || checkingInId === selected.id || !selected.auth_user_id}
           className={`w-full rounded-2xl py-4 font-bold text-sm flex items-center justify-center gap-2.5 transition-all ${
             isCheckedIn
               ? "bg-court-free/15 text-court-free"
@@ -490,13 +500,13 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
 
             return (
               <motion.div
-                key={profile.id}
+                key={profile.customer_id || profile.id}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04 }}
                 className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3"
               >
-                <button onClick={() => setCustomer360UserId(profile.auth_user_id)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+                <button onClick={() => setCustomer360Target({ customerId: profile.customer_id || null, userId: profile.auth_user_id || null })} className="flex items-center gap-3 flex-1 min-w-0 text-left">
                   <div className={`w-10 h-10 rounded-xl ${t.bg} ${t.text} flex items-center justify-center text-sm font-display font-bold flex-shrink-0`}>{initials}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -541,7 +551,7 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
                 <motion.button
                   whileTap={{ scale: 0.85 }}
                   onClick={(e) => !isCheckedIn && handleQuickCheckin(profile, e)}
-                  disabled={isCheckedIn || checkingInId === profile.id}
+                  disabled={isCheckedIn || checkingInId === profile.id || !profile.auth_user_id}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all ${
                     isCheckedIn
                       ? "bg-court-free/15 text-court-free"
@@ -574,13 +584,14 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
       </AnimatePresence>
 
       <Customer360Drawer
-        open={!!customer360UserId}
+        open={!!customer360Target}
         venueId={venueId}
-        userId={customer360UserId}
-        onClose={() => setCustomer360UserId(null)}
+        customerId={customer360Target?.customerId}
+        userId={customer360Target?.userId}
+        onClose={() => setCustomer360Target(null)}
         onManageProfile={selected360Profile ? () => {
-          setSelectedId(selected360Profile.id);
-          setCustomer360UserId(null);
+          setSelectedId(selected360Profile.customer_id || selected360Profile.id);
+          setCustomer360Target(null);
         } : undefined}
       />
     </div>

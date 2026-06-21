@@ -32,6 +32,7 @@ interface CourtDisplay {
 
 interface TodayCheckin {
   id: string;
+  customer_id?: string | null;
   user_id?: string | null;
   player_name: string | null;
   entry_type: string;
@@ -211,7 +212,7 @@ const TodayScreen = () => {
   const [showScanner, setShowScanner] = useState(false);
   const [showEntryQr, setShowEntryQr] = useState(false);
   const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
-  const [customer360UserId, setCustomer360UserId] = useState<string | null>(null);
+  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const [newArrivalIds, setNewArrivalIds] = useState<Set<string>>(new Set());
 
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
@@ -472,8 +473,8 @@ const TodayScreen = () => {
                 <button
                   key={checkin.id}
                   type="button"
-                  onClick={() => checkin.user_id && setCustomer360UserId(checkin.user_id)}
-                  disabled={!checkin.user_id}
+                  onClick={() => setCustomer360Target({ customerId: checkin.customer_id || null, userId: checkin.user_id || null })}
+                  disabled={!checkin.customer_id && !checkin.user_id}
                   className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition disabled:cursor-default"
                   style={{
                     background: isNewArrival ? "hsl(var(--court-free) / 0.16)" : "hsl(var(--surface-1))",
@@ -630,10 +631,11 @@ const TodayScreen = () => {
         onClose={() => setOpenBooking(null)}
       />
       <Customer360Drawer
-        open={!!customer360UserId}
+        open={!!customer360Target}
         venueId={venueId}
-        userId={customer360UserId}
-        onClose={() => setCustomer360UserId(null)}
+        customerId={customer360Target?.customerId}
+        userId={customer360Target?.userId}
+        onClose={() => setCustomer360Target(null)}
       />
 
       {/* Court Action Sheet */}

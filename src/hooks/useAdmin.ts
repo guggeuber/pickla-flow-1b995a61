@@ -99,6 +99,7 @@ export type AdminLedgerEntry = {
   source_id: string;
   accounting_date: string;
   occurred_at: string;
+  customer_id?: string | null;
   customer_name?: string | null;
   amount_inc_vat_minor: number;
   vat_amount_minor: number;
@@ -111,6 +112,7 @@ export type AdminLedgerEntry = {
   booking_receipt_id?: string | null;
   receipt?: {
     id: string;
+    customer_id?: string | null;
     user_id?: string | null;
     receipt_number: string;
     customer_name?: string | null;
@@ -255,6 +257,7 @@ export type AdminCalendarItem = {
   resource_name?: string | null;
   booking_group_key?: string;
   venue_id?: string | null;
+  customer_id?: string | null;
   user_id?: string | null;
   customer_user_id?: string | null;
   booking_refs?: string[];
@@ -349,6 +352,7 @@ export type AdminTodaysPlanItem = {
   moduleTarget?: string | null;
   booking_group_key?: string;
   venue_id?: string | null;
+  customer_id?: string | null;
   user_id?: string | null;
   customer_user_id?: string | null;
   booking_refs?: string[];

@@ -53,7 +53,7 @@ export default function DeskCommandBar({
   onOpenBooking: (booking: any, rows: any[]) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const qc = useQueryClient();
   const q = query.trim();
 
@@ -83,7 +83,7 @@ export default function DeskCommandBar({
 
     const customerResults: Result[] = (customersQ.data || []).slice(0, 8).map((row: any) => ({
       kind: "customer" as const,
-      id: row.auth_user_id,
+      id: row.customer_id || row.auth_user_id || row.id,
       title: customerTitle(row),
       meta: [row.email, row.phone, row.active_membership_tier?.name].filter(Boolean).join(" · ") || "Kund",
       row,
@@ -99,6 +99,7 @@ export default function DeskCommandBar({
   const checkinMutation = useMutation({
     mutationFn: async (result: Result) => {
       if (result.kind === "booking") return checkInDeskBooking(result.row);
+      if (!result.row.auth_user_id) throw new Error("Kunden saknar inloggningsidentitet för check-in");
       return apiPost("api-checkins", "checkin", {
         venue_id: venueId,
         target_user_id: result.row.auth_user_id,
@@ -117,10 +118,10 @@ export default function DeskCommandBar({
   const openResult = (result: Result | null) => {
     if (!result) return;
     if (result.kind === "booking") onOpenBooking(result.row, courtRows);
-    if (result.kind === "customer") setSelectedUserId(result.row.auth_user_id);
+    if (result.kind === "customer") setSelectedCustomer({ customerId: result.row.customer_id || null, userId: result.row.auth_user_id || null });
   };
 
-  const canCheckInBest = best?.kind === "customer" || (best?.kind === "booking" && deskBookingCheckinEligibility(best.row).ok);
+  const canCheckInBest = (best?.kind === "customer" && !!best.row.auth_user_id) || (best?.kind === "booking" && deskBookingCheckinEligibility(best.row).ok);
 
   return (
     <div className="relative">
@@ -208,10 +209,11 @@ export default function DeskCommandBar({
       </div>
 
       <Customer360Drawer
-        open={!!selectedUserId}
+        open={!!selectedCustomer}
         venueId={venueId}
-        userId={selectedUserId}
-        onClose={() => setSelectedUserId(null)}
+        customerId={selectedCustomer?.customerId}
+        userId={selectedCustomer?.userId}
+        onClose={() => setSelectedCustomer(null)}
       />
     </div>
   );

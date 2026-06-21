@@ -582,7 +582,7 @@ function bookingNoteParts(notes?: string | null) {
 async function groupedCourtBookingItems(admin: any, venueId: string, startIso: string, endIso: string) {
   const { data: rows, error } = await admin
     .from('bookings')
-    .select('id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, user_id, booked_by, notes, start_time, end_time, status, total_price, created_at, venue_courts(id, name, court_number, sport_type)')
+    .select('id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, customer_id, user_id, booked_by, notes, start_time, end_time, status, total_price, created_at, venue_courts(id, name, court_number, sport_type)')
     .eq('venue_id', venueId)
     .neq('status', 'cancelled')
     .lt('start_time', endIso)
@@ -599,7 +599,7 @@ async function groupedCourtBookingItems(admin: any, venueId: string, startIso: s
     stripeIds.length
       ? admin
         .from('booking_receipts')
-        .select('id, receipt_number, customer_name, customer_email, customer_phone, payment_method, payment_status, stripe_session_id, total_inc_vat_sek')
+        .select('id, customer_id, receipt_number, customer_name, customer_email, customer_phone, payment_method, payment_status, stripe_session_id, total_inc_vat_sek')
         .in('stripe_session_id', stripeIds)
       : Promise.resolve({ data: [], error: null }),
     bookingIds.length
@@ -651,6 +651,7 @@ async function groupedCourtBookingItems(admin: any, venueId: string, startIso: s
       source_id: first.id,
       source_ids: groupRows.map((row: any) => row.id),
       venue_id: first.venue_id || venueId,
+      customer_id: receipt?.customer_id || first.customer_id || null,
       user_id: first.user_id || null,
       customer_user_id: first.user_id || null,
       booking_group_key: groupKey,
@@ -1405,7 +1406,7 @@ Deno.serve(async (req) => {
 
       const { data: rows, error: rowsErr } = await admin
         .from('ledger_entries')
-        .select('id, venue_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
+        .select('id, venue_id, customer_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
         .eq('venue_id', venueId)
         .eq('accounting_date', selectedDate)
         .order('occurred_at', { ascending: false })
@@ -1417,7 +1418,7 @@ Deno.serve(async (req) => {
       if (receiptIds.length) {
         const { data: receipts, error: receiptsErr } = await admin
           .from('booking_receipts')
-          .select('id, user_id, receipt_number, customer_name, customer_email, customer_phone, product_description, purchase_type, total_inc_vat_sek, vat_amount_sek, vat_rate, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, issued_at')
+          .select('id, customer_id, user_id, receipt_number, customer_name, customer_email, customer_phone, product_description, purchase_type, total_inc_vat_sek, vat_amount_sek, vat_rate, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, issued_at')
           .eq('venue_id', venueId)
           .in('id', receiptIds);
         if (receiptsErr) throw new Error(receiptsErr.message);

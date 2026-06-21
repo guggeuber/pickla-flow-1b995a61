@@ -1841,7 +1841,7 @@ Deno.serve(async (req) => {
         stripeIds.length
           ? lookupClient
             .from('booking_receipts')
-            .select('id, receipt_number, customer_name, customer_email, customer_phone, payment_method, payment_status, stripe_session_id, total_inc_vat_sek')
+            .select('id, customer_id, receipt_number, customer_name, customer_email, customer_phone, payment_method, payment_status, stripe_session_id, total_inc_vat_sek')
             .in('stripe_session_id', stripeIds)
           : Promise.resolve({ data: [], error: null }),
         bookingIds.length
@@ -1884,7 +1884,7 @@ Deno.serve(async (req) => {
       if (date) {
         const { data: registrations, error: regErr } = await client
           .from('session_registrations')
-          .select('id, venue_id, activity_session_id, session_date, user_id, status, price_paid_sek, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
+          .select('id, venue_id, activity_session_id, session_date, customer_id, user_id, status, price_paid_sek, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
           .eq('venue_id', venueId)
           .eq('session_date', date)
           .neq('status', 'cancelled');
