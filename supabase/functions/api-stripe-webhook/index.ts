@@ -8,6 +8,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
+import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 
@@ -184,6 +185,7 @@ async function createLedgerEntryFromReceipt({
     source_id: sourceId,
     accounting_date: accountingDate,
     occurred_at: occurredAt,
+    customer_id: receipt?.customer_id || null,
     customer_name: receipt?.customer_name || meta.customer_name || meta.name || session.customer_details?.name || null,
     amount_inc_vat_minor: amountIncVatMinor,
     vat_amount_minor: vatMinorFromIncludedMinor(amountIncVatMinor, Number(receipt?.vat_rate || 6)),
@@ -232,12 +234,13 @@ async function createPurchaseReceipt({
 
   const { data: existing } = await serviceClient
     .from('booking_receipts')
-    .select('id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id')
+    .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id')
     .eq('stripe_session_id', session.id)
     .maybeSingle();
   if (existing) return existing;
 
   const vat = vatPartsFromIncludedTotal(totalSek, 6);
+  const customerId = await resolveCustomerIdForUser(serviceClient, userId);
   const customerName = meta.customer_name || meta.name || session.customer_details?.name || null;
   const customerEmail = session.customer_details?.email || meta.customer_email || null;
   const customerPhone = meta.customer_phone || meta.phone || session.customer_details?.phone || null;
@@ -249,6 +252,7 @@ async function createPurchaseReceipt({
     stripe_customer_id: session.customer || null,
     stripe_subscription_id: session.subscription || null,
     venue_id: meta.venue_id || null,
+    customer_id: customerId,
     user_id: userId,
     customer_name: customerName,
     customer_email: customerEmail,
@@ -275,7 +279,7 @@ async function createPurchaseReceipt({
       activity_session_id: meta.activity_session_id || meta.open_play_session_id || null,
       tier_id: meta.tier_id || null,
     },
-  }).select('id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id').single();
+  }).select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id').single();
 
   if (error) {
     console.error('Failed to create receipt:', error.message);

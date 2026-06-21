@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId, stockholmDateRangeUtc } from '../_shared/bookings.ts';
+import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
@@ -269,6 +270,7 @@ async function createFreeEntitlementBookingResponse({
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const adminFree = createClient(supabaseUrl, serviceKey);
+  const entitlementCustomerId = await resolveCustomerIdForUser(adminFree, entitlementUserId);
 
   if (product_type === 'court_booking' && meta.court_ids && meta.date) {
     const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
@@ -303,6 +305,7 @@ async function createFreeEntitlementBookingResponse({
 
       const { data: booking, error: bookingErr } = await adminFree.from('bookings').insert({
         venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
+        customer_id: entitlementCustomerId,
         start_time: startISO, end_time: endISO, total_price: 0,
         status: 'confirmed', notes, access_code: accessCode, access_code_expires_at: endISO,
         membership_id: meta.membership_id || null,
@@ -343,6 +346,7 @@ async function createFreeEntitlementBookingResponse({
     const validDate = meta.date || today;
     const { data: dayPass } = await adminFree.from('day_passes').insert({
       venue_id, user_id: entitlementUserId, valid_date: validDate,
+      customer_id: entitlementCustomerId,
       purchase_date: today, price: 0, status: 'active', is_free: true,
     }).select('id').single();
 
@@ -369,6 +373,7 @@ async function createFreeEntitlementBookingResponse({
           activity_session_id: activitySessionId,
           session_date: validDate,
           user_id: entitlementUserId,
+          customer_id: entitlementCustomerId,
           status: 'confirmed',
           price_paid_sek: 0,
           source_type: 'day_pass',
@@ -397,6 +402,7 @@ async function createFreeEntitlementBookingResponse({
         activity_session_id: activitySessionId,
         session_date: validDate,
         user_id: entitlementUserId,
+        customer_id: entitlementCustomerId,
         status: 'confirmed',
         price_paid_sek: 0,
         source_type: 'membership',
@@ -439,6 +445,7 @@ async function createFreeEntitlementBookingResponse({
         activity_session_id: activitySessionId,
         session_date: validDate,
         user_id: entitlementUserId,
+        customer_id: entitlementCustomerId,
         status: 'confirmed',
         price_paid_sek: 0,
         source_type: 'membership',
@@ -464,6 +471,7 @@ async function createFreeEntitlementBookingResponse({
         activity_session_id: activitySessionId,
         session_date: validDate,
         user_id: entitlementUserId,
+        customer_id: entitlementCustomerId,
         status: 'confirmed',
         price_paid_sek: 0,
         source_type: 'access_entitlement',
@@ -2052,11 +2060,14 @@ Deno.serve(async (req) => {
       }
 
       const bookingDate = DateTime.fromISO(startTime, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate()!;
-      const accessCode = await generateAccessCode(getServiceClient(), venueId, bookingDate);
+      const serviceClient = getServiceClient();
+      const accessCode = await generateAccessCode(serviceClient, venueId, bookingDate);
+      const customerId = await resolveCustomerIdForUser(serviceClient, userId);
 
       const { data, error: insertErr } = await client.from('bookings').insert({
         venue_id: venueId,
         venue_court_id: venueCourtId,
+        customer_id: customerId,
         user_id: userId,
         booked_by: bookedBy || userId,
         start_time: startTime,

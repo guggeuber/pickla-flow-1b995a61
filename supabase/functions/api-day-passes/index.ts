@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 function randomVoucherCode() {
@@ -622,9 +623,11 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const { venueId, customerUserId, validDate, price } = body;
       if (!venueId || !customerUserId || !validDate) return errorResponse('Missing fields');
+      const customerId = await resolveCustomerIdForUser(getServiceClient(), customerUserId);
 
       const { data, error: insertErr } = await client.from('day_passes').insert({
         venue_id: venueId,
+        customer_id: customerId,
         user_id: customerUserId,
         valid_date: validDate,
         price: price || 0,

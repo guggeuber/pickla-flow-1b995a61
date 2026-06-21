@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail } from '../_shared/bookings.ts';
+import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const STOCKHOLM_ZONE = 'Europe/Stockholm';
@@ -376,7 +377,7 @@ Deno.serve(async (req) => {
       const { today, nowSthlm } = stockholmNow();
       const { data: baseBooking, error: baseErr } = await serviceClient
         .from('bookings')
-        .select('id, user_id, venue_id, start_time, end_time, status, total_price, stripe_session_id, access_code, notes, booked_by')
+        .select('id, customer_id, user_id, venue_id, start_time, end_time, status, total_price, stripe_session_id, access_code, notes, booked_by')
         .eq('venue_id', venueId)
         .eq('id', requestedBookingIds[0])
         .maybeSingle();
@@ -385,7 +386,7 @@ Deno.serve(async (req) => {
 
       let groupQuery = serviceClient
         .from('bookings')
-        .select('id, user_id, venue_id, start_time, end_time, status, total_price, stripe_session_id, access_code, notes, booked_by')
+        .select('id, customer_id, user_id, venue_id, start_time, end_time, status, total_price, stripe_session_id, access_code, notes, booked_by')
         .eq('venue_id', venueId)
         .eq('start_time', baseBooking.start_time)
         .eq('end_time', baseBooking.end_time)
@@ -434,10 +435,16 @@ Deno.serve(async (req) => {
 
       const existingIds = new Set((existingRows || []).map((row: any) => row.entitlement_id));
       const playerName = String(body.customer_name || body.customerName || nameFromBookingNotes(baseBooking.notes) || baseBooking.booked_by || '').trim() || null;
+      const bookingCustomerIdsByUserId = new Map<string, string | null>();
+      const bookingUserIds = [...new Set(bookings.map((booking: any) => String(booking.user_id || '').trim()).filter(Boolean))];
+      for (const bookingUserId of bookingUserIds) {
+        bookingCustomerIdsByUserId.set(bookingUserId, await resolveCustomerIdForUser(serviceClient, bookingUserId));
+      }
       const rowsToInsert = bookings
         .filter((booking: any) => !existingIds.has(booking.id))
         .map((booking: any) => ({
           venue_id: venueId,
+          customer_id: booking.customer_id || bookingCustomerIdsByUserId.get(booking.user_id) || null,
           user_id: booking.user_id || null,
           player_name: playerName,
           entry_type: 'booking',
@@ -521,6 +528,7 @@ Deno.serve(async (req) => {
 
       const best = access.best;
       const playerName = profileName(profile);
+      const customerId = await resolveCustomerIdForUser(serviceClient, userId);
       const existingCheckin = await findActiveCheckin(serviceClient, {
         venueId: venue.id,
         today: access.today,
@@ -548,6 +556,7 @@ Deno.serve(async (req) => {
         .from('venue_checkins')
         .insert({
           venue_id: venue.id,
+          customer_id: customerId,
           user_id: userId,
           player_name: playerName,
           entry_type: best.type,
@@ -624,7 +633,7 @@ Deno.serve(async (req) => {
 
       const { data: bookings, error: bErr } = await serviceClient
         .from('bookings')
-        .select('id, user_id, venue_id, venue_court_id, start_time, end_time, status, booking_ref, notes, venue_courts(id, name, court_number, sport_type)')
+        .select('id, customer_id, user_id, venue_id, venue_court_id, start_time, end_time, status, booking_ref, notes, venue_courts(id, name, court_number, sport_type)')
         .eq('venue_id', venue_id)
         .eq('access_code', safeCode)
         .eq('status', 'confirmed')
@@ -695,9 +704,15 @@ Deno.serve(async (req) => {
 
       // Extract customer name from "Name | Phone" notes format
       const customerName = nameFromBookingNotes((booking as any).notes);
+      const bookingCustomerIdsByUserId = new Map<string, string | null>();
+      const bookingUserIds = [...new Set(groupBookings.map((b: any) => String(b.user_id || '').trim()).filter(Boolean))];
+      for (const bookingUserId of bookingUserIds) {
+        bookingCustomerIdsByUserId.set(bookingUserId, await resolveCustomerIdForUser(serviceClient, bookingUserId));
+      }
 
       const checkinRows = groupBookings.filter((b: any) => !existingIds.has(b.id)).map((b: any) => ({
         venue_id,
+        customer_id: b.customer_id || bookingCustomerIdsByUserId.get(b.user_id) || null,
         user_id: b.user_id || null,
         player_name: customerName || null,
         entry_type: 'booking_code',
