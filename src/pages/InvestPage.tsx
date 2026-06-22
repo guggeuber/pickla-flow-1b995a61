@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Helmet } from "react-helmet-async";
+
 import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -41,6 +41,12 @@ export default function InvestPage() {
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
+    document.title = "Pickla — Investor access";
+    let meta = document.querySelector('meta[name="robots"]') as HTMLMetaElement | null;
+    if (!meta) { meta = document.createElement("meta"); meta.name = "robots"; document.head.appendChild(meta); }
+    const prev = meta.content;
+    meta.content = "noindex, nofollow";
+    return () => { meta!.content = prev; };
   }, []);
 
   async function submit(e: React.FormEvent) {
@@ -60,11 +66,6 @@ export default function InvestPage() {
 
   return (
     <div className="min-h-screen bg-[#08090B] text-neutral-100 antialiased selection:bg-neutral-200 selection:text-black">
-      <Helmet>
-        <title>Pickla — Investor access</title>
-        <meta name="description" content="Pickla is building the operating system for social sports communities. Request investor access." />
-        <meta name="robots" content="noindex, nofollow" />
-      </Helmet>
 
       <header className="px-6 py-6 flex items-center justify-between max-w-6xl mx-auto">
         <div className="flex items-center gap-2 font-medium tracking-tight">

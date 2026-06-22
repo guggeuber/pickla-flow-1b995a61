@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Helmet } from "react-helmet-async";
+
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
