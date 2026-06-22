@@ -1788,6 +1788,60 @@ export type Database = {
           },
         ]
       }
+      investor_leads: {
+        Row: {
+          access_token_hash: string | null
+          approved_at: string | null
+          created_at: string
+          email: string
+          id: string
+          message: string | null
+          metadata: Json
+          name: string | null
+          opened_at: string | null
+          rejected_at: string | null
+          requested_shares: number | null
+          status: string
+          submitted_interest_at: string | null
+          token_expires_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          access_token_hash?: string | null
+          approved_at?: string | null
+          created_at?: string
+          email: string
+          id?: string
+          message?: string | null
+          metadata?: Json
+          name?: string | null
+          opened_at?: string | null
+          rejected_at?: string | null
+          requested_shares?: number | null
+          status?: string
+          submitted_interest_at?: string | null
+          token_expires_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          access_token_hash?: string | null
+          approved_at?: string | null
+          created_at?: string
+          email?: string
+          id?: string
+          message?: string | null
+          metadata?: Json
+          name?: string | null
+          opened_at?: string | null
+          rejected_at?: string | null
+          requested_shares?: number | null
+          status?: string
+          submitted_interest_at?: string | null
+          token_expires_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ladder_challenges: {
         Row: {
           challenged_entry_id: string
