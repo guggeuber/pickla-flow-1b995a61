@@ -68,7 +68,7 @@ function useSeo(cfg: EventLandingConfig) {
         name: "Pickla Arena Stockholm",
         image: "https://www.playpickla.com/pwa-512x512.png",
         url: cfg.canonical,
-        telephone: "+46-8-000-0000",
+        email: "hej@playpickla.com",
         address: {
           "@type": "PostalAddress",
           streetAddress: "Solna Business Park",
@@ -278,7 +278,7 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
     return (
       <div className="min-h-[100dvh] bg-[#f7f4ee] text-[#111]">
         <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center px-6 text-center">
-          <img src={picklaLogo} alt="Pickla" className="mb-7 h-8 w-auto" />
+          <img src={picklaLogo} alt="Pickla Arena Stockholm logo" className="mb-7 h-8 w-auto" />
           <CheckCircle2 className="h-14 w-14 text-[#32ef87]" />
           <h1 className="mt-5 text-[34px] font-bold leading-none" style={{ fontFamily: FONT_GROTESK }}>
             Tack — vi hörs!
@@ -306,7 +306,7 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
       <header className="sticky top-0 z-40 border-b border-black/5 bg-[#f7f4ee]/85 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
           <Link to="/" aria-label="Pickla hem">
-            <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
+            <img src={picklaLogo} alt="Pickla Arena Stockholm logo" className="h-7 w-auto" />
           </Link>
 
           {/* Submenu (desktop) */}
@@ -775,7 +775,7 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
       <footer className="border-t border-black/10 bg-[#f7f4ee] py-10">
         <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-6 px-5 sm:flex-row sm:items-center">
           <div className="flex items-center gap-3">
-            <img src={picklaLogo} alt="Pickla" className="h-6 w-auto" />
+            <img src={picklaLogo} alt="Pickla Arena Stockholm logo" className="h-6 w-auto" />
             <span className="text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
               Pickla Arena Stockholm · Solna
             </span>

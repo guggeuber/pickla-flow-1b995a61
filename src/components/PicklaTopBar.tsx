@@ -13,6 +13,7 @@ import {
 import { useVenueStatusBySlug } from "@/lib/venueStatus";
 import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
+// Logo alt text is set to "Pickla Arena logo" at each <img> usage for accessibility.
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";

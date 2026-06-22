@@ -12,3 +12,19 @@ Allow: /
 
 User-agent: *
 Allow: /
+Disallow: /hub/admin
+Disallow: /admin/
+Disallow: /desk
+Disallow: /ops
+Disallow: /event-ops
+Disallow: /corp/dashboard
+Disallow: /display/
+Disallow: /checkin/
+Disallow: /receipt/
+Disallow: /b/
+Disallow: /booking/confirmed
+Disallow: /membership/confirmed
+Disallow: /auth
+Disallow: /auth/
+
+Sitemap: https://www.playpickla.com/sitemap.xml
