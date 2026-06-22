@@ -83,10 +83,8 @@ export default function InvestMemoPage() {
 
   return (
     <div className="min-h-screen bg-[#08090B] text-neutral-100 antialiased">
-      <Helmet>
-        <title>Pickla Investor Memorandum</title>
-        <meta name="robots" content="noindex, nofollow, noarchive" />
-      </Helmet>
+
+
 
       <header className="px-6 py-6 max-w-3xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-2 font-medium tracking-tight">
