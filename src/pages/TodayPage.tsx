@@ -581,8 +581,9 @@ export default function TodayPage() {
 
 
       <main>
+        <h1 className="sr-only">Pickla Arena Stockholm — Pickleball, dart och event i Solna</h1>
         <section className="relative mx-auto h-[510px] max-w-md overflow-hidden sm:rounded-b-[28px]">
-          <img src={heroImage} alt="" className="absolute inset-0 h-full w-full object-cover object-center" />
+          <img src={heroImage} alt="Pickla Arena Stockholm — pickleballbanor, dart och lounge" className="absolute inset-0 h-full w-full object-cover object-center" />
           <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/5" />
           <div className="absolute left-0 top-[34%] flex flex-col items-start gap-2">
             <HeroSticker guideKey="pickleball" onClick={openGuide} />
@@ -679,7 +680,7 @@ export default function TodayPage() {
                     {GUIDES[activeGuide].title}
                   </h2>
                 </div>
-                <button type="button" onClick={() => setActiveGuide(null)} className="rounded-full p-2 text-neutral-950">
+                <button type="button" onClick={() => setActiveGuide(null)} aria-label="Stäng" className="rounded-full p-2 text-neutral-950">
                   <X className="h-5 w-5" />
                 </button>
               </div>

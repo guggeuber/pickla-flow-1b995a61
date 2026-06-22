@@ -1,7 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://www.playpickla.com/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <!-- Core surfaces -->
+  <url><loc>https://www.playpickla.com/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>
+  <url><loc>https://www.playpickla.com/play</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://www.playpickla.com/book</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://www.playpickla.com/events</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://www.playpickla.com/openplay</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://www.playpickla.com/membership</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://www.playpickla.com/wellness</loc><changefreq>monthly</changefreq><priority>0.5</priority></url>
+
+  <!-- Event marketing -->
   <url><loc>https://www.playpickla.com/eventlokaler</loc><changefreq>weekly</changefreq><priority>0.9</priority></url>
+  <url><loc>https://www.playpickla.com/book/group</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://www.playpickla.com/hotell</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
 
   <!-- Corporate landing pages -->
   <url><loc>https://www.playpickla.com/foretagsevent-stockholm</loc><changefreq>weekly</changefreq><priority>0.9</priority></url>
@@ -22,8 +33,8 @@
   <url><loc>https://www.playpickla.com/skolavslutning-stockholm</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
   <url><loc>https://www.playpickla.com/jubileum-stockholm</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
 
-  <url><loc>https://www.playpickla.com/hotell</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://www.playpickla.com/book/group</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://www.playpickla.com/membership</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://www.playpickla.com/play</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>
+  <!-- Legal -->
+  <url><loc>https://www.playpickla.com/privacy</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://www.playpickla.com/terms</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://www.playpickla.com/cookies</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
 </urlset>

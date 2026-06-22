@@ -103,7 +103,7 @@ export function PicklaTopBar({
             className={`shrink-0 active:scale-[0.98] ${showVenue ? "" : "justify-self-center"}`}
             aria-label="Till startsidan"
           >
-            <img src={picklaLogo} alt="Pickla" className="h-8 w-auto" />
+            <img src={picklaLogo} alt="Pickla Arena logo" className="h-8 w-auto" />
           </button>
 
           {showVenue && (
