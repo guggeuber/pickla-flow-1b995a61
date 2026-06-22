@@ -25,22 +25,51 @@ export default function InvestMemoPage() {
     document.documentElement.classList.add("dark");
     document.title = "Pickla Investor Memorandum";
     let meta = document.querySelector('meta[name="robots"]') as HTMLMetaElement | null;
+    const created = !meta;
     if (!meta) { meta = document.createElement("meta"); meta.name = "robots"; document.head.appendChild(meta); }
     const prev = meta.content;
     meta.content = "noindex, nofollow, noarchive";
-    return () => { meta!.content = prev; };
-    if (!token) return;
+
+    if (!token) {
+      setError("Missing access token.");
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) {
+        setError("Request timed out. Please try again.");
+        setLoading(false);
+      }
+    }, 15000);
+
     (async () => {
       try {
-        const res = await apiGet<{ lead: Lead }>("api-investor", "memo", { token });
+        const res = await apiGet<{ ok?: boolean; lead?: Lead }>("api-investor", "memo", { token });
+        if (cancelled) return;
+        if (!res || !res.lead) {
+          console.error("Unexpected memo response shape", res);
+          throw new Error("Unexpected response from server.");
+        }
         setLead(res.lead);
         if (res.lead.requested_shares) setShares(String(res.lead.requested_shares));
       } catch (e) {
-        setError((e as Error).message);
+        if (!cancelled) setError((e as Error).message || "Failed to load memo.");
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          window.clearTimeout(timeoutId);
+        }
       }
     })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      if (created && meta?.parentNode) meta.parentNode.removeChild(meta);
+      else if (meta) meta.content = prev;
+    };
   }, [token]);
 
   async function submitInterest(e: React.FormEvent) {
