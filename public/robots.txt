@@ -26,5 +26,6 @@ Disallow: /booking/confirmed
 Disallow: /membership/confirmed
 Disallow: /auth
 Disallow: /auth/
+Disallow: /invest/memo/
 
 Sitemap: https://www.playpickla.com/sitemap.xml
