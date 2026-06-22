@@ -23,6 +23,12 @@ export default function InvestMemoPage() {
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
+    document.title = "Pickla Investor Memorandum";
+    let meta = document.querySelector('meta[name="robots"]') as HTMLMetaElement | null;
+    if (!meta) { meta = document.createElement("meta"); meta.name = "robots"; document.head.appendChild(meta); }
+    const prev = meta.content;
+    meta.content = "noindex, nofollow, noarchive";
+    return () => { meta!.content = prev; };
     if (!token) return;
     (async () => {
       try {
@@ -65,7 +71,6 @@ export default function InvestMemoPage() {
   if (error || !lead) {
     return (
       <div className="min-h-screen bg-[#08090B] text-neutral-100 flex items-center justify-center px-6">
-        <Helmet><meta name="robots" content="noindex, nofollow" /></Helmet>
         <div className="max-w-md text-center">
           <h1 className="text-2xl font-medium tracking-tight">Access denied</h1>
           <p className="mt-3 text-neutral-500 text-sm">{error || "This link is invalid, expired, or has been revoked."}</p>
