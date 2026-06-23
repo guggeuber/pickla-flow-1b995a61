@@ -48,7 +48,6 @@ async function fetchMemo(token: string, signal: AbortSignal): Promise<Lead> {
     signal,
     headers: {
       Accept: "application/json",
-      "Cache-Control": "no-store",
     },
   });
 
@@ -72,7 +71,6 @@ async function submitMemoInterest(body: Record<string, unknown>) {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
-      "Cache-Control": "no-store",
     },
     body: JSON.stringify(body),
   });
