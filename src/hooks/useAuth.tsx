@@ -41,9 +41,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         localStorage.removeItem(PENDING_CLAIM_KEY);
         toast.success("Dagspass hämtat! Du hittar det under Mitt konto.");
       })
-      .catch(() => {
-        // Token might already be claimed or invalid — clear it silently
-        localStorage.removeItem(PENDING_CLAIM_KEY);
+      .catch((error) => {
+        toast.error(error?.message || "Kunde inte hämta dagspasset. Öppna länken igen och försök på nytt.");
       });
   }, [user]);
 

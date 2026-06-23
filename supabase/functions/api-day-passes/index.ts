@@ -15,6 +15,233 @@ async function getUserIdFromRequest(req: Request, adminClient: ReturnType<typeof
   return data.user?.id || null;
 }
 
+const normalizeEmail = (value: unknown) => {
+  const email = String(value || '').trim().toLowerCase();
+  return email || null;
+};
+
+const normalizePhone = (value: unknown) => {
+  const phone = String(value || '').replace(/[^0-9+]/g, '').trim();
+  return phone || null;
+};
+
+async function getDefaultOrganizationId(adminClient: ReturnType<typeof getServiceClient>, venueId?: string | null) {
+  if (venueId) {
+    const { data: venue } = await adminClient
+      .from('venues')
+      .select('organization_id')
+      .eq('id', venueId)
+      .maybeSingle();
+    if (venue?.organization_id) return venue.organization_id;
+  }
+
+  const { data: org } = await adminClient
+    .from('organizations')
+    .select('id')
+    .eq('slug', 'pickla')
+    .maybeSingle();
+  return org?.id || null;
+}
+
+async function resolveOrCreateCustomerForUser(
+  adminClient: ReturnType<typeof getServiceClient>,
+  userId: string,
+  venueId?: string | null,
+) {
+  const existingCustomerId = await resolveCustomerIdForUser(adminClient, userId);
+  if (existingCustomerId) return existingCustomerId;
+
+  const [{ data: authResult }, { data: profile }] = await Promise.all([
+    adminClient.auth.admin.getUserById(userId),
+    adminClient
+      .from('player_profiles')
+      .select('id, display_name, first_name, last_name, phone, customer_id')
+      .eq('auth_user_id', userId)
+      .maybeSingle(),
+  ]);
+
+  if (profile?.customer_id) return profile.customer_id;
+
+  const authUser = authResult?.user;
+  const organizationId = await getDefaultOrganizationId(adminClient, venueId);
+  if (!organizationId) throw new Error('Missing organization for customer');
+
+  const email = normalizeEmail(authUser?.email);
+  const phone = normalizePhone(profile?.phone);
+  const displayName = profile?.display_name || authUser?.user_metadata?.display_name || email || 'Kund';
+
+  const { data: existingByUser } = await adminClient
+    .from('customers')
+    .select('id')
+    .eq('auth_user_id', userId)
+    .eq('status', 'active')
+    .maybeSingle();
+  if (existingByUser?.id) return existingByUser.id;
+
+  if (email) {
+    const { data: existingByEmail } = await adminClient
+      .from('customers')
+      .select('id, auth_user_id')
+      .eq('organization_id', organizationId)
+      .eq('email_normalized', email)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    if (existingByEmail?.id) {
+      if (!existingByEmail.auth_user_id) {
+        await adminClient
+          .from('customers')
+          .update({
+            auth_user_id: userId,
+            display_name: displayName,
+            primary_email: email,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingByEmail.id);
+      }
+      await adminClient
+        .from('player_profiles')
+        .update({ customer_id: existingByEmail.id })
+        .eq('auth_user_id', userId)
+        .is('customer_id', null);
+      return existingByEmail.id;
+    }
+  }
+
+  const { data: inserted, error: insertErr } = await adminClient
+    .from('customers')
+    .insert({
+      organization_id: organizationId,
+      auth_user_id: userId,
+      display_name: displayName,
+      first_name: profile?.first_name || null,
+      last_name: profile?.last_name || null,
+      primary_email: email,
+      primary_phone: profile?.phone || null,
+      email_normalized: email,
+      phone_e164: phone,
+      metadata: {
+        source: 'day_pass_share_claim',
+        player_profile_id: profile?.id || null,
+      },
+    })
+    .select('id')
+    .single();
+
+  if (insertErr) {
+    const { data: afterConflict } = await adminClient
+      .from('customers')
+      .select('id')
+      .eq('auth_user_id', userId)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (afterConflict?.id) return afterConflict.id;
+    throw new Error(insertErr.message);
+  }
+
+  const customerId = inserted.id;
+
+  await adminClient
+    .from('player_profiles')
+    .update({ customer_id: customerId })
+    .eq('auth_user_id', userId)
+    .is('customer_id', null);
+
+  await adminClient.from('customer_identities').insert([
+    {
+      customer_id: customerId,
+      organization_id: organizationId,
+      provider: 'auth',
+      provider_id: userId,
+      verified_at: new Date().toISOString(),
+      metadata: { source: 'day_pass_share_claim' },
+    },
+    ...(email ? [{
+      customer_id: customerId,
+      organization_id: organizationId,
+      provider: 'email',
+      provider_id: email,
+      email,
+      verified_at: authUser?.email_confirmed_at || null,
+      metadata: { source: 'day_pass_share_claim' },
+    }] : []),
+    ...(phone ? [{
+      customer_id: customerId,
+      organization_id: organizationId,
+      provider: 'phone',
+      provider_id: phone,
+      phone: profile?.phone || phone,
+      metadata: { source: 'day_pass_share_claim' },
+    }] : []),
+  ]).select('id');
+
+  return customerId;
+}
+
+async function linkCustomerToVenue(
+  adminClient: ReturnType<typeof getServiceClient>,
+  customerId: string | null,
+  venueId: string | null,
+) {
+  if (!customerId || !venueId) return;
+  const now = new Date().toISOString();
+  const { data: existing } = await adminClient
+    .from('customer_venue_profiles')
+    .select('id, visit_count')
+    .eq('customer_id', customerId)
+    .eq('venue_id', venueId)
+    .maybeSingle();
+
+  if (existing?.id) {
+    await adminClient
+      .from('customer_venue_profiles')
+      .update({
+        last_seen_at: now,
+        metadata: { source: 'day_pass_share_claim' },
+      })
+      .eq('id', existing.id);
+    return;
+  }
+
+  await adminClient.from('customer_venue_profiles').insert({
+    customer_id: customerId,
+    venue_id: venueId,
+    is_home_venue: false,
+    first_seen_at: now,
+    last_seen_at: now,
+    visit_count: 0,
+    metadata: { source: 'day_pass_share_claim' },
+  });
+}
+
+async function auditDayPassShareClaim(
+  adminClient: ReturnType<typeof getServiceClient>,
+  input: {
+    actorUserId: string;
+    shareId: string;
+    dayPassId: string;
+    venueId: string | null;
+    customerId: string | null;
+  },
+) {
+  try {
+    await adminClient.from('audit_log').insert({
+      actor_user_id: input.actorUserId,
+      actor_type: 'user',
+      action: 'day_pass_share.claim',
+      entity_table: 'day_pass_shares',
+      entity_id: input.shareId,
+      venue_id: input.venueId,
+      metadata: {
+        day_pass_id: input.dayPassId,
+        customer_id: input.customerId,
+      },
+    });
+  } catch (_) {
+    // audit_log may not exist in older environments; claiming must keep working.
+  }
+}
+
 async function getActiveMembershipWithBenefits(adminClient: ReturnType<typeof getServiceClient>, userId: string) {
   const { data: membership } = await adminClient
     .from('memberships')
@@ -193,15 +420,42 @@ Deno.serve(async (req) => {
         }
         if (share.status !== 'pending') return errorResponse('Passet kan inte hämtas längre', 410);
 
-        await adminClient.from('day_pass_shares')
+        const { data: dayPass, error: dayPassErr } = await adminClient
+          .from('day_passes')
+          .select('id, venue_id')
+          .eq('id', share.day_pass_id)
+          .maybeSingle();
+        if (dayPassErr) return errorResponse(dayPassErr.message, 500);
+        if (!dayPass) return errorResponse('Pass not found', 404);
+
+        const customerId = await resolveOrCreateCustomerForUser(adminClient, claimUserId, dayPass.venue_id);
+        await linkCustomerToVenue(adminClient, customerId, dayPass.venue_id);
+
+        const { error: shareUpdateErr } = await adminClient.from('day_pass_shares')
           .update({ status: 'claimed', claimed_by: claimUserId, claimed_at: new Date().toISOString() })
           .eq('id', share.id);
+        if (shareUpdateErr) return errorResponse(shareUpdateErr.message, 500);
 
-        await adminClient.from('day_passes')
-          .update({ user_id: claimUserId, status: 'active' })
+        const { error: passUpdateErr } = await adminClient.from('day_passes')
+          .update({ user_id: claimUserId, customer_id: customerId, status: 'active' })
           .eq('id', share.day_pass_id);
+        if (passUpdateErr) return errorResponse(passUpdateErr.message, 500);
 
-        return jsonResponse({ success: true, dayPassId: share.day_pass_id, legacy: true });
+        await adminClient
+          .from('player_profiles')
+          .update({ customer_id: customerId })
+          .eq('auth_user_id', claimUserId)
+          .is('customer_id', null);
+
+        await auditDayPassShareClaim(adminClient, {
+          actorUserId: claimUserId,
+          shareId: share.id,
+          dayPassId: share.day_pass_id,
+          venueId: dayPass.venue_id,
+          customerId,
+        });
+
+        return jsonResponse({ success: true, dayPassId: share.day_pass_id, customerId, legacy: true });
       }
 
       const now = DateTime.now().setZone('Europe/Stockholm');

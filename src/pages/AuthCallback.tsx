@@ -13,6 +13,7 @@ const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
 const OTP_TYPES = new Set(["signup", "invite", "magiclink", "recovery", "email_change", "email"]);
+const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
 
 function callbackParam(searchParams: URLSearchParams, hashParams: URLSearchParams, key: string) {
   return searchParams.get(key) || hashParams.get(key);
@@ -20,6 +21,12 @@ function callbackParam(searchParams: URLSearchParams, hashParams: URLSearchParam
 
 function normalizeOtpType(type?: string | null): EmailOtpType {
   return OTP_TYPES.has(type || "") ? (type as EmailOtpType) : "signup";
+}
+
+function postAuthTarget() {
+  const pendingClaim = localStorage.getItem(PENDING_CLAIM_KEY);
+  if (pendingClaim) return `/pass/${pendingClaim}`;
+  return "/my";
 }
 
 export default function AuthCallback() {
@@ -54,7 +61,7 @@ export default function AuthCallback() {
         }
         setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
         setStatus("success");
-        setTimeout(() => navigate("/my", { replace: true }), 3000);
+        setTimeout(() => navigate(postAuthTarget(), { replace: true }), 1200);
         return;
       }
 
@@ -72,7 +79,7 @@ export default function AuthCallback() {
         }
         setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
         setStatus("success");
-        setTimeout(() => navigate("/my", { replace: true }), 3000);
+        setTimeout(() => navigate(postAuthTarget(), { replace: true }), 1200);
         return;
       }
 
@@ -81,7 +88,7 @@ export default function AuthCallback() {
       if (session) {
         setSuccessText("Du är inloggad");
         setStatus("success");
-        setTimeout(() => navigate("/my", { replace: true }), 3000);
+        setTimeout(() => navigate(postAuthTarget(), { replace: true }), 1200);
         return;
       }
 
@@ -150,7 +157,7 @@ export default function AuthCallback() {
               </p>
             </div>
             <button
-              onClick={() => navigate("/my", { replace: true })}
+              onClick={() => navigate(postAuthTarget(), { replace: true })}
               className="px-8 py-3 rounded-2xl text-[14px] font-bold active:scale-95 transition-transform"
               style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
             >

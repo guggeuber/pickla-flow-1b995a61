@@ -34,6 +34,15 @@ const uniqueStrings = (values: unknown[]) =>
 
 const asArrayResult = (result: any) => result?.data || [];
 
+const uniqueRowsById = (rows: any[]) => {
+  const map = new Map<string, any>();
+  for (const row of rows || []) {
+    if (!row?.id) continue;
+    map.set(row.id, row);
+  }
+  return Array.from(map.values());
+};
+
 function customerFullName(customer: Record<string, unknown> | null | undefined) {
   if (!customer) return null;
   return cleanString([customer.first_name, customer.last_name].filter(Boolean).join(' '))
@@ -146,6 +155,16 @@ Deno.serve(async (req) => {
       if (venueProfilesResult.error) return errorResponse(venueProfilesResult.error.message);
 
       const venueCustomerIds = uniqueStrings((venueProfilesResult.data || []).map((row: any) => row.customer_id));
+      let authUsersResultForSearch: any = null;
+      let searchMatchedUserIds: string[] = [];
+      if (search) {
+        authUsersResultForSearch = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        const needle = search.toLowerCase();
+        searchMatchedUserIds = uniqueStrings((authUsersResultForSearch.data?.users || [])
+          .filter((user: any) => String(user.email || '').toLowerCase().includes(needle))
+          .map((user: any) => user.id));
+      }
+
       let customerQuery = admin
         .from('customers')
         .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, email_normalized, phone_e164, created_at, updated_at, status')
@@ -163,10 +182,29 @@ Deno.serve(async (req) => {
       const { data: customers, error: customersErr } = await customerQuery;
       if (customersErr) return errorResponse(customersErr.message);
 
-      const { data: profiles, error: qErr } = await admin.from('player_profiles').select('*')
-        .order('pickla_rating', { ascending: false })
-        .limit(fetchLimit);
-      if (qErr) return errorResponse(qErr.message);
+      let profiles: any[] = [];
+      if (search) {
+        const like = `%${search.replace(/[%_,]/g, ' ').trim()}%`;
+        const profileQueries = [
+          admin.from('player_profiles').select('*').ilike('display_name', like).limit(fetchLimit),
+          admin.from('player_profiles').select('*').ilike('first_name', like).limit(fetchLimit),
+          admin.from('player_profiles').select('*').ilike('last_name', like).limit(fetchLimit),
+          admin.from('player_profiles').select('*').ilike('phone', like).limit(fetchLimit),
+        ];
+        if (searchMatchedUserIds.length) {
+          profileQueries.push(admin.from('player_profiles').select('*').in('auth_user_id', searchMatchedUserIds).limit(fetchLimit));
+        }
+        const profileResults = await Promise.all(profileQueries);
+        const profileError = profileResults.find((result) => result.error)?.error;
+        if (profileError) return errorResponse(profileError.message);
+        profiles = uniqueRowsById(profileResults.flatMap((result) => result.data || [])).slice(0, fetchLimit);
+      } else {
+        const { data: profileRows, error: qErr } = await admin.from('player_profiles').select('*')
+          .order('pickla_rating', { ascending: false })
+          .limit(fetchLimit);
+        if (qErr) return errorResponse(qErr.message);
+        profiles = profileRows || [];
+      }
 
       const customerIds = uniqueStrings((customers || []).map((customer: any) => customer.id));
       const authUserIds = uniqueStrings([
@@ -177,7 +215,9 @@ Deno.serve(async (req) => {
       const profileByUserId = new Map((profiles || []).filter((profile: any) => profile.auth_user_id).map((profile: any) => [profile.auth_user_id, profile]));
       const venueProfileByCustomerId = new Map((venueProfilesResult.data || []).map((row: any) => [row.customer_id, row]));
 
-      const authUsersPromise = admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      const authUsersPromise = authUsersResultForSearch
+        ? Promise.resolve(authUsersResultForSearch)
+        : admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
       const receiptsPromise = fetchByCustomerOrUser(admin, 'booking_receipts',
         'id, customer_id, user_id, customer_name, customer_email, customer_phone, product_description, purchase_type, issued_at, created_at',
         { venueId, customerIds, userIds: authUserIds, orderColumn: 'issued_at', ascending: false, limit: 1000 });

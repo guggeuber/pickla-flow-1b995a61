@@ -14,6 +14,7 @@ const FONT_MONO = "'Space Mono', monospace";
 const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
 
 const clearPendingClaimToken = () => localStorage.removeItem(PENDING_CLAIM_KEY);
+type ClaimStatus = "idle" | "account_created" | "claiming" | "claimed" | "failed";
 
 const ClaimPassPage = () => {
   const { token } = useParams<{ token: string }>();
@@ -21,6 +22,7 @@ const ClaimPassPage = () => {
   const { user, loading: authLoading, signUp, signIn } = useAuth();
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
+  const [claimStatus, setClaimStatus] = useState<ClaimStatus>("idle");
   const [mode, setMode] = useState<"register" | "login">("register");
   const [formData, setFormData] = useState({ name: "", email: "", password: "" });
   const claimAttempted = useRef(false);
@@ -40,16 +42,18 @@ const ClaimPassPage = () => {
     if (!token) return;
     claimAttempted.current = true;
     setClaimError(null);
+    setClaimStatus("claiming");
     setClaiming(true);
     try {
       await apiPost("api-day-passes", "claim", { token });
       clearPendingClaimToken();
-      toast.success("Dagspass hämtat! Du hittar det under Aktivitet.");
-      navigate("/activity");
+      setClaimStatus("claimed");
+      toast.success("Dagspass hämtat! Du hittar det under Mitt konto.");
+      window.setTimeout(() => navigate("/my"), 1200);
     } catch (err: any) {
       const message = err.message || "Kunde inte hämta passet";
       setClaimError(message);
-      clearPendingClaimToken();
+      setClaimStatus("failed");
       toast.error(message);
     } finally {
       setClaiming(false);
@@ -63,6 +67,7 @@ const ClaimPassPage = () => {
       if (mode === "register") {
         const { error } = await signUp(formData.email, formData.password, formData.name);
         if (error) { toast.error(error.message); setClaiming(false); return; }
+        setClaimStatus("account_created");
         toast.success("Konto skapat! Kolla din e-post för verifiering, logga sedan in för att hämta ditt pass.");
         setMode("login");
       } else {
@@ -135,13 +140,20 @@ const ClaimPassPage = () => {
 
         {user ? (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="w-full mt-6">
+            {claimStatus !== "idle" && (
+              <div className="mb-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-xs leading-relaxed text-white/70" style={{ fontFamily: FONT_MONO }}>
+                {claimStatus === "claiming" && "Du är inloggad. Hämtar passet nu…"}
+                {claimStatus === "claimed" && "Passet är hämtat och kopplat till ditt konto."}
+                {claimStatus === "failed" && "Passet kunde inte hämtas automatiskt. Försök igen."}
+              </div>
+            )}
             <button
               onClick={handleClaim}
-              disabled={claiming}
+              disabled={claiming || claimStatus === "claimed"}
               className="w-full py-4 rounded-2xl text-white text-sm font-black uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-2"
               style={{ background: "#E86C24", fontFamily: FONT_MONO }}
             >
-              {claiming ? <Loader2 className="w-4 h-4 animate-spin" /> : "HÄMTA DITT PASS"}
+              {claiming ? <Loader2 className="w-4 h-4 animate-spin" /> : claimStatus === "claimed" ? "PASSET ÄR HÄMTAT" : "HÄMTA DITT PASS"}
             </button>
             {claimError && (
               <p className="mt-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-xs leading-relaxed text-white/70" style={{ fontFamily: FONT_MONO }}>
@@ -151,6 +163,11 @@ const ClaimPassPage = () => {
           </motion.div>
         ) : (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="w-full mt-6">
+            {claimStatus === "account_created" && (
+              <div className="mb-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-xs leading-relaxed text-white/70" style={{ fontFamily: FONT_MONO }}>
+                Konto skapat. Bekräfta din e-post, sedan kommer du tillbaka hit och passet hämtas automatiskt.
+              </div>
+            )}
             <p className="text-sm text-white/50 text-center mb-4" style={{ fontFamily: FONT_MONO }}>
               {mode === "register" ? "Skapa konto för att hämta ditt pass" : "Logga in för att hämta ditt pass"}
             </p>
