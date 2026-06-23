@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
-import { NetworkFirst } from 'workbox-strategies';
+import { NetworkFirst, NetworkOnly } from 'workbox-strategies';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -23,11 +23,25 @@ self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 
+registerRoute(
+  ({ request, url }: { request: Request; url: URL }) =>
+    request.mode === 'navigate' && url.pathname.startsWith('/invest/memo/'),
+  new NetworkOnly(),
+);
+
 registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')));
 
 registerRoute(
   ({ url }: { url: URL }) =>
-    url.hostname.includes('.supabase.co') && url.pathname.startsWith('/functions/v1/'),
+    url.hostname.includes('.supabase.co') && url.pathname.startsWith('/functions/v1/api-investor/'),
+  new NetworkOnly(),
+);
+
+registerRoute(
+  ({ url }: { url: URL }) =>
+    url.hostname.includes('.supabase.co') &&
+    url.pathname.startsWith('/functions/v1/') &&
+    !url.pathname.startsWith('/functions/v1/api-investor/'),
   new NetworkFirst({ cacheName: 'api-cache', networkTimeoutSeconds: 5 }),
 );
 
