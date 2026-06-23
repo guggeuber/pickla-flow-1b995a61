@@ -1,38 +1,24 @@
 import { useEffect, useState } from "react";
 
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+import picklaLogo from "@/assets/pickla-logo.svg";
+import { assetByType, InvestorAsset, InvestorSettings, mergeInvestorSettings } from "@/lib/investorContent";
 import { toast } from "sonner";
 
-const sections = [
-  {
-    kicker: "Today",
-    title: "A category-defining venue",
-    body: "Pickla Arena Stockholm runs pickleball, Stockholm Dart Arena, events, F&B and a live community — under one operating system.",
-  },
-  {
-    kicker: "The thesis",
-    title: "Social sports is the next category",
-    body: "Padel proved demand. Pickleball is accelerating globally. Dart, shuffleboard and hybrid venues are next. The winners will not be a chain — they will be the operating layer beneath them.",
-  },
-  {
-    kicker: "What we are building",
-    title: "The operating system for social sports",
-    body: "Booking, memberships, events, check-in, community, AI-assisted operations. One stack that scales from a single venue to networks of hosts, ambassadors, affiliates and franchises.",
-  },
-];
-
 const pillars = [
-  ["Pickleball", "Courts, leagues, ladders, open play."],
-  ["Stockholm Dart Arena", "19 boards. Scoring, queues, broadcast."],
-  ["Events", "Corporate, private, tournaments. Sales OS."],
-  ["F&B", "Integrated bar, restaurant, member tabs."],
-  ["Community", "Crews, feeds, signals, social proof."],
-  ["Hosts & Ambassadors", "Distributed supply, low CAC."],
-  ["Affiliates & Venues", "Network effects across cities."],
-  ["AI Operations", "Pricing, staffing, retention, ops."],
+  ["Pickleball", "Courts, memberships, open play and community programming."],
+  ["Stockholm Dart Arena", "Dart as a first-class social sports surface."],
+  ["Events", "Corporate, private, tournaments and partner activations."],
+  ["F&B", "Venue revenue, hospitality and community rituals."],
+  ["Admin OS", "Planning, calendar, operations truth and capacity."],
+  ["Desk OS", "Arrivals, check-in, customers and live actions."],
+  ["Customer 360", "Bookings, tickets, memberships, receipts and history."],
+  ["AI Operations", "Agent-assisted planning with human approval."],
 ];
 
 export default function InvestPage() {
+  const [settings, setSettings] = useState<InvestorSettings>(() => mergeInvestorSettings());
+  const [assets, setAssets] = useState<InvestorAsset[]>([]);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
@@ -47,6 +33,20 @@ export default function InvestPage() {
     const prev = meta.content;
     meta.content = "noindex, nofollow";
     return () => { meta!.content = prev; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ settings?: Partial<InvestorSettings>; assets?: InvestorAsset[] }>("api-investor", "settings")
+      .then((res) => {
+        if (cancelled) return;
+        setSettings(mergeInvestorSettings(res.settings));
+        setAssets(Array.isArray(res.assets) ? res.assets : []);
+      })
+      .catch((err) => {
+        console.warn("Investor settings failed; using fallback content", err);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   async function submit(e: React.FormEvent) {
@@ -64,13 +64,15 @@ export default function InvestPage() {
     }
   }
 
+  const logo = assetByType(assets, "logo")?.public_url || picklaLogo;
+  const hero = assetByType(assets, "hero") || assetByType(assets, "venue_photo");
+
   return (
     <div className="min-h-screen bg-[#08090B] text-neutral-100 antialiased selection:bg-neutral-200 selection:text-black">
 
       <header className="px-6 py-6 flex items-center justify-between max-w-6xl mx-auto">
         <div className="flex items-center gap-2 font-medium tracking-tight">
-          <div className="h-7 w-7 rounded-md bg-gradient-to-br from-neutral-100 to-neutral-400" />
-          <span>Pickla</span>
+          <img src={logo} alt={settings.company_name || "Pickla"} className="h-8 w-auto max-w-[120px]" />
         </div>
         <span className="text-xs text-neutral-500 uppercase tracking-widest">Investor preview</span>
       </header>
@@ -78,13 +80,26 @@ export default function InvestPage() {
       <main className="max-w-6xl mx-auto px-6 pb-32">
         {/* Hero */}
         <section className="pt-16 sm:pt-28 pb-24 border-b border-neutral-900">
-          <p className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-6">Series Seed · 2026</p>
-          <h1 className="text-4xl sm:text-6xl font-medium tracking-tight leading-[1.05] max-w-3xl">
-            The operating system for social sports communities.
-          </h1>
-          <p className="mt-8 text-lg text-neutral-400 max-w-2xl leading-relaxed">
-            Pickla is not a single pickleball venue. We are building the infrastructure that lets the next generation of social sports — pickleball, dart, padel, hybrid — run as a single network.
-          </p>
+          <div className="grid gap-10 lg:grid-cols-[1fr_360px] lg:items-end">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-6">{settings.round_label}</p>
+              <h1 className="text-4xl sm:text-6xl font-medium tracking-tight leading-[1.05] max-w-3xl">
+                {settings.headline}
+              </h1>
+              <p className="mt-8 text-lg text-neutral-400 max-w-2xl leading-relaxed">
+                {settings.subheadline}
+              </p>
+            </div>
+            {hero?.public_url ? (
+              <img
+                src={hero.public_url}
+                alt={hero.title}
+                className="aspect-[4/3] w-full rounded-2xl border border-neutral-900 object-cover"
+              />
+            ) : (
+              <div className="aspect-[4/3] rounded-2xl border border-neutral-900 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.16),transparent_34%),linear-gradient(135deg,#111318,#050607)]" />
+            )}
+          </div>
 
           <div className="mt-12 grid sm:grid-cols-3 gap-px bg-neutral-900 rounded-xl overflow-hidden border border-neutral-900">
             {[
@@ -103,12 +118,18 @@ export default function InvestPage() {
 
         {/* Narrative sections */}
         <section className="py-24 space-y-24 border-b border-neutral-900">
-          {sections.map((s) => (
-            <div key={s.title} className="grid sm:grid-cols-12 gap-8">
-              <div className="sm:col-span-3 text-xs uppercase tracking-[0.2em] text-neutral-500">{s.kicker}</div>
+          <div className="grid sm:grid-cols-12 gap-8">
+            <div className="sm:col-span-3 text-xs uppercase tracking-[0.2em] text-neutral-500">The thesis</div>
+            <div className="sm:col-span-9 max-w-2xl">
+              <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">{settings.round_name}</h2>
+              <p className="mt-4 text-neutral-400 leading-relaxed">{settings.public_thesis}</p>
+            </div>
+          </div>
+          {settings.traction_metrics.map((metric) => (
+            <div key={metric.label} className="grid sm:grid-cols-12 gap-8">
+              <div className="sm:col-span-3 text-xs uppercase tracking-[0.2em] text-neutral-500">{metric.label}</div>
               <div className="sm:col-span-9 max-w-2xl">
-                <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">{s.title}</h2>
-                <p className="mt-4 text-neutral-400 leading-relaxed">{s.body}</p>
+                <p className="text-neutral-400 leading-relaxed">{metric.value}</p>
               </div>
             </div>
           ))}
@@ -184,7 +205,7 @@ export default function InvestPage() {
       </main>
 
       <footer className="border-t border-neutral-900 py-10 px-6 text-xs text-neutral-600 text-center">
-        © Pickla Solna AB · 556977-4481 · This page contains forward-looking statements and is not an offer of securities.
+        © {settings.company_name} · {settings.company_org_number} · This page contains forward-looking statements and is not an offer of securities.
       </footer>
     </div>
   );
