@@ -135,6 +135,12 @@ export function assetByType(assets: InvestorAsset[], type: InvestorAssetType) {
     .sort((a, b) => a.sort_order - b.sort_order)[0] || null;
 }
 
+export function assetsByType(assets: InvestorAsset[], type: InvestorAssetType) {
+  return assets
+    .filter((asset) => asset.is_active && asset.asset_type === type)
+    .sort((a, b) => a.sort_order - b.sort_order);
+}
+
 export function mergeInvestorSettings(settings?: Partial<InvestorSettings> | null): InvestorSettings {
   return {
     ...investorDefaults,

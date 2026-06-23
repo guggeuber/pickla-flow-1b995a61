@@ -4,7 +4,7 @@ import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { assetByType, InvestorAsset, InvestorSettings, mergeInvestorSettings, moneySek } from "@/lib/investorContent";
+import { assetByType, assetsByType, InvestorAsset, InvestorSettings, mergeInvestorSettings, moneySek } from "@/lib/investorContent";
 
 type Lead = {
   name: string | null;
@@ -218,6 +218,12 @@ export default function InvestMemoPage() {
   const submitted = !!lead.submitted_interest_at;
   const logo = assetByType(assets, "logo")?.public_url || picklaLogo;
   const hero = assetByType(assets, "hero") || assetByType(assets, "venue_photo");
+  const visualAssets = [
+    { label: "Venue", title: "Pickla Arena", assets: assetsByType(assets, "venue_photo") },
+    { label: "Dart", title: "Stockholm Dart Arena", assets: assetsByType(assets, "dart_photo") },
+    { label: "Product", title: "Pickla OS screenshots", assets: assetsByType(assets, "product_screenshot") },
+  ].filter((section) => section.assets.length > 0);
+  const deckAssets = assetsByType(assets, "deck");
 
   return (
     <div className="min-h-screen bg-[#08090B] text-neutral-100 antialiased">
@@ -254,6 +260,54 @@ export default function InvestMemoPage() {
             {section.body}
           </Section>
         ))}
+
+        {visualAssets.length > 0 && (
+          <section className="py-12 border-b border-neutral-900">
+            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Visual evidence</div>
+            <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">The venue and product surfaces</h2>
+            <div className="mt-8 space-y-8">
+              {visualAssets.map((section) => (
+                <div key={section.label}>
+                  <div className="mb-3 text-sm font-medium text-neutral-300">{section.title}</div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {section.assets.map((asset) => (
+                      <figure key={asset.id} className="overflow-hidden rounded-xl border border-neutral-900 bg-[#0B0C0E]">
+                        {asset.public_url && (
+                          <img src={asset.public_url} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
+                        )}
+                        <figcaption className="p-4">
+                          <div className="text-sm font-medium">{asset.title}</div>
+                          {asset.description && <div className="mt-1 text-xs leading-relaxed text-neutral-500">{asset.description}</div>}
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {deckAssets.length > 0 && (
+          <section className="py-12 border-b border-neutral-900">
+            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Deck</div>
+            <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">Investor deck</h2>
+            <div className="mt-6 space-y-3">
+              {deckAssets.map((asset) => (
+                <a
+                  key={asset.id}
+                  href={asset.public_url || "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block rounded-xl border border-neutral-900 bg-[#0B0C0E] p-5 hover:border-neutral-700"
+                >
+                  <div className="font-medium">{asset.title}</div>
+                  {asset.description && <div className="mt-1 text-sm text-neutral-500">{asset.description}</div>}
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
 
         <section className="py-12 border-b border-neutral-900">
           <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Offer</div>

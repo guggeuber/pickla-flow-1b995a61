@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { apiGet, apiPost } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { assetByType, InvestorAsset, InvestorSettings, mergeInvestorSettings } from "@/lib/investorContent";
+import { assetByType, assetsByType, InvestorAsset, InvestorSettings, mergeInvestorSettings } from "@/lib/investorContent";
 import { toast } from "sonner";
 
 const pillars = [
@@ -66,6 +66,26 @@ export default function InvestPage() {
 
   const logo = assetByType(assets, "logo")?.public_url || picklaLogo;
   const hero = assetByType(assets, "hero") || assetByType(assets, "venue_photo");
+  const visualAssets = [
+    {
+      label: "Pickla Arena",
+      title: "Live venue",
+      body: "Pickleball, events, F&B and community operations in one venue.",
+      assets: assetsByType(assets, "venue_photo"),
+    },
+    {
+      label: "Stockholm Dart Arena",
+      title: "Dart is part of the core surface",
+      body: "Stockholm Dart Arena is presented as a first-class Pickla venue surface, not an add-on.",
+      assets: assetsByType(assets, "dart_photo"),
+    },
+    {
+      label: "Pickla OS",
+      title: "The operating system",
+      body: "Admin OS, Desk OS, Customer 360, Operations Truth, Revenue Ledger and Event OS.",
+      assets: assetsByType(assets, "product_screenshot"),
+    },
+  ].filter((section) => section.assets.length > 0);
 
   return (
     <div className="min-h-screen bg-[#08090B] text-neutral-100 antialiased selection:bg-neutral-200 selection:text-black">
@@ -134,6 +154,38 @@ export default function InvestPage() {
             </div>
           ))}
         </section>
+
+        {visualAssets.length > 0 && (
+          <section className="py-24 border-b border-neutral-900">
+            <h2 className="text-2xl sm:text-3xl font-medium tracking-tight max-w-xl">
+              Built from a real operating floor.
+            </h2>
+            <div className="mt-12 space-y-12">
+              {visualAssets.map((section) => (
+                <div key={section.label} className="grid gap-6 lg:grid-cols-[280px_1fr] lg:items-start">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">{section.label}</div>
+                    <h3 className="mt-3 text-xl font-medium tracking-tight">{section.title}</h3>
+                    <p className="mt-3 text-sm leading-relaxed text-neutral-500">{section.body}</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {section.assets.map((asset) => (
+                      <figure key={asset.id} className="overflow-hidden rounded-2xl border border-neutral-900 bg-[#0B0C0E]">
+                        {asset.public_url && (
+                          <img src={asset.public_url} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
+                        )}
+                        <figcaption className="p-4">
+                          <div className="text-sm font-medium">{asset.title}</div>
+                          {asset.description && <div className="mt-1 text-xs leading-relaxed text-neutral-500">{asset.description}</div>}
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Pillars */}
         <section className="py-24 border-b border-neutral-900">
