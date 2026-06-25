@@ -491,6 +491,8 @@ Deno.serve(async (req) => {
       if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
       const body = await req.json();
+      const requestedEntryType = body.entry_type ? String(body.entry_type) : null;
+      const requestedEntitlementId = body.entitlement_id ? String(body.entitlement_id) : null;
       const serviceClient = getServiceClient();
       const venue = await resolveVenueForSelfCheckin(serviceClient, {
         venueId: body.venue_id || body.venueId || null,
@@ -501,7 +503,7 @@ Deno.serve(async (req) => {
       const access = await resolveUserAccess(serviceClient, venue.id, userId);
       const profile = access.profile;
 
-      if (access.already_checked_in && access.existingCheckin) {
+      if (!requestedEntryType && !requestedEntitlementId && access.already_checked_in && access.existingCheckin) {
         await markSessionRegistrationCheckedIn(serviceClient, {
           venueId: venue.id,
           entryType: access.existingCheckin.entry_type,
@@ -526,7 +528,15 @@ Deno.serve(async (req) => {
         }, 200);
       }
 
-      const best = access.best;
+      let best = access.best;
+      if (requestedEntryType && requestedEntitlementId) {
+        const requested = access.entitlements.find((ent) =>
+          ent.type === requestedEntryType && String(ent.id || '') === requestedEntitlementId
+        );
+        if (!requested) return errorResponse('Ingen giltig access hittades för den här biljetten', 403);
+        best = requested;
+      }
+      if (!best) return errorResponse('Ingen giltig access hittades', 403);
       const playerName = profileName(profile);
       const customerId = await resolveCustomerIdForUser(serviceClient, userId);
       const existingCheckin = await findActiveCheckin(serviceClient, {
@@ -857,11 +867,13 @@ Deno.serve(async (req) => {
 
       const body = await req.json();
       const { venue_id, target_user_id, player_name, player_phone } = body;
+      const requestedCustomerId = body.customer_id ? String(body.customer_id) : null;
       let { entry_type, entitlement_id } = body;
       if (!venue_id || !entry_type) return errorResponse('Missing required fields');
 
       const serviceClient = getServiceClient();
       const { today } = stockholmNow();
+      const customerId = requestedCustomerId || (target_user_id ? await resolveCustomerIdForUser(serviceClient, target_user_id) : null);
 
       if (target_user_id) {
         const access = await resolveUserAccess(serviceClient, venue_id, target_user_id);
@@ -917,6 +929,7 @@ Deno.serve(async (req) => {
         .from('venue_checkins')
         .insert({
           venue_id,
+          customer_id: customerId,
           user_id: target_user_id || null,
           player_name: player_name || null,
           player_phone: player_phone || null,

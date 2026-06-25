@@ -1,14 +1,13 @@
-import { useMemo } from "react";
-import { motion } from "framer-motion";
-import { Activity, AlertTriangle, CalendarCheck, CheckCircle2, Clock3, CreditCard, Inbox, Loader2, Sparkles, UserCheck, Users } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { Activity, AlertTriangle, CalendarCheck, CheckCircle2, ChevronDown, Inbox, Loader2, Mail, Phone, ReceiptText, Sparkles, UserCheck } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { useTodayBookings, useTodayRevenue, useVenueCourts } from "@/hooks/useDesk";
-import { apiGet } from "@/lib/api";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
-import { checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
+import Customer360Drawer from "@/components/customers/Customer360Drawer";
+import { activityRegistrationCheckinEligibility, checkInActivityRegistration, checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
 
 interface Props {
   venueId: string | undefined;
@@ -22,25 +21,29 @@ function timeLabel(value: string) {
 
 export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const qc = useQueryClient();
+  const [expandedActivityKey, setExpandedActivityKey] = useState<string | null>(null);
+  const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const { data: bookings } = useTodayBookings(venueId);
   const { data: revenue } = useTodayRevenue(venueId);
   const { data: courts } = useVenueCourts(venueId);
-  const opsQ = useQuery({
-    queryKey: ["desk-ops-suggestions", venueId],
-    enabled: !!venueId,
-    queryFn: () => apiGet<any>("api-checkins", "ops", { venueId: venueId! }),
-    refetchInterval: 30000,
-  });
-
   const checkinMutation = useMutation({
     mutationFn: (booking: any) => checkInDeskBooking(booking),
     onSuccess: () => {
       toast.success("Kunden är incheckad");
       qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
       qc.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
-      qc.invalidateQueries({ queryKey: ["desk-ops-suggestions", venueId] });
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte checka in"),
+  });
+  const activityCheckinMutation = useMutation({
+    mutationFn: (registration: any) => checkInActivityRegistration(registration),
+    onSuccess: () => {
+      toast.success("Biljetten är incheckad");
+      qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
+      qc.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
+      qc.invalidateQueries({ queryKey: ["customer-360"] });
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte checka in biljetten"),
   });
 
   const rows = (bookings as any[] | undefined) || [];
@@ -64,9 +67,12 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
       const key = `${row.activity_session_id}:${row.session_date}:${row.start_time}`;
       const current = map.get(key) || {
         ...row,
+        key,
+        participants: [],
         registered_count: 0,
         checked_in_count: 0,
       };
+      current.participants.push(row);
       current.registered_count += 1;
       if (row.checked_in || row.consumed || row.status === "checked_in") current.checked_in_count += 1;
       map.set(key, current);
@@ -76,7 +82,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
 
   const suggestions = useMemo(() => {
     const now = DateTime.now().setZone("Europe/Stockholm");
-    const items: Array<{ id: string; title: string; meta: string; action: string; tone: "sun" | "danger" | "electric" | "lime"; booking?: any }> = [];
+    const items: Array<{ id: string; title: string; meta: string; action: string; tone: "sun" | "danger" | "electric" | "lime"; booking?: any; activityKey?: string }> = [];
 
     for (const booking of courtRows) {
       const start = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
@@ -113,34 +119,13 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
           meta: `${activity.checked_in_count}/${activity.registered_count} incheckade`,
           action: "Följ upp deltagare",
           tone: "electric",
+          activityKey: activity.key,
         });
       }
     }
 
-    const stale = opsQ.data?.stale_checkins || [];
-    if (stale.length > 0) {
-      items.push({
-        id: "stale-checkins",
-        title: `${stale.length} gamla check-ins är fortfarande öppna`,
-        meta: "Stängdes inte igår",
-        action: "Granska check-ins",
-        tone: "danger",
-      });
-    }
-
-    const unclear = opsQ.data?.unclear_checkins || [];
-    if (unclear.length > 0) {
-      items.push({
-        id: "unclear-checkins",
-        title: `${unclear.length} incheckade saknar tydlig access`,
-        meta: "Manuell incheckning utan entitlement",
-        action: "Öppna Arrivals",
-        tone: "sun",
-      });
-    }
-
     return items.slice(0, 8);
-  }, [activityGroups, courtRows, opsQ.data]);
+  }, [activityGroups, courtRows]);
 
   const totalCourts = (courts as any[] | undefined)?.length || 0;
   const total = revenue ? `${(revenue as any).total.toLocaleString("sv-SE")} kr` : "–";
@@ -174,6 +159,9 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
                 key={item.id}
                 item={item}
                 onOpenBooking={() => item.booking && onOpenBooking(item.booking, courtRows)}
+                onOpenActivity={() => {
+                  if (item.activityKey) setExpandedActivityKey(item.activityKey);
+                }}
                 onCheckIn={() => item.booking && checkinMutation.mutate(item.booking)}
                 checking={checkinMutation.isPending}
               />
@@ -214,12 +202,28 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
           ) : (
             <div className="space-y-1.5">
               {activityGroups.map((activity: any) => (
-                <ActivityRow key={`${activity.activity_session_id}:${activity.start_time}`} activity={activity} />
+                <ActivityRow
+                  key={activity.key}
+                  activity={activity}
+                  expanded={expandedActivityKey === activity.key}
+                  onToggle={() => setExpandedActivityKey((current) => (current === activity.key ? null : activity.key))}
+                  onCheckIn={(participant) => activityCheckinMutation.mutate(participant)}
+                  checkingId={(activityCheckinMutation.variables as any)?.session_registration_id || (activityCheckinMutation.variables as any)?.registration_id || null}
+                  checking={activityCheckinMutation.isPending}
+                  onOpenCustomer={(participant) => setCustomerTarget({ customerId: participant.customer_id || null, userId: participant.user_id || null })}
+                />
               ))}
             </div>
           )}
         </section>
       </div>
+      <Customer360Drawer
+        open={!!customerTarget}
+        onClose={() => setCustomerTarget(null)}
+        venueId={venueId || null}
+        customerId={customerTarget?.customerId || undefined}
+        userId={customerTarget?.userId || undefined}
+      />
     </div>
   );
 }
@@ -233,7 +237,7 @@ function MiniStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AttentionCard({ item, onOpenBooking, onCheckIn, checking }: { item: any; onOpenBooking: () => void; onCheckIn: () => void; checking: boolean }) {
+function AttentionCard({ item, onOpenBooking, onOpenActivity, onCheckIn, checking }: { item: any; onOpenBooking: () => void; onOpenActivity: () => void; onCheckIn: () => void; checking: boolean }) {
   const canCheckIn = item.booking && deskBookingCheckinEligibility(item.booking).ok;
   return (
     <AxCard glow={item.tone === "danger" ? ax("danger", 0.55) : item.tone === "sun" ? ax("sun", 0.55) : undefined}>
@@ -251,6 +255,10 @@ function AttentionCard({ item, onOpenBooking, onCheckIn, checking }: { item: any
               </button>
             ) : item.booking ? (
               <button type="button" onClick={onOpenBooking} className="rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("electric"), color: ax("ink") }}>
+                {item.action}
+              </button>
+            ) : item.activityKey ? (
+              <button type="button" onClick={onOpenActivity} className="rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("electric"), color: ax("ink") }}>
                 {item.action}
               </button>
             ) : (
@@ -309,11 +317,27 @@ function BookingActionRow({ booking, onOpen, onCheckIn, checking }: { booking: a
   );
 }
 
-function ActivityRow({ activity }: { activity: any }) {
+function ActivityRow({
+  activity,
+  expanded,
+  onToggle,
+  onCheckIn,
+  checkingId,
+  checking,
+  onOpenCustomer,
+}: {
+  activity: any;
+  expanded: boolean;
+  onToggle: () => void;
+  onCheckIn: (participant: any) => void;
+  checkingId: string | null;
+  checking: boolean;
+  onOpenCustomer: (participant: any) => void;
+}) {
   const name = activity.activity_session?.name || activity.notes || "Aktivitet";
   return (
     <AxCard pad="row">
-      <div className="flex items-center gap-3">
+      <button type="button" onClick={onToggle} className="flex w-full items-center gap-3 text-left">
         <div className="min-w-[52px]">
           <p className="font-mono text-lg font-black tabular-nums" style={{ color: ax("magenta") }}>
             {timeLabel(activity.start_time)}
@@ -325,8 +349,104 @@ function ActivityRow({ activity }: { activity: any }) {
             {activity.checked_in_count}/{activity.registered_count} incheckade
           </p>
         </div>
-        <AxChip tone={activity.checked_in_count === activity.registered_count ? "lime" : "magenta"}>Pass</AxChip>
-      </div>
+        <div className="flex items-center gap-2">
+          <AxChip tone={activity.checked_in_count === activity.registered_count ? "lime" : "magenta"}>Pass</AxChip>
+          <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} style={{ color: ax("muted") }} />
+        </div>
+      </button>
+      {expanded && (
+        <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: ax("borderSoft") }}>
+          {activity.participants.map((participant: any) => (
+            <ActivityParticipantRow
+              key={participant.session_registration_id || participant.registration_id}
+              participant={participant}
+              onCheckIn={() => onCheckIn(participant)}
+              checking={checking && checkingId === (participant.session_registration_id || participant.registration_id)}
+              onOpenCustomer={() => onOpenCustomer(participant)}
+            />
+          ))}
+        </div>
+      )}
     </AxCard>
+  );
+}
+
+function ActivityParticipantRow({
+  participant,
+  onCheckIn,
+  checking,
+  onOpenCustomer,
+}: {
+  participant: any;
+  onCheckIn: () => void;
+  checking: boolean;
+  onOpenCustomer: () => void;
+}) {
+  const eligibility = activityRegistrationCheckinEligibility(participant);
+  const checkedIn = participant.checked_in || participant.consumed || participant.status === "checked_in";
+  const paymentStatus = String(participant.payment_status || "").toLowerCase();
+  const paymentLabel = paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "confirmed" ? "Betald" : "Okänd";
+  const receiptRef = participant.receipt_number || participant.receipt?.receipt_number || null;
+  const hasCustomer = Boolean(participant.customer_id || participant.user_id);
+
+  return (
+    <div className="rounded-xl border p-3" style={{ background: ax("surfaceHi"), borderColor: ax("borderSoft") }}>
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-black text-white">{participant.customer_name || participant.booked_by || "Deltagare"}</p>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+            {participant.customer_email && (
+              <span className="inline-flex items-center gap-1 text-[11px]" style={{ color: ax("muted") }}>
+                <Mail className="h-3 w-3" />
+                {participant.customer_email}
+              </span>
+            )}
+            {participant.customer_phone && (
+              <span className="inline-flex items-center gap-1 text-[11px]" style={{ color: ax("muted") }}>
+                <Phone className="h-3 w-3" />
+                {participant.customer_phone}
+              </span>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <AxChip tone={paymentStatus === "paid" || paymentStatus === "free" || paymentStatus === "confirmed" ? "lime" : "sun"}>{paymentLabel}</AxChip>
+            <AxChip tone={checkedIn ? "lime" : "sun"}>
+              {checkedIn ? `Incheckad${participant.checked_in_at ? ` ${timeLabel(participant.checked_in_at)}` : ""}` : "Ej incheckad"}
+            </AxChip>
+            {receiptRef && <AxChip tone="neutral">Kvitto {receiptRef}</AxChip>}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 md:justify-end">
+          {checkedIn ? (
+            <span className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("lime", 0.16), color: ax("lime") }}>
+              Använd
+            </span>
+          ) : eligibility.ok ? (
+            <button type="button" onClick={onCheckIn} disabled={checking} className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50" style={{ background: ax("lime"), color: ax("ink") }}>
+              {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserCheck className="h-3.5 w-3.5" />}
+              Checka in
+            </button>
+          ) : (
+            <span className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("borderSoft"), color: ax("muted") }}>
+              {eligibility.reason}
+            </span>
+          )}
+          <button type="button" onClick={onOpenCustomer} disabled={!hasCustomer} className="rounded-xl px-3 py-2 text-xs font-black disabled:opacity-40" style={{ background: ax("electric", 0.18), color: ax("electricSoft") }}>
+            Kund
+          </button>
+          {receiptRef && (
+            <button
+              type="button"
+              onClick={() => window.open(`/receipt/${encodeURIComponent(receiptRef)}`, "_blank", "noopener,noreferrer")}
+              className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-black"
+              style={{ background: ax("magenta", 0.16), color: ax("magentaSoft") }}
+            >
+              <ReceiptText className="h-3.5 w-3.5" />
+              Kvitto
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

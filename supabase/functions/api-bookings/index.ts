@@ -1892,7 +1892,7 @@ Deno.serve(async (req) => {
       if (date) {
         const { data: registrations, error: regErr } = await client
           .from('session_registrations')
-          .select('id, venue_id, activity_session_id, session_date, customer_id, user_id, status, price_paid_sek, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
+          .select('id, venue_id, activity_session_id, session_date, customer_id, user_id, status, price_paid_sek, stripe_session_id, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
           .eq('venue_id', venueId)
           .eq('session_date', date)
           .neq('status', 'cancelled');
@@ -1901,18 +1901,48 @@ Deno.serve(async (req) => {
 
         const userIds = Array.from(new Set((registrations || []).map((row: any) => row.user_id).filter(Boolean)));
         const registrationIds = Array.from(new Set((registrations || []).map((row: any) => row.id).filter(Boolean)));
+        const stripeSessionIds = Array.from(new Set((registrations || []).map((row: any) => row.stripe_session_id).filter(Boolean)));
+        const explicitCustomerIds = (registrations || []).map((row: any) => row.customer_id).filter(Boolean);
         const profilesByUserId = new Map<string, any>();
+        const customersById = new Map<string, any>();
+        const receiptByStripe = new Map<string, any>();
         const checkinByRegistrationId = new Map<string, any>();
 
         if (userIds.length > 0) {
           const { data: profiles, error: profilesErr } = await client
             .from('player_profiles')
-            .select('auth_user_id, display_name, first_name, last_name, phone')
+            .select('auth_user_id, customer_id, display_name, first_name, last_name, phone')
             .in('auth_user_id', userIds);
 
           if (profilesErr) return errorResponse(profilesErr.message);
           for (const profile of profiles || []) {
             profilesByUserId.set(profile.auth_user_id, profile);
+          }
+        }
+
+        const profileCustomerIds = Array.from(new Set(Array.from(profilesByUserId.values()).map((profile: any) => profile.customer_id).filter(Boolean)));
+        const customerIds = Array.from(new Set([...explicitCustomerIds, ...profileCustomerIds]));
+        if (customerIds.length > 0) {
+          const { data: customers, error: customersErr } = await lookupClient
+            .from('customers')
+            .select('id, display_name, first_name, last_name, primary_email, primary_phone')
+            .in('id', customerIds);
+
+          if (customersErr) return errorResponse(customersErr.message);
+          for (const customer of customers || []) {
+            customersById.set(customer.id, customer);
+          }
+        }
+
+        if (stripeSessionIds.length > 0) {
+          const { data: receipts, error: receiptsErr } = await lookupClient
+            .from('booking_receipts')
+            .select('id, receipt_number, stripe_session_id, customer_id, user_id, customer_name, customer_email, customer_phone, total_inc_vat_sek, payment_method, payment_status')
+            .in('stripe_session_id', stripeSessionIds);
+
+          if (receiptsErr) return errorResponse(receiptsErr.message);
+          for (const receipt of receipts || []) {
+            receiptByStripe.set(receipt.stripe_session_id, receipt);
           }
         }
 
@@ -1935,23 +1965,46 @@ Deno.serve(async (req) => {
           const session = registration.activity_sessions || {};
           const startTime = stockholmSessionIso(registration.session_date, session.start_time, false);
           const endTime = stockholmSessionIso(registration.session_date, session.end_time, true);
-          const participantName = profileDisplayName(profilesByUserId.get(registration.user_id)) || 'Deltagare';
+          const profile = profilesByUserId.get(registration.user_id);
+          const customerId = registration.customer_id || profile?.customer_id || null;
+          const customer = customerId ? customersById.get(customerId) : null;
+          const receipt = registration.stripe_session_id ? receiptByStripe.get(registration.stripe_session_id) || null : null;
+          const customerFullName = [customer?.first_name, customer?.last_name].filter(Boolean).join(' ').trim();
+          const participantName = customerFullName || customer?.display_name || receipt?.customer_name || profileDisplayName(profile) || receipt?.customer_email || 'Deltagare';
+          const participantEmail = customer?.primary_email || receipt?.customer_email || null;
+          const participantPhone = customer?.primary_phone || receipt?.customer_phone || profile?.phone || null;
           const checkin = checkinByRegistrationId.get(registration.id);
+          const paymentStatus = receipt?.payment_status || (Number(registration.price_paid_sek || 0) <= 0 ? 'free' : registration.stripe_session_id ? 'paid' : 'confirmed');
 
           return {
             id: `session_registration:${registration.id}`,
             kind: 'activity_registration',
             booking_type: 'Aktivitet',
+            registration_id: registration.id,
+            session_id: registration.activity_session_id,
             session_registration_id: registration.id,
             activity_session_id: registration.activity_session_id,
             session_date: registration.session_date,
             venue_id: registration.venue_id,
+            customer_id: customerId,
+            user_id: registration.user_id,
             venue_court_id: null,
             start_time: startTime,
             end_time: endTime,
             status: registration.status || 'confirmed',
             total_price: registration.price_paid_sek,
             booked_by: participantName,
+            customer_name: participantName,
+            customer_email: participantEmail,
+            customer_phone: participantPhone,
+            player_name: participantName,
+            player_email: participantEmail,
+            player_phone: participantPhone,
+            payment_status: paymentStatus,
+            payment_method: receipt?.payment_method || (registration.stripe_session_id ? 'Stripe' : null),
+            receipt_id: receipt?.id || null,
+            receipt_number: receipt?.receipt_number || null,
+            stripe_session_id: registration.stripe_session_id || null,
             checked_in: Boolean(checkin) || registration.status === 'checked_in',
             checked_in_at: checkin?.checked_in_at || null,
             consumed: Boolean(checkin) || registration.status === 'checked_in',

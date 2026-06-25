@@ -2,11 +2,12 @@ import { lazy, Suspense, useEffect, useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut } from "lucide-react";
+import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut, UserCheck } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -251,6 +252,28 @@ function getSessionRegistrationDateTime(registration?: MySessionRegistration | n
 
   const datePart = String(date).slice(0, 10);
   return new Date(time ? `${datePart}T${String(time).slice(0, 5)}` : `${datePart}T${end ? "23:59:59" : "00:00:00"}`);
+}
+
+function sessionRegistrationCheckinEligibility(registration?: MySessionRegistration | null) {
+  if (!registration?.venue_id) return { ok: false, reason: "Passdata saknas" };
+  if (registration.status === "checked_in") return { ok: false, reason: "Redan incheckad" };
+
+  const session = registration.activity_sessions;
+  const date = String(registration.session_date || session?.session_date || "").slice(0, 10);
+  const startTime = String(session?.start_time || "").slice(0, 5);
+  const endTime = String(session?.end_time || "").slice(0, 5);
+  if (!date || !startTime || !endTime) return { ok: false, reason: "Tid saknas" };
+
+  const now = DateTime.now().setZone("Europe/Stockholm");
+  const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone: "Europe/Stockholm" });
+  const end = DateTime.fromISO(`${date}T${endTime}:00`, { zone: "Europe/Stockholm" });
+  if (!start.isValid || !end.isValid) return { ok: false, reason: "Ogiltig tid" };
+  if (now.toISODate() !== date) return { ok: false, reason: "Inte idag" };
+  if (now < start.minus({ minutes: 30 })) return { ok: false, reason: `Öppnar ${start.minus({ minutes: 30 }).toFormat("HH:mm")}` };
+  if (now > end) return { ok: false, reason: "Passerat" };
+  if (!["confirmed", "paid", "checked_in"].includes(String(registration.status || "confirmed"))) return { ok: false, reason: "Inte bekräftad" };
+
+  return { ok: true, reason: "" };
 }
 
 function getSessionRegistrationPath(registration: MySessionRegistration, fallbackVenueSlug: string) {
@@ -967,7 +990,21 @@ function SessionRegistrationDetailsSheet({
   receiptItems: MyReceiptItem[];
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [openingLobby, setOpeningLobby] = useState(false);
+  const checkinMutation = useMutation({
+    mutationFn: () => apiPost("api-checkins", "self", {
+      venue_id: registration?.venue_id,
+      entry_type: "session_ticket",
+      entitlement_id: registration?.id,
+    }),
+    onSuccess: () => {
+      toast.success("Du är incheckad");
+      queryClient.invalidateQueries({ queryKey: ["my-session-registrations", user?.id] });
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte checka in"),
+  });
 
   if (!registration) return null;
 
@@ -995,6 +1032,8 @@ function SessionRegistrationDetailsSheet({
     ? activityThreads.find((thread) => thread.room.resource_id === resourceId)?.room
     : null;
   const venueSlug = session?.venues?.slug || fallbackVenueSlug;
+  const isCheckedIn = registration.status === "checked_in";
+  const checkinEligibility = sessionRegistrationCheckinEligibility(registration);
   const money = (amount: number) =>
     `${Number(amount || 0).toLocaleString("sv-SE", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })} kr`;
 
@@ -1074,7 +1113,7 @@ function SessionRegistrationDetailsSheet({
                 {venueName}
               </p>
               <p className="text-xs mt-1" style={{ color: TEXT_SECONDARY }}>
-                {registration.status === "confirmed" ? "Anmäld och bekräftad" : "Väntar på bekräftelse"}
+                {isCheckedIn ? "Biljetten är incheckad och använd" : registration.status === "confirmed" ? "Anmäld och bekräftad" : "Väntar på bekräftelse"}
               </p>
               {receipt?.reference && (
                 <p className="text-[11px] mt-1 truncate" style={{ color: TEXT_MUTED }}>
@@ -1084,7 +1123,7 @@ function SessionRegistrationDetailsSheet({
             </div>
             <div className="text-right shrink-0">
               <span className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: GREEN_LIGHT, color: GREEN, fontFamily: FONT_HEADING }}>
-                {registration.status === "confirmed" ? "Anmäld" : "Väntande"}
+                {isCheckedIn ? "Incheckad" : registration.status === "confirmed" ? "Anmäld" : "Väntande"}
               </span>
               {paidAmount !== null ? (
                 <p className="text-sm font-bold mt-2" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>
@@ -1099,6 +1138,25 @@ function SessionRegistrationDetailsSheet({
           </div>
 
           <div className="grid grid-cols-2 gap-2 mt-5">
+            {isCheckedIn ? (
+              <div className="col-span-2 w-full rounded-xl px-4 py-3 text-center text-sm font-bold" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}`, color: GREEN, fontFamily: FONT_HEADING }}>
+                Incheckad
+              </div>
+            ) : checkinEligibility.ok ? (
+              <button
+                onClick={() => checkinMutation.mutate()}
+                disabled={checkinMutation.isPending}
+                className="col-span-2 w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ background: GREEN, color: "white", fontFamily: FONT_HEADING }}
+              >
+                {checkinMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                Checka in
+              </button>
+            ) : (
+              <div className="col-span-2 w-full rounded-xl px-4 py-3 text-center text-xs font-bold" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}>
+                Check-in: {checkinEligibility.reason}
+              </div>
+            )}
             <button
               onClick={handleOpenLobby}
               disabled={openingLobby}
