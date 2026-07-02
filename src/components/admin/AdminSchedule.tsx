@@ -3,6 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { motion } from "framer-motion";
 import { AlertTriangle, CalendarDays, Edit3, Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { formatSek } from "@/lib/activityPricing";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
 const DAYS = [
@@ -89,6 +90,74 @@ const soldAsFromSession = (session: any): SoldAs => {
 
 const isOpenPlayLike = (sessionType: string) => ["open_play", "club_night", "pickla_open"].includes(sessionType);
 
+const numericPrice = (value: number | string | null | undefined, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100) / 100) : fallback;
+};
+
+const optionalPrice = (value: number | string | null | undefined) => {
+  if (value === "" || value == null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100) / 100) : null;
+};
+
+const sessionMetadata = (session: any) => {
+  if (!session?.metadata || typeof session.metadata !== "object" || Array.isArray(session.metadata)) return {};
+  return session.metadata;
+};
+
+const sessionOnlinePrice = (session: any) => {
+  const metadata = sessionMetadata(session);
+  return numericPrice(metadata.online_price_sek ?? session?.price_sek ?? 0);
+};
+
+const sessionDeskPrice = (session: any) => {
+  const metadata = sessionMetadata(session);
+  const online = sessionOnlinePrice(session);
+  return numericPrice(metadata.desk_price_sek ?? online, online);
+};
+
+const buildPricingMetadata = ({
+  existingMetadata = {},
+  onlinePrice,
+  deskPrice,
+  corporatePrice,
+  promoPrice,
+}: {
+  existingMetadata?: Record<string, any>;
+  onlinePrice: number;
+  deskPrice: number;
+  corporatePrice?: number | string | null;
+  promoPrice?: number | string | null;
+}) => {
+  const metadata: Record<string, any> = {
+    ...existingMetadata,
+    online_price_sek: onlinePrice,
+    desk_price_sek: deskPrice,
+    pricing_channel_mode: deskPrice > onlinePrice ? "online_discount" : "standard",
+  };
+  const corporate = optionalPrice(corporatePrice);
+  const promo = optionalPrice(promoPrice);
+  if (corporate == null) delete metadata.corporate_price_sek;
+  else metadata.corporate_price_sek = corporate;
+  if (promo == null) delete metadata.promo_price_sek;
+  else metadata.promo_price_sek = promo;
+  return metadata;
+};
+
+const sessionScopeLabel = (session: any) => {
+  if (session?.activity_series?.name) return "Kopplat till serie";
+  if (session?.session_date) return "Enskilt pass";
+  return "Återkommande schema";
+};
+
+const accessSummary = (includedInDayPass: boolean, includedInUnlimited: boolean) => {
+  const parts = [];
+  if (includedInDayPass) parts.push("Dagspass");
+  if (includedInUnlimited) parts.push("Unlimited/Play+");
+  return parts.length ? parts.join(" + ") : "Ingen inkluderad access";
+};
+
 const buildSessionConfig = ({
   soldAs,
   sessionType,
@@ -136,10 +205,10 @@ const draftWarnings = (draft: {
   const isPublished = (draft.publish_status || "published") === "published" && draft.is_active !== false;
 
   if (isPublished && soldAs === "activity_ticket" && price <= 0) {
-    warnings.push({ message: "Publicerad aktivitetsbiljett behöver pris.", blocking: true });
+    warnings.push({ message: "Lägg in ett onlinepris innan passet publiceras.", blocking: true });
   }
   if (isPublished && soldAs !== "included_only" && (!capacity || capacity <= 0)) {
-    warnings.push({ message: "Publicerat pass behöver kapacitet.", blocking: true });
+    warnings.push({ message: "Lägg in max antal platser innan passet publiceras.", blocking: true });
   }
   if (soldAs === "day_pass" && isOpenPlayLike(sessionType)) {
     warnings.push({ message: "Det här passet säljs som dagsmedlemskap och kan ge heldagstillgång. Är det avsiktligt?" });
@@ -159,7 +228,7 @@ const sessionWarnings = (session: any) => draftWarnings({
   sold_as: soldAsFromSession(session),
   product_key: session.product_key,
   included_in_day_pass: Boolean(session.access_policy?.allows_day_access),
-  price_sek: session.price_sek,
+  price_sek: sessionOnlinePrice(session),
   capacity: session.capacity,
   publish_status: session.publish_status || "published",
   is_active: session.is_active,
@@ -188,11 +257,14 @@ const memberPriceForProduct = ({
   const effectivePrice = rule.fixed_price != null
     ? Number(rule.fixed_price)
     : Math.max(0, Math.round(basePrice * (1 - Number(rule.discount_percent || 0) / 100)));
-  return `${effectivePrice} kr`;
+  return formatSek(effectivePrice);
 };
 
 const pricingPreview = ({
-  price,
+  onlinePrice,
+  deskPrice,
+  corporatePrice,
+  promoPrice,
   soldAs,
   sessionType,
   includedInDayPass,
@@ -200,7 +272,10 @@ const pricingPreview = ({
   tiers,
   tierPricing,
 }: {
-  price: number;
+  onlinePrice: number;
+  deskPrice?: number;
+  corporatePrice?: number | null;
+  promoPrice?: number | null;
   soldAs: SoldAs;
   sessionType: string;
   includedInDayPass: boolean;
@@ -208,29 +283,41 @@ const pricingPreview = ({
   tiers: MembershipTier[];
   tierPricing: TierPricing[];
 }) => {
+  const price = numericPrice(onlinePrice);
+  const desk = numericPrice(deskPrice ?? price, price);
+  const optionalRows: [string, string][] = [];
+  if (corporatePrice != null) optionalRows.push(["Corporate", formatSek(corporatePrice)]);
+  if (promoPrice != null) optionalRows.push(["Promo", formatSek(promoPrice)]);
+
   if (soldAs === "included_only") {
     return [
-      ["Vanlig kund", "Ingen checkout"],
+      ["Online", "Ingen checkout"],
+      ["Desk", "Ingen checkout"],
       ["Pickla Access / Play", "Enligt rättighet"],
       ["Unlimited / Play+", includedInUnlimited ? "Ingår" : "Ej inkluderat"],
       ["Dagsmedlemskap", includedInDayPass ? "Ingår idag" : "Ej access"],
+      ...optionalRows,
     ];
   }
   if (soldAs === "day_pass") {
     const basePrice = price || 199;
     return [
-      ["Vanlig kund", `${basePrice} kr`],
+      ["Online", formatSek(basePrice)],
+      ["Desk", formatSek(desk || basePrice)],
       ["Pickla Access / Play", memberPriceForProduct({ productKey: "day_access", basePrice, tiers, tierPricing })],
       ["Unlimited / Play+", "Ej relevant"],
       ["Dagsmedlemskap", "Aktiveras"],
+      ...optionalRows,
     ];
   }
   const productKey = productKeyForActivityTicket(sessionType);
   return [
-    ["Vanlig kund", `${price} kr`],
+    ["Online", formatSek(price)],
+    ["Desk", formatSek(desk)],
     ["Pickla Access / Play", memberPriceForProduct({ productKey, basePrice: price, tiers, tierPricing })],
     ["Unlimited / Play+", includedInUnlimited ? "Ingår" : "Ej inkluderat"],
     ["Dagsmedlemskap", includedInDayPass ? "Ingår idag" : "Ej access"],
+    ...optionalRows,
   ];
 };
 
@@ -250,6 +337,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [startTime, setStartTime] = useState("10:00");
   const [endTime, setEndTime] = useState("12:00");
   const [price, setPrice] = useState("");
+  const [deskPrice, setDeskPrice] = useState("");
+  const [corporatePrice, setCorporatePrice] = useState("");
+  const [promoPrice, setPromoPrice] = useState("");
   const [capacity, setCapacity] = useState("");
 
   const [editingSeriesId, setEditingSeriesId] = useState<string | null>(null);
@@ -327,6 +417,10 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       qc.invalidateQueries({ queryKey: ["admin-activity-sessions", venueId] });
       toast.success("Schema-pass skapat");
       setSessionName("");
+      setPrice("");
+      setDeskPrice("");
+      setCorporatePrice("");
+      setPromoPrice("");
     },
     onError: (e: any) => toast.error(e.message),
   });
@@ -389,13 +483,15 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       includedInDayPass,
       includedInUnlimited,
     });
+    const onlinePrice = numericPrice(price);
+    const desk = numericPrice(deskPrice || onlinePrice, onlinePrice);
     const warnings = draftWarnings({
       name: sessionName,
       session_type: sessionType,
       sold_as: soldAs,
       product_key: config.product_key,
       included_in_day_pass: includedInDayPass,
-      price_sek: price,
+      price_sek: onlinePrice,
       capacity,
       publish_status: "published",
       is_active: true,
@@ -414,9 +510,15 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       recurrence_days: days,
       start_time: startTime,
       end_time: endTime,
-      price_sek: Math.round(Number(price || 0)),
+      price_sek: onlinePrice,
       capacity: capacity ? Math.round(Number(capacity)) : null,
       access_policy: config.access_policy,
+      metadata: buildPricingMetadata({
+        onlinePrice,
+        deskPrice: desk,
+        corporatePrice,
+        promoPrice,
+      }),
       is_active: true,
     });
   };
@@ -460,6 +562,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   };
 
   const startEditSession = (session: any) => {
+    const metadata = sessionMetadata(session);
+    const online = sessionOnlinePrice(session);
+    const desk = sessionDeskPrice(session);
     setEditingSessionId(session.id);
     setSessionDrafts((current) => ({
       ...current,
@@ -474,7 +579,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         recurrence_days: session.recurrence_days || [],
         start_time: String(session.start_time || "10:00").slice(0, 5),
         end_time: String(session.end_time || "12:00").slice(0, 5),
-        price_sek: session.price_sek ?? 0,
+        price_sek: online,
+        online_price_sek: online,
+        desk_price_sek: desk,
+        corporate_price_sek: metadata.corporate_price_sek ?? "",
+        promo_price_sek: metadata.promo_price_sek ?? "",
         capacity: session.capacity ?? "",
         is_active: Boolean(session.is_active),
         publish_status: session.publish_status || "published",
@@ -494,8 +603,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       includedInDayPass: Boolean(draft.included_in_day_pass),
       includedInUnlimited: Boolean(draft.included_in_unlimited),
     });
+    const onlinePrice = numericPrice(draft.online_price_sek ?? draft.price_sek ?? 0);
+    const desk = numericPrice(draft.desk_price_sek || onlinePrice, onlinePrice);
     const warnings = draftWarnings({
       ...draft,
+      price_sek: onlinePrice,
       product_key: config.product_key,
       included_in_day_pass: Boolean(draft.included_in_day_pass),
     });
@@ -513,11 +625,18 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       recurrence_days: draft.recurrence_days,
       start_time: draft.start_time,
       end_time: draft.end_time,
-      price_sek: Math.max(0, Math.round(Number(draft.price_sek || 0))),
+      price_sek: onlinePrice,
       capacity: draft.capacity === "" || draft.capacity == null ? null : Math.max(0, Math.round(Number(draft.capacity))),
       is_active: Boolean(draft.is_active),
       publish_status: draft.publish_status || "published",
       access_policy: config.access_policy,
+      metadata: buildPricingMetadata({
+        existingMetadata: sessionMetadata(session),
+        onlinePrice,
+        deskPrice: desk,
+        corporatePrice: draft.corporate_price_sek,
+        promoPrice: draft.promo_price_sek,
+      }),
     }, {
       onSuccess: () => setEditingSessionId(null),
     });
@@ -530,13 +649,16 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     sold_as: soldAs,
     product_key: createConfig.product_key,
     included_in_day_pass: includedInDayPass,
-    price_sek: price,
+    price_sek: numericPrice(price),
     capacity,
     publish_status: "published",
     is_active: true,
   });
   const createPreview = pricingPreview({
-    price: Math.max(0, Math.round(Number(price || 0))),
+    onlinePrice: numericPrice(price),
+    deskPrice: numericPrice(deskPrice || price, numericPrice(price)),
+    corporatePrice: optionalPrice(corporatePrice),
+    promoPrice: optionalPrice(promoPrice),
     soldAs,
     sessionType,
     includedInDayPass,
@@ -665,7 +787,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             {SESSION_TYPES.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
           <select value={seriesId} onChange={(e) => setSeriesId(e.target.value)} className={baseInputClass} style={inputStyle}>
-            <option value="">Fristående</option>
+            <option value="">Enskilt pass</option>
             {series.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </div>
@@ -705,9 +827,30 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             />
           </label>
         </div>
-        <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Pris/access-preview</p>
-          <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px]">
+        <div className="rounded-xl bg-muted/40 p-3 space-y-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Pris & kanalpriser</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">Onlinepriset används på playpickla.com. Deskpriset används i kassan på plats.</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Onlinepris
+              <input type="number" placeholder="99" value={price} onChange={(e) => setPrice(e.target.value)} className={baseInputClass + " w-full"} style={inputStyle} />
+            </label>
+            <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Deskpris
+              <input type="number" placeholder="129" value={deskPrice} onChange={(e) => setDeskPrice(e.target.value)} className={baseInputClass + " w-full"} style={inputStyle} />
+            </label>
+            <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Corporate
+              <input type="number" placeholder="Valfritt" value={corporatePrice} onChange={(e) => setCorporatePrice(e.target.value)} className={baseInputClass + " w-full"} style={inputStyle} />
+            </label>
+            <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Promo
+              <input type="number" placeholder="Valfritt" value={promoPrice} onChange={(e) => setPromoPrice(e.target.value)} className={baseInputClass + " w-full"} style={inputStyle} />
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5 text-[11px]">
             {createPreview.map(([label, value]) => (
               <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
                 <span className="text-muted-foreground">{label}</span>
@@ -740,8 +883,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         <div className="grid grid-cols-4 gap-2">
           <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className={baseInputClass} style={inputStyle} />
           <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className={baseInputClass} style={inputStyle} />
-          <input type="number" placeholder="Pris" value={price} onChange={(e) => setPrice(e.target.value)} className={baseInputClass} style={inputStyle} />
-          <input type="number" placeholder="Max" value={capacity} onChange={(e) => setCapacity(e.target.value)} className={baseInputClass} style={inputStyle} />
+          <input type="number" placeholder="Max antal platser" value={capacity} onChange={(e) => setCapacity(e.target.value)} className="col-span-2 rounded-xl px-3 py-2.5 text-xs outline-none" style={inputStyle} />
         </div>
         <button onClick={handleCreateSession} disabled={createSession.isPending} className="w-full rounded-xl bg-court-free py-2.5 text-sm font-bold text-white disabled:opacity-50 flex items-center justify-center gap-2">
           {createSession.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
@@ -773,7 +915,10 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
               })
             : sessionWarnings(session);
           const activePreview = pricingPreview({
-            price: Math.max(0, Math.round(Number(isEditing ? draft.price_sek ?? session.price_sek ?? 0 : session.price_sek ?? 0))),
+            onlinePrice: numericPrice(isEditing ? draft.online_price_sek ?? draft.price_sek ?? sessionOnlinePrice(session) : sessionOnlinePrice(session)),
+            deskPrice: numericPrice(isEditing ? draft.desk_price_sek ?? sessionDeskPrice(session) : sessionDeskPrice(session)),
+            corporatePrice: optionalPrice(isEditing ? draft.corporate_price_sek : sessionMetadata(session).corporate_price_sek),
+            promoPrice: optionalPrice(isEditing ? draft.promo_price_sek : sessionMetadata(session).promo_price_sek),
             soldAs: activeDraftSoldAs,
             sessionType: draft.session_type || session.session_type || "open_play",
             includedInDayPass: activeDraftIncludedInDayPass,
@@ -781,6 +926,15 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             tiers: membershipTiers,
             tierPricing: allTierPricing,
           });
+          const online = sessionOnlinePrice(session);
+          const desk = sessionDeskPrice(session);
+          const memberAccess = memberPriceForProduct({
+            productKey: activeDraftConfig.product_key,
+            basePrice: online,
+            tiers: membershipTiers,
+            tierPricing: allTierPricing,
+          });
+          const includedLabel = accessSummary(activeDraftIncludedInDayPass, activeDraftIncludedInUnlimited);
           return (
             <motion.div key={session.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
               {isEditing ? (
@@ -806,7 +960,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       {SESSION_TYPES.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
                     </select>
                     <select value={draft.series_id || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, series_id: e.target.value } }))} className={baseInputClass} style={inputStyle}>
-                      <option value="">Fristående</option>
+                      <option value="">Enskilt pass</option>
                       {series.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
                   </div>
@@ -849,9 +1003,33 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       />
                     </label>
                   </div>
-                  <div className="rounded-xl bg-muted/40 p-3">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Pris/access-preview</p>
-                    <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px]">
+                  <div className="rounded-xl bg-muted/40 p-3 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Pris & kanalpriser</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">Online/base styr webben. Desk visas i kassan på plats.</p>
+                      </div>
+                      <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary">Redigerar pass</span>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                      <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Onlinepris
+                        <input type="number" value={draft.online_price_sek ?? draft.price_sek ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, online_price_sek: e.target.value, price_sek: e.target.value } }))} className={baseInputClass + " w-full"} style={inputStyle} />
+                      </label>
+                      <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Deskpris
+                        <input type="number" value={draft.desk_price_sek ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, desk_price_sek: e.target.value } }))} className={baseInputClass + " w-full"} style={inputStyle} />
+                      </label>
+                      <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Corporate
+                        <input type="number" placeholder="Valfritt" value={draft.corporate_price_sek ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, corporate_price_sek: e.target.value } }))} className={baseInputClass + " w-full"} style={inputStyle} />
+                      </label>
+                      <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Promo
+                        <input type="number" placeholder="Valfritt" value={draft.promo_price_sek ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, promo_price_sek: e.target.value } }))} className={baseInputClass + " w-full"} style={inputStyle} />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 text-[11px]">
                       {activePreview.map(([label, value]) => (
                         <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
                           <span className="text-muted-foreground">{label}</span>
@@ -884,8 +1062,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                   <div className="grid grid-cols-4 gap-2">
                     <input type="time" value={draft.start_time || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, start_time: e.target.value } }))} className={baseInputClass} style={inputStyle} />
                     <input type="time" value={draft.end_time || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, end_time: e.target.value } }))} className={baseInputClass} style={inputStyle} />
-                    <input type="number" value={draft.price_sek ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, price_sek: e.target.value } }))} className={baseInputClass} style={inputStyle} />
-                    <input type="number" value={draft.capacity ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, capacity: e.target.value } }))} className={baseInputClass} style={inputStyle} />
+                    <input type="number" placeholder="Max antal platser" value={draft.capacity ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, capacity: e.target.value } }))} className="col-span-2 rounded-xl px-3 py-2.5 text-xs outline-none" style={inputStyle} />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <select value={draft.is_active ? "true" : "false"} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, is_active: e.target.value === "true" } }))} className={baseInputClass} style={inputStyle}>
@@ -913,25 +1090,50 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                     <CalendarDays className="w-5 h-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold">{session.name}</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {dayLabel(session)} · {String(session.start_time).slice(0, 5)}-{String(session.end_time).slice(0, 5)}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <span className="status-chip bg-primary/15 text-primary text-[9px]">{session.session_type}</span>
-                      {session.activity_series?.name && <span className="status-chip bg-muted text-muted-foreground text-[9px]">{session.activity_series.name}</span>}
-                      <span className="status-chip bg-muted text-muted-foreground text-[9px]">
-                        {SOLD_AS_OPTIONS.find((option) => option.key === activeDraftSoldAs)?.label}
-                      </span>
-                      {activeDraftIncludedInDayPass && <span className="status-chip bg-badge-paid/15 text-badge-paid text-[9px]">dag ingår</span>}
-                      {activeDraftIncludedInUnlimited && <span className="status-chip bg-badge-paid/15 text-badge-paid text-[9px]">unlimited ingår</span>}
-                      <span className="status-chip bg-court-free/15 text-court-free text-[9px]">{session.price_sek} kr</span>
-                      {product && <span className="status-chip bg-badge-vip/15 text-badge-vip text-[9px]">{product.name}</span>}
-                      {session.capacity && <span className="status-chip bg-muted text-muted-foreground text-[9px]">max {session.capacity}</span>}
-                      <span className={`status-chip text-[9px] ${session.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}>
-                        {session.is_active ? "Aktiv" : "Av"}
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-bold">{session.name}</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {dayLabel(session)} · {String(session.start_time).slice(0, 5)}-{String(session.end_time).slice(0, 5)}
+                        </p>
+                      </div>
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${session.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}>
+                        {session.is_active ? "Aktiv" : "Avstängd"} · {session.publish_status === "published" ? "Publicerad" : session.publish_status || "Utkast"}
                       </span>
                     </div>
+                    <div className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="rounded-xl bg-muted/40 px-3 py-2">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Program</span>
+                        <span className="mt-1 block font-bold text-foreground">{session.activity_series?.name || sessionScopeLabel(session)}</span>
+                      </div>
+                      <div className="rounded-xl bg-muted/40 px-3 py-2">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Biljett</span>
+                        <span className="mt-1 block font-bold text-foreground">{SOLD_AS_OPTIONS.find((option) => option.key === activeDraftSoldAs)?.label}</span>
+                      </div>
+                      <div className="rounded-xl bg-muted/40 px-3 py-2">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Kapacitet</span>
+                        <span className="mt-1 block font-bold text-foreground">{session.capacity ? `${session.capacity} platser` : "Saknas"}</span>
+                      </div>
+                      <div className="rounded-xl bg-muted/40 px-3 py-2">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Access</span>
+                        <span className="mt-1 block font-bold text-foreground">{includedLabel}</span>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-3">
+                      <div className="rounded-xl bg-court-free/10 px-3 py-2 text-court-free">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest">Online</span>
+                        <span className="mt-1 block font-black">{formatSek(online)}</span>
+                      </div>
+                      <div className="rounded-xl bg-primary/10 px-3 py-2 text-primary">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest">Desk</span>
+                        <span className="mt-1 block font-black">{formatSek(desk)}</span>
+                      </div>
+                      <div className="rounded-xl bg-muted/40 px-3 py-2">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Medlem</span>
+                        <span className="mt-1 block font-bold text-foreground">{activeDraftIncludedInUnlimited ? "Play+ ingår" : memberAccess}</span>
+                      </div>
+                    </div>
+                    {product && <p className="mt-2 text-[10px] text-muted-foreground">Produkt: {product.name}</p>}
                     {activeWarnings.length > 0 && (
                       <div className="mt-2 space-y-1">
                         {activeWarnings.map((warning) => (
