@@ -1,357 +1,131 @@
 # Architecture Foundation Phase 1
 
-Status: canonical implementation plan  
-Scope: architecture foundation only  
-Last updated: 2026-06-20
+Status: implemented foundation with compatibility runtime
+Scope: organization/franchise/customer/authorization/audit foundation plus current engine context
+Last updated: 2026-07-03
 
-This document reconciles four inputs:
+This document used to be the implementation plan for Foundation Phase 1. It is now the current-state architecture record for the foundation that has been implemented and the remaining cutovers that are still open.
 
-1. Claude CTO review: identified architectural blockers.
-2. Codex Foundation Phase 1 audit: mapped current schema/functions/RLS risks.
-3. `pickla-target-erd-central-membership.md`: target ERD for central membership ownership and franchise scaling.
-4. Claude AI-first architecture review: future substrate required before safe autonomous agents.
+Do not treat older "Phase 1 will create..." notes as current truth. The foundation exists, but not every runtime flow has been cut over to use it as the only source.
 
-This is the source of truth for future implementation sessions. Do not implement from older chat context if it conflicts with this document.
+## Platform Status
 
-## Decision Summary
+### Foundation
 
-Pickla will move toward a brand-owned operating model:
+Implemented:
 
-```text
-organization
-  -> franchisee
-      -> venue
+- `organizations`: brand/HQ tenant root.
+- `franchisees`: legal/operator layer under organization.
+- `venues.organization_id` and `venues.franchisee_id`: venue ancestry.
+- `organization_members`: organization-level staff roles.
+- Customer Master: `customers`, `customer_identities`, and `customer_venue_profiles`.
+- Nullable `customer_id` links on key operational records.
+- Shared authorization module: `supabase/functions/_shared/authorization.ts`.
+- `audit_log`: append-only scoped audit surface.
+- Customer 360: reads customer master where possible and falls back to legacy `user_id` paths.
 
-organization
-  -> customer
-      -> membership
-          -> entitlement_grant
-              -> entitlement_usage at venue
+Still compatibility-first:
+
+- Supabase Auth remains the login anchor.
+- `player_profiles` remains a live compatibility/profile table.
+- Booking, check-in, Stripe, and membership runtime still use a mix of `user_id`, `customer_id`, and venue-local membership fields.
+- Audit coverage is partial.
+- Organization/franchise authorization exists, but older code paths may still use legacy venue checks.
+
+### Operations
+
+Implemented:
+
+- Desk OS: live command and arrival cockpit at `/desk`.
+- Operations Truth: shared booking/activity/event/resource/check-in data visible across Admin Calendar, Admin Today, Desk, displays, and drawers.
+- Self Check-in: customer-led QR check-in through `/checkin/:venueSlug`.
+- Activity Ticket Operations: `activity_sessions`, `session_registrations`, capacity, attendance, and check-in.
+- Shared Pass Claim flow: `/pass/:token`, `day_pass_shares`, `access_vouchers`, and `api-day-passes/claim`.
+- Revenue Ledger: append-only `ledger_entries`.
+- Zettle import: `zettle_connections`, `zettle_purchases`, and ledger integration.
+
+### Financial Operations 1A
+
+Implemented:
+
+- Universal Channel Pricing for activity/day-access flows.
+- Admin Product Engine pricing simulator.
+- Customer 360 Financial summary.
+- Subscription Center (read-first) inside Customer 360.
+- Financial Timeline (local aggregation) inside Customer 360.
+- Revenue integration from Stripe Checkout completion and Zettle import.
+- Desk pricing support through `sales_channel = desk` and session `desk_price_sek` metadata.
+
+### Product Engine Phase 1
+
+Implemented:
+
+- Products as primary abstraction through `access_products`.
+- Schedule references product through `activity_sessions.product_key`.
+- Pricing owned by Product Engine for activity/day-access flows through `_shared/activity_pricing.ts`.
+- Schedule owns time/capacity through `activity_sessions`.
+- Product owns default/fallback pricing through `access_products.base_price_sek`.
+- Value-first customer pricing in public session UI.
+
+Compatibility state:
+
+- Court booking pricing still uses `pricing_rules` and booking-specific membership entitlement logic.
+- Membership plans are not yet organization-owned runtime products.
+- Promotions/referrals/campaigns are simulator placeholders, not real pricing entities.
+
+### Investor Platform
+
+Implemented:
+
+- Investor Access: `/invest` and tokenized `/invest/memo/:token`.
+- Investor CMS: `/hub/admin/investors`.
+- Investor Assets: `investor_assets` and `investor-assets` storage.
+- Investor Memorandum: editable `investor_settings`.
+- Admin investor management through `api-investor`.
+
+## Current Architecture
+
+```mermaid
+flowchart TD
+  Org["organizations"]
+  Franchisee["franchisees"]
+  Venue["venues"]
+  OrgMembers["organization_members"]
+  Customer["customers"]
+  Identities["customer_identities"]
+  VenueProfile["customer_venue_profiles"]
+  Product["access_products"]
+  Schedule["activity_sessions"]
+  Registration["session_registrations"]
+  Ops["Operations Truth"]
+  Ledger["ledger_entries"]
+  Receipts["booking_receipts"]
+  Audit["audit_log"]
+  Investor["investor_settings / investor_leads / investor_assets"]
+
+  Org --> Franchisee --> Venue
+  Org --> OrgMembers
+  Org --> Customer --> Identities
+  Customer --> VenueProfile --> Venue
+  Venue --> Product --> Schedule --> Registration
+  Venue --> Ops
+  Registration --> Ops
+  Ops --> Ledger
+  Receipts --> Ledger
+  Org --> Investor
+  Ops --> Audit
 ```
 
-The key decision:
+The foundation is additive. It did not rewrite the whole platform around organization/customer/product in one cutover. Current runtime therefore has two layers:
 
-**Membership is ultimately owned by `organization`, not by `venue`.**
+- New foundation layer: organization, franchisee, customer, shared authorization, audit.
+- Compatibility/runtime layer: existing venue-scoped booking, check-in, membership, Stripe, activity, and ledger flows.
 
-Phase 1 will create the foundation for that model, but it will not cut checkout, booking, check-in, Stripe, or membership entitlement runtime over to the new model yet.
-
-## Future AI-First Direction
-
-This section captures future direction only. It does not expand Phase 1 implementation scope.
-
-Phase 1 still remains:
-
-- organization / franchisee spine
-- customer master
-- central membership foundation
-- shared authorization
-- audit log
-
-The purpose of this section is to prevent Phase 1 decisions from locking Pickla into a venue-only architecture that cannot later support autonomous agents, ambassadors, affiliates, pop-ups, parks, or franchise-scale operations.
-
-### 1. Resource-First Architecture
-
-Long-term, Pickla should model the world as playable resources grouped by containers.
-
-Target concepts:
-
-- `playable_resource`: anything a session can happen on.
-  - Examples: indoor court, dart board, outdoor seasonal court, pop-up court, park-cluster court, community-hosted court, event-only resource.
-- `resource_container`: operating context that groups resources.
-  - Examples: staffed venue, franchise venue, seasonal site, pop-up, park cluster, community host.
-- `venue`: one concrete container type.
-  - In Phase 1, `venue` remains the only implemented container type.
-
-Direction:
-
-- Agents reason about resources: capacity, availability, utilization, demand, conflicts, and revenue attribution.
-- `venue_id` should remain valid for current operations, but new architecture should avoid assuming every resource is an indoor staffed venue.
-- Future tables should be able to resolve `resource -> container -> franchisee -> organization`.
-
-Phase 1 implication:
-
-- Do not build generic resource containers yet.
-- Do not rewrite booking/check-in around resources yet.
-- But do avoid new hardcoded venue-only assumptions where an organization/franchise/resource relationship will be needed later.
-
-### 2. Host/Ambassador Progression Model
-
-Long-term, Pickla's growth path is not only staff-operated venues.
-
-Target progression:
-
-```text
-customer
-  -> host
-  -> ambassador
-  -> affiliate
-  -> operator
-  -> franchisee
-```
-
-This should be modeled as capabilities on a principal, not as disconnected user tables.
-
-Definitions:
-
-- Customer: normal player/customer identity.
-- Host: customer allowed to create sessions on approved resources.
-- Ambassador: customer allowed to recruit/community-build with attribution.
-- Affiliate: customer/principal allowed to earn commission or rewards.
-- Operator: principal with operational capability for a resource container.
-- Franchisee: legal/operator entity under organization.
-
-Phase 1 implication:
-
-- Customer master must not assume every customer is only a buyer.
-- Authorization must eventually support non-staff principals with scoped capabilities.
-- Do not build host/ambassador/affiliate payout or progression features in Phase 1.
-
-### 3. Affiliate Progression Model
-
-Affiliate behavior requires attribution, permissions, and ledger support.
-
-Future model:
-
-- Referral and affiliate attribution should attach to domain events:
-  - `created_by_principal`
-  - `referred_by_principal`
-  - `affiliate_code`
-  - `correlation_id`
-- Affiliate earning should become ledger/settlement lines later.
-- Fraud/risk checks should be agent-readable but approval-bound.
-
-Phase 1 implication:
-
-- Customer and audit models should support actor/principal identity cleanly.
-- Ledger line/reversal/commission model is not Phase 1.
-- Do not bolt affiliate identity onto membership tiers or venue staff.
-
-### 4. Event Architecture
-
-Future AI agents need events as a perception and coordination layer.
-
-Two logs should remain separate:
-
-1. Domain event log
-   - Immutable facts that happened.
-   - Examples: `BookingConfirmed`, `CheckinRecorded`, `PaymentSettled`, `LeadReceived`, `SessionPublished`, `ResourceBlocked`.
-   - Scoped by organization, franchisee/container/venue, resource, customer, principal.
-   - Typed, versioned, idempotent, append-only.
-   - Carries `event_id`, `correlation_id`, `caused_by_event_id`.
-
-2. Agent activity log
-   - What an agent perceived, proposed, decided, and attempted.
-   - Separate from world facts because an agent proposal is not a fact about the business.
-
-Future read models:
-
-- Operations Truth
-- Customer 360
-- Revenue Ledger summaries
-- Agent Inbox
-
-These should become projections of facts over time, not independent parallel truths.
-
-Phase 1 implication:
-
-- Phase 1 audit log is not the full domain event log.
-- Do not build event-stream infrastructure yet.
-- But audit records should include enough actor/scope/entity/correlation metadata to evolve toward this.
-
-### 5. Agent Contracts
-
-Every future agent must have a machine-readable contract.
-
-Contract fields:
-
-- Consumes:
-  - event types
-  - read scopes
-  - allowed projections
-- Emits:
-  - closed set of typed proposed actions
-  - never arbitrary writes
-- Per-action guards:
-  - preconditions
-  - capacity checks
-  - consent checks
-  - amount caps
-  - target state checks
-- Effect class:
-  - `read`
-  - `reversible_write`
-  - `irreversible`
-  - `money_moving`
-  - `customer_facing`
-- Blast radius:
-  - record
-  - resource
-  - venue
-  - franchisee
-  - organization
-
-Phase 1 implication:
-
-- Do not build the full agent contract framework yet.
-- Shared authorization and audit log should be designed so agent contracts can later use the same permission/action vocabulary humans use.
-
-### 6. Agent Permissions
-
-Agents should be principals with scoped capabilities.
-
-Future permission shape:
-
-```text
-principal x capability x scope x constraints
-```
-
-Examples:
-
-- `offer.draft` scoped to a venue.
-- `offer.send` scoped to a venue and customer-facing approval policy.
-- `resource.recommend_reallocation` scoped to a resource/container.
-- `credit.apply` scoped to organization with amount cap.
-
-Constraints:
-
-- monetary cap
-- per-action rate limit
-- daily cap
-- allowed hours
-- consent required
-- customer-facing approval required
-- franchisee opt-out/threshold
-
-Future write path:
-
-- Humans and agents should use the same guarded action gateway.
-- No agent should write through a private service-role side door.
-
-Phase 1 implication:
-
-- Implement shared authorization for humans first.
-- Do not introduce autonomous agent write permissions in Phase 1.
-- Do not create a separate agent-only authorization path.
-
-### 7. Agent Memory
-
-Future agent memory has three categories:
-
-1. Working memory
-   - Per-run context.
-   - Ephemeral and reconstructable.
-
-2. Episodic memory
-   - History with a customer, lead, venue, resource, or event.
-   - Should derive from domain events and projections.
-
-3. Semantic/operational memory
-   - Playbooks, learned preferences, embeddings, operational patterns.
-   - The only genuinely new memory store.
-
-Rules:
-
-- Memory is scoped by organization/franchisee/venue/resource/customer.
-- Venue-private customer notes stay in `customer_venue_profiles`, not global customer memory.
-- Customer memory is personal data and must support retention and erasure.
-- Agent memory reads need permission checks.
-- Memory should be versioned enough to explain what an agent knew at decision time.
-
-Phase 1 implication:
-
-- Do not build agent memory in Phase 1.
-- Customer master and venue-private profile split must be designed so future memory does not leak cross-venue data.
-
-### 8. Approval Boundaries
-
-Approval must be policy-driven, not hardcoded per agent.
-
-Future approval outcomes:
-
-- `auto_execute`
-- `approve_by_venue_staff`
-- `approve_by_franchisee`
-- `approve_by_hq`
-- `forbidden`
-
-Policy inputs:
-
-- effect class
-- scope
-- amount/value
-- customer-facing impact
-- reversibility
-- confidence
-- venue/franchisee thresholds
-- historical override/rejection rate
-
-Graduation model:
-
-1. Shadow:
-   - agent proposes only
-   - measure would-approve rate
-2. Approval-required:
-   - human approves before execution
-3. Auto-within-bounds:
-   - only for low-risk actions under explicit caps
-
-Phase 1 implication:
-
-- Do not grant autonomy in Phase 1.
-- Audit log should record approval/rejection decisions where they exist.
-- Existing Agent Inbox remains approval-first.
-
-### 9. Multi-Agent Architecture
-
-Future multi-agent design should be event-driven, not one central brain.
-
-Principles:
-
-- Choreography over orchestration:
-  - agents react to typed events and emit typed proposals/actions.
-- Idempotency:
-  - every trigger/action needs dedupe keys.
-- Leases/claims:
-  - only one agent instance should own a given mutable workflow at a time.
-- Conflict arbitration:
-  - resource/capacity conflicts need priority policy.
-- Sagas and compensation:
-  - multi-step workflows must be reversible step-by-step.
-- Correlation IDs:
-  - every chain of proposals/actions should be traceable as one workflow.
-- Kill switch:
-  - per agent, capability, venue, franchisee, organization.
-- Observability:
-  - run tracing, override rate, rejection rate, drift, latency, cost.
-
-Phase 1 implication:
-
-- Do not build multi-agent orchestration in Phase 1.
-- Audit and authorization should include the scope/correlation concepts needed later.
-- Ledger reversal model is required before safe money-moving multi-agent workflows, but it is not Phase 1.
-
-## Current Blockers
-
-The current codebase has these architectural blockers:
-
-- Memberships are venue-scoped:
-  - `membership_tiers.venue_id`
-  - `memberships.venue_id`
-  - `membership_entitlements.tier_id`
-  - `membership_usage.venue_id`
-- `venues` is the top tenant root. There is no organization/franchise layer.
-- There is no canonical customer master below `auth.users`.
-- `player_profiles` is globally readable through RLS.
-- Service-role functions have scattered authorization checks.
-- There is no universal `audit_log`.
-- `events` mixes public/play/scoring events with private sales/event-ops records.
-- Ledger has no line-item or reversal model. This is acknowledged but explicitly out of Phase 1.
-
-## Target Entity Model
+## Implemented Foundation Model
 
 ### Organization
 
-Definition: the brand/HQ owner of identity, central membership plans, global policy, and platform-level reporting.
+Definition: brand/HQ owner of identity, global policy, investor platform, reporting, and future central membership ownership.
 
 Table: `organizations`
 
@@ -369,17 +143,15 @@ Key fields:
 - `created_at`
 - `updated_at`
 
-Responsibilities:
+Current behavior:
 
-- Owns customers.
-- Owns central membership plans.
-- Owns brand-level entitlements policy.
-- Owns franchisee relationships.
-- Provides HQ authorization scope.
+- The Pickla organization is backfilled.
+- Existing venues are attached through `venues.organization_id`.
+- Organization membership is used by shared authorization and scoped RLS.
 
 ### Franchisee
 
-Definition: operator legal entity under an organization. A franchisee owns one or more venues operationally and financially.
+Definition: operator/legal entity under an organization. A franchisee owns one or more venues operationally and financially.
 
 Table: `franchisees`
 
@@ -388,8 +160,9 @@ Key fields:
 - `id`
 - `organization_id`
 - `legal_name`
+- `slug`
 - `org_number`
-- `stripe_account_id` nullable for now
+- `stripe_account_id`
 - `payout_currency`
 - `vat_rate`
 - `revenue_share_pct`
@@ -398,13 +171,11 @@ Key fields:
 - `created_at`
 - `updated_at`
 
-Responsibilities:
+Current behavior:
 
-- Groups venues by operator.
-- Future Stripe Connect connected-account owner.
-- Future settlement and revenue-share scope.
-
-Phase 1 must create this entity even though Stripe Connect is not touched yet.
+- A first-party Pickla Solna AB franchisee exists.
+- Existing venues are attached through `venues.franchisee_id`.
+- `stripe_account_id` is a future home for Stripe Connect, not active runtime behavior.
 
 ### Venue
 
@@ -412,20 +183,38 @@ Definition: physical operating location.
 
 Current table: `venues`
 
-New parent fields:
+Foundation fields:
 
 - `organization_id`
 - `franchisee_id`
 
-Responsibilities:
+Current behavior:
 
-- Owns local operations: courts, bookings, check-ins, opening hours, activities, drift, resource blocks.
-- Consumes central membership entitlements once later phases cut over.
-- Attributes revenue and entitlement usage to the physical location.
+- Venue remains the operational tenant for bookings, courts/resources, check-ins, schedules, activity tickets, displays, staff access, Zettle connection, and ledger attribution.
+- Organization/franchisee ancestry is available for future HQ/franchise reporting and central membership.
 
-### Customer
+### Organization Members
 
-Definition: canonical human/commercial identity under an organization. It is not the same thing as `auth.users`.
+Definition: organization-level staff role membership.
+
+Table: `organization_members`
+
+Roles:
+
+- `owner`
+- `admin`
+- `ops`
+- `finance`
+- `support`
+
+Current behavior:
+
+- Super admins and existing active venue staff were backfilled into organization membership.
+- Shared authorization can derive authorized venue ids from organization membership.
+
+### Customer Master
+
+Definition: canonical customer identity under an organization. It is not the same thing as `auth.users`.
 
 Table: `customers`
 
@@ -433,7 +222,7 @@ Key fields:
 
 - `id`
 - `organization_id`
-- `auth_user_id` nullable, unique when present
+- `auth_user_id`
 - `display_name`
 - `first_name`
 - `last_name`
@@ -449,251 +238,65 @@ Key fields:
 - `created_at`
 - `updated_at`
 
-Responsibilities:
+Supporting tables:
 
-- Customer 360 reads this as the primary identity.
-- Allows walk-ins, Zettle-only buyers, imported contacts, and auth users to converge.
-- Supports future merge/dedupe.
+- `customer_identities`: auth/email/phone/Stripe/Zettle/manual identity links.
+- `customer_venue_profiles`: venue-private profile, home venue, first/last seen, visit count, notes, tags.
 
-Supporting table: `customer_identities`
+Backfilled links:
 
-Purpose: external and alternate identity links.
+- One customer per deterministic auth-backed `player_profiles.auth_user_id`.
+- Auth identity.
+- Email identity from `auth.users.email`.
+- Phone identity from `player_profiles.phone`.
+- Stripe identity from `player_profiles.stripe_customer_id`.
+- Venue profiles from preferred venue and linked bookings, registrations, day passes, memberships, receipts, and check-ins.
 
-Examples:
+Current behavior:
 
-- `provider = 'auth'`, `provider_id = auth.users.id`
-- `provider = 'stripe'`, `provider_id = cus_...`
-- `provider = 'email'`
-- `provider = 'phone'`
-- `provider = 'zettle'` later, only when safely matched
+- `player_profiles.customer_id` links legacy profile to customer master.
+- Key operational tables have nullable `customer_id`.
+- Customer 360 can resolve by `customer_id` or legacy `user_id`.
+- Newer checkout/webhook code resolves customer ids where practical.
 
-Supporting table: `customer_venue_profiles`
+Current constraint:
 
-Purpose: venue-private customer context.
-
-Fields:
-
-- `customer_id`
-- `venue_id`
-- `is_home_venue`
-- `first_seen_at`
-- `last_seen_at`
-- `visit_count`
-- `private_notes`
-- `tags`
-- `metadata`
-
-Venue-private notes must not leak across venues.
-
-### Membership
-
-Definition: central customer subscription/access relationship owned by organization.
-
-Target table: `memberships` will eventually be re-owned, or a new `central_memberships` table will be introduced and then renamed once stable.
-
-Target fields:
-
-- `id`
-- `organization_id`
-- `customer_id`
-- `plan_id`
-- `home_venue_id` nullable
-- `status`
-- `started_at`
-- `current_period_end`
-- `cancel_at`
-- `stripe_subscription_id`
-- `stripe_customer_id`
-- `created_at`
-- `updated_at`
-
-Important Phase 1 decision:
-
-Do not immediately remove `memberships.venue_id`. Add `customer_id`, `organization_id`, and `home_venue_id` in a compatibility step later, then backfill and dual-read. Runtime cutover is Phase 2.
-
-### Membership Plan
-
-Definition: central brand-level plan catalog, replacing venue-owned `membership_tiers` as the target model.
-
-Target table: `membership_plans`
-
-Key fields:
-
-- `id`
-- `organization_id`
-- `name`
-- `description`
-- `price_minor`
-- `currency`
-- `billing_interval`
-- `access_scope`: `all_venues`, `home_venue`, `venue_group`
-- `is_active`
-- `sort_order`
-- `metadata`
-
-Supporting table: `membership_plan_venues`
-
-Purpose: declare which venues honor which plan when `access_scope` requires explicit venue selection.
-
-Phase 1 may create this catalog as a shadow model, but public membership checkout must still use the current tables until Phase 2.
-
-### Entitlement
-
-Definition: a grantable access right from a plan or purchase.
-
-Target model has three layers:
-
-1. `plan_entitlements`
-   - Defines what a plan grants.
-   - Replaces target ownership of current `membership_entitlements`.
-
-2. `entitlement_grants`
-   - Runtime access spine.
-   - Materialized from membership, day pass, booking, voucher, comp.
-   - Booking/check-in will eventually read this as the access source.
-
-3. `entitlement_usage`
-   - Records venue-attributed consumption.
-   - Replaces target ownership of current `membership_usage`.
-
-Phase 1 creates the foundation and backfill plan. It does not cut booking/check-in over to grants.
-
-### Franchise Ownership
-
-Definition: legal/financial parentage between organization, franchisee, and venue.
-
-Rules:
-
-- Organization owns brand, customers, plan catalog.
-- Franchisee owns local operating entity and future connected account.
-- Venue belongs to exactly one franchisee and one organization.
-- A first-party venue still has a franchisee row, e.g. "Pickla Solna AB".
-
-Do not implement Stripe Connect in Phase 1, but model `franchisees.stripe_account_id` so the future migration has a home.
-
-## Proposed New Tables
-
-Phase 1 creates:
-
-- `organizations`
-- `franchisees`
-- `organization_members`
-- `staff_roles` or, if too large for Phase 1, `organization_members` only plus existing `venue_staff`
-- `customers`
-- `customer_identities`
-- `customer_venue_profiles`
-- `audit_log`
-
-Phase 1 may also create shadow target tables if we want central membership shape visible early:
-
-- `membership_plans`
-- `membership_plan_venues`
-- `plan_entitlements`
-
-Do not create `entitlement_grants` as the runtime source in the first migration unless a feature flag/read-only backfill plan is ready.
-
-## Current Tables Affected
-
-Tenant/authorization:
-
-- `venues`
-- `venue_staff`
-- `user_roles`
-
-Customer:
-
-- `player_profiles`
-- `auth.users`
-- `booking_receipts`
-- `ledger_entries`
-- `bookings`
-- `session_registrations`
-- `day_passes`
-- `memberships`
-- `venue_checkins`
-
-Membership/access:
-
-- `membership_tiers`
-- `membership_tier_pricing`
-- `membership_entitlements`
-- `membership_usage`
-- `memberships`
-- `access_entitlements`
-- `access_vouchers`
-- `day_passes`
-
-Events:
-
-- `events`
-- `event_leads`
-- `event_offers`
-- `event_lead_activities`
-- `event_resource_allocations`
-- `event_resource_blocks`
-- `event_courts`
-- `score_sessions`
-- `score_matches`
-- `chat_rooms`
-
-Finance:
-
-- `ledger_entries`
-- `booking_receipts`
-- `zettle_connections`
-- `zettle_purchases`
-- `customer_transactions`
+- No aggressive merge/dedupe.
+- Zettle purchases are not auto-matched to customers.
+- Not every new operational write is guaranteed to populate `customer_id`.
 
 ## Shared Authorization
 
-Create a shared Edge Function module:
+Implemented module:
 
 ```text
 supabase/functions/_shared/authorization.ts
 ```
 
-Responsibilities:
+Implemented helpers include:
 
-- Resolve authenticated user.
-- Check super admin.
-- Check organization role.
-- Check franchisee role.
-- Check venue role.
-- Resolve venue ancestry: venue -> franchisee -> organization.
-- Provide one canonical set of helpers:
-  - `requireUser(req)`
-  - `requireSuperAdmin(admin, userId)`
-  - `requireOrganizationRole(admin, userId, organizationId, roles)`
-  - `requireFranchiseeRole(admin, userId, franchiseeId, roles)`
-  - `requireVenueRole(admin, userId, venueId, roles)`
-  - `canOperateVenue(admin, userId, venueId)`
-  - `getAuthorizedVenueIds(admin, userId)`
-  - `assertMutationScope(...)`
+- `requireUser(req)`
+- `isSuperAdmin(admin, userId)`
+- `requireSuperAdmin(admin, userId)`
+- `requireVenueRole(admin, userId, venueId, roles)`
+- `requireOrganizationRole(admin, userId, organizationId, roles)`
+- `canOperateVenue(admin, userId, venueId)`
+- `getAuthorizedVenueIds(admin, userId)`
+- `writeAuditLog(admin, row)`
+- `auditMutation(admin, input)`
 
-Replace scattered checks in this order:
+Current rule:
 
-1. `api-admin`
-2. `api-customers`
-3. `api-memberships`
-4. `api-checkins`
-5. `event-sales-agent`
-6. `event-intake-agent`
-7. `event-offer-builder`
-8. `event-pdf-generator`
-9. `event-followup-agent`
-10. `api-day-passes`
-11. `api-notifications`
-12. `api-bookings` admin mutation paths
-13. `api-events`
-14. `api-ops`
+Every new venue mutation should authorize the specific target venue or organization. Avoid "admin somewhere" checks.
 
-Important rule:
+Current rollout:
 
-`api-admin` must not authorize as "admin somewhere". Every venue mutation must authorize the specific target venue.
+- Used by newer `api-admin` paths, `api-investor`, day-pass claim audit paths, and other selected mutations.
+- Still needs broader adoption across older Edge Function mutation paths.
 
 ## Audit Log
 
-Create `audit_log` as append-only.
+Implemented table: `audit_log`
 
 Fields:
 
@@ -714,452 +317,410 @@ Fields:
 - `user_agent`
 - `created_at`
 
-Rules:
+Implemented rules:
 
-- Insert only through service role.
-- No update/delete.
-- Venue admins can read logs for their venue.
-- Organization admins can read logs for their organization.
-- Super admins can read all.
+- Service-role insert policy.
+- No update/delete through triggers.
+- Venue-admin scoped reads.
+- Organization-admin scoped reads.
+- Super-admin reads.
 
-Phase 1 mutation coverage:
+Current coverage:
 
-- `api-admin` mutations.
-- `api-customers` create/update.
-- `api-memberships` assign/update/cancel/tier changes.
-- `api-checkins` staff/manual check-in.
-- Event lead/offer/schedule/confirm mutations.
+- Selected `api-admin` mutations.
+- Selected investor mutations.
+- Day pass shared-claim audit when the table exists.
+- Event/agent flows where wired.
 
-Do not attempt full webhook audit parity in the first pass. Add Stripe webhook audit after customer master resolution is stable.
+Current gap:
 
-## Player Profiles Security Fix
+- Audit parity is not complete for every Stripe webhook, booking, check-in, membership, event, notification, or admin mutation.
+- `audit_log` is not the full domain event log.
 
-Current policy:
+## Customer Engine
 
-```sql
-CREATE POLICY "Anyone can read player profiles"
-ON public.player_profiles
-FOR SELECT
-USING (true);
+Purpose: one customer identity and history spine across auth, bookings, activities, passes, memberships, receipts, ledger, and venue-private profile context.
+
+Implemented read model:
+
+```mermaid
+flowchart LR
+  Auth["auth.users"]
+  Profile["player_profiles"]
+  Customer["customers"]
+  Identity["customer_identities"]
+  VenueProfile["customer_venue_profiles"]
+  OpsRecords["bookings / registrations / day_passes / memberships / checkins"]
+  Finance["receipts / ledger_entries"]
+  Drawer["Customer 360"]
+
+  Auth --> Profile --> Customer
+  Customer --> Identity
+  Customer --> VenueProfile
+  Customer --> OpsRecords
+  Customer --> Finance
+  OpsRecords --> Drawer
+  Finance --> Drawer
+  VenueProfile --> Drawer
 ```
 
-Target:
+Customer 360 currently shows:
 
-- Users can read/update their own `player_profiles`.
-- Venue staff can read profiles only for customers connected to their venue.
-- Organization staff can read profiles connected to organization venues.
-- Super admins can read all.
-- Public/community features that need names/avatars should use a safe public profile view with limited fields.
+- Name, email, phone.
+- Membership/access status.
+- Today's access.
+- Upcoming bookings.
+- Activity registrations.
+- Day passes.
+- Memberships.
+- Check-ins.
+- Receipts.
+- Ledger entries.
+- Financial summary.
+- Subscription Center read-first.
+- Local Financial Timeline.
+- Safe existing staff actions.
 
-Recommended safe public view:
+## Financial Engine
 
-```text
-public_player_profiles
-- auth_user_id
-- display_name
-- avatar_url
-- pickla_rating
-```
+Purpose: sales truth, receipts, customer financial visibility, and future finance-ledger foundation.
 
-Do not expose phone, structured contact fields, Stripe customer id, wellness fields, or private customer fields publicly.
+Implemented:
 
-## Event Table Split Strategy
+- `ledger_entries`: append-only daily sales truth.
+- `booking_receipts`: customer-facing receipt/evidence rows.
+- `customer_transactions`: additive future finance ledger table.
+- `zettle_connections`: venue-level Zettle connection state.
+- `zettle_purchases`: imported Zettle purchase rows.
+- Customer 360 financial summary, subscription read model, and local financial timeline.
 
-Decision:
+Current sources:
 
-Do not split `events` in Phase 1.
+- Court bookings.
+- Activity/session registrations.
+- Day passes.
+- Membership checkout.
+- Zettle purchases.
 
-Instead:
+Current Stripe behavior:
 
-1. Add `events.event_domain`:
-   - `play`
-   - `sales`
-   - `mixed`
-2. Backfill:
-   - linked from `event_leads.event_id` -> `sales`
-   - has customer/planning/private fields -> `sales`
-   - public tournament/scoring rows -> `play`
-   - ambiguous rows -> `mixed`
-3. Update new code to filter by `event_domain` where relevant.
+- `api-stripe-webhook` finalizes `checkout.session.completed`.
+- Other Stripe event types are acknowledged and ignored.
 
-Target split:
+Known constraint:
 
-- `play_events`: public/tournament/community/scoring.
-- `sales_events` or `private_events`: B2B/private event operations linked to leads/offers/resources/blocks.
+- Financial Operations 1A is implemented; 1B subscription synchronization is not.
+- `customer_transactions` is present but not the primary ledger used by the product.
+- `ledger_entries` has no line-item or reversal/correction model.
 
-Actual table split is Phase 2 or Phase 3 after read paths have domain filters.
+## Product Engine
 
-## Migration Order
+Purpose: describe what is sold and resolve value-first customer pricing.
 
-### Migration 1: Organization And Franchise Spine
+Implemented tables:
 
-Create:
+- `access_products`
+- `activity_series`
+- `activity_sessions`
+- `session_registrations`
+- `access_entitlements`
+- `access_vouchers`
+- `membership_tier_pricing`
+- `membership_entitlements`
+- `membership_usage`
 
-- `organizations`
-- `franchisees`
-- `organization_members`
+Implemented pricing path:
 
-Alter:
+- Product base/fallback price from `access_products.base_price_sek`.
+- Concrete schedule price from `activity_sessions.price_sek`.
+- Channel price from session metadata such as `online_price_sek` and `desk_price_sek`.
+- Membership inclusion/discount from active membership, entitlements, and tier pricing.
+- Day-access inclusion from active `access_entitlements`.
+- Debuggable backend decision from `_shared/activity_pricing.ts`.
 
-- `venues.organization_id`
-- `venues.franchisee_id`
+Important rule:
 
-Backfill:
+For activity/program sessions, prefer `activity_sessions.price_sek` and session metadata before `access_products.base_price_sek`. The product base price is the fallback/default, not the concrete occurrence price when the session has a price.
 
-- Create organization `Pickla`.
-- Create first-party franchisee for current operating company.
-- Attach every existing venue to that organization/franchisee.
-- Backfill `organization_members` from `user_roles.super_admin` and `venue_staff`.
+Current gap:
 
-### Migration 2: Authorization SQL Helpers
+- Court booking pricing and membership checkout are not fully moved to a universal Product Engine resolver.
 
-Create SQL helper functions:
+## Operations Engine
 
-- `is_organization_member(user_id, organization_id)`
-- `is_organization_admin(user_id, organization_id)`
-- `is_franchisee_member(user_id, franchisee_id)`
-- `is_franchisee_admin(user_id, franchisee_id)`
-- `can_operate_venue(user_id, venue_id)`
+Purpose: live venue truth across desk, admin, displays, check-in, bookings, activities, events, and agent support.
 
-Keep existing helpers:
-
-- `is_super_admin`
-- `is_venue_member`
-- `is_venue_admin`
-
-Do not break existing RLS.
-
-### Migration 3: Customer Master
-
-Create:
-
-- `customers`
-- `customer_identities`
-- `customer_venue_profiles`
-
-Alter:
-
-- `player_profiles.customer_id`
-
-Backfill:
-
-- One customer per `player_profiles.auth_user_id`.
-- Link `player_profiles.customer_id`.
-- Add auth identity for each linked auth user.
-- Add email identity from `auth.users.email` where available.
-- Add phone identity from `player_profiles.phone` where available.
-- Add Stripe identity from `player_profiles.stripe_customer_id` where available.
-
-Do not fuzzy-match Zettle.
-
-### Migration 4: Customer References On Operational Tables
-
-Add nullable `customer_id` to:
+Implemented operational sources:
 
 - `bookings`
+- `venue_courts`
+- `activity_sessions`
 - `session_registrations`
+- `activity_session_overrides`
+- `activity_session_interests`
+- `access_entitlements`
+- `access_vouchers`
 - `day_passes`
 - `memberships`
-- `booking_receipts`
-- `ledger_entries`
 - `venue_checkins`
+- `events`
+- `event_leads`
+- `event_resource_allocations`
+- `event_resource_blocks`
+- `ops_signals`
+- `ops_check_state`
+- `ops_incidents`
+- `ops_client_events`
+- `ops_agent_runs`
 
-Backfill by `user_id -> customers.auth_user_id`.
+Implemented surfaces:
 
-Do not make these columns `NOT NULL` in Phase 1.
+- Desk OS.
+- Admin Calendar.
+- Admin Today.
+- Operations booking drawer.
+- Self Check-in.
+- Displays.
+- Ops Center.
+- Agent Inbox for event recommendations.
 
-### Migration 5: Audit Log
+Current gap:
 
-Create `audit_log`.
+- No unified Operations Inbox exists yet.
+- Ops Center incidents/signals and event agent recommendations are related but separate.
 
-Add RLS:
+## Investor Engine
 
-- service role insert
-- no update/delete
-- scoped staff read
+Purpose: investor access and editable fundraising narrative.
 
-### Migration 6: Player Profile RLS Lockdown
+Implemented tables:
 
-Create safe public profile view if required.
+- `investor_leads`
+- `investor_settings`
+- `investor_assets`
 
-Then:
+Implemented surfaces:
 
-- Drop public `player_profiles` select policy.
-- Add own/staff/org/super-admin policies.
+- `/invest`
+- `/invest/memo/:token`
+- `/hub/admin/investors`
 
-This should happen after app paths that rely on broad profile reads are identified and moved to safe views or service-backed endpoints.
+Implemented API:
 
-### Migration 7: Event Domain
+- `api-investor/settings`
+- `api-investor/request`
+- `api-investor/memo`
+- `api-investor/leads`
+- `api-investor/admin-settings`
+- `api-investor/save-settings`
+- `api-investor/save-asset`
+- `api-investor/approve`
+- `api-investor/reject`
+- `api-investor/revoke`
 
-Alter:
+Current constraints:
 
-- `events.event_domain`
+- Super-admin managed.
+- Tokenized memo access, not a legal/KYC/cap-table/payment system.
 
-Backfill:
+## Central Membership Status
 
-- `sales`, `play`, `mixed`.
+Original target remains valid:
 
-Add index:
+```text
+organization
+  -> customer
+      -> central membership
+          -> entitlement grant
+              -> entitlement usage at venue
+```
 
-- `(venue_id, event_domain, start_date)`
+Current runtime:
 
-Do not split table.
+- `membership_tiers` and `memberships` remain venue-scoped.
+- `membership_entitlements` and `membership_usage` remain current entitlement/quota runtime.
+- `memberships.customer_id` exists as an additive link.
+- Membership checkout still uses Stripe Checkout and venue-local tier ids.
 
-### Migration 8: Membership Target Shadow Model
+Not implemented yet:
 
-Create target catalog tables if Phase 1 has budget:
+- `membership_plans` as organization-owned runtime catalog.
+- `membership_plan_venues`.
+- `plan_entitlements`.
+- `entitlement_grants` as the universal access source.
+- Organization-owned central membership runtime.
+- Cross-venue central membership cutover.
 
-- `membership_plans`
-- `membership_plan_venues`
-- `plan_entitlements`
+## Future AI-First Direction
 
-Backfill from:
+The future direction is still resource-first and event-driven, but it is not implemented as a general autonomous architecture.
 
-- `membership_tiers`
-- `membership_entitlements`
+### Resource-First Architecture
 
-Do not use as runtime source yet.
+Future target:
 
-## Backfill Strategy
+- `playable_resource`: anything a session can happen on.
+- `resource_container`: operating context that groups resources.
+- `venue`: one concrete container type.
 
-### Organization/Franchisee
+Current implementation:
 
-- Create one organization for Pickla.
-- Create one first-party franchisee for existing Solna/current operator.
-- Attach all venues to both.
-- Preserve existing `venue_staff`.
-- Add `organization_members` for super admins.
+- `venue_courts` remains the concrete playable resource table.
+- `event_resource_catalog`, `event_resource_allocations`, and `event_resource_blocks` support event planning and capacity blocking.
+- Generic resource containers are not implemented.
 
-### Customers
+### Host/Ambassador/Affiliate Progression
 
-Deterministic order:
+Future target:
 
-1. `player_profiles.auth_user_id`
-2. `auth.users.email`
-3. `player_profiles.phone`
-4. `player_profiles.stripe_customer_id`
-5. receipt denormalized fields only as metadata if no auth-backed profile exists
+```text
+customer
+  -> host
+  -> ambassador
+  -> affiliate
+  -> operator
+  -> franchisee
+```
 
-No aggressive merge by phone/email in the first migration. Duplicates are safer than bad merges.
+Current implementation:
 
-### Customer Venue Profiles
+- Product/pricing simulator names channels such as `host`, `ambassador`, `affiliate`, and `corporate`.
+- These are not yet real principal types, payout systems, or scoped capabilities.
 
-Create a row when a customer has any venue-linked record:
+### Event Outbox
 
-- booking
-- activity registration
-- day pass
-- membership
-- check-in
-- receipt
+Future target:
 
-Set:
+- Immutable domain facts such as `BookingConfirmed`, `CheckinRecorded`, `PaymentSettled`, `LeadReceived`, `SessionPublished`, and `ResourceBlocked`.
+- Typed, versioned, idempotent, append-only.
+- Correlation and causation ids.
+- Projection rebuilds for Operations Truth, Customer 360, Revenue Ledger summaries, Financial Timeline, and Agent Inbox.
 
-- `first_seen_at = min(created_at/issued_at/checked_in_at)`
-- `last_seen_at = max(...)`
-- `visit_count` from check-ins where available
+Current implementation:
 
-### Membership Shadow Catalog
+- `audit_log` exists for mutation traceability.
+- `ops_client_events` exists for operational/client signals.
+- Event agent recommendations exist in `event_lead_activities`.
+- There is no general domain-event outbox yet.
 
-Backfill one `membership_plan` per current `membership_tiers` row initially, even though this duplicates venue-local plans at org level.
+### Agent Contracts And Permissions
 
-Set:
-
-- `organization_id` from tier venue organization.
-- `access_scope = 'home_venue'` for migrated venue-local plans.
-- `membership_plan_venues` includes the old `venue_id`.
-
-This avoids accidentally turning Solna memberships into all-venue memberships.
+Future target:
 
-### Event Domain
+- Agents are principals with scoped capabilities.
+- Agents consume typed events and emit typed proposed actions.
+- Every action has preconditions, effect class, blast radius, and approval policy.
 
-Backfill:
+Current implementation:
 
-- `sales` if `events.id` appears in `event_leads.event_id`.
-- `sales` if `customer_email`, `customer_name`, `expected_participants`, `internal_notes`, or private planning fields are set.
-- `play` if public/scoring/tournament fields dominate and no sales linkage exists.
-- `mixed` if unclear.
+- Event operations agent is approval-first.
+- Ops Center has shadow-agent checks and `ops_agent_runs`.
+- No general agent permissions, action gateway, or policy engine exists yet.
 
-## Rollout Plan
+## Current Known Gaps
 
-### Phase 1: Foundation
+### Financial Operations 1B
 
-Implement:
+Missing:
 
-- Organization/franchisee spine.
-- Customer master and identities.
-- Customer references on key operational records.
-- Shared authorization module.
-- Audit log.
-- `player_profiles` public read lockdown.
-- `events.event_domain`.
-- Optional central membership shadow catalog.
+- Real Stripe subscription synchronization.
+- `invoice.paid`.
+- `invoice.payment_failed`.
+- Subscription snapshots.
+- Payment method snapshots.
+- Richer Financial Timeline.
+- Full `membership_usage` integration across finance/customer views.
 
-Runtime behavior should remain the same:
+### Central Membership
 
-- Existing booking works.
-- Existing check-in works.
-- Existing membership checkout works.
-- Existing Stripe webhook works.
-- Existing ledger writes work.
-- Existing Event OS works.
+Missing:
 
-### Phase 2: Runtime Cutovers
+- Organization-owned membership plan runtime.
+- Central membership subscription/access table.
+- Universal entitlement grants.
+- Cross-venue plan honoring and revenue attribution.
+- Venue-local membership compatibility removal.
 
-Implement:
+### Event Outbox
 
-- Customer 360 reads from `customers` as primary.
-- New writes populate `customer_id` everywhere.
-- Membership UI reads central `membership_plans`.
-- Membership assignment creates central `membership` model.
-- Add `entitlement_grants` and `entitlement_usage`.
-- Dual-run current access resolver and grant resolver.
-- Event reads filter by `event_domain`.
-- Start reducing direct dependence on `auth.users` for customer workflows.
+Missing:
 
-### Phase 3: Franchise And Accounting Scale
+- Domain-event outbox table.
+- Idempotent event delivery.
+- Projection rebuild support.
+- Correlation/causation ids across all workflows.
 
-Implement:
+### Operations Inbox
 
-- Stripe Connect.
-- Franchisee settlement.
-- Ledger lines and reversal model.
-- Central membership revenue attribution.
-- Full grant-based booking/check-in access.
-- Split `events` into play/private tables if domain filters are stable.
-- Deprecate old venue-owned membership tables or convert them into compatibility views.
+Missing:
 
-## What Must Not Be Touched Yet
+- One staff work queue for payment exceptions, access problems, stale check-ins, activity attendance gaps, event conflicts, Zettle import issues, and agent recommendations.
+- Assignment, status, comments, SLA, and resolution model.
 
-Phase 1 must not:
+### Shadow Agent
 
-- Implement Stripe Connect.
-- Change payment checkout behavior.
-- Change Stripe webhook payment finalization semantics.
-- Rebuild ledger lines/reversals.
-- Cut booking/check-in over to entitlement grants.
-- Remove existing `memberships.venue_id`.
-- Remove existing `membership_tiers`.
-- Delete or split `events`.
-- Rewrite booking availability.
-- Rewrite self check-in.
-- Auto-merge uncertain customers.
-- Auto-match Zettle transactions to customers.
-- Change public booking or public schedule behavior except where required for profile security.
+Partially implemented:
 
-## Edge Function Rollout Order
+- Event recommendations.
+- Ops Center shadow checks.
+- `ops_agent_runs`.
 
-1. Add `_shared/authorization.ts`.
-2. Update `api-admin` first.
-3. Update `api-customers`.
-4. Update `api-memberships`.
-5. Update `api-checkins`.
-6. Update event functions.
-7. Update `api-bookings` admin mutation paths.
-8. Update `api-stripe-webhook` to create/resolve `customer_id` for new writes.
-9. Update `api-day-passes`.
-10. Update `api-notifications`.
-11. Update `api-ops`.
+Missing:
 
-Each updated mutation should write `audit_log`.
+- Typed action contracts.
+- Agent-as-principal authorization.
+- Would-have-done metrics across operations.
+- Kill switches by agent/capability/venue/organization.
 
-## Risks
+### Product Engine Phase 2
 
-### RLS Breakage
+Missing:
 
-Locking down `player_profiles` can break public/community UI that currently relies on broad profile reads.
+- Universal resolver for all products, including court booking and memberships.
+- Promotions/referrals/campaigns as first-class pricing entities.
+- Channel pricing tables beyond session metadata and simulator placeholders.
+- Product-owned entitlements replacing scattered special logic.
+- Full admin guarantees that public UI, desk UI, and checkout use exactly the same resolver for every product.
 
-Mitigation:
+### Native Apps
 
-- Add safe public view.
-- Move sensitive reads behind Edge Functions.
-- Test Hub/community/score/check-in/customer search before policy cutover.
+Future only:
 
-### Bad Customer Merges
+- Native iOS/Android apps.
+- Native push/deep-link handling beyond PWA web push.
+- Native scanner/display shells.
+- App store distribution and native offline behavior.
 
-Phone/email matching can merge unrelated people.
+## Acceptance Status
 
-Mitigation:
+Foundation Phase 1 acceptance:
 
-- Only deterministic auth-backed linking in Phase 1.
-- Use `customer_identities` for candidates.
-- Build admin-assisted merge later.
+- Every venue belongs to an organization and franchisee: implemented for existing venues through migration/backfill.
+- Existing staff can still access venues: implemented through additive organization membership and existing venue_staff compatibility.
+- Shared authorization helpers exist: implemented.
+- Customer master exists and is backfilled from `player_profiles`: implemented.
+- Key operational tables have nullable `customer_id`: implemented.
+- Customer 360 can resolve customer via `customer_id` or compatibility fallback: implemented.
+- `audit_log` exists and is append-only: implemented.
+- Current booking, check-in, membership, Stripe Checkout, ledger, Event OS, Desk OS, and Admin OS flows remain compatible: implemented.
 
-### Hidden Cross-Venue Assumptions
+Still not complete:
 
-`api-admin` currently allows broad admin access after proving admin somewhere.
+- Player profile public-read lockdown is not documented here as complete unless verified in deployed RLS.
+- Audit coverage is not universal.
+- Event domain split/filtering is not treated as complete current architecture.
+- Central membership runtime cutover is not complete.
+- Stripe subscription event synchronization is not complete.
+- Ledger reversal/line-item model is not complete.
 
-Mitigation:
+## Implementation Notes For Future Sessions
 
-- Roll out shared authorization endpoint by endpoint.
-- Log denied attempts.
-- Keep venue switcher tests explicit.
-
-### Membership Runtime Drift
-
-Creating central plan tables while current runtime uses venue tables can create split-brain.
-
-Mitigation:
-
-- Treat central membership catalog as shadow/read-only until Phase 2.
-- Do not expose editing in UI until runtime cutover is planned.
-
-### Event Domain Ambiguity
-
-Some `events` rows are mixed.
-
-Mitigation:
-
-- Use `mixed` domain.
-- Do not split table in Phase 1.
-- Add filters only where the domain is unambiguous.
-
-### Audit Noise
-
-Audit log can become noisy and inconsistent.
-
-Mitigation:
-
-- Standardize `action` names.
-- Log only mutations.
-- Include `request_id`, actor, entity, before/after when practical.
-
-### Migration Ordering
-
-Adding RLS before backfill can lock staff out.
-
-Mitigation:
-
-- Backfill first.
-- Add policies permissively with old helpers.
-- Tighten after function changes deploy.
-
-## Acceptance Criteria
-
-Phase 1 is complete when:
-
-1. Every venue belongs to an organization and franchisee.
-2. Existing staff can still access the same venues as before.
-3. Shared authorization helpers exist and are used by `api-admin`, `api-customers`, `api-memberships`, and `api-checkins`.
-4. Customer master exists and is backfilled from `player_profiles`.
-5. Key operational tables have nullable `customer_id` and are backfilled where deterministic.
-6. Customer 360 can resolve a customer through `customer_id` or compatibility fallback.
-7. `player_profiles` is no longer globally readable with sensitive fields.
-8. Safe public profile access exists where public UI needs display name/avatar/rating.
-9. `audit_log` exists, is append-only, and records Phase 1-covered mutations.
-10. `events.event_domain` exists and is backfilled.
-11. Current booking, check-in, membership, Stripe webhook, ledger, Event OS, Desk OS, and Admin OS flows still work.
-12. No Stripe Connect, ledger reversal, entitlement-grant cutover, or event table split has been introduced.
-
-## Implementation Notes For Future Codex Sessions
-
-- Start with migrations and backfills, then authorization module, then function-by-function rollout.
-- Keep changes small and deployable.
-- Do not combine customer master rollout with membership runtime inversion.
-- Do not combine audit log rollout with ledger redesign.
-- Use feature-compatible columns and nullable references first.
-- Prefer compatibility reads during migration:
-  - new `customer_id` when present
-  - fallback to `user_id`/`auth_user_id`
-- Run `npm run build` and `git diff --check` after implementation changes.
-- Never commit `supabase/.temp/*`.
+- Keep foundation changes additive until a specific cutover plan exists.
+- Prefer `customer_id` when present, but preserve `user_id` compatibility where production runtime still needs it.
+- Use `_shared/authorization.ts` for new mutations.
+- Write `audit_log` for new staff/admin/agent/customer-impacting mutations where practical.
+- Do not auto-merge uncertain customers.
+- Do not auto-match Zettle purchases to customers.
+- Do not mix central membership rollout with Stripe subscription synchronization unless the cutover plan explicitly covers both.
+- Do not introduce Stripe Connect until franchise settlement and ledger reversal models are ready.
+- Run `git diff --check` after documentation changes.

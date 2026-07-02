@@ -1,31 +1,96 @@
 # Pickla
 
-Pickla is a community-first racket sports platform and venue operating system.
+Pickla is a community-first sports venue platform and operating system.
 
-The product is moving from a booking site into **Pickla OS**: one operational layer for venue managers, desk staff, event sales, member access, customer history, financial truth, and the public player experience.
+It now runs as **Pickla OS**: a multi-surface platform for venue operations, desk staff, customer access, activity tickets, memberships, revenue evidence, investor access, and the public player experience.
 
-This README is written for a new technical leader who needs the architecture truth quickly. The canonical coding-agent guide remains [AGENTS.md](./AGENTS.md).
+This README is written for a new technical leader who needs the current architecture truth quickly. The canonical coding-agent guide remains [AGENTS.md](./AGENTS.md).
 
-## Vision
+## Platform Status
 
-Pickla OS should answer the questions a venue asks all day:
+### Foundation
 
-- What is happening in the building now, today, and tomorrow?
-- Who is arriving, what have they paid for, and do they have access?
-- Which courts/resources are available, blocked, booked, or allocated to events?
-- Which activities are public, hidden, cancelled, full, or affected by operations?
-- What did we sell today, through which channel, and what evidence exists?
-- Which event leads need action, and what safe recommendation should staff approve?
+Implemented:
 
-The product principles are:
+- Organization: `organizations` exists as the brand/HQ tenant root. Existing venues are attached to the Pickla organization.
+- Franchisee: `franchisees` exists between organization and venue. Current first-party venues are attached to the Pickla Solna AB franchisee row.
+- Customer Master: `customers`, `customer_identities`, and `customer_venue_profiles` exist. Deterministic backfill links auth-backed profiles, Stripe customer ids, phone/email identities, and venue-local customer profile rows.
+- Shared Authorization: `supabase/functions/_shared/authorization.ts` provides shared user, super-admin, organization, venue, authorized-venue, and audit helpers. It is actively used by newer admin/investor/day-pass paths and is the required path for new mutations.
+- Audit Log: `audit_log` exists, is append-only, is scoped by organization/franchisee/venue, and records selected mutations. Coverage is partial, not universal.
+- Customer 360: the staff drawer resolves customer identity through `customer_id` and compatibility `user_id` paths, then aggregates access, bookings, activities, memberships, receipts, ledger rows, and local financial timeline data.
 
-- Venue operating system first, marketing site second.
-- Community-first racket sports: activity, membership, social proof, chat, and repeat play matter as much as bookings.
-- Human approval for operational decisions. Agents recommend; staff approves; the system executes.
-- Source-of-truth data over dashboards. Every metric should be clickable or traceable.
-- Multi-venue by design, scoped by `venue_id`.
+### Operations
 
-## Architecture
+Implemented:
+
+- Desk OS: `/desk` is the live staff cockpit for command search, arrivals, bookings, activity registrations, check-ins, operational suggestions, booking drawers, and Customer 360.
+- Operations Truth: Admin Calendar, Admin Today, Desk Today, booking drawers, and display surfaces read the same operational objects: bookings, activity sessions, registrations, resource blocks, events, drift/overrides, check-ins, receipts, and ledger evidence.
+- Self Check-in: `/checkin/:venueSlug` resolves booking, activity ticket, day pass, and membership access through `api-checkins/self`; check-ins are idempotent and visible to Desk.
+- Activity Ticket Operations: activity sessions, session registrations, session-date capacity, attendance/check-in, activity pricing decisions, and paid/free checkout paths are live.
+- Shared Pass Claim flow: `/pass/:token`, `day_pass_shares`, `access_vouchers`, and `api-day-passes/claim` support gift/shared pass claim flows that survive login/signup redirects and write audit where available.
+- Revenue Ledger: `ledger_entries` is the append-only daily sales truth for Stripe-finalized Pickla sales and imported Zettle purchases.
+- Zettle import: venue-level connection/import endpoints in `api-admin` import Zettle purchases into `zettle_purchases` and `ledger_entries`. The MVP is purchase totals only, with no automatic customer matching.
+
+### Financial Operations 1A
+
+Implemented:
+
+- Universal Channel Pricing: products, session prices, online/desk channel prices, membership rules, day access, and activity pricing decisions are resolved through shared Product Engine pricing helpers for activity ticket flows.
+- Pricing simulator: Admin Pricing includes a Product Engine simulator: product -> membership -> channel -> promotion -> final price. It is read-only and mutates nothing.
+- Customer 360 Financial: Customer 360 shows lifetime ledger amount, receipts, subscriptions, linked payments, and local financial timeline rows.
+- Subscription Center (read-first): Customer 360 displays locally known membership/subscription data, Stripe ids, period data, card snapshots where available, and payment history from receipts/ledger. Mutating actions such as retry/cancel are deliberately not live Stripe operations yet.
+- Financial Timeline (local): Customer 360 builds a local timeline from receipts, ledger entries, memberships, activity registrations, and day passes. It is not a full event-sourced finance timeline yet.
+- Revenue integration: Stripe Checkout completion writes booking receipts and ledger entries. Zettle purchase import writes ledger entries.
+- Desk pricing: activity ticket checkout can carry `sales_channel = desk`, and session metadata can expose `desk_price_sek` beside online pricing.
+
+### Product Engine Phase 1
+
+Implemented:
+
+- Products as primary abstraction: `access_products` defines sellable venue products such as day access, open play slot, group training, day-access voucher, and membership-like products.
+- Schedule references product: `activity_sessions.product_key` links scheduled occurrences to the product being sold.
+- Pricing owned by Product Engine: `supabase/functions/_shared/activity_pricing.ts` resolves product, session, channel, membership, and entitlement decisions for activity tickets and day access.
+- Schedule owns time/capacity: `activity_sessions` owns date/recurrence, start/end, capacity, courts, publish status, and overrides.
+- Product owns pricing: `access_products.base_price_sek` is the fallback/default product price; concrete sessions can override via `activity_sessions.price_sek` and metadata.
+- Value-first customer pricing: public program/session UI prioritizes included access, day pass inclusion, membership inclusion, member discounts, savings, and final customer price over raw product mechanics.
+
+### Investor Platform
+
+Implemented:
+
+- Investor Access: `/invest` collects investor requests in `investor_leads`; approved leads receive tokenized memo access at `/invest/memo/:token`.
+- Investor CMS: `/hub/admin/investors` lets super admins manage investor leads and editable investor content.
+- Investor Assets: `investor_assets` plus public `investor-assets` storage support logos, hero assets, venue photos, screenshots, decks, PDFs, and other round assets.
+- Investor Memorandum: `investor_settings` stores round terms, thesis, traction, risks, team, and memo sections. Private memo content is returned only after token validation.
+- Admin investor management: approve, reject, revoke, content edit, and asset toggle/upload flows are available through `api-investor`, with audit logging on selected mutations.
+
+## Current Architecture
+
+```mermaid
+flowchart TD
+  Org["Organization"]
+  Franchisee["Franchisee"]
+  Venue["Venue"]
+  Customer["Customer Master"]
+  Product["Product Engine"]
+  Schedule["Schedule / Activity Sessions"]
+  Ops["Operations Engine"]
+  Finance["Financial Engine"]
+  Investor["Investor Engine"]
+  Stripe["Stripe"]
+  Zettle["Zettle"]
+
+  Org --> Franchisee --> Venue
+  Org --> Customer
+  Venue --> Product
+  Product --> Schedule
+  Schedule --> Ops
+  Customer --> Ops
+  Ops --> Finance
+  Stripe --> Finance
+  Zettle --> Finance
+  Org --> Investor
+```
 
 ### Frontend
 
@@ -42,309 +107,241 @@ Important surfaces:
 - Public player app: `/`, `/today`, `/book`, `/openplay`, `/program/:sessionId`, `/my`, `/hub`.
 - Desk OS: `/desk`.
 - Admin OS: `/hub/admin`.
+- Admin investor management: `/hub/admin/investors`.
+- Investor access: `/invest`, `/invest/memo/:token`.
 - Event lead operations: `/admin/event-leads`.
 - Self check-in: `/checkin/:venueSlug`.
-- Displays: `/display/venue`, `/display/openplay`, `/display/resource/:courtId`, `/display/device/:token`.
+- Displays: `/display/venue`, `/display/openplay`, `/display/resource/:courtId`, `/display/device/:token`, `/display/broadcast/:scoreSessionId`.
 
 ### Supabase
 
 Supabase provides:
 
-- PostgreSQL source-of-truth.
+- PostgreSQL source of truth.
 - Auth.
 - Realtime subscriptions for live check-ins, bookings, chat, and display surfaces.
 - Edge Functions for all server logic.
-- Storage for generated PDFs/media where used.
+- Storage for generated PDFs/media and investor assets where used.
 
-All production data is scoped to venues. Staff permissions are enforced through `venue_staff`, `user_roles`, and service-role checks in Edge Functions.
+All operational data remains venue-scoped through `venue_id`. Foundation tables now add organization/franchise/customer ancestry, but several runtime flows still keep compatibility `user_id` and venue-local membership fields.
 
 ### Edge Functions
 
 Edge Functions are in [supabase/functions](./supabase/functions). They are Deno functions and are deployed with `--no-verify-jwt`; authentication is performed manually inside functions via `getAuthenticatedClient(req)` and Supabase Auth.
 
-### Stripe
+Important functions:
 
-Stripe is used for:
+| Function | Purpose |
+| --- | --- |
+| `api-admin` | Admin aggregate API: venue/staff/courts/hours/pricing/products/schedule, Admin Today, Calendar, attention, Agent Inbox, venue operations, resource blocks, activity overrides, Revenue Ledger, Zettle connect/import. |
+| `api-bookings` | Public/admin booking API, Stripe checkout creation, public venue/courts, booking receipts, wellness, admin booking CRUD, availability, activity ticket checkout, and entitlement usage updates. |
+| `api-checkins` | Self check-in, booking code check-in, staff check-in, today/ops feeds, player/event check-in helpers. |
+| `api-customers` | Customer list/profile/create/update/recent and Customer 360 aggregation. |
+| `api-day-passes` | Day pass, share, voucher, and claim flows. |
+| `api-event-public` | Public activity/session endpoints, registrations, pricing previews, event lead intake-facing flows. |
+| `api-events` | Admin event CRUD, event plan sharing, public partner plan. |
+| `api-investor` | Investor lead request, tokenized memo access, admin lead management, investor settings, and assets. |
+| `api-memberships` | Membership tiers, tier pricing, entitlement, and member-facing/admin membership operations. |
+| `api-notifications` | Push subscription and notification sending. |
+| `api-ops` | Ops Center, operational health, client event, incident, checklist, and shadow-agent support. |
+| `api-stripe` | Stripe customer/payment-method/setup helpers. |
+| `api-stripe-webhook` | Stripe Checkout completion finalization for bookings, registrations, day passes, memberships, receipts, and ledger entries. Other Stripe event types are currently acknowledged and ignored. |
+| `event-sales-agent` | Event sales workflow: recommendation, schedule patch, offer draft/PDF/email, send offer, booking preview, confirm booking. |
 
-- Court booking checkout.
-- Activity/session registration checkout.
-- Day pass checkout.
-- Membership subscription checkout.
-- Saved payment method setup.
-- Webhook-finalized records, receipts, and ledger entries.
+Shared helpers are in [supabase/functions/_shared](./supabase/functions/_shared).
 
-The webhook path is `api-stripe-webhook`. Webhook handling must remain idempotent.
+## Engines
 
-### Zettle
+### Customer Engine
 
-Zettle Revenue MVP exists as a read/import integration:
+The Customer Engine is the identity and customer-history layer.
 
-- `zettle_connections` stores venue-level OAuth/API-key connection state.
-- `zettle_purchases` stores imported purchases.
-- `ledger_entries.source_type = 'zettle'` brings Zettle totals into Revenue Ledger.
+Implemented model:
 
-Current scope is purchases only. Products, category mapping, settlements, and customer matching are not yet part of the MVP.
+- `auth.users`: authentication anchor.
+- `player_profiles`: legacy/user profile fields and Stripe customer id.
+- `customers`: organization-scoped customer master.
+- `customer_identities`: auth/email/phone/Stripe/manual/Zettle identity links.
+- `customer_venue_profiles`: venue-private customer context, first/last seen, visits, tags, and private notes.
+- Nullable `customer_id` links on bookings, session registrations, day passes, memberships, receipts, ledger entries, and check-ins.
 
-### Agent Architecture
+Read surfaces:
 
-Pickla has an early approve-first event operations agent. It is not a general autonomous framework yet.
+- Customer 360.
+- Desk command/search and booking drawers.
+- Admin customer/people paths.
+- Revenue Ledger rows when a customer is known.
 
-Current agent behavior:
+Current constraint: runtime still supports compatibility reads by `user_id`; not every write path is fully customer-master-first.
 
-- Reads event lead, linked event, offer, schedule, resources, activity impact, opening hours, drift overrides, and resource blocks.
-- Writes recommendations into `event_lead_activities` with `type = 'agent_recommendation'`.
-- Admin sees recommendations in Agent Inbox and Event Lead.
-- Staff can approve/reject/re-analyze.
-- Approval can prepare safe internal drafts; it must not email, charge, refund, cancel activities, or confirm bookings automatically.
+### Financial Engine
 
-Key shared code:
+The Financial Engine records sales truth and customer-facing financial evidence.
 
-- [supabase/functions/_shared/event_operations_agent.ts](./supabase/functions/_shared/event_operations_agent.ts)
-- [supabase/functions/_shared/event_agents.ts](./supabase/functions/_shared/event_agents.ts)
-- [supabase/functions/event-sales-agent/index.ts](./supabase/functions/event-sales-agent/index.ts)
+Implemented model:
 
-## Core Systems
+- `ledger_entries`: append-only daily sales truth, unique by source/session where available.
+- `booking_receipts`: receipt/evidence records for Stripe finalized purchases.
+- `customer_transactions`: additive finance-ledger roadmap table for Stripe/Zettle/manual/refund/Fortnox-style future flows.
+- `zettle_connections` and `zettle_purchases`: Zettle purchase import state and imported purchase records.
+- Customer 360 financial summaries and local financial timeline.
 
-### Admin OS
+Current Stripe scope:
 
-Admin OS lives under `/hub/admin` and is wired in [src/pages/AdminPage.tsx](./src/pages/AdminPage.tsx).
+- `checkout.session.completed` finalizes bookings, registrations, day passes, memberships, receipts, entitlement usage, and ledger entries.
+- `invoice.paid`, `invoice.payment_failed`, and subscription lifecycle events are not yet real synchronization sources.
 
-It includes:
+### Product Engine
 
-- Today overview.
-- Calendar.
-- Venue settings.
-- Courts/resources.
-- Schedule/activity sessions.
-- Events and event leads.
-- Venue operations/drift.
-- Resource blocks.
-- Products/pricing/memberships.
-- Revenue Ledger.
-- Staff/devices/links/content surfaces.
+The Product Engine describes what is sold and how the customer price is resolved.
 
-Admin OS is the strategic/operator view. Desk OS is the live arrival/action view.
+Implemented model:
 
-### Desk OS
+- `access_products`: sellable products, base price, VAT, product kind, grants, and sort order.
+- `activity_series`: recurring program/series grouping.
+- `activity_sessions`: schedule, time, capacity, courts/resources, product key, publish status, access policy, and session metadata.
+- `session_registrations`: concrete customer registration for an occurrence date.
+- `access_entitlements` and `access_vouchers`: dated/reusable access and voucher-style rights.
+- `membership_tier_pricing` and `membership_entitlements`: current membership benefit/pricing rules.
 
-Desk OS lives at `/desk` in [src/pages/Index.tsx](./src/pages/Index.tsx).
+Pricing path:
 
-Current direction: inline command cockpit, not passive dashboard.
+```mermaid
+flowchart LR
+  Product["access_products"]
+  Session["activity_sessions"]
+  Channel["sales_channel / session channel price"]
+  Membership["membership tier pricing and entitlements"]
+  Promotion["promotion placeholder"]
+  Decision["ActivityPricingDecision"]
 
-It includes:
+  Product --> Decision
+  Session --> Decision
+  Channel --> Decision
+  Membership --> Decision
+  Promotion --> Decision
+```
 
-- Always-visible command bar for customer, booking code, receipt, phone, and booking search.
-- Today actionable lists for arrivals, bookings, activity registrations, and check-ins.
-- Operations suggestions for soon-starting bookings, pending payment, activity attendance gaps, stale check-ins, and unclear check-ins.
-- Shared booking detail drawer.
-- Shared Customer 360 drawer.
-- Staff booking check-in.
+Current constraint: Product Engine Phase 1 is implemented for activity/day-access pricing. Court booking pricing still uses `pricing_rules` and membership entitlement logic, with shared concepts but not a single universal product resolver.
 
-### Operations Truth
+### Operations Engine
 
-Operations Truth is the shared read layer that makes operational objects visible across Calendar, Desk, and Admin Today.
+The Operations Engine is the venue truth layer.
 
-It includes:
+Implemented model:
 
-- Court bookings grouped by booking/session/access code.
-- Activity sessions and registrations.
-- Events.
-- Venue operation overrides.
-- Event/resource blocks.
-- Check-in status.
-- Payment/receipt evidence where available.
+- `bookings`, `venue_courts`, `event_resource_blocks`, `activity_sessions`, `session_registrations`, `activity_session_overrides`, `events`, `venue_checkins`.
+- Desk OS, Admin Calendar, Admin Today, displays, and booking drawers read from shared operational sources.
+- `ops_signals`, `ops_check_state`, `ops_incidents`, `ops_client_events`, and `ops_agent_runs` power Ops Center and shadow-agent health checks.
+- Event operations agent recommendations are stored in `event_lead_activities` and shown in Agent Inbox.
 
-Important UI:
+Current constraint: there is no general Operations Inbox/work queue yet; signals and agent recommendations are split across Ops Center and Admin/Agent Inbox surfaces.
 
-- [src/components/operations/OperationsBookingDrawer.tsx](./src/components/operations/OperationsBookingDrawer.tsx)
-- [src/components/admin/shell/AdminCalendar.tsx](./src/components/admin/shell/AdminCalendar.tsx)
-- [src/screens/TodayScreen.tsx](./src/screens/TodayScreen.tsx)
-- [src/components/desk/shell/DeskToday.tsx](./src/components/desk/shell/DeskToday.tsx)
+### Investor Engine
 
-### Customer 360
+The Investor Engine is a platform-adjacent capital-raise surface.
 
-Customer 360 is the staff view for one customer.
+Implemented model:
 
-It shows:
+- `investor_leads`: request, approval, token hash, memo opened/interested states, requested shares, and message.
+- `investor_settings`: round content, terms, use of funds, traction, risks, team, and memo sections.
+- `investor_assets`: typed assets backed by public `investor-assets` storage.
+- `api-investor`: public request/settings/memo endpoints plus super-admin admin endpoints.
 
-- Name, email, phone.
-- Membership/access status.
-- Today access.
-- Upcoming bookings.
-- Activity registrations.
-- Day passes.
-- Memberships.
-- Check-ins.
-- Receipts and ledger evidence.
-- Safe existing actions.
+Current constraint: this is not a cap table, share registry, KYC, payment, or document-signing system.
 
-Entry points:
+## Current Known Gaps
 
-- Admin People/Customers.
-- Desk command bar.
-- Desk arrivals/check-ins.
-- Operations booking drawer.
-- Revenue Ledger rows when a user is known.
+### Financial Operations 1B
 
-Main component: [src/components/customers/Customer360Drawer.tsx](./src/components/customers/Customer360Drawer.tsx).
+Not implemented yet:
 
-### Self Check-in
+- Real Stripe subscription synchronization beyond Checkout completion.
+- `invoice.paid`.
+- `invoice.payment_failed`.
+- Subscription snapshots from Stripe as first-class records.
+- Payment method snapshots as durable finance/customer facts.
+- Richer Financial Timeline based on financial/domain events instead of local aggregation.
+- Full `membership_usage` integration across all pricing and finance views.
 
-Self check-in is customer-led venue entry.
+### Central Membership
 
-Flow:
+Not implemented yet:
 
-1. Customer scans a permanent venue QR, for example `/checkin/solna`.
-2. If logged out, they log in/sign up and resume.
-3. `api-checkins/self` resolves valid access.
-4. Access can come from booking, activity registration, day pass, or membership.
-5. A `venue_checkins` row is created/reused.
-6. Desk sees the arrival.
-7. If no access exists, the UI shows purchase options.
+- Organization-owned membership plans as runtime source.
+- Central membership records owned by `organization_id` + `customer_id`.
+- `entitlement_grants` as the universal access spine.
+- Runtime cutover away from venue-owned `membership_tiers`/`memberships.venue_id`.
+- Cross-venue central membership reporting and revenue attribution.
 
-Staff-led check-in still exists for booking drawers and desk operations.
+### Event Outbox
 
-### Revenue Ledger
+Not implemented yet:
 
-Revenue Ledger is the daily sales truth layer.
+- Typed domain-event outbox for facts such as BookingConfirmed, PaymentSettled, CheckinRecorded, SessionPublished, ResourceBlocked, and LeadReceived.
+- Idempotent event delivery with correlation/causation ids.
+- Projection rebuild path for Operations Truth, Customer 360, Financial Timeline, and Agent Inbox.
 
-Current table: `ledger_entries`.
+### Operations Inbox
 
-Properties:
+Not implemented yet:
 
-- Append-only: updates/deletes are blocked by trigger.
-- Idempotent by `(source_type, source_id)` and Stripe session where present.
-- Stores venue, source, accounting date, occurred time, customer name, amount including VAT, VAT amount, payment status/method, Stripe session, receipt number, booking receipt, and metadata.
+- A unified staff inbox for operational exceptions across bookings, payments, check-ins, activities, events, Zettle imports, and agent recommendations.
+- Assignment, status, SLA, comments, and resolution workflow.
 
-Current sources:
+### Shadow Agent
 
-- Court bookings.
-- Activity registrations.
-- Day passes.
-- Memberships.
-- Zettle purchases.
+Partially implemented:
 
-Admin view: [src/components/admin/AdminRevenueLedger.tsx](./src/components/admin/AdminRevenueLedger.tsx).
+- Ops Center has `ops_agent_runs` and shadow checks.
+- Event operations agent can recommend and staff can approve/reject/re-analyze.
 
-### Event OS
+Not implemented yet:
 
-Event OS covers B2B/private events from lead to offer to confirmed capacity.
+- General typed action contracts.
+- Agent permissions as first-class principals.
+- Would-have-done measurement across all operations.
+- Kill switches by agent/capability/scope.
 
-Current chain:
+### Product Engine Phase 2
 
-1. Event lead is created by intake/public event flow.
-2. Staff can edit operational schedule on linked `events`.
-3. Agent can recommend package, schedule, resources, and risk.
-4. Staff can approve a recommendation to prepare an internal offer draft.
-5. Offers/PDF/email drafts can be generated.
-6. Confirm booking is explicit.
-7. Confirmed event resource allocations create `event_resource_blocks`.
-8. Public booking availability respects those resource blocks.
-9. Affected activities require explicit staff hide/cancel decisions through `activity_session_overrides`.
+Not implemented yet:
 
-Important tables:
+- Universal product/pricing resolver for all product categories, including court bookings and memberships.
+- Promotions/vouchers/referrals as real pricing entities.
+- Channel pricing tables beyond current session metadata and simulator placeholders.
+- Product-owned entitlements replacing scattered membership/product logic.
+- Admin editing that guarantees public UI, desk UI, and backend checkout are always driven by the same resolver for every product.
 
-- `event_leads`
-- `events`
-- `event_offers`
-- `event_lead_activities`
-- `event_resource_catalog`
-- `event_resource_allocations`
-- `event_courts`
-- `event_resource_blocks`
+### Native Apps (future)
 
-### Agent Inbox
+Not implemented yet:
 
-Agent Inbox is the Today/Admin surface for agent recommendations.
+- Native iOS/Android apps.
+- Native push/deep-link handling beyond the current PWA and web push setup.
+- App-store distribution, native offline access, and native scanner/display shells.
 
-Storage:
-
-- `event_lead_activities.type = 'agent_recommendation'`
-- JSON payload includes summary, risk, capacity status, conflicts, affected activities, and next action.
-
-Phase 1 behavior:
-
-- Recommendations are visible.
-- Staff can approve/reject/re-analyze.
-- High-risk or failed-capacity recommendations should block approval.
-- Approval prepares safe internal drafts only.
-
-### Calendar
-
-Admin Calendar is a real operational calendar MVP, not a placeholder.
-
-It shows:
-
-- Activity sessions.
-- Events.
-- Venue operation overrides/drift.
-- Event/resource blocks.
-- Private court bookings.
-
-It supports:
-
-- Week/day views.
-- Opening existing modules.
-- Hide/cancel one activity occurrence through `activity_session_overrides`.
-- Create drift override.
-- Create one-off public activities/specialpass sessions.
-
-Main component: [src/components/admin/shell/AdminCalendar.tsx](./src/components/admin/shell/AdminCalendar.tsx).
-
-### Specialpass
-
-Specialpass is implemented as a one-off activity/session, not as drift and not as a recurring series.
-
-It supports:
-
-- One-time public activity creation from Calendar.
-- Title, date, time, price, capacity, type, description, visibility.
-- Membership/day-pass behavior where standard pricing applies.
-- Per-session pricing override in `activity_sessions.metadata`.
-- Pricing modes:
-  - `standard`
-  - `fixed_ticket`
-  - `member_discount`
-- Channel pricing:
-  - `online_price_sek`
-  - `desk_price_sek`
-  - `pricing_channel_mode = 'online_discount'`
-
-Public listing/detail UI should respect metadata pricing mode and avoid showing inherited Open Play badges for specialpass overrides.
-
-### Memberships
-
-Memberships include:
-
-- Stripe subscription checkout.
-- Membership tiers.
-- Entitlements such as court-hour quota, discounts, open play access, day pass benefits.
-- Usage tracking for entitlement periods.
-- Admin membership management and assignment surfaces.
-- Customer 360 membership/access display.
-
-Membership pricing must not be globally changed by specialpass/session pricing overrides.
-
-## Current Production Status
+## Production Status
 
 Live today:
 
 - Public booking and booking confirmation.
 - Court availability with resource-block awareness.
 - Public venue/opening-hours display with drift overrides.
-- Activity/session listing and registration.
+- Activity/session listing, sharing, interest/social proof, and registration.
 - Activity occurrence hiding/cancellation through overrides.
-- Specialpass one-off public sessions with per-session pricing display.
+- Specialpass one-off public sessions with per-session/channel pricing display.
 - Membership checkout and entitlement logic.
-- Day passes.
+- Day passes, shared passes, and claim flow.
 - Self check-in route and desk-visible check-ins.
-- Staff check-in for bookings.
+- Staff check-in for bookings, activity tickets, memberships, and day access.
 - Desk OS command/search/action surface.
-- Admin OS Today, Calendar, Venue Operations, Resource Blocks, Revenue Ledger.
-- Customer 360.
-- Event lead intake, offer generation, PDF/email drafts, confirm-booking, event capacity blocks.
+- Admin OS Today, Calendar, Venue Operations, Resource Blocks, Products, Pricing, Schedule, Revenue Ledger.
+- Customer 360 with financial/subscription read-first surfaces.
+- Event lead intake, offer generation, PDF/email drafts, confirm booking, event capacity blocks.
 - Agent recommendations for event operations.
 - Zettle purchases import into Revenue Ledger.
+- Investor access, investor CMS, investor assets, and investor memorandum.
 - Hub/chat/community surfaces.
 - Venue/resource displays.
 - Score/broadcast MVP.
@@ -357,196 +354,18 @@ Important production notes:
 - Migrations are applied manually and PostgREST schema cache should be reloaded after SQL editor changes.
 - Do not commit Supabase `.temp` files.
 
-## Edge Functions Overview
+## Deployment And Environment
 
-| Function | Purpose |
-| --- | --- |
-| `api-admin` | Admin OS aggregate API: venue/staff/courts/hours/pricing/products/schedule, Admin Today, Calendar, attention, Agent Inbox, venue operations, resource blocks, activity overrides, Revenue Ledger, Zettle connect/import. |
-| `api-auth` | Auth-adjacent helper endpoints. |
-| `api-bookings` | Public/admin booking API: checkout creation, public venue/courts, public booking, receipts/wellness, admin booking CRUD, availability and revenue helpers. |
-| `api-checkins` | Self check-in, booking code check-in, staff check-in, today/ops feeds, player/event check-in helpers. |
-| `api-corporate` | Corporate account and join/dashboard flows. |
-| `api-customers` | Customer list/profile/create/update/recent and Customer 360 aggregation. |
-| `api-day-passes` | Day pass flows and access support. |
-| `api-event-public` | Public event/activity/session endpoints, registrations, event lead intake-facing flows. |
-| `api-event-templates` | Event product/template catalog support. |
-| `api-events` | Admin event CRUD, event plan sharing, public partner plan. |
-| `api-link-preview` | Link preview helper. |
-| `api-matches` | Match/community game endpoints. |
-| `api-memberships` | Membership tiers, entitlement, and member-facing/admin membership operations. |
-| `api-notifications` | Push subscription and notification sending. |
-| `api-ops` | Ops Center and operational health/check-in visibility support. |
-| `api-score` | Pickla Score MVP endpoints. |
-| `api-stripe` | Stripe customer/payment-method/setup helpers. |
-| `api-stripe-webhook` | Stripe webhook finalization for bookings, registrations, day passes, memberships, receipts, ledger entries. |
-| `event-followup-agent` | Event lead follow-up automation support. |
-| `event-intake-agent` | Event lead intake, list, and update support. |
-| `event-offer-builder` | Offer generation helper. |
-| `event-pdf-generator` | Event offer PDF generation. |
-| `event-sales-agent` | Event sales workflow: recommendation, schedule patch, offer draft/PDF/email, send offer, booking preview, confirm booking. |
-
-Shared helpers are in [supabase/functions/_shared](./supabase/functions/_shared).
-
-## Database Domains
-
-### Bookings
-
-Core concepts:
-
-- `bookings`: one row per court/resource booking row; multi-court bookings are grouped by Stripe session/access code.
-- `venue_courts`: physical courts/resources used by public booking and displays.
-- `booking_receipts`: receipt/evidence records.
-- `access_code`: 4-digit venue/day code for booking check-in.
-- `stripe_session_id`: payment idempotency/grouping key.
-
-Booking availability must respect `event_resource_blocks`.
-
-### Activities
-
-Core concepts:
-
-- `activity_sessions`: concrete/recurring public sessions and one-off specialpass sessions.
-- `session_registrations`: paid/free/access-based registrations.
-- `activity_session_overrides`: per-date hidden/cancelled state without modifying the recurring base session.
-- `activity_session_interests`: soft intent/social proof.
-- Activity pricing can be overridden per session through `activity_sessions.metadata`.
-
-### Memberships
-
-Core concepts:
-
-- `membership_tiers`
-- `memberships`
-- `membership_entitlements`
-- `membership_usage`
-- Stripe customer/subscription IDs on member/payment records.
-
-Memberships can grant quotas, discounts, and access benefits.
-
-### Events
-
-Core concepts:
-
-- `event_leads`: inbound customer request and sales pipeline.
-- `events`: operational event record; source of truth for schedule (`start_date`, `end_date`, `start_time`, `end_time`).
-- `event_offers`: offer payload, send status, PDF/email draft data.
-- `event_lead_activities`: timeline, agent recommendations, approval/rejection events.
-- `event_resource_catalog`: bookable/plannable event resources.
-- `event_resource_allocations`: proposed/confirmed planning allocations.
-- `event_courts`: selected court resources.
-- `event_resource_blocks`: actual operational capacity blocks.
-
-### Check-ins
-
-Core concepts:
-
-- `venue_checkins`: live/recorded presence.
-- `entry_type`: booking, activity/session registration, day pass, membership, manual/auto.
-- `session_date`: Stockholm venue day.
-- Check-ins are idempotent for active entitlement/user combinations.
-- Desk should show current Stockholm day only, not stale previous-day presence as current.
-
-### Ledger
-
-Core concepts:
-
-- `ledger_entries`: append-only daily sales truth.
-- `source_type`: booking/activity/day_pass/membership/zettle/etc.
-- `source_id`: source record/session id.
-- `accounting_date`, `occurred_at`, amount/VAT/payment/receipt evidence.
-- Zettle imports write both `zettle_purchases` and ledger entries.
-
-There is no `ledger_entry_lines` table yet. No reversal/correction model yet.
-
-### Customers
-
-Core concepts:
-
-- Supabase Auth users are the identity anchor.
-- `player_profiles` stores customer profile fields.
-- Customer 360 resolves linked operational records by `user_id`, receipts, Stripe session/receipt metadata where available.
-- Zettle purchases generally do not include customer identity and are not auto-matched.
-
-## Agent Roadmap
-
-Current state: recommendation-first event operations agent.
-
-Next phases:
-
-1. Strengthen recommendation quality.
-   - More reliable opening-hours checks.
-   - Better resource alternatives.
-   - Better conflict explanations.
-   - Stronger event-type heuristics.
-2. Consolidate Event OS workflow.
-   - One decision path: Lead -> Agent Recommendation -> Approve -> Offer Draft Ready -> Send Offer -> Customer Accepts -> Confirm Booking.
-   - Remove duplicate unsafe legacy controls where state says they are invalid.
-3. Add explicit action contracts.
-   - Recommendation payload should declare proposed actions as safe internal actions.
-   - UI should show exactly what approval will do.
-4. Add durable agent tables when recommendations outgrow `event_lead_activities`.
-   - `agent_runs`
-   - `agent_recommendations`
-   - `agent_actions`
-5. Add ledger/audit trail after operational truth is correct.
-   - The ledger must log truth, not stale planned data.
-6. Keep hard safety rules.
-   - Agents never send customer email, charge, refund, cancel activities, delete data, or change confirmed bookings without explicit staff approval.
-
-## Multi-venue Roadmap
-
-The schema is already venue-scoped, but operational multi-venue maturity is incomplete.
-
-Needed:
-
-- Venue switcher consistency across Admin, Desk, Calendar, Ledger, and Customer 360.
-- Per-venue opening hours, products, membership rules, Zettle connection, Stripe account/connect model if needed.
-- Cross-venue customer history without leaking venue-private operational notes.
-- Central HQ reporting across venue ledgers.
-- Venue-specific displays, QR check-in surfaces, and device management.
-- Multi-venue staff permissions and audit trail.
-- Clear stage/prod separation for every external integration.
-
-## Known Gaps
-
-Product/ops gaps:
-
-- Ledger has no line-item model, correction/reversal entries, export, or Fortnox integration.
-- Zettle imports purchases only; no settlements, categories, products, or customer matching.
-- Customer 360 is read-focused; no refund/cancellation/customer-service workflows beyond safe existing actions.
-- Agent framework is intentionally minimal and stored in lead activities.
-- Calendar MVP has no drag/drop and limited editing.
-- Activity/session editing is still uneven across admin surfaces.
-- Specialpass pricing display and checkout calculation must stay aligned as more pricing modes are added.
-- Self check-in uses permanent venue QR; daily rotating token/geofence abuse prevention is not built.
-- Operations Truth exists through multiple endpoints/components, not a formal single backend read model.
-- Multi-venue HQ reporting is not done.
-
-Technical gaps:
-
-- Supabase generated types may lag the live schema after migrations.
-- Some admin queries still rely on flat merging because PostgREST schema cache/FK embeds can fail after manual migrations.
-- Lint has legacy repo-wide debt; build is the current minimum gate for most product changes.
-- Migrations are manual; deploy/runbook discipline matters.
-- Edge Function deployment is separate from frontend deployment.
-
-## Development Workflow
-
-### Commands
+Commands:
 
 ```bash
-npm run dev          # Start local Vite dev server
-npm run build        # Production build
-npm run test         # Run Vitest once
-npm run test:watch   # Run Vitest in watch mode
-npm run lint         # ESLint check; may include legacy debt
-npm run prod:check   # Tests + production build
-npm run ops:agent    # Production ops/deploy checklist
+npm run dev
+npm run build
+npm run lint
+npm run test
 ```
 
-### Local environment
-
-Create `.env`:
+Environment requires a `.env` file with:
 
 ```bash
 VITE_SUPABASE_URL=...
@@ -554,7 +373,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=...
 VITE_SUPABASE_PROJECT_ID=...
 ```
 
-Backend secrets live in Supabase Secrets, not frontend env:
+Supabase secrets required where features are enabled:
 
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
@@ -562,45 +381,20 @@ Backend secrets live in Supabase Secrets, not frontend env:
 - `VAPID_PRIVATE_KEY`
 - Zettle credentials as configured by `api-admin`
 
-### Coding rules
+Deploy process:
 
-- Make targeted changes.
-- Use React Query and `apiGet`/`apiPost`/`apiPatch`/`apiDelete` for server state.
-- Use Luxon for Stockholm calendar-day logic.
-- Do not bypass Edge Functions with direct Supabase writes from UI except for established auth/realtime patterns.
-- Do not change payment, membership, or booking logic as part of unrelated UI work.
+- Frontend: `git push` to `main` deploys through Vercel.
+- Edge Functions: `supabase functions deploy --no-verify-jwt --project-ref cqnjpudmsreubgviqptg`.
+- Migrations: run manually in Supabase SQL editor, then run `NOTIFY pgrst, 'reload schema'`.
+
+## Development Rules
+
+- Make small targeted changes.
+- No production code changes when updating architecture documentation.
+- Use Luxon for venue-day and timezone-sensitive logic.
+- All server state should flow through React Query and Edge Functions.
+- New mutations should use shared authorization helpers and write audit where practical.
 - Never commit secrets.
-- Never commit `supabase/.temp/*`.
-
-### Deploy
-
-Frontend:
-
-```bash
-git push
-```
-
-Vercel deploys from `main`.
-
-Migrations:
-
-1. Apply manually in Supabase SQL editor.
-2. Reload PostgREST schema cache:
-
-```sql
-NOTIFY pgrst, 'reload schema';
-```
-
-Edge Functions:
-
-```bash
-supabase functions deploy <function-name> --no-verify-jwt --project-ref cqnjpudmsreubgviqptg
-```
-
-Production Stripe webhook:
-
-```text
-https://cqnjpudmsreubgviqptg.supabase.co/functions/v1/api-stripe-webhook
-```
-
-See [docs/production-readiness.md](./docs/production-readiness.md), [docs/launch-runbook.md](./docs/launch-runbook.md), and [docs/daily-operations-runbook.md](./docs/daily-operations-runbook.md) for operational runbooks.
+- Never commit Supabase `.temp` files.
+- Run `npm run build` before commits for application changes. Documentation-only changes do not require a build.
+- Run `git diff --check` before handing off documentation changes.
