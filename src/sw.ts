@@ -1,9 +1,19 @@
 /// <reference lib="webworker" />
-import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
-import { NavigationRoute, registerRoute } from 'workbox-routing';
-import { NetworkFirst, NetworkOnly } from 'workbox-strategies';
+import { setCacheNameDetails } from 'workbox-core';
+import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
+import { registerRoute } from 'workbox-routing';
+import { NetworkOnly } from 'workbox-strategies';
 
 declare const self: ServiceWorkerGlobalScope;
+
+const CACHE_VERSION = '2026-07-02-no-maintenance-fallback';
+
+setCacheNameDetails({
+  prefix: 'pickla',
+  suffix: CACHE_VERSION,
+  precache: 'precache',
+  runtime: 'runtime',
+});
 
 type PushPayload = {
   aps?: {
@@ -18,31 +28,37 @@ type PushPayload = {
 };
 
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    const keys = await self.caches.keys();
+    await Promise.all(
+      keys
+        .filter((key) =>
+          key.includes('workbox') ||
+          key.includes('precache') ||
+          key.includes('api-cache') ||
+          key.includes('pickla-runtime') ||
+          key.includes('pickla-precache')
+        )
+        .filter((key) => !key.includes(CACHE_VERSION))
+        .map((key) => self.caches.delete(key))
+    );
+    await self.clients.claim();
+  })());
+});
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 
 registerRoute(
-  ({ request, url }: { request: Request; url: URL }) =>
-    request.mode === 'navigate' && url.pathname.startsWith('/invest/memo/'),
-  new NetworkOnly(),
-);
-
-registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')));
-
-registerRoute(
-  ({ url }: { url: URL }) =>
-    url.hostname.includes('.supabase.co') && url.pathname.startsWith('/functions/v1/api-investor/'),
+  ({ request }: { request: Request }) => request.mode === 'navigate',
   new NetworkOnly(),
 );
 
 registerRoute(
   ({ url }: { url: URL }) =>
-    url.hostname.includes('.supabase.co') &&
-    url.pathname.startsWith('/functions/v1/') &&
-    !url.pathname.startsWith('/functions/v1/api-investor/'),
-  new NetworkFirst({ cacheName: 'api-cache', networkTimeoutSeconds: 5 }),
+    url.hostname.includes('.supabase.co') && url.pathname.startsWith('/functions/v1/'),
+  new NetworkOnly(),
 );
 
 self.addEventListener('push', (event: PushEvent) => {
