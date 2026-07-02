@@ -5,6 +5,7 @@ import { Check, CreditCard, Loader2, Pencil, Plus, Tag, Trash2, X } from "lucide
 import { toast } from "sonner";
 import { DateTime } from "luxon";
 import { apiGet } from "@/lib/api";
+import { formatSek } from "@/lib/activityPricing";
 
 const DAY_LABELS = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -267,8 +268,8 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
           </select>
           <div className="rounded-xl px-3 py-2.5 text-sm" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
             <span className="text-muted-foreground">Final price </span>
-            <span className="font-bold">{formatPrice(selectedPreview.finalPrice)}</span>
-            {selectedPreview.modifier !== 0 && <span className="text-muted-foreground"> ({selectedPreview.modifier > 0 ? "+" : ""}{formatPrice(selectedPreview.modifier)})</span>}
+            <span className="font-bold">{formatSek(selectedPreview.finalPrice)}</span>
+            {selectedPreview.modifier !== 0 && <span className="text-muted-foreground"> ({selectedPreview.modifier > 0 ? "+" : ""}{formatSek(selectedPreview.modifier)})</span>}
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground">
@@ -288,9 +289,9 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
                   <p className="text-sm font-bold">{item.title}</p>
                   <p className="text-[10px] text-muted-foreground">{item.date} · {item.time} · {item.session_type}</p>
                   <div className="mt-2 grid grid-cols-3 gap-1.5 text-[11px]">
-                    <PricePill label="Online" value={formatPrice(online)} />
-                    <PricePill label="Desk" value={formatPrice(desk)} />
-                    <PricePill label="Diff" value={`${desk - online >= 0 ? "+" : ""}${formatPrice(desk - online)}`} />
+                    <PricePill label="Online" value={formatSek(online)} />
+                    <PricePill label="Desk" value={formatSek(desk)} />
+                    <PricePill label="Diff" value={`${desk - online >= 0 ? "+" : ""}${formatSek(desk - online)}`} />
                   </div>
                 </div>
               );
