@@ -88,6 +88,12 @@ const soldAsFromSession = (session: any): SoldAs => {
   return "activity_ticket";
 };
 
+const soldAsFromProduct = (product: any, productKey?: string | null): SoldAs => {
+  if (!productKey) return "included_only";
+  if (productKey === "day_access" || product?.product_kind === "day_access") return "day_pass";
+  return "activity_ticket";
+};
+
 const isOpenPlayLike = (sessionType: string) => ["open_play", "club_night", "pickla_open"].includes(sessionType);
 
 const numericPrice = (value: number | string | null | undefined, fallback = 0) => {
@@ -182,6 +188,32 @@ const buildSessionConfig = ({
       includes_day_access: soldAs === "day_pass",
       member_benefit_key: includedInUnlimited ? "open_play_unlimited" : null,
       sold_as: soldAs,
+    },
+  };
+};
+
+const buildProductSessionConfig = ({
+  product,
+  productKey,
+  sessionType,
+  includedInDayPass,
+  includedInUnlimited,
+}: {
+  product: any;
+  productKey: string | null;
+  sessionType: string;
+  includedInDayPass: boolean;
+  includedInUnlimited: boolean;
+}) => {
+  const soldAs = soldAsFromProduct(product, productKey);
+  const config = buildSessionConfig({ soldAs, sessionType, includedInDayPass, includedInUnlimited });
+  return {
+    soldAs,
+    product_key: soldAs === "included_only" ? null : productKey || config.product_key,
+    access_policy: {
+      ...config.access_policy,
+      product_kind: product?.product_kind || null,
+      product_name: product?.name || null,
     },
   };
 };
@@ -330,7 +362,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [sessionName, setSessionName] = useState("");
   const [sessionType, setSessionType] = useState("open_play");
   const [seriesId, setSeriesId] = useState("");
-  const [soldAs, setSoldAs] = useState<SoldAs>("activity_ticket");
+  const [sessionProductKey, setSessionProductKey] = useState("open_play_slot");
   const [includedInDayPass, setIncludedInDayPass] = useState(true);
   const [includedInUnlimited, setIncludedInUnlimited] = useState(true);
   const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5]);
@@ -477,21 +509,26 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       toast.error("Namn och minst en veckodag krävs");
       return;
     }
-    const config = buildSessionConfig({
-      soldAs,
+    const selectedProductKey = sessionProductKey || productKeyForActivityTicket(sessionType);
+    const selectedProduct = productMap[selectedProductKey] || null;
+    const config = buildProductSessionConfig({
+      product: selectedProduct,
+      productKey: selectedProductKey,
       sessionType,
       includedInDayPass,
       includedInUnlimited,
     });
-    const onlinePrice = numericPrice(price);
-    const desk = numericPrice(deskPrice || onlinePrice, onlinePrice);
+    const effectiveSoldAs = config.soldAs;
+    const productBasePrice = numericPrice(selectedProduct?.base_price_sek ?? 0);
+    const effectiveInputPrice = price === "" ? productBasePrice : numericPrice(price);
+    const desk = numericPrice(deskPrice || effectiveInputPrice, effectiveInputPrice);
     const warnings = draftWarnings({
       name: sessionName,
       session_type: sessionType,
-      sold_as: soldAs,
+      sold_as: effectiveSoldAs,
       product_key: config.product_key,
       included_in_day_pass: includedInDayPass,
-      price_sek: onlinePrice,
+      price_sek: effectiveInputPrice,
       capacity,
       publish_status: "published",
       is_active: true,
@@ -510,11 +547,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       recurrence_days: days,
       start_time: startTime,
       end_time: endTime,
-      price_sek: onlinePrice,
+      price_sek: effectiveInputPrice,
       capacity: capacity ? Math.round(Number(capacity)) : null,
       access_policy: config.access_policy,
       metadata: buildPricingMetadata({
-        onlinePrice,
+        onlinePrice: effectiveInputPrice,
         deskPrice: desk,
         corporatePrice,
         promoPrice,
@@ -597,8 +634,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       toast.error("Passet behöver namn och minst en veckodag");
       return;
     }
-    const config = buildSessionConfig({
-      soldAs: draft.sold_as || "activity_ticket",
+    const draftProductKey = draft.product_key || productKeyForActivityTicket(draft.session_type || "open_play");
+    const draftProduct = productMap[draftProductKey] || null;
+    const config = buildProductSessionConfig({
+      product: draftProduct,
+      productKey: draftProductKey,
       sessionType: draft.session_type || "open_play",
       includedInDayPass: Boolean(draft.included_in_day_pass),
       includedInUnlimited: Boolean(draft.included_in_unlimited),
@@ -642,24 +682,33 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     });
   };
 
-  const createConfig = buildSessionConfig({ soldAs, sessionType, includedInDayPass, includedInUnlimited });
+  const createProductKey = sessionProductKey || productKeyForActivityTicket(sessionType);
+  const createProduct = productMap[createProductKey] || null;
+  const createConfig = buildProductSessionConfig({
+    product: createProduct,
+    productKey: createProductKey,
+    sessionType,
+    includedInDayPass,
+    includedInUnlimited,
+  });
+  const createOnlinePrice = price === "" ? numericPrice(createProduct?.base_price_sek ?? 0) : numericPrice(price);
   const createWarnings = draftWarnings({
     name: sessionName,
     session_type: sessionType,
-    sold_as: soldAs,
+    sold_as: createConfig.soldAs,
     product_key: createConfig.product_key,
     included_in_day_pass: includedInDayPass,
-    price_sek: numericPrice(price),
+    price_sek: createOnlinePrice,
     capacity,
     publish_status: "published",
     is_active: true,
   });
   const createPreview = pricingPreview({
-    onlinePrice: numericPrice(price),
-    deskPrice: numericPrice(deskPrice || price, numericPrice(price)),
+    onlinePrice: createOnlinePrice,
+    deskPrice: numericPrice(deskPrice || createOnlinePrice, createOnlinePrice),
     corporatePrice: optionalPrice(corporatePrice),
     promoPrice: optionalPrice(promoPrice),
-    soldAs,
+    soldAs: createConfig.soldAs,
     sessionType,
     includedInDayPass,
     includedInUnlimited,
@@ -780,6 +829,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
               const nextType = e.target.value;
               setSessionType(nextType);
               setIncludedInUnlimited(isOpenPlayLike(nextType));
+              setSessionProductKey(productKeyForActivityTicket(nextType));
             }}
             className={baseInputClass}
             style={inputStyle}
@@ -791,22 +841,32 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             {series.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {SOLD_AS_OPTIONS.map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              onClick={() => {
-                setSoldAs(option.key);
-                if (option.key === "activity_ticket") setIncludedInDayPass(true);
-                if (option.key === "day_pass") setIncludedInDayPass(true);
-              }}
-              className={`rounded-xl border px-3 py-2 text-left ${soldAs === option.key ? "border-primary bg-primary/10 text-foreground" : "border-border bg-muted/40 text-muted-foreground"}`}
-            >
-              <span className="block text-xs font-bold">{option.label}</span>
-              <span className="mt-0.5 block text-[10px] leading-snug">{option.helper}</span>
-            </button>
-          ))}
+        <div className="rounded-xl bg-muted/40 p-3 space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Vad säljer vi?</p>
+          <select
+            value={createProductKey}
+            onChange={(e) => setSessionProductKey(e.target.value)}
+            className="w-full rounded-xl px-3 py-2.5 text-xs outline-none"
+            style={inputStyle}
+          >
+            {products.map((product) => (
+              <option key={product.id} value={product.product_key}>{product.name}</option>
+            ))}
+          </select>
+          <div className="grid gap-2 text-[11px] sm:grid-cols-3">
+            <div className="rounded-lg bg-background/60 px-2 py-1.5">
+              <span className="block text-muted-foreground">Produkt</span>
+              <span className="font-bold">{createProduct?.name || createProductKey}</span>
+            </div>
+            <div className="rounded-lg bg-background/60 px-2 py-1.5">
+              <span className="block text-muted-foreground">Biljettyp</span>
+              <span className="font-bold">{SOLD_AS_OPTIONS.find((option) => option.key === createConfig.soldAs)?.label}</span>
+            </div>
+            <div className="rounded-lg bg-background/60 px-2 py-1.5">
+              <span className="block text-muted-foreground">Baspris</span>
+              <span className="font-bold">{formatSek(numericPrice(createProduct?.base_price_sek ?? 0))}</span>
+            </div>
+          </div>
         </div>
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
@@ -814,7 +874,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             <input
               type="checkbox"
               checked={includedInDayPass}
-              disabled={soldAs === "day_pass"}
+              disabled={createConfig.soldAs === "day_pass"}
               onChange={(e) => setIncludedInDayPass(e.target.checked)}
             />
           </label>
@@ -897,15 +957,18 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           const product = session.product_key ? productMap[session.product_key] : null;
           const isEditing = editingSessionId === session.id;
           const draft = sessionDrafts[session.id] || {};
-          const activeDraftSoldAs = (draft.sold_as || soldAsFromSession(session)) as SoldAs;
+          const activeDraftProductKey = draft.product_key || session.product_key || productKeyForActivityTicket(draft.session_type || session.session_type || "open_play");
+          const activeDraftProduct = productMap[activeDraftProductKey] || product;
           const activeDraftIncludedInDayPass = Boolean(draft.included_in_day_pass ?? session.access_policy?.allows_day_access);
           const activeDraftIncludedInUnlimited = Boolean(draft.included_in_unlimited ?? (session.access_policy?.member_benefit_key === "open_play_unlimited"));
-          const activeDraftConfig = buildSessionConfig({
-            soldAs: activeDraftSoldAs,
+          const activeDraftConfig = buildProductSessionConfig({
+            product: activeDraftProduct,
+            productKey: activeDraftProductKey,
             sessionType: draft.session_type || session.session_type || "open_play",
             includedInDayPass: activeDraftIncludedInDayPass,
             includedInUnlimited: activeDraftIncludedInUnlimited,
           });
+          const activeDraftSoldAs = activeDraftConfig.soldAs;
           const activeWarnings = isEditing
             ? draftWarnings({
                 ...draft,
@@ -965,24 +1028,45 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                     </select>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-3">
-                    {SOLD_AS_OPTIONS.map((option) => (
-                      <button
-                        key={option.key}
-                        type="button"
-                        onClick={() => setSessionDrafts((current) => ({
-                          ...current,
-                          [session.id]: {
-                            ...draft,
-                            sold_as: option.key,
-                            included_in_day_pass: option.key === "day_pass" ? true : draft.included_in_day_pass,
-                          },
-                        }))}
-                        className={`rounded-xl border px-3 py-2 text-left ${activeDraftSoldAs === option.key ? "border-primary bg-primary/10 text-foreground" : "border-border bg-muted/40 text-muted-foreground"}`}
+                    <div className="sm:col-span-3 rounded-xl bg-muted/40 p-3 space-y-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Vad säljer vi?</p>
+                      <select
+                        value={activeDraftProductKey || ""}
+                        onChange={(e) => {
+                          const nextProduct = productMap[e.target.value];
+                          const nextSoldAs = soldAsFromProduct(nextProduct, e.target.value);
+                          setSessionDrafts((current) => ({
+                            ...current,
+                            [session.id]: {
+                              ...draft,
+                              product_key: e.target.value,
+                              sold_as: nextSoldAs,
+                              included_in_day_pass: nextSoldAs === "day_pass" ? true : draft.included_in_day_pass,
+                            },
+                          }));
+                        }}
+                        className="w-full rounded-xl px-3 py-2.5 text-xs outline-none"
+                        style={inputStyle}
                       >
-                        <span className="block text-xs font-bold">{option.label}</span>
-                        <span className="mt-0.5 block text-[10px] leading-snug">{option.helper}</span>
-                      </button>
-                    ))}
+                        {products.map((productOption) => (
+                          <option key={productOption.id} value={productOption.product_key}>{productOption.name}</option>
+                        ))}
+                      </select>
+                      <div className="grid gap-2 text-[11px] sm:grid-cols-3">
+                        <div className="rounded-lg bg-background/60 px-2 py-1.5">
+                          <span className="block text-muted-foreground">Produkt</span>
+                          <span className="font-bold">{activeDraftProduct?.name || activeDraftProductKey}</span>
+                        </div>
+                        <div className="rounded-lg bg-background/60 px-2 py-1.5">
+                          <span className="block text-muted-foreground">Biljettyp</span>
+                          <span className="font-bold">{SOLD_AS_OPTIONS.find((option) => option.key === activeDraftSoldAs)?.label}</span>
+                        </div>
+                        <div className="rounded-lg bg-background/60 px-2 py-1.5">
+                          <span className="block text-muted-foreground">Produktens baspris</span>
+                          <span className="font-bold">{formatSek(numericPrice(activeDraftProduct?.base_price_sek ?? 0))}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">

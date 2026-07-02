@@ -1,8 +1,32 @@
 export type MembershipPricingRow = {
+  tier_id?: string | null;
   product_type?: string | null;
   fixed_price?: number | null;
   discount_percent?: number | null;
   label?: string | null;
+};
+
+export type ProductPricingInput = {
+  product?: {
+    id?: string | null;
+    product_key?: string | null;
+    name?: string | null;
+    product_kind?: string | null;
+    base_price_sek?: number | string | null;
+  } | null;
+  membership?: {
+    id?: string | null;
+    name?: string | null;
+    isGuest?: boolean;
+  } | null;
+  tierPricing?: MembershipPricingRow[] | null;
+  channel?: string | null;
+  channelPrices?: Record<string, number | string | null | undefined> | null;
+  promotion?: {
+    label?: string | null;
+    fixed_discount_sek?: number | string | null;
+    discount_percent?: number | string | null;
+  } | null;
 };
 
 export type MembershipEntitlementRow = {
@@ -37,6 +61,76 @@ export function formatSek(amount: number) {
     minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
     maximumFractionDigits: 2,
   })} kr`;
+}
+
+function roundSek(value: number) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function normalizePrice(value: number | string | null | undefined) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, roundSek(parsed)) : 0;
+}
+
+function normalizeChannel(channel?: string | null) {
+  return String(channel || "online").toLowerCase();
+}
+
+export function resolveProductPricingPreview({
+  product,
+  membership,
+  tierPricing,
+  channel = "online",
+  channelPrices,
+  promotion,
+}: ProductPricingInput) {
+  const productKey = product?.product_key || "";
+  const normalizedChannel = normalizeChannel(channel);
+  const basePrice = normalizePrice(product?.base_price_sek);
+  const channelOverride = channelPrices ? channelPrices[normalizedChannel] : null;
+  const channelPrice = channelOverride == null || channelOverride === "" ? basePrice : normalizePrice(channelOverride);
+  const channelAdjustment = roundSek(channelPrice - basePrice);
+
+  const membershipRule = membership?.id
+    ? (tierPricing || []).find((row) => row.tier_id === membership.id && row.product_type === productKey)
+    : null;
+  const membershipPrice = membershipRule?.fixed_price != null
+    ? normalizePrice(membershipRule.fixed_price)
+    : membershipRule?.discount_percent != null
+    ? roundSek(channelPrice * (1 - Number(membershipRule.discount_percent || 0) / 100))
+    : channelPrice;
+  const membershipAdjustment = roundSek(membershipPrice - channelPrice);
+
+  const promotionPercent = Number(promotion?.discount_percent || 0);
+  const promotionFixed = normalizePrice(promotion?.fixed_discount_sek);
+  const promotionAdjustment = promotionPercent > 0
+    ? -roundSek(membershipPrice * (promotionPercent / 100))
+    : promotionFixed > 0
+    ? -Math.min(membershipPrice, promotionFixed)
+    : 0;
+  const finalPrice = Math.max(0, roundSek(membershipPrice + promotionAdjustment));
+
+  return {
+    productKey,
+    productName: product?.name || productKey || "Produkt",
+    channel: normalizedChannel,
+    membershipName: membership?.name || "Gäst",
+    basePrice,
+    channelPrice,
+    channelAdjustment,
+    membershipPrice,
+    membershipAdjustment,
+    promotionLabel: promotion?.label || "Ingen promotion",
+    promotionAdjustment,
+    finalPrice,
+    included: finalPrice <= 0,
+    rows: [
+      { label: "Baspris", value: basePrice, adjustment: 0 },
+      { label: `Kanal: ${normalizedChannel}`, value: channelPrice, adjustment: channelAdjustment },
+      { label: `Medlemskap: ${membership?.name || "Gäst"}`, value: membershipPrice, adjustment: membershipAdjustment },
+      { label: promotion?.label || "Promotion", value: finalPrice, adjustment: promotionAdjustment },
+    ],
+  };
 }
 
 export function isUnlimitedMembership(membership: MembershipLike) {
@@ -115,16 +209,16 @@ export function activityPriceLabels({
     includedLabel,
     hasDiscount: finalPrice > 0 && finalPrice < safeBasePrice,
     publicChips: [
-      formatSek(safeBasePrice),
-      `${PICKLA_ACCESS_LABEL} ${formatSek(accessPrice)}`,
+      `Ordinarie ${formatSek(safeBasePrice)}`,
+      includedLabel ? includedLabel : finalPrice < safeBasePrice ? `Du sparar ${formatSek(safeBasePrice - finalPrice)}` : `${PICKLA_ACCESS_LABEL} ${formatSek(accessPrice)}`,
+      includedLabel ? "Ditt pris 0 kr" : `Ditt pris ${formatSek(finalPrice)}`,
       `${PICKLA_UNLIMITED_LABEL} ingår`,
-      "Dag ingår",
     ],
     detailRows: [
-      { label: "Aktivitetsbiljett", value: formatSek(safeBasePrice) },
-      { label: `${PICKLA_ACCESS_LABEL} ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`, value: formatSek(accessPrice) },
-      { label: `${PICKLA_UNLIMITED_LABEL} ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`, value: "Ingår" },
-      { label: `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`, value: "Ingår idag" },
+      { label: "Ordinarie pris", value: formatSek(safeBasePrice) },
+      { label: "Du sparar", value: finalPrice < safeBasePrice ? formatSek(safeBasePrice - finalPrice) : formatSek(0) },
+      { label: "Ditt pris", value: includedLabel || formatSek(finalPrice) },
+      { label: `Ingår i ${PICKLA_UNLIMITED_LABEL}`, value: hasIncludedActivityAccess(membership, productKey, sessionType) ? "Ja" : "Nej" },
     ],
     checkoutLabel: includedLabel || formatSek(finalPrice),
   };

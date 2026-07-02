@@ -1483,7 +1483,7 @@ Deno.serve(async (req) => {
 
       const { data: sessions, error: sessionsError } = await admin
         .from('activity_sessions')
-        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity, metadata')
+        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity, product_key, metadata')
         .eq('venue_id', scopedVenueId)
         .eq('is_active', true)
         .order('start_time', { ascending: true })
@@ -1508,6 +1508,7 @@ Deno.serve(async (req) => {
             kind: 'activity',
             tone: 'lime',
             session_type: session.session_type || 'open_play',
+            product_key: session.product_key || null,
             price_sek: session.price_sek || 0,
             online_price_sek: Number(session.metadata?.online_price_sek ?? session.price_sek ?? 0),
             desk_price_sek: Number(session.metadata?.desk_price_sek ?? session.price_sek ?? 0),

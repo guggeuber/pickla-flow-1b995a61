@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useAdminPricing, useAdminMutation } from "@/hooks/useAdmin";
 import { Check, CreditCard, Loader2, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { DateTime } from "luxon";
 import { apiGet } from "@/lib/api";
-import { formatSek } from "@/lib/activityPricing";
+import { formatSek, resolveProductPricingPreview } from "@/lib/activityPricing";
 
 const DAY_LABELS = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -20,7 +20,27 @@ const COURT_TYPES = [
   { value: "outdoor", label: "Outdoor" },
   { value: "vip", label: "VIP" },
 ];
-const CHANNELS = ["online", "desk", "member", "guest", "corporate", "affiliate", "host", "ambassador", "promo"];
+const CHANNELS = ["online", "desk", "corporate", "affiliate", "host", "ambassador", "guest", "member"];
+const PROMOTIONS = [
+  { key: "none", label: "Ingen promotion" },
+  { key: "future_code", label: "Promo code (framtid)" },
+  { key: "future_referral", label: "Referral (framtid)" },
+  { key: "future_campaign", label: "Campaign (framtid)" },
+];
+
+type MembershipTier = {
+  id: string;
+  name: string;
+  is_active: boolean;
+};
+
+type TierPricing = {
+  tier_id: string;
+  product_type: string;
+  fixed_price: number | null;
+  discount_percent: number | null;
+  label?: string | null;
+};
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
@@ -49,6 +69,18 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
     enabled: !!venueId,
     queryFn: () => apiGet("api-admin", "products", { venueId }),
   });
+  const tiersQ = useQuery<MembershipTier[]>({
+    queryKey: ["membership-tiers", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-memberships", "tiers", { venueId, includeHidden: "true" }),
+  });
+  const tierPricingQueries = useQueries({
+    queries: (tiersQ.data || []).map((tier) => ({
+      queryKey: ["tier-pricing", tier.id],
+      queryFn: () => apiGet<TierPricing[]>("api-memberships", "tier-pricing", { tierId: tier.id }),
+      enabled: !!tier.id,
+    })),
+  });
   const calendarQ = useQuery<any>({
     queryKey: ["admin-pricing-calendar-preview", venueId],
     enabled: !!venueId,
@@ -69,10 +101,15 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
   const [courtType, setCourtType] = useState("");
   const [previewChannel, setPreviewChannel] = useState("online");
   const [previewProductId, setPreviewProductId] = useState("");
+  const [previewMembershipId, setPreviewMembershipId] = useState("guest");
+  const [previewPromotion, setPreviewPromotion] = useState("none");
+  const [previewSessionId, setPreviewSessionId] = useState("");
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any | null>(null);
 
   const products = productsQ.data || [];
+  const membershipTiers = (tiersQ.data || []).filter((tier) => tier.is_active !== false);
+  const allTierPricing = tierPricingQueries.flatMap((query) => query.data || []);
   const calendarItems = Array.isArray(calendarQ.data?.items) ? calendarQ.data.items : [];
   const activityChannelRows = calendarItems
     .filter((item: any) => item.kind === "activity")
@@ -82,15 +119,39 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
   const inactiveRules = (pricing || []).filter((rule: any) => rule.is_active === false);
   const selectedPreview = useMemo(() => {
     const selectedProduct = products.find((product: any) => product.id === previewProductId) || products[0];
-    const base = Number(selectedProduct?.base_price_sek || 0);
-    const finalPrice = previewChannel === "desk" && base > 0 ? base + 20 : base;
+    const selectedMembership = previewMembershipId === "guest"
+      ? null
+      : membershipTiers.find((tier) => tier.id === previewMembershipId) || null;
+    const matchingSessions = activityChannelRows.filter((item: any) => !selectedProduct?.product_key || item.product_key === selectedProduct.product_key);
+    const selectedSession = previewSessionId
+      ? matchingSessions.find((item: any) => item.id === previewSessionId) || null
+      : null;
+    const channelPrices = selectedSession
+      ? {
+        online: Number(selectedSession.online_price_sek ?? selectedSession.price_sek ?? selectedProduct?.base_price_sek ?? 0),
+        desk: Number(selectedSession.desk_price_sek ?? selectedSession.online_price_sek ?? selectedProduct?.base_price_sek ?? 0),
+        corporate: selectedSession.corporate_price_sek ?? null,
+        affiliate: selectedSession.affiliate_price_sek ?? null,
+        host: selectedSession.host_price_sek ?? null,
+        ambassador: selectedSession.ambassador_price_sek ?? null,
+        guest: Number(selectedSession.online_price_sek ?? selectedSession.price_sek ?? selectedProduct?.base_price_sek ?? 0),
+        member: Number(selectedSession.online_price_sek ?? selectedSession.price_sek ?? selectedProduct?.base_price_sek ?? 0),
+      }
+      : null;
     return {
+      ...resolveProductPricingPreview({
+        product: selectedProduct,
+        membership: selectedMembership ? { id: selectedMembership.id, name: selectedMembership.name } : { id: null, name: "Gäst", isGuest: true },
+        tierPricing: allTierPricing,
+        channel: previewChannel,
+        channelPrices,
+        promotion: previewPromotion === "none" ? null : { label: PROMOTIONS.find((item) => item.key === previewPromotion)?.label || "Promotion" },
+      }),
       product: selectedProduct,
-      base,
-      finalPrice,
-      modifier: finalPrice - base,
+      session: selectedSession,
+      matchingSessions,
     };
-  }, [previewChannel, previewProductId, products]);
+  }, [activityChannelRows, allTierPricing, membershipTiers, previewChannel, previewMembershipId, previewProductId, previewPromotion, previewSessionId, products]);
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
@@ -233,30 +294,45 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
           <Metric label="Channel sessions" value={String(activityChannelRows.length)} />
         </div>
         <div className="rounded-xl p-3" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Universal channels</p>
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Kanaler</p>
           <div className="flex flex-wrap gap-1.5">
             {CHANNELS.map((channel) => (
               <span key={channel} className="status-chip bg-primary/10 text-primary text-[9px]">{channel}</span>
             ))}
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Implementerat nu: activity/open play channel metadata för online/desk och medlemsregler. Future-ready: corporate, affiliate, host, ambassador, promo.
+            Promo är inte en kanal. Kampanjer, vouchers och referral-rabatter ligger som promotion-steg efter kanal och medlemskap.
           </p>
         </div>
       </div>
 
       <div className="glass-card rounded-2xl p-4 space-y-3">
-        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Pris-preview</p>
-        <div className="grid gap-2 md:grid-cols-3">
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Product Engine simulator</p>
+          <p className="mt-1 text-xs text-muted-foreground">Produkt → medlemskap → kanal → promotion → slutpris.</p>
+        </div>
+        <div className="grid gap-2 md:grid-cols-5">
           <select
             value={previewProductId || products[0]?.id || ""}
-            onChange={(e) => setPreviewProductId(e.target.value)}
+            onChange={(e) => {
+              setPreviewProductId(e.target.value);
+              setPreviewSessionId("");
+            }}
             className="rounded-xl px-3 py-2.5 text-sm outline-none"
             style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
           >
             {products.map((product: any) => (
               <option key={product.id} value={product.id}>{product.name} · {product.product_key}</option>
             ))}
+          </select>
+          <select
+            value={previewMembershipId}
+            onChange={(e) => setPreviewMembershipId(e.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
+          >
+            <option value="guest">Gäst / standard</option>
+            {membershipTiers.map((tier) => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
           </select>
           <select
             value={previewChannel}
@@ -266,14 +342,47 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
           >
             {CHANNELS.map((channel) => <option key={channel} value={channel}>{channel}</option>)}
           </select>
-          <div className="rounded-xl px-3 py-2.5 text-sm" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-            <span className="text-muted-foreground">Final price </span>
-            <span className="font-bold">{formatSek(selectedPreview.finalPrice)}</span>
-            {selectedPreview.modifier !== 0 && <span className="text-muted-foreground"> ({selectedPreview.modifier > 0 ? "+" : ""}{formatSek(selectedPreview.modifier)})</span>}
+          <select
+            value={previewPromotion}
+            onChange={(e) => setPreviewPromotion(e.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
+          >
+            {PROMOTIONS.map((promotion) => <option key={promotion.key} value={promotion.key}>{promotion.label}</option>)}
+          </select>
+          <select
+            value={previewSessionId}
+            onChange={(e) => setPreviewSessionId(e.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
+          >
+            <option value="">Produktens baspris</option>
+            {selectedPreview.matchingSessions.map((item: any) => (
+              <option key={item.id} value={item.id}>{item.title} · {item.date} {item.time}</option>
+            ))}
+          </select>
+        </div>
+        <div className="grid gap-2 md:grid-cols-5">
+          <PricePill label="Baspris" value={formatSek(selectedPreview.basePrice)} />
+          <PricePill
+            label={`Kanal ${selectedPreview.channel}`}
+            value={`${selectedPreview.channelAdjustment >= 0 ? "+" : ""}${formatSek(selectedPreview.channelAdjustment)}`}
+          />
+          <PricePill
+            label={selectedPreview.membershipName}
+            value={`${selectedPreview.membershipAdjustment >= 0 ? "+" : ""}${formatSek(selectedPreview.membershipAdjustment)}`}
+          />
+          <PricePill
+            label={selectedPreview.promotionLabel}
+            value={`${selectedPreview.promotionAdjustment >= 0 ? "+" : ""}${formatSek(selectedPreview.promotionAdjustment)}`}
+          />
+          <div className="rounded-lg px-3 py-2" style={{ background: "hsl(var(--surface-1))" }}>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Slutpris</p>
+            <p className="text-lg font-black">{selectedPreview.included ? "Ingår" : formatSek(selectedPreview.finalPrice)}</p>
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground">
-          Previewn muterar inget. För schemapass används passets egna metadata, se Channel modifiers nedan.
+          Previewn muterar inget. Den använder produktens baspris, aktiva medlemsregler och eventuella channel-priser från valt schemapass.
         </p>
       </div>
 

@@ -163,7 +163,7 @@ const ProductPriceCard = ({
             <div className="rounded-xl p-3 text-xs space-y-1" style={{ background: "hsl(var(--surface-2))" }}>
               <p className="font-semibold">Produktnyckel för schemapass</p>
               <p className="text-muted-foreground">
-                Baspriset här är bara fallback. Kundpriset för ett pass sätts på passet i Schema. Medlemsrabatter sätts på medlemskapsnivån för produktnyckel <span className="font-mono">{product.product_key}</span>.
+                Produktens baspris är huvudpris för pass som använder den här produkten. Schema ska bara ändra pris när ett enskilt pass uttryckligen behöver avvika. Medlemsrabatter sätts på medlemskapsnivån för produktnyckel <span className="font-mono">{product.product_key}</span>.
               </p>
             </div>
           )}
@@ -200,7 +200,7 @@ const ProductPriceCard = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
                 <span className="text-muted-foreground">Vanlig kund</span>
-                <span className="font-bold">{isSessionPricedProduct ? "Pris i Schema" : formatPrice(product.base_price_sek)}</span>
+                <span className="font-bold">{formatPrice(product.base_price_sek)}</span>
               </div>
               {previewRows.length > 0 ? previewRows.map((row) => (
                 <div key={`${product.product_key}-${row.tierName}`} className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
