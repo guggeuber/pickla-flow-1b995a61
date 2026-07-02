@@ -35,6 +35,13 @@ function boolFromMetadata(value: unknown, fallback: boolean) {
   return String(value) === 'true';
 }
 
+function normalizeChannel(value: unknown) {
+  const channel = String(value || 'online').toLowerCase();
+  return ['online', 'desk', 'member', 'guest', 'corporate', 'affiliate', 'host', 'ambassador', 'promo'].includes(channel)
+    ? channel
+    : 'online';
+}
+
 export type ActivityPricingDecision = {
   activitySessionId: string;
   sessionDate: string;
@@ -63,6 +70,7 @@ export async function resolveActivityPricingDecision({
   requestedProductKey,
   requestedAmountSek,
   purchaseKind = 'activity_ticket',
+  salesChannel = 'online',
   session: providedSession,
   productCache,
 }: {
@@ -74,6 +82,7 @@ export async function resolveActivityPricingDecision({
   requestedProductKey?: string | null;
   requestedAmountSek?: number | null;
   purchaseKind?: 'activity_ticket' | 'day_pass';
+  salesChannel?: string | null;
   session?: any | null;
   productCache?: Map<string, Promise<any>>;
 }): Promise<ActivityPricingDecision> {
@@ -119,9 +128,15 @@ export async function resolveActivityPricingDecision({
   const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
   const onlinePriceSek = Number(sessionMetadata.online_price_sek ?? session.price_sek ?? 0);
   const deskPriceSek = Number(sessionMetadata.desk_price_sek ?? onlinePriceSek);
+  const channel = normalizeChannel(salesChannel || sessionMetadata.default_sales_channel);
+  const channelBaseAmountSek = channel === 'desk' && deskPriceSek > 0
+    ? deskPriceSek
+    : onlinePriceSek > 0
+    ? onlinePriceSek
+    : 0;
   const baseAmountSek = roundSek(
-    purchaseKind !== 'day_pass' && onlinePriceSek > 0
-      ? onlinePriceSek
+    purchaseKind !== 'day_pass' && channelBaseAmountSek > 0
+      ? channelBaseAmountSek
       : productBaseAmountSek > 0
       ? productBaseAmountSek
       : fallbackBaseAmountSek,
@@ -155,6 +170,19 @@ export async function resolveActivityPricingDecision({
     base_amount_sek: baseAmountSek,
     online_price_sek: onlinePriceSek || null,
     desk_price_sek: deskPriceSek || null,
+    sales_channel: channel,
+    channel_price_sek: channelBaseAmountSek || null,
+    channel_prices: {
+      online: onlinePriceSek || null,
+      desk: deskPriceSek || null,
+      member: null,
+      guest: onlinePriceSek || null,
+      corporate: null,
+      affiliate: null,
+      host: null,
+      ambassador: null,
+      promo: null,
+    },
     pricing_channel_mode: sessionMetadata.pricing_channel_mode || null,
     pricing_mode: pricingMode,
     member_discount_percent: memberDiscountPercent,

@@ -2,6 +2,9 @@ import { motion } from "framer-motion";
 import { TrendingUp, TrendingDown, Flame, ChevronRight, Target, ShoppingBag, Gift, Crown, Trophy, Zap, Loader2 } from "lucide-react";
 import { useVenueForStaff, useTodayRevenue, useTodayBookings } from "@/hooks/useDesk";
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { DateTime } from "luxon";
+import { apiGet } from "@/lib/api";
 
 const walkInOffers = [
   { title: "Förläng till 90 min", sub: "+120 kr — 68% accepterar", icon: Target, tag: "Hot" },
@@ -15,6 +18,27 @@ const SalesScreen = () => {
   const venueId = staffVenue?.venue_id;
   const { data: revenue, isLoading: revenueLoading } = useTodayRevenue(venueId);
   const { data: bookings } = useTodayBookings(venueId);
+  const today = DateTime.now().setZone("Europe/Stockholm").toISODate();
+  const { data: calendar } = useQuery<any>({
+    queryKey: ["desk-sales-channel-pricing", venueId, today],
+    enabled: !!venueId && !!today,
+    queryFn: () => apiGet("api-admin", "calendar", { venueId: venueId!, from: today!, to: today! }),
+    refetchInterval: 60000,
+  });
+  const activityPricing = useMemo(() => {
+    const items = Array.isArray(calendar?.items) ? calendar.items : [];
+    return items
+      .filter((item: any) => item.kind === "activity")
+      .map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        time: item.time,
+        online: Number(item.online_price_sek ?? item.price_sek ?? 0),
+        desk: Number(item.desk_price_sek ?? item.online_price_sek ?? item.price_sek ?? 0),
+      }))
+      .filter((item: any) => item.online > 0 || item.desk > 0)
+      .slice(0, 6);
+  }, [calendar]);
 
   // Derive breakdown from real data
   const breakdown = useMemo(() => {
@@ -57,6 +81,42 @@ const SalesScreen = () => {
           </span>
         </div>
       </motion.div>
+
+      {/* Walk-in Upsells — action center */}
+      {activityPricing.length > 0 && (
+        <div>
+          <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2 flex items-center gap-1.5">
+            <ShoppingBag className="w-3.5 h-3.5 text-primary" /> Aktivitet · channel pricing
+          </h2>
+          <div className="space-y-1.5">
+            {activityPricing.map((item: any) => (
+              <div key={item.id} className="glass-card rounded-2xl p-3.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold">{item.title}</p>
+                    <p className="text-[11px] text-muted-foreground">{item.time}</p>
+                  </div>
+                  {item.desk > item.online && (
+                    <span className="rounded-full bg-primary/15 px-2 py-1 text-[9px] font-bold text-primary">
+                      +{item.desk - item.online} kr desk
+                    </span>
+                  )}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-xl px-3 py-2" style={{ background: "hsl(var(--surface-2))" }}>
+                    <p className="text-[9px] uppercase tracking-widest text-muted-foreground">Online</p>
+                    <p className="font-display text-lg font-black">{item.online.toLocaleString("sv-SE")} kr</p>
+                  </div>
+                  <div className="rounded-xl px-3 py-2" style={{ background: "hsl(var(--surface-2))" }}>
+                    <p className="text-[9px] uppercase tracking-widest text-muted-foreground">Desk</p>
+                    <p className="font-display text-lg font-black">{item.desk.toLocaleString("sv-SE")} kr</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Walk-in Upsells — action center */}
       <div>

@@ -22,9 +22,11 @@ type Customer360Response = {
   activity_registrations: any[];
   day_passes: any[];
   memberships: any[];
+  subscriptions?: any[];
   checkins: any[];
   receipts: any[];
   ledger_entries: any[];
+  financial_timeline?: any[];
   safe_actions?: string[];
 };
 
@@ -62,6 +64,21 @@ function formatMinor(value?: number | null) {
 
 function formatSek(value?: number | null) {
   return `${Number(value || 0).toLocaleString("sv-SE")} kr`;
+}
+
+function formatFinancialAmountMinor(value?: number | null) {
+  const sek = Math.round(Number(value || 0) / 100);
+  return `${sek.toLocaleString("sv-SE")} kr`;
+}
+
+function financialKindLabel(kind?: string | null) {
+  const key = String(kind || "");
+  if (key === "receipt") return "Kvitto";
+  if (key === "ledger_entry") return "Ledger";
+  if (key === "membership") return "Medlemskap";
+  if (key === "activity_registration") return "Aktivitet";
+  if (key === "day_pass") return "Dagspass";
+  return key || "Händelse";
 }
 
 function Empty({ text }: { text: string }) {
@@ -269,6 +286,74 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                     </section>
                   )}
 
+                  <Section title="Financial operations" icon={CreditCard}>
+                    <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-white/40">Lifetime</p>
+                          <p className="mt-1 text-lg font-black text-white">
+                            {formatFinancialAmountMinor((data.ledger_entries || []).reduce((sum, entry) => sum + Number(entry.amount_inc_vat_minor || 0), 0))}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-white/40">Kvitton</p>
+                          <p className="mt-1 text-lg font-black text-white">{data.receipts.length}</p>
+                        </div>
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-white/40">Subscriptions</p>
+                          <p className="mt-1 text-lg font-black text-white">{data.subscriptions?.length || 0}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </Section>
+
+                  <Section title="Subscription Center" icon={Crown}>
+                    {data.subscriptions?.length ? data.subscriptions.map((subscription) => (
+                      <div key={subscription.membership_id || subscription.stripe_subscription_id || subscription.subscription_name} className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-lg font-black text-white">{subscription.subscription_name || "Medlemskap"}</p>
+                            <p className="mt-1 text-xs text-white/50">
+                              {subscription.status || "unknown"} · {subscription.billing_interval || "interval saknas"} · {formatSek(subscription.amount_sek)}
+                            </p>
+                          </div>
+                          <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-[10px] font-bold text-white/65">
+                            {subscription.cancel_at_period_end ? "Avslutas" : subscription.paused ? "Pausad" : "Aktiv"}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                          <Row title="Period" meta={`${formatDateTime(subscription.current_period_start)} - ${formatDateTime(subscription.current_period_end)}`} />
+                          <Row title="Nästa dragning" meta={formatDateTime(subscription.next_billing_date)} />
+                          <Row title="Senaste betalning" meta={formatDateTime(subscription.last_successful_payment)} />
+                          <Row title="Misslyckad betalning" meta={subscription.last_failed_payment ? formatDateTime(subscription.last_failed_payment) : "Ingen hittad"} />
+                          <Row title="Stripe customer" meta={subscription.stripe_customer_id || "Saknas"} />
+                          <Row title="Stripe subscription" meta={subscription.stripe_subscription_id || "Saknas lokalt"} />
+                          <Row title="Kort" meta={[subscription.card_brand, subscription.card_last4 ? `•••• ${subscription.card_last4}` : null].filter(Boolean).join(" ") || subscription.payment_method || "Saknas"} />
+                          <Row title="Lifetime subscription revenue" meta={formatFinancialAmountMinor(subscription.lifetime_subscription_revenue_minor)} />
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <CommandButton icon={ReceiptText} label="View payments" onClick={subscription.payment_history?.length ? () => toast.info("Betalhistoriken visas i kortet") : undefined} />
+                          <CommandButton icon={FileText} label="Open receipt" onClick={subscription.payment_history?.[0]?.receipt_number ? () => window.open(`/receipt/${encodeURIComponent(subscription.payment_history[0].receipt_number)}`, "_blank", "noopener,noreferrer") : undefined} />
+                          <CommandButton icon={CreditCard} label="Retry payment" onClick={subscription.last_failed_payment ? () => toast.info("Retry payment kräver Stripe-mutation i senare fas") : undefined} />
+                          <CommandButton icon={X} label="Cancel" onClick={() => toast.info("Cancel kopplas till befintligt säkert medlemsflöde i senare fas")} />
+                        </div>
+                        {subscription.payment_history?.length ? (
+                          <div className="mt-3 space-y-2">
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-white/40">Payment history</p>
+                            {subscription.payment_history.slice(0, 5).map((payment: any) => (
+                              <Row
+                                key={payment.receipt_id || payment.stripe_session_id}
+                                title={payment.receipt_number || payment.stripe_session_id || "Payment"}
+                                meta={`${formatDateTime(payment.occurred_at)} · ${payment.payment_method || "payment"}`}
+                                aside={`${formatSek(payment.amount_sek)} · ${payment.payment_status || "ok"}`}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    )) : <Empty text="Inga Stripe-abonnemang eller medlemskapsbetalningar kunde kopplas lokalt ännu." />}
+                  </Section>
+
                   <Section title="Kommande bokningar" icon={CalendarClock}>
                     {data.upcoming_bookings.length ? data.upcoming_bookings.map((booking) => (
                       <Row
@@ -333,6 +418,17 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                         aside={receipt.payment_status || undefined}
                       />
                     )) : <Empty text="Inga kvitton hittades." />}
+                  </Section>
+
+                  <Section title="Financial timeline" icon={CreditCard}>
+                    {data.financial_timeline?.length ? data.financial_timeline.slice(0, 40).map((item) => (
+                      <Row
+                        key={item.id}
+                        title={`${financialKindLabel(item.kind)} · ${item.title || "Finansiell händelse"}`}
+                        meta={`${formatDateTime(item.occurred_at)}${item.receipt_number ? ` · ${item.receipt_number}` : ""}${item.stripe_session_id ? ` · ${item.stripe_session_id}` : ""}`}
+                        aside={formatFinancialAmountMinor(item.amount_minor)}
+                      />
+                    )) : <Empty text="Ingen finansiell tidslinje kunde byggas från kvitton eller ledger." />}
                   </Section>
 
                   <Section title="Ledger" icon={CreditCard}>

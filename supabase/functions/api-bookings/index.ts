@@ -657,6 +657,7 @@ Deno.serve(async (req) => {
         requestedProductKey: product_type === 'day_pass' ? 'day_access' : (meta.product_key || null),
         requestedAmountSek: amount_sek,
         purchaseKind: product_type === 'day_pass' ? 'day_pass' : 'activity_ticket',
+        salesChannel: meta.sales_channel || meta.pricing_channel || 'online',
       });
 
       baseAmountSek = activityPricingDecision.baseAmountSek;
@@ -673,6 +674,7 @@ Deno.serve(async (req) => {
       meta.online_price_sek = String(activityPricingDecision.debug?.online_price_sek || '');
       meta.desk_price_sek = String(activityPricingDecision.debug?.desk_price_sek || '');
       meta.pricing_channel_mode = String(activityPricingDecision.debug?.pricing_channel_mode || '');
+      meta.pricing_channel = String(activityPricingDecision.debug?.sales_channel || 'online');
       meta.access_entitlement_id = activityPricingDecision.entitlementType === 'day_access'
         ? activityPricingDecision.sourceId || ''
         : '';

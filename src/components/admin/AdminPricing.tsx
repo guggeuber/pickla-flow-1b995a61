@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAdminPricing, useAdminMutation } from "@/hooks/useAdmin";
-import { Check, Loader2, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
+import { Check, CreditCard, Loader2, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { DateTime } from "luxon";
+import { apiGet } from "@/lib/api";
 
 const DAY_LABELS = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -16,10 +19,44 @@ const COURT_TYPES = [
   { value: "outdoor", label: "Outdoor" },
   { value: "vip", label: "VIP" },
 ];
+const CHANNELS = ["online", "desk", "member", "guest", "corporate", "affiliate", "host", "ambassador", "promo"];
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl p-3" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{label}</p>
+      <p className="mt-1 text-lg font-display font-black">{value}</p>
+    </div>
+  );
+}
+
+function PricePill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg px-2 py-1.5" style={{ background: "hsl(var(--surface-1))" }}>
+      <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">{label}</p>
+      <p className="font-bold">{value}</p>
+    </div>
+  );
+}
 
 const AdminPricing = ({ venueId }: { venueId: string }) => {
   const { data: pricing, isLoading } = useAdminPricing(venueId);
   const { addPricing, updatePricing, deletePricing } = useAdminMutation(venueId);
+  const today = DateTime.now().setZone("Europe/Stockholm");
+  const productsQ = useQuery<any[]>({
+    queryKey: ["admin-products", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-admin", "products", { venueId }),
+  });
+  const calendarQ = useQuery<any>({
+    queryKey: ["admin-pricing-calendar-preview", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-admin", "calendar", {
+      venueId,
+      from: today.toISODate()!,
+      to: today.plus({ days: 14 }).toISODate()!,
+    }),
+  });
   const [name, setName] = useState("");
   const [type, setType] = useState("hourly");
   const [price, setPrice] = useState("");
@@ -29,8 +66,30 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
   const [timeTo, setTimeTo] = useState("23:00");
   const [sportType, setSportType] = useState("");
   const [courtType, setCourtType] = useState("");
+  const [previewChannel, setPreviewChannel] = useState("online");
+  const [previewProductId, setPreviewProductId] = useState("");
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any | null>(null);
+
+  const products = productsQ.data || [];
+  const calendarItems = Array.isArray(calendarQ.data?.items) ? calendarQ.data.items : [];
+  const activityChannelRows = calendarItems
+    .filter((item: any) => item.kind === "activity")
+    .filter((item: any) => Number(item.online_price_sek ?? item.price_sek ?? 0) > 0 || Number(item.desk_price_sek ?? 0) > 0)
+    .slice(0, 12);
+  const activeRules = (pricing || []).filter((rule: any) => rule.is_active !== false);
+  const inactiveRules = (pricing || []).filter((rule: any) => rule.is_active === false);
+  const selectedPreview = useMemo(() => {
+    const selectedProduct = products.find((product: any) => product.id === previewProductId) || products[0];
+    const base = Number(selectedProduct?.base_price_sek || 0);
+    const finalPrice = previewChannel === "desk" && base > 0 ? base + 20 : base;
+    return {
+      product: selectedProduct,
+      base,
+      finalPrice,
+      modifier: finalPrice - base,
+    };
+  }, [previewChannel, previewProductId, products]);
 
   if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
 
@@ -154,6 +213,92 @@ const AdminPricing = ({ venueId }: { venueId: string }) => {
 
   return (
     <div className="space-y-4">
+      <div className="glass-card rounded-2xl p-4 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
+            <CreditCard className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-sm font-bold">Financial Operations · Pricing</p>
+            <p className="text-xs text-muted-foreground">
+              Baspris kommer från produkter, banprisregler eller konkreta pass. Channel modifiers visas ovanpå samma källa.
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-2 md:grid-cols-4">
+          <Metric label="Produkter" value={String(products.length)} />
+          <Metric label="Aktiva regler" value={String(activeRules.length)} />
+          <Metric label="Inaktiva/utgångna" value={String(inactiveRules.length)} />
+          <Metric label="Channel sessions" value={String(activityChannelRows.length)} />
+        </div>
+        <div className="rounded-xl p-3" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Universal channels</p>
+          <div className="flex flex-wrap gap-1.5">
+            {CHANNELS.map((channel) => (
+              <span key={channel} className="status-chip bg-primary/10 text-primary text-[9px]">{channel}</span>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Implementerat nu: activity/open play channel metadata för online/desk och medlemsregler. Future-ready: corporate, affiliate, host, ambassador, promo.
+          </p>
+        </div>
+      </div>
+
+      <div className="glass-card rounded-2xl p-4 space-y-3">
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Pris-preview</p>
+        <div className="grid gap-2 md:grid-cols-3">
+          <select
+            value={previewProductId || products[0]?.id || ""}
+            onChange={(e) => setPreviewProductId(e.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
+          >
+            {products.map((product: any) => (
+              <option key={product.id} value={product.id}>{product.name} · {product.product_key}</option>
+            ))}
+          </select>
+          <select
+            value={previewChannel}
+            onChange={(e) => setPreviewChannel(e.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))" }}
+          >
+            {CHANNELS.map((channel) => <option key={channel} value={channel}>{channel}</option>)}
+          </select>
+          <div className="rounded-xl px-3 py-2.5 text-sm" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+            <span className="text-muted-foreground">Final price </span>
+            <span className="font-bold">{formatPrice(selectedPreview.finalPrice)}</span>
+            {selectedPreview.modifier !== 0 && <span className="text-muted-foreground"> ({selectedPreview.modifier > 0 ? "+" : ""}{formatPrice(selectedPreview.modifier)})</span>}
+          </div>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Previewn muterar inget. För schemapass används passets egna metadata, se Channel modifiers nedan.
+        </p>
+      </div>
+
+      {activityChannelRows.length > 0 && (
+        <div className="glass-card rounded-2xl p-4 space-y-3">
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Channel modifiers på kommande pass</p>
+          <div className="grid gap-2 md:grid-cols-2">
+            {activityChannelRows.map((item: any) => {
+              const online = Number(item.online_price_sek ?? item.price_sek ?? 0);
+              const desk = Number(item.desk_price_sek ?? online);
+              return (
+                <div key={item.id} className="rounded-xl p-3" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+                  <p className="text-sm font-bold">{item.title}</p>
+                  <p className="text-[10px] text-muted-foreground">{item.date} · {item.time} · {item.session_type}</p>
+                  <div className="mt-2 grid grid-cols-3 gap-1.5 text-[11px]">
+                    <PricePill label="Online" value={formatPrice(online)} />
+                    <PricePill label="Desk" value={formatPrice(desk)} />
+                    <PricePill label="Diff" value={`${desk - online >= 0 ? "+" : ""}${formatPrice(desk - online)}`} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="glass-card rounded-2xl p-4 space-y-3">
         <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Ny prisregel</p>
 

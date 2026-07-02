@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const cleanString = (value: unknown) => {
   const text = String(value || '').trim();
@@ -468,7 +469,7 @@ Deno.serve(async (req) => {
           'id, venue_id, customer_id, user_id, player_name, player_phone, entry_type, entitlement_id, checked_in_at, checked_out_at, session_date, created_at',
           { venueId, customerIds, userIds, orderColumn: 'checked_in_at', ascending: false, limit: 30 }),
         fetchByCustomerOrUser(admin, 'booking_receipts',
-          'id, receipt_number, booking_refs, stripe_session_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, issued_at, created_at',
+          'id, receipt_number, booking_refs, stripe_session_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, issued_at, created_at',
           { venueId, customerIds, userIds, orderColumn: 'issued_at', ascending: false, limit: 50 }),
       ]);
 
@@ -541,6 +542,107 @@ Deno.serve(async (req) => {
       const email = cleanString(customer?.primary_email) || cleanString(authUser?.email) || cleanString(latestReceipt?.customer_email);
       const phone = cleanString(customer?.primary_phone) || cleanString(profile?.phone) || cleanString(latestReceipt?.customer_phone);
       const activeMembership = (membershipsResult.data || []).find((row: any) => row.status === 'active') || null;
+      const ledgerEntries = Array.from(ledgerById.values()).sort((a, b) =>
+        new Date(b.occurred_at || b.created_at).getTime() - new Date(a.occurred_at || a.created_at).getTime()
+      );
+      const membershipReceipts = receipts.filter((receipt: any) =>
+        receipt.purchase_type === 'membership' ||
+        Boolean(receipt.stripe_subscription_id) ||
+        /medlemskap|membership/i.test(String(receipt.product_description || ''))
+      );
+      const subscriptionRows = (membershipsResult.data || []).map((membership: any) => {
+        const relatedReceipts = membershipReceipts.filter((receipt: any) =>
+          receipt.customer_id && membership.customer_id
+            ? receipt.customer_id === membership.customer_id
+            : receipt.user_id === membership.user_id
+        );
+        const latest = relatedReceipts[0] || null;
+        const successful = relatedReceipts.find((receipt: any) =>
+          ['paid', 'complete', 'succeeded'].includes(String(receipt.payment_status || '').toLowerCase())
+        ) || null;
+        const failed = relatedReceipts.find((receipt: any) => !['paid', 'complete', 'succeeded'].includes(String(receipt.payment_status || '').toLowerCase())) || null;
+        const amountSek = Number(latest?.total_inc_vat_sek ?? membership.membership_tiers?.monthly_price ?? 0);
+        const periodStart = membership.starts_at || membership.created_at || null;
+        const periodEnd = membership.expires_at || (latest?.issued_at
+          ? DateTime.fromISO(latest.issued_at, { zone: 'utc' }).plus({ months: 1 }).toISO()
+          : null);
+        const lifetimeRevenueMinor = relatedReceipts.reduce((sum: number, receipt: any) =>
+          sum + Math.round(Number(receipt.total_inc_vat_sek ?? receipt.total_inc_vat ?? 0) * 100), 0);
+        return {
+          membership_id: membership.id,
+          subscription_name: membership.membership_tiers?.name || 'Medlemskap',
+          status: membership.status || 'unknown',
+          current_period_start: periodStart,
+          current_period_end: periodEnd,
+          next_billing_date: membership.status === 'active' ? periodEnd : null,
+          last_successful_payment: successful?.issued_at || successful?.created_at || null,
+          last_failed_payment: failed?.issued_at || failed?.created_at || null,
+          billing_interval: membership.membership_tiers?.monthly_price ? 'monthly' : 'manual',
+          amount_sek: amountSek,
+          stripe_customer_id: latest?.stripe_customer_id || profile?.stripe_customer_id || null,
+          stripe_subscription_id: latest?.stripe_subscription_id || null,
+          payment_method: latest?.payment_method || null,
+          card_brand: null,
+          card_last4: null,
+          cancel_at_period_end: /cancel_at_period_end/i.test(String(membership.notes || '')),
+          paused: /paused/i.test(String(membership.notes || '')),
+          lifetime_subscription_revenue_minor: lifetimeRevenueMinor,
+          payment_history: relatedReceipts.map((receipt: any) => ({
+            receipt_id: receipt.id,
+            receipt_number: receipt.receipt_number,
+            occurred_at: receipt.issued_at || receipt.created_at,
+            amount_sek: Number(receipt.total_inc_vat_sek ?? receipt.total_inc_vat ?? 0),
+            payment_status: receipt.payment_status || null,
+            payment_method: receipt.payment_method || null,
+            stripe_session_id: receipt.stripe_session_id || null,
+          })),
+          actions: {
+            view_payments: relatedReceipts.length > 0,
+            retry_payment: Boolean(failed),
+            open_receipt: Boolean(latest?.receipt_number),
+            update_payment_method: 'future',
+            cancel: 'existing_safe_flow_required',
+            pause: 'future',
+          },
+        };
+      });
+      const financialTimeline = [
+        ...receipts.map((receipt: any) => ({
+          id: `receipt:${receipt.id}`,
+          occurred_at: receipt.issued_at || receipt.created_at,
+          kind: 'receipt',
+          title: receipt.product_description || receipt.purchase_type || 'Kvitto',
+          amount_minor: Math.round(Number(receipt.total_inc_vat_sek ?? receipt.total_inc_vat ?? 0) * 100),
+          status: receipt.payment_status || null,
+          receipt_number: receipt.receipt_number || null,
+          stripe_session_id: receipt.stripe_session_id || null,
+          source: receipt,
+        })),
+        ...ledgerEntries.map((entry: any) => ({
+          id: `ledger:${entry.id}`,
+          occurred_at: entry.occurred_at || entry.created_at,
+          kind: 'ledger_entry',
+          title: entry.source_type || 'Ledger entry',
+          amount_minor: Number(entry.amount_inc_vat_minor || 0),
+          status: entry.payment_status || null,
+          receipt_number: entry.receipt_number || null,
+          stripe_session_id: entry.stripe_session_id || null,
+          source: entry,
+        })),
+        ...(membershipsResult.data || []).map((membership: any) => ({
+          id: `membership:${membership.id}`,
+          occurred_at: membership.created_at || membership.starts_at,
+          kind: 'membership',
+          title: membership.membership_tiers?.name || 'Medlemskap',
+          amount_minor: Math.round(Number(membership.membership_tiers?.monthly_price || 0) * 100),
+          status: membership.status || null,
+          receipt_number: null,
+          stripe_session_id: null,
+          source: membership,
+        })),
+      ].filter((item: any) => item.occurred_at).sort((a: any, b: any) =>
+        new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
+      );
 
       return jsonResponse({
         customer: {
@@ -570,11 +672,11 @@ Deno.serve(async (req) => {
         }),
         day_passes: dayPassesResult.data || [],
         memberships: membershipsResult.data || [],
+        subscriptions: subscriptionRows,
         checkins: checkinsResult.data || [],
         receipts,
-        ledger_entries: Array.from(ledgerById.values()).sort((a, b) =>
-          new Date(b.occurred_at || b.created_at).getTime() - new Date(a.occurred_at || a.created_at).getTime()
-        ),
+        ledger_entries: ledgerEntries,
+        financial_timeline: financialTimeline,
         safe_actions: [
           'edit_contact',
           'manual_checkin',
