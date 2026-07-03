@@ -1718,7 +1718,7 @@ Deno.serve(async (req) => {
 
       const [receiptRes, profileRes, wellnessProfileRes, legacyDayPassesRes] = await Promise.all([
         admin.from('booking_receipts')
-          .select('id, receipt_number, booking_refs, purchase_type, product_description, customer_name, customer_email, customer_phone, total_inc_vat, total_inc_vat_sek, total_ex_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, stripe_session_id')
+          .select('id, receipt_number, booking_refs, purchase_type, product_description, customer_name, customer_email, customer_phone, total_inc_vat, total_inc_vat_sek, total_ex_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, stripe_session_id, stripe_invoice_id')
           .eq('user_id', userId)
           .eq('payment_status', 'paid')
           .gte('issued_at', start)
@@ -1761,6 +1761,7 @@ Deno.serve(async (req) => {
         vat_amount: Number(receipt.vat_amount_sek ?? 0),
         payment_method: receipt.payment_method || 'Kort via Stripe',
         stripe_session_id: receipt.stripe_session_id || null,
+        stripe_invoice_id: receipt.stripe_invoice_id || null,
       }));
 
       const receiptStripeSessionIds = new Set(items.map((i: any) => i.stripe_session_id).filter(Boolean));

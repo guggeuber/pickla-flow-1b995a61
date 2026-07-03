@@ -425,7 +425,7 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                       <Row
                         key={item.id}
                         title={`${financialKindLabel(item.kind)} · ${item.title || "Finansiell händelse"}`}
-                        meta={`${formatDateTime(item.occurred_at)}${item.receipt_number ? ` · ${item.receipt_number}` : ""}${item.stripe_session_id ? ` · ${item.stripe_session_id}` : ""}`}
+                        meta={`${formatDateTime(item.occurred_at)}${item.receipt_number ? ` · ${item.receipt_number}` : ""}${item.stripe_session_id ? ` · ${item.stripe_session_id}` : item.stripe_invoice_id ? ` · ${item.stripe_invoice_id}` : ""}`}
                         aside={formatFinancialAmountMinor(item.amount_minor)}
                       />
                     )) : <Empty text="Ingen finansiell tidslinje kunde byggas från kvitton eller ledger." />}

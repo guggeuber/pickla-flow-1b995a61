@@ -3,7 +3,7 @@
 //
 // Configure the webhook endpoint in the Stripe dashboard:
 //   https://<project>.supabase.co/functions/v1/api-stripe-webhook
-// Events to listen for: checkout.session.completed
+// Events to listen for: checkout.session.completed, invoice.paid
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
@@ -109,10 +109,53 @@ Deno.serve(async (req) => {
   });
   if (eventInsertError) {
     if (eventInsertError.code === '23505') {
-      return jsonResponse({ received: true, duplicate: true }, 200);
+      const { data: existingEvent, error: existingEventError } = await serviceClient
+        .from('stripe_events')
+        .select('status')
+        .eq('id', eventId)
+        .maybeSingle();
+      if (existingEventError) {
+        console.error('Failed to inspect duplicate Stripe event:', existingEventError.message);
+        return errorResponse('Failed to inspect duplicate Stripe event', 500);
+      }
+      if (['processed', 'skipped'].includes(String(existingEvent?.status || ''))) {
+        return jsonResponse({ received: true, duplicate: true }, 200);
+      }
+      const { error: retryEventError } = await serviceClient
+        .from('stripe_events')
+        .update({
+          type: String(event.type || 'unknown'),
+          payload: event,
+          status: 'received',
+          processed_at: null,
+          error: null,
+        })
+        .eq('id', eventId);
+      if (retryEventError) {
+        console.error('Failed to prepare Stripe event retry:', retryEventError.message);
+        return errorResponse('Failed to prepare Stripe event retry', 500);
+      }
     }
-    console.error('Failed to record Stripe event:', eventInsertError.message);
-    return errorResponse('Failed to record Stripe event', 500);
+    if (eventInsertError.code !== '23505') {
+      console.error('Failed to record Stripe event:', eventInsertError.message);
+      return errorResponse('Failed to record Stripe event', 500);
+    }
+  }
+
+  if (event.type === 'invoice.paid') {
+    try {
+      await handleInvoicePaid(event.data.object, serviceClient);
+      await serviceClient.from('stripe_events')
+        .update({ status: 'processed', processed_at: new Date().toISOString(), error: null })
+        .eq('id', eventId);
+      return jsonResponse({ received: true }, 200);
+    } catch (err) {
+      console.error('Error processing invoice.paid webhook:', err);
+      await serviceClient.from('stripe_events')
+        .update({ status: 'failed', processed_at: new Date().toISOString(), error: (err as Error).message })
+        .eq('id', eventId);
+      return errorResponse((err as Error).message, 500);
+    }
   }
 
   if (event.type !== 'checkout.session.completed') {
@@ -180,6 +223,36 @@ function receiptPaymentMethod(session: any) {
   return types.length ? `${types.join(', ')} via Stripe` : 'Stripe';
 }
 
+function stripeId(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value && 'id' in value) return String((value as any).id || '') || null;
+  return null;
+}
+
+function invoiceSubscriptionId(invoice: any): string | null {
+  return stripeId(invoice.subscription)
+    || stripeId(invoice.subscription_details?.subscription)
+    || stripeId(invoice.parent?.subscription_details?.subscription)
+    || stripeId(invoice.lines?.data?.find((line: any) => line?.subscription)?.subscription)
+    || null;
+}
+
+function invoiceMetadata(invoice: any): Record<string, string> {
+  const merged = {
+    ...(invoice.subscription_details?.metadata || {}),
+    ...(invoice.parent?.subscription_details?.metadata || {}),
+    ...(invoice.lines?.data?.find((line: any) => line?.metadata && Object.keys(line.metadata).length)?.metadata || {}),
+  };
+  return Object.fromEntries(Object.entries(merged).map(([key, value]) => [key, String(value ?? '')]));
+}
+
+function invoicePaymentIntentId(invoice: any): string | null {
+  return stripeId(invoice.payment_intent)
+    || stripeId(invoice.payments?.data?.find((payment: any) => payment?.payment?.payment_intent)?.payment?.payment_intent)
+    || null;
+}
+
 async function createLedgerEntryFromReceipt({
   session,
   meta,
@@ -200,6 +273,17 @@ async function createLedgerEntryFromReceipt({
   metadata?: Record<string, unknown>;
 }) {
   if (!meta.venue_id || !sourceId || amountIncVatMinor <= 0) return;
+
+  const stripeInvoiceId = String(metadata.stripe_invoice_id || '').trim();
+  if (sourceType === 'membership' && stripeInvoiceId) {
+    const { data: existingInvoiceLedger } = await serviceClient
+      .from('ledger_entries')
+      .select('id')
+      .eq('source_type', 'membership_invoice')
+      .eq('source_id', stripeInvoiceId)
+      .maybeSingle();
+    if (existingInvoiceLedger?.id) return;
+  }
 
   const occurredAt = receipt?.issued_at || new Date().toISOString();
   const accountingDate = DateTime
@@ -229,6 +313,7 @@ async function createLedgerEntryFromReceipt({
       product_description: receipt?.product_description || null,
       stripe_payment_intent_id: session.payment_intent || receipt?.stripe_payment_intent_id || null,
       stripe_customer_id: session.customer || receipt?.stripe_customer_id || null,
+      stripe_invoice_id: stripeInvoiceId || receipt?.stripe_invoice_id || null,
       ...metadata,
     },
   };
@@ -261,9 +346,33 @@ async function createPurchaseReceipt({
 }) {
   if (totalSek <= 0) return null;
 
+  const checkoutInvoiceId = stripeId(session.invoice);
+  if (purchaseType === 'membership' && checkoutInvoiceId) {
+    const { data: invoiceReceipt } = await serviceClient
+      .from('booking_receipts')
+      .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id, metadata')
+      .eq('stripe_invoice_id', checkoutInvoiceId)
+      .maybeSingle();
+    if (invoiceReceipt) {
+      if (!invoiceReceipt.stripe_session_id) {
+        const { data: updated } = await serviceClient
+          .from('booking_receipts')
+          .update({
+            stripe_session_id: session.id,
+            stripe_subscription_id: invoiceReceipt.stripe_subscription_id || session.subscription || null,
+          })
+          .eq('id', invoiceReceipt.id)
+          .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id, metadata')
+          .maybeSingle();
+        return updated || invoiceReceipt;
+      }
+      return invoiceReceipt;
+    }
+  }
+
   const { data: existing } = await serviceClient
     .from('booking_receipts')
-    .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id')
+    .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id')
     .eq('stripe_session_id', session.id)
     .maybeSingle();
   if (existing) return existing;
@@ -278,6 +387,7 @@ async function createPurchaseReceipt({
     booking_refs: bookingRefs,
     stripe_session_id: session.id,
     stripe_payment_intent_id: session.payment_intent || null,
+    stripe_invoice_id: checkoutInvoiceId,
     stripe_customer_id: session.customer || null,
     stripe_subscription_id: session.subscription || null,
     venue_id: meta.venue_id || null,
@@ -308,7 +418,7 @@ async function createPurchaseReceipt({
       activity_session_id: meta.activity_session_id || meta.open_play_session_id || null,
       tier_id: meta.tier_id || null,
     },
-  }).select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id').single();
+  }).select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id').single();
 
   if (error) {
     console.error('Failed to create receipt:', error.message);
@@ -316,6 +426,338 @@ async function createPurchaseReceipt({
   }
 
   return receipt;
+}
+
+async function resolveInvoiceCustomerContext(invoice: any, serviceClient: any) {
+  const stripeCustomerId = stripeId(invoice.customer);
+  const stripeSubscriptionId = invoiceSubscriptionId(invoice);
+  const meta = invoiceMetadata(invoice);
+  let latestReceipt: any = null;
+
+  if (stripeSubscriptionId) {
+    const { data } = await serviceClient
+      .from('booking_receipts')
+      .select('id, customer_id, user_id, venue_id, customer_name, customer_email, customer_phone, product_description, stripe_customer_id, stripe_subscription_id, stripe_session_id, issued_at, metadata')
+      .eq('stripe_subscription_id', stripeSubscriptionId)
+      .eq('purchase_type', 'membership')
+      .order('issued_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    latestReceipt = data || null;
+  }
+
+  let userId = latestReceipt?.user_id || String(meta.user_id || '').trim() || null;
+  let customerId = latestReceipt?.customer_id || null;
+  let venueId = latestReceipt?.venue_id || String(meta.venue_id || '').trim() || null;
+  let tierId = String(meta.tier_id || latestReceipt?.metadata?.tier_id || '').trim() || null;
+  let tierName = String(meta.tier_name || latestReceipt?.metadata?.tier_name || latestReceipt?.product_description || '').trim() || null;
+  let customerName = latestReceipt?.customer_name || invoice.customer_name || String(meta.customer_name || '').trim() || null;
+  let customerEmail = latestReceipt?.customer_email || invoice.customer_email || String(meta.customer_email || '').trim() || null;
+  let customerPhone = latestReceipt?.customer_phone || invoice.customer_phone || String(meta.customer_phone || '').trim() || null;
+
+  if (stripeCustomerId && (!userId || !customerId || !customerName || !customerPhone)) {
+    const { data: profile } = await serviceClient
+      .from('player_profiles')
+      .select('auth_user_id, customer_id, display_name, first_name, last_name, phone')
+      .eq('stripe_customer_id', stripeCustomerId)
+      .maybeSingle();
+    if (profile) {
+      userId = userId || profile.auth_user_id || null;
+      customerId = customerId || profile.customer_id || null;
+      customerName = customerName || [profile.first_name, profile.last_name].filter(Boolean).join(' ') || profile.display_name || null;
+      customerPhone = customerPhone || profile.phone || null;
+    }
+  }
+
+  if (stripeCustomerId && !customerId) {
+    const { data: identity } = await serviceClient
+      .from('customer_identities')
+      .select('customer_id')
+      .eq('provider', 'stripe')
+      .eq('provider_id', stripeCustomerId)
+      .limit(1)
+      .maybeSingle();
+    customerId = identity?.customer_id || null;
+  }
+
+  if (customerId && (!userId || !customerName || !customerEmail || !customerPhone)) {
+    const { data: customer } = await serviceClient
+      .from('customers')
+      .select('auth_user_id, display_name, first_name, last_name, primary_email, primary_phone')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (customer) {
+      userId = userId || customer.auth_user_id || null;
+      customerName = customerName || [customer.first_name, customer.last_name].filter(Boolean).join(' ') || customer.display_name || null;
+      customerEmail = customerEmail || customer.primary_email || null;
+      customerPhone = customerPhone || customer.primary_phone || null;
+    }
+  }
+
+  if (!customerId && userId) {
+    customerId = await resolveCustomerIdForUser(serviceClient, userId);
+  }
+
+  return {
+    latestReceipt,
+    userId,
+    customerId,
+    venueId,
+    tierId,
+    tierName,
+    customerName,
+    customerEmail,
+    customerPhone,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    metadata: meta,
+  };
+}
+
+async function createLedgerEntryFromInvoice({
+  invoice,
+  serviceClient,
+  receipt,
+  context,
+  amountIncVatMinor,
+  issuedAt,
+}: {
+  invoice: any;
+  serviceClient: any;
+  receipt: any;
+  context: any;
+  amountIncVatMinor: number;
+  issuedAt: string;
+}) {
+  if (!context.venueId || !invoice.id || amountIncVatMinor <= 0) return;
+
+  const accountingDate = DateTime
+    .fromISO(issuedAt, { zone: 'utc' })
+    .setZone('Europe/Stockholm')
+    .toISODate();
+  if (!accountingDate) throw new Error('Could not resolve invoice ledger accounting date');
+
+  const entry = {
+    venue_id: context.venueId,
+    source_type: 'membership_invoice',
+    source_id: invoice.id,
+    accounting_date: accountingDate,
+    occurred_at: issuedAt,
+    customer_id: context.customerId || receipt?.customer_id || null,
+    customer_name: context.customerName || receipt?.customer_name || null,
+    amount_inc_vat_minor: amountIncVatMinor,
+    vat_amount_minor: vatMinorFromIncludedMinor(amountIncVatMinor, Number(receipt?.vat_rate || 6)),
+    payment_status: 'paid',
+    payment_method: 'Kort via Stripe',
+    stripe_session_id: null,
+    receipt_number: receipt?.receipt_number || null,
+    booking_receipt_id: receipt?.id || null,
+    metadata: {
+      product_type: 'membership',
+      purchase_type: 'membership',
+      product_description: receipt?.product_description || context.tierName || 'Medlemskap',
+      stripe_invoice_id: invoice.id,
+      stripe_invoice_number: invoice.number || null,
+      stripe_payment_intent_id: invoicePaymentIntentId(invoice),
+      stripe_customer_id: context.stripeCustomerId,
+      stripe_subscription_id: context.stripeSubscriptionId,
+      billing_reason: invoice.billing_reason || null,
+      hosted_invoice_url: invoice.hosted_invoice_url || null,
+      invoice_pdf: invoice.invoice_pdf || null,
+      period_start: invoice.period_start ? new Date(Number(invoice.period_start) * 1000).toISOString() : null,
+      period_end: invoice.period_end ? new Date(Number(invoice.period_end) * 1000).toISOString() : null,
+      tier_id: context.tierId || null,
+      tier_name: context.tierName || null,
+    },
+  };
+
+  const { error } = await serviceClient.from('ledger_entries').insert(entry);
+  if (error) {
+    if (error.code === '23505') return;
+    throw new Error(`Failed to create subscription invoice ledger entry: ${error.message}`);
+  }
+}
+
+async function hasLedgerForReceiptOrSession(serviceClient: any, receipt: any): Promise<boolean> {
+  if (receipt?.id) {
+    const { data } = await serviceClient
+      .from('ledger_entries')
+      .select('id')
+      .eq('booking_receipt_id', receipt.id)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return true;
+  }
+
+  if (receipt?.stripe_session_id) {
+    const { data } = await serviceClient
+      .from('ledger_entries')
+      .select('id')
+      .eq('stripe_session_id', receipt.stripe_session_id)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return true;
+  }
+
+  return false;
+}
+
+async function handleInvoicePaid(invoice: any, serviceClient: any): Promise<void> {
+  if (!invoice?.id) throw new Error('Missing Stripe invoice id');
+  if (invoice.paid === false || invoice.status !== 'paid') {
+    console.log('Ignoring invoice.paid with non-paid invoice state', invoice.id, invoice.status);
+    return;
+  }
+
+  const amountPaidMinor = Number(invoice.amount_paid || 0);
+  if (amountPaidMinor <= 0) {
+    console.log('Ignoring zero-value paid invoice', invoice.id);
+    return;
+  }
+
+  const context = await resolveInvoiceCustomerContext(invoice, serviceClient);
+  if (!context.stripeCustomerId && !context.stripeSubscriptionId) {
+    throw new Error(`Invoice ${invoice.id} has no Stripe customer/subscription id`);
+  }
+  if (!context.venueId) {
+    throw new Error(`Could not resolve venue for paid subscription invoice ${invoice.id}`);
+  }
+  if (!context.tierId && !context.tierName) {
+    throw new Error(`Could not resolve membership tier snapshot for paid subscription invoice ${invoice.id}`);
+  }
+
+  const paidAt = invoice.status_transitions?.paid_at
+    ? new Date(Number(invoice.status_transitions.paid_at) * 1000).toISOString()
+    : invoice.created
+    ? new Date(Number(invoice.created) * 1000).toISOString()
+    : new Date().toISOString();
+
+  const { data: existingInvoiceReceipt } = await serviceClient
+    .from('booking_receipts')
+    .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id')
+    .eq('stripe_invoice_id', invoice.id)
+    .maybeSingle();
+
+  if (existingInvoiceReceipt) {
+    if (await hasLedgerForReceiptOrSession(serviceClient, existingInvoiceReceipt)) return;
+    await createLedgerEntryFromInvoice({
+      invoice,
+      serviceClient,
+      receipt: existingInvoiceReceipt,
+      context,
+      amountIncVatMinor: amountPaidMinor,
+      issuedAt: existingInvoiceReceipt.issued_at || paidAt,
+    });
+    return;
+  }
+
+  if (invoice.billing_reason === 'subscription_create' && context.stripeSubscriptionId) {
+    const { data: checkoutReceipt } = await serviceClient
+      .from('booking_receipts')
+      .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id, metadata')
+      .eq('stripe_subscription_id', context.stripeSubscriptionId)
+      .eq('purchase_type', 'membership')
+      .not('stripe_session_id', 'is', null)
+      .order('issued_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (checkoutReceipt) {
+      let linkedReceipt = checkoutReceipt;
+      if (!checkoutReceipt.stripe_invoice_id) {
+        const { data: updated, error: updateErr } = await serviceClient
+          .from('booking_receipts')
+          .update({
+            stripe_invoice_id: invoice.id,
+            stripe_payment_intent_id: checkoutReceipt.stripe_payment_intent_id || invoicePaymentIntentId(invoice),
+            metadata: {
+              ...(checkoutReceipt.metadata || {}),
+              stripe_invoice_id: invoice.id,
+              stripe_invoice_number: invoice.number || null,
+              billing_reason: invoice.billing_reason || null,
+              hosted_invoice_url: invoice.hosted_invoice_url || null,
+              invoice_pdf: invoice.invoice_pdf || null,
+            },
+          })
+          .eq('id', checkoutReceipt.id)
+          .select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id')
+          .maybeSingle();
+        if (updateErr) throw new Error(`Failed to link initial subscription invoice receipt: ${updateErr.message}`);
+        linkedReceipt = updated || checkoutReceipt;
+      }
+
+      if (await hasLedgerForReceiptOrSession(serviceClient, linkedReceipt)) return;
+
+      await createLedgerEntryFromInvoice({
+        invoice,
+        serviceClient,
+        receipt: linkedReceipt,
+        context,
+        amountIncVatMinor: amountPaidMinor,
+        issuedAt: linkedReceipt.issued_at || paidAt,
+      });
+      return;
+    }
+  }
+
+  const amountSek = Math.round((amountPaidMinor / 100) * 100) / 100;
+  const vat = vatPartsFromIncludedTotal(amountSek, 6);
+  const description = context.tierName ? `Medlemskap · ${context.tierName}` : 'Medlemskap';
+
+  const { data: receipt, error } = await serviceClient.from('booking_receipts').insert({
+    booking_refs: [],
+    stripe_session_id: null,
+    stripe_invoice_id: invoice.id,
+    stripe_payment_intent_id: invoicePaymentIntentId(invoice),
+    stripe_customer_id: context.stripeCustomerId,
+    stripe_subscription_id: context.stripeSubscriptionId,
+    venue_id: context.venueId,
+    customer_id: context.customerId || null,
+    user_id: context.userId || null,
+    customer_name: context.customerName || null,
+    customer_email: context.customerEmail || invoice.customer_email || null,
+    customer_phone: context.customerPhone || invoice.customer_phone || null,
+    purchase_type: 'membership',
+    product_description: description,
+    payment_method: 'Kort via Stripe',
+    total_inc_vat: Math.round(vat.totalIncVat),
+    total_ex_vat: Math.round(vat.totalExVat),
+    vat_amount: Math.round(vat.vatAmount),
+    total_inc_vat_sek: vat.totalIncVat,
+    total_ex_vat_sek: vat.totalExVat,
+    vat_amount_sek: vat.vatAmount,
+    vat_rate: vat.vatRate,
+    currency: String(invoice.currency || 'sek').toUpperCase(),
+    payment_provider: 'stripe',
+    payment_status: 'paid',
+    issued_at: paidAt,
+    metadata: {
+      product_type: 'membership',
+      tier_id: context.tierId || null,
+      tier_name: context.tierName || null,
+      stripe_invoice_id: invoice.id,
+      stripe_invoice_number: invoice.number || null,
+      billing_reason: invoice.billing_reason || null,
+      hosted_invoice_url: invoice.hosted_invoice_url || null,
+      invoice_pdf: invoice.invoice_pdf || null,
+      period_start: invoice.period_start ? new Date(Number(invoice.period_start) * 1000).toISOString() : null,
+      period_end: invoice.period_end ? new Date(Number(invoice.period_end) * 1000).toISOString() : null,
+    },
+  }).select('id, customer_id, receipt_number, purchase_type, product_description, customer_name, total_inc_vat_sek, vat_amount_sek, vat_rate, issued_at, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, stripe_invoice_id').single();
+
+  if (error) {
+    if (error.code === '23505') return;
+    throw new Error(`Failed to create subscription invoice receipt: ${error.message}`);
+  }
+
+  await createLedgerEntryFromInvoice({
+    invoice,
+    serviceClient,
+    receipt,
+    context,
+    amountIncVatMinor: amountPaidMinor,
+    issuedAt: paidAt,
+  });
 }
 
 async function createCourtBookingReceipt({
@@ -909,6 +1351,7 @@ async function handleMembership(
         membership_id: existing.id,
         tier_id,
         tier_name: meta.tier_name || null,
+        stripe_invoice_id: stripeId(session.invoice),
         reactivated: true,
       },
     });
@@ -948,6 +1391,7 @@ async function handleMembership(
       membership_id: membership?.id || null,
       tier_id,
       tier_name: meta.tier_name || null,
+      stripe_invoice_id: stripeId(session.invoice),
       reactivated: false,
     },
   });

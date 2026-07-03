@@ -469,7 +469,7 @@ Deno.serve(async (req) => {
           'id, venue_id, customer_id, user_id, player_name, player_phone, entry_type, entitlement_id, checked_in_at, checked_out_at, session_date, created_at',
           { venueId, customerIds, userIds, orderColumn: 'checked_in_at', ascending: false, limit: 30 }),
         fetchByCustomerOrUser(admin, 'booking_receipts',
-          'id, receipt_number, booking_refs, stripe_session_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, issued_at, created_at',
+          'id, receipt_number, booking_refs, stripe_session_id, stripe_invoice_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, issued_at, created_at',
           { venueId, customerIds, userIds, orderColumn: 'issued_at', ascending: false, limit: 50 }),
       ]);
 
@@ -595,6 +595,7 @@ Deno.serve(async (req) => {
             payment_status: receipt.payment_status || null,
             payment_method: receipt.payment_method || null,
             stripe_session_id: receipt.stripe_session_id || null,
+            stripe_invoice_id: receipt.stripe_invoice_id || null,
           })),
           actions: {
             view_payments: relatedReceipts.length > 0,
@@ -616,6 +617,7 @@ Deno.serve(async (req) => {
           status: receipt.payment_status || null,
           receipt_number: receipt.receipt_number || null,
           stripe_session_id: receipt.stripe_session_id || null,
+          stripe_invoice_id: receipt.stripe_invoice_id || null,
           source: receipt,
         })),
         ...ledgerEntries.map((entry: any) => ({

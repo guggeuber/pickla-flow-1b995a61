@@ -1326,6 +1326,7 @@ Deno.serve(async (req) => {
         activity_registration: 'Activity',
         day_pass: 'Day Pass',
         membership: 'Membership',
+        membership_invoice: 'Membership Invoice',
         zettle: 'Zettle',
       };
 
