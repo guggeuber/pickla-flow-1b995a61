@@ -38,6 +38,7 @@ function adminEntityTableForPath(path: string) {
     'event-categories': 'venue_event_categories',
     'zettle-connect': 'zettle_connections',
     'zettle-import': 'zettle_purchases',
+    'stripe-invoice-backfill': 'booking_receipts',
   };
   return map[path] || path || 'api_admin';
 }
@@ -59,6 +60,7 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'links') return body.linkId || url.searchParams.get('linkId');
   if (path === 'event-categories') return body.id || body.categoryKey || url.searchParams.get('id');
   if (path === 'zettle-import') return body.date || null;
+  if (path === 'stripe-invoice-backfill') return body.stripe_customer_id || body.customer_id || null;
   return body.id || null;
 }
 
@@ -381,6 +383,540 @@ function zettleLedgerEntry(venueId: string, purchase: any) {
       raw: purchase,
     },
   };
+}
+
+function vatMinorFromIncludedMinor(totalIncVatMinor: number, vatRate = 6) {
+  return Math.round(totalIncVatMinor * vatRate / (100 + vatRate));
+}
+
+function vatPartsFromIncludedMinor(totalIncVatMinor: number, vatRate = 6) {
+  const amountSek = Math.round(totalIncVatMinor) / 100;
+  const vatSek = Math.round(vatMinorFromIncludedMinor(totalIncVatMinor, vatRate)) / 100;
+  return {
+    totalIncVatSek: amountSek,
+    vatAmountSek: vatSek,
+    totalExVatSek: Math.round(Math.max(amountSek - vatSek, 0) * 100) / 100,
+    vatRate,
+  };
+}
+
+function stripeId(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value && 'id' in value) return String((value as any).id || '') || null;
+  return null;
+}
+
+function stripeInvoiceSubscriptionId(invoice: any): string | null {
+  return stripeId(invoice.subscription)
+    || stripeId(invoice.subscription_details?.subscription)
+    || stripeId(invoice.parent?.subscription_details?.subscription)
+    || stripeId(invoice.lines?.data?.find((line: any) => line?.subscription)?.subscription)
+    || null;
+}
+
+function stripeInvoicePaymentIntentId(invoice: any): string | null {
+  return stripeId(invoice.payment_intent)
+    || stripeId(invoice.payments?.data?.find((payment: any) => payment?.payment?.payment_intent)?.payment?.payment_intent)
+    || null;
+}
+
+function stripeInvoiceMetadata(invoice: any): Record<string, string> {
+  const merged = {
+    ...(invoice.subscription_details?.metadata || {}),
+    ...(invoice.parent?.subscription_details?.metadata || {}),
+    ...(invoice.lines?.data?.find((line: any) => line?.metadata && Object.keys(line.metadata).length)?.metadata || {}),
+  };
+  return Object.fromEntries(Object.entries(merged).map(([key, value]) => [key, String(value ?? '')]));
+}
+
+function stripeInvoicePaidAt(invoice: any) {
+  const paidAt = Number(invoice.status_transitions?.paid_at || 0);
+  if (paidAt > 0) return new Date(paidAt * 1000).toISOString();
+  const created = Number(invoice.created || 0);
+  if (created > 0) return new Date(created * 1000).toISOString();
+  return new Date().toISOString();
+}
+
+function stripeInvoiceAmountRefunded(invoice: any) {
+  return Math.round(Number(
+    invoice.amount_refunded
+    || invoice.post_payment_credit_notes_amount
+    || invoice.charge?.amount_refunded
+    || invoice.latest_charge?.amount_refunded
+    || 0
+  ));
+}
+
+async function fetchStripePaidInvoices(stripeCustomerId: string, subscriptionId?: string | null) {
+  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+  if (!stripeKey) throw new Error('Stripe is not configured. Missing STRIPE_SECRET_KEY.');
+
+  const invoices: any[] = [];
+  let startingAfter: string | null = null;
+  for (let page = 0; page < 30; page += 1) {
+    const url = new URL('https://api.stripe.com/v1/invoices');
+    url.searchParams.set('customer', stripeCustomerId);
+    url.searchParams.set('status', 'paid');
+    url.searchParams.set('limit', '100');
+    if (subscriptionId) url.searchParams.set('subscription', subscriptionId);
+    if (startingAfter) url.searchParams.set('starting_after', startingAfter);
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${stripeKey}` },
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(json.error?.message || json.message || `Stripe invoice fetch failed (${response.status})`);
+    }
+
+    const pageRows = Array.isArray(json.data) ? json.data : [];
+    invoices.push(...pageRows);
+    if (!json.has_more || !pageRows.length) break;
+    startingAfter = pageRows[pageRows.length - 1]?.id || null;
+    if (!startingAfter) break;
+  }
+  return invoices;
+}
+
+async function hasLedgerForReceiptOrSession(admin: any, receipt: any): Promise<boolean> {
+  if (receipt?.id) {
+    const { data } = await admin
+      .from('ledger_entries')
+      .select('id')
+      .eq('booking_receipt_id', receipt.id)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return true;
+  }
+
+  if (receipt?.stripe_session_id) {
+    const { data } = await admin
+      .from('ledger_entries')
+      .select('id')
+      .eq('stripe_session_id', receipt.stripe_session_id)
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return true;
+  }
+
+  return false;
+}
+
+function receiptMatchesStripeBackfillTarget(receipt: any, target: any) {
+  const receiptStripeCustomerId = String(receipt?.stripe_customer_id || receipt?.metadata?.stripe_customer_id || '').trim();
+  if (receiptStripeCustomerId && receiptStripeCustomerId !== target.stripeCustomerId) return false;
+
+  return (
+    receipt?.customer_id === target.customer.id ||
+    (target.userId && receipt?.user_id === target.userId) ||
+    receiptStripeCustomerId === target.stripeCustomerId
+  );
+}
+
+async function resolveStripeBackfillTarget(admin: any, venueId: string, body: Record<string, any>) {
+  const requestedCustomerId = String(body.customer_id || body.customerId || '').trim() || null;
+  let stripeCustomerId = String(body.stripe_customer_id || body.stripeCustomerId || '').trim() || null;
+  const requestedTierId = String(body.tier_id || body.tierId || '').trim() || null;
+  const requestedSubscriptionId = String(body.stripe_subscription_id || body.stripeSubscriptionId || '').trim() || null;
+
+  let customer: any = null;
+  if (requestedCustomerId) {
+    const { data, error } = await admin
+      .from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone')
+      .eq('id', requestedCustomerId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) throw new Error('Customer not found');
+    customer = data;
+  }
+
+  let profileByStripe: any = null;
+  if (stripeCustomerId) {
+    const { data, error } = await admin
+      .from('player_profiles')
+      .select('auth_user_id, customer_id, display_name, first_name, last_name, phone, stripe_customer_id')
+      .eq('stripe_customer_id', stripeCustomerId)
+      .limit(2);
+    if (error) throw new Error(error.message);
+    if ((data || []).length > 1) throw new Error(`Multiple player profiles use Stripe customer ${stripeCustomerId}`);
+    profileByStripe = data?.[0] || null;
+  }
+
+  let stripeIdentity: any = null;
+  if (stripeCustomerId) {
+    const { data, error } = await admin
+      .from('customer_identities')
+      .select('customer_id, provider_id')
+      .eq('provider', 'stripe')
+      .eq('provider_id', stripeCustomerId)
+      .limit(2);
+    if (error) throw new Error(error.message);
+    if ((data || []).length > 1) throw new Error(`Multiple customer identities use Stripe customer ${stripeCustomerId}`);
+    stripeIdentity = data?.[0] || null;
+  }
+
+  const stripeLinkedCustomerIds = [
+    profileByStripe?.customer_id,
+    stripeIdentity?.customer_id,
+  ].filter(Boolean);
+  const uniqueStripeLinkedCustomerIds = Array.from(new Set(stripeLinkedCustomerIds));
+  if (uniqueStripeLinkedCustomerIds.length > 1) {
+    throw new Error(`Stripe customer ${stripeCustomerId} maps to multiple customers`);
+  }
+
+  if (customer && uniqueStripeLinkedCustomerIds.length && uniqueStripeLinkedCustomerIds[0] !== customer.id) {
+    throw new Error(`Stripe customer ${stripeCustomerId} belongs to a different customer`);
+  }
+
+  if (!customer && uniqueStripeLinkedCustomerIds.length) {
+    const { data, error } = await admin
+      .from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone')
+      .eq('id', uniqueStripeLinkedCustomerIds[0])
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    customer = data || null;
+  }
+
+  if (customer && !stripeCustomerId) {
+    const { data: profile } = await admin
+      .from('player_profiles')
+      .select('stripe_customer_id')
+      .eq('customer_id', customer.id)
+      .not('stripe_customer_id', 'is', null)
+      .limit(2);
+    if ((profile || []).length > 1) throw new Error('Customer has multiple Stripe customer ids on profiles');
+    stripeCustomerId = profile?.[0]?.stripe_customer_id || null;
+
+    if (!stripeCustomerId) {
+      const { data: identity } = await admin
+        .from('customer_identities')
+        .select('provider_id')
+        .eq('customer_id', customer.id)
+        .eq('provider', 'stripe')
+        .not('provider_id', 'is', null)
+        .limit(2);
+      if ((identity || []).length > 1) throw new Error('Customer has multiple Stripe customer identities');
+      stripeCustomerId = identity?.[0]?.provider_id || null;
+    }
+  }
+
+  if (!customer && profileByStripe?.auth_user_id) {
+    const { data } = await admin
+      .from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone')
+      .eq('auth_user_id', profileByStripe.auth_user_id)
+      .maybeSingle();
+    customer = data || null;
+  }
+
+  if (!customer) throw new Error('Could not safely resolve customer');
+  if (!stripeCustomerId) throw new Error('Could not resolve Stripe customer id');
+
+  let userId = customer.auth_user_id || profileByStripe?.auth_user_id || null;
+  let profile = profileByStripe;
+  if (!profile && userId) {
+    const { data } = await admin
+      .from('player_profiles')
+      .select('auth_user_id, customer_id, display_name, first_name, last_name, phone, stripe_customer_id')
+      .eq('auth_user_id', userId)
+      .maybeSingle();
+    profile = data || null;
+  }
+  userId = userId || profile?.auth_user_id || null;
+
+  const { data: memberships, error: membershipError } = await admin
+    .from('memberships')
+    .select('id, venue_id, tier_id, user_id, customer_id, status, created_at, membership_tiers(id, name, monthly_price)')
+    .eq('venue_id', venueId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false });
+  if (membershipError) throw new Error(membershipError.message);
+
+  let matchingMemberships = (memberships || []).filter((membership: any) =>
+    (customer.id && membership.customer_id === customer.id) ||
+    (userId && membership.user_id === userId)
+  );
+  if (requestedTierId) matchingMemberships = matchingMemberships.filter((membership: any) => membership.tier_id === requestedTierId);
+  if (!matchingMemberships.length) throw new Error('No active membership found for this customer at the selected venue');
+  if (matchingMemberships.length > 1 && !requestedTierId) {
+    throw new Error('Multiple active memberships found. Provide tier_id for a safe backfill.');
+  }
+  const membership = matchingMemberships[0];
+
+  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ')
+    || customer.display_name
+    || [profile?.first_name, profile?.last_name].filter(Boolean).join(' ')
+    || profile?.display_name
+    || customer.primary_email
+    || null;
+
+  return {
+    customer,
+    profile,
+    membership,
+    stripeCustomerId,
+    stripeSubscriptionId: requestedSubscriptionId || null,
+    userId,
+    customerName,
+    customerEmail: customer.primary_email || null,
+    customerPhone: customer.primary_phone || profile?.phone || null,
+    tierId: membership.tier_id,
+    tierName: membership.membership_tiers?.name || null,
+  };
+}
+
+async function importStripeSubscriptionInvoice(admin: any, venueId: string, target: any, invoice: any) {
+  if (!invoice?.id) return { status: 'failed', invoice_id: null, reason: 'missing_invoice_id' };
+  const amountPaidMinor = Math.round(Number(invoice.amount_paid || 0));
+  const amountRefundedMinor = stripeInvoiceAmountRefunded(invoice);
+  if (invoice.status !== 'paid' || invoice.paid === false || amountPaidMinor <= 0) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'not_paid_or_zero' };
+  }
+  if (amountRefundedMinor > 0 && amountPaidMinor <= amountRefundedMinor) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'fully_refunded' };
+  }
+  if (amountRefundedMinor > 0) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'partial_refund_manual_review' };
+  }
+
+  const invoiceCustomerId = stripeId(invoice.customer);
+  if (invoiceCustomerId && invoiceCustomerId !== target.stripeCustomerId) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'invoice_customer_mismatch' };
+  }
+
+  const invoiceSubscriptionId = stripeInvoiceSubscriptionId(invoice);
+  const invoiceMeta = stripeInvoiceMetadata(invoice);
+  const invoiceVenueId = invoiceMeta.venue_id || null;
+  const invoiceTierId = invoiceMeta.tier_id || null;
+  if (invoiceVenueId && invoiceVenueId !== venueId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'venue_mismatch' };
+  }
+  if (invoiceTierId && invoiceTierId !== target.tierId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'tier_mismatch' };
+  }
+  if (target.stripeSubscriptionId && !invoiceSubscriptionId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'missing_subscription_id' };
+  }
+  if (target.stripeSubscriptionId && invoiceSubscriptionId && invoiceSubscriptionId !== target.stripeSubscriptionId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'subscription_mismatch' };
+  }
+
+  const tierId = invoiceTierId || target.tierId || null;
+  const tierName = invoiceMeta.tier_name || target.tierName || null;
+  if (!tierId && !tierName) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'missing_tier_snapshot' };
+  }
+
+  const { data: existingReceipt, error: existingReceiptError } = await admin
+    .from('booking_receipts')
+    .select('id, receipt_number, stripe_session_id, stripe_invoice_id, stripe_subscription_id, stripe_customer_id, customer_id, user_id, customer_name, product_description, total_inc_vat_sek, vat_rate, issued_at, metadata')
+    .eq('stripe_invoice_id', invoice.id)
+    .maybeSingle();
+  if (existingReceiptError) throw new Error(existingReceiptError.message);
+  if (existingReceipt && !receiptMatchesStripeBackfillTarget(existingReceipt, target)) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'existing_invoice_receipt_customer_mismatch', receipt_id: existingReceipt.id };
+  }
+  if (existingReceipt?.stripe_subscription_id && invoiceSubscriptionId && existingReceipt.stripe_subscription_id !== invoiceSubscriptionId) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'existing_invoice_receipt_subscription_mismatch', receipt_id: existingReceipt.id };
+  }
+
+  let receipt = existingReceipt;
+  let receiptCreated = false;
+  let receiptUpdated = false;
+  if (!receipt && invoice.billing_reason === 'subscription_create') {
+    if (!invoiceSubscriptionId) {
+      return { status: 'failed', invoice_id: invoice.id, reason: 'initial_invoice_missing_subscription_id' };
+    }
+
+    const { data: checkoutReceipts, error: checkoutReceiptError } = await admin
+      .from('booking_receipts')
+      .select('id, receipt_number, stripe_session_id, stripe_invoice_id, stripe_subscription_id, stripe_customer_id, customer_id, user_id, customer_name, product_description, total_inc_vat_sek, vat_rate, issued_at, stripe_payment_intent_id, metadata')
+      .eq('stripe_subscription_id', invoiceSubscriptionId)
+      .eq('purchase_type', 'membership')
+      .not('stripe_session_id', 'is', null)
+      .order('issued_at', { ascending: false })
+      .limit(5);
+    if (checkoutReceiptError) throw new Error(checkoutReceiptError.message);
+
+    const matchingCheckoutReceipts = (checkoutReceipts || []).filter((row: any) =>
+      receiptMatchesStripeBackfillTarget(row, target)
+    );
+    if ((checkoutReceipts || []).length && !matchingCheckoutReceipts.length) {
+      return { status: 'failed', invoice_id: invoice.id, reason: 'initial_checkout_receipt_customer_mismatch' };
+    }
+    if (matchingCheckoutReceipts.length > 1) {
+      return { status: 'failed', invoice_id: invoice.id, reason: 'multiple_initial_checkout_receipts' };
+    }
+
+    const checkoutReceipt = matchingCheckoutReceipts[0] || null;
+    if (checkoutReceipt) {
+      if (checkoutReceipt.stripe_invoice_id && checkoutReceipt.stripe_invoice_id !== invoice.id) {
+        return { status: 'failed', invoice_id: invoice.id, reason: 'checkout_receipt_has_different_invoice', receipt_id: checkoutReceipt.id };
+      }
+
+      receipt = checkoutReceipt;
+      if (!checkoutReceipt.stripe_invoice_id) {
+        const { data: updatedReceipt, error: updateReceiptError } = await admin
+          .from('booking_receipts')
+          .update({
+            stripe_invoice_id: invoice.id,
+            stripe_payment_intent_id: checkoutReceipt.stripe_payment_intent_id || stripeInvoicePaymentIntentId(invoice),
+            metadata: {
+              ...(checkoutReceipt.metadata || {}),
+              stripe_invoice_id: invoice.id,
+              stripe_invoice_number: invoice.number || null,
+              billing_reason: invoice.billing_reason || null,
+              hosted_invoice_url: invoice.hosted_invoice_url || null,
+              invoice_pdf: invoice.invoice_pdf || null,
+            },
+          })
+          .eq('id', checkoutReceipt.id)
+          .is('stripe_invoice_id', null)
+          .select('id, receipt_number, stripe_session_id, stripe_invoice_id, stripe_subscription_id, customer_id, user_id, customer_name, product_description, total_inc_vat_sek, vat_rate, issued_at')
+          .maybeSingle();
+        if (updateReceiptError) {
+          if (updateReceiptError.code === '23505') {
+            return { status: 'failed', invoice_id: invoice.id, reason: 'stripe_invoice_already_linked_elsewhere', receipt_id: checkoutReceipt.id };
+          }
+          throw new Error(updateReceiptError.message);
+        }
+        if (!updatedReceipt) {
+          return { status: 'failed', invoice_id: invoice.id, reason: 'checkout_receipt_invoice_link_race', receipt_id: checkoutReceipt.id };
+        }
+        receipt = updatedReceipt;
+        receiptUpdated = true;
+      }
+    }
+  }
+
+  if (!receipt) {
+    const vat = vatPartsFromIncludedMinor(amountPaidMinor, 6);
+    const paidAt = stripeInvoicePaidAt(invoice);
+    const description = tierName ? `Medlemskap · ${tierName}` : 'Medlemskap';
+    const { data: insertedReceipt, error: receiptError } = await admin
+      .from('booking_receipts')
+      .insert({
+        booking_refs: [],
+        stripe_session_id: null,
+        stripe_invoice_id: invoice.id,
+        stripe_payment_intent_id: stripeInvoicePaymentIntentId(invoice),
+        stripe_customer_id: target.stripeCustomerId,
+        stripe_subscription_id: invoiceSubscriptionId || target.stripeSubscriptionId,
+        venue_id: venueId,
+        customer_id: target.customer.id,
+        user_id: target.userId || null,
+        customer_name: target.customerName || null,
+        customer_email: target.customerEmail || invoice.customer_email || null,
+        customer_phone: target.customerPhone || invoice.customer_phone || null,
+        purchase_type: 'membership',
+        product_description: description,
+        payment_method: 'Kort via Stripe',
+        total_inc_vat: Math.round(vat.totalIncVatSek),
+        total_ex_vat: Math.round(vat.totalExVatSek),
+        vat_amount: Math.round(vat.vatAmountSek),
+        total_inc_vat_sek: vat.totalIncVatSek,
+        total_ex_vat_sek: vat.totalExVatSek,
+        vat_amount_sek: vat.vatAmountSek,
+        vat_rate: vat.vatRate,
+        currency: String(invoice.currency || 'sek').toUpperCase(),
+        payment_provider: 'stripe',
+        payment_status: 'paid',
+        issued_at: paidAt,
+        metadata: {
+          source: 'stripe_invoice_backfill',
+          product_type: 'membership',
+          tier_id: tierId,
+          tier_name: tierName,
+          membership_id: target.membership.id,
+          stripe_invoice_id: invoice.id,
+          stripe_invoice_number: invoice.number || null,
+          billing_reason: invoice.billing_reason || null,
+          hosted_invoice_url: invoice.hosted_invoice_url || null,
+          invoice_pdf: invoice.invoice_pdf || null,
+          period_start: invoice.period_start ? new Date(Number(invoice.period_start) * 1000).toISOString() : null,
+          period_end: invoice.period_end ? new Date(Number(invoice.period_end) * 1000).toISOString() : null,
+        },
+      })
+      .select('id, receipt_number, stripe_session_id, stripe_invoice_id, stripe_subscription_id, customer_id, user_id, customer_name, product_description, total_inc_vat_sek, vat_rate, issued_at')
+      .single();
+    if (receiptError) {
+      if (receiptError.code === '23505') {
+        return { status: 'skipped', invoice_id: invoice.id, reason: 'receipt_exists' };
+      }
+      throw new Error(receiptError.message);
+    }
+    receipt = insertedReceipt;
+    receiptCreated = true;
+  }
+
+  const { data: existingInvoiceLedger, error: existingLedgerError } = await admin
+    .from('ledger_entries')
+    .select('id')
+    .eq('source_type', 'membership_invoice')
+    .eq('source_id', invoice.id)
+    .maybeSingle();
+  if (existingLedgerError) throw new Error(existingLedgerError.message);
+
+  let ledgerCreated = false;
+  if (!existingInvoiceLedger && !(await hasLedgerForReceiptOrSession(admin, receipt))) {
+    const issuedAt = receipt.issued_at || stripeInvoicePaidAt(invoice);
+    const { error: ledgerError } = await admin.from('ledger_entries').insert({
+      venue_id: venueId,
+      customer_id: target.customer.id,
+      source_type: 'membership_invoice',
+      source_id: invoice.id,
+      accounting_date: localAccountingDateFromIso(issuedAt),
+      occurred_at: issuedAt,
+      customer_name: target.customerName || receipt.customer_name || null,
+      amount_inc_vat_minor: amountPaidMinor,
+      vat_amount_minor: vatMinorFromIncludedMinor(amountPaidMinor, Number(receipt.vat_rate || 6)),
+      payment_status: 'paid',
+      payment_method: 'Kort via Stripe',
+      stripe_session_id: null,
+      receipt_number: receipt.receipt_number || null,
+      booking_receipt_id: receipt.id,
+      metadata: {
+        source: 'stripe_invoice_backfill',
+        product_type: 'membership',
+        purchase_type: 'membership',
+        product_description: receipt.product_description || tierName || 'Medlemskap',
+        membership_id: target.membership.id,
+        tier_id: tierId,
+        tier_name: tierName,
+        stripe_invoice_id: invoice.id,
+        stripe_invoice_number: invoice.number || null,
+        stripe_payment_intent_id: stripeInvoicePaymentIntentId(invoice),
+        stripe_customer_id: target.stripeCustomerId,
+        stripe_subscription_id: invoiceSubscriptionId || target.stripeSubscriptionId,
+        billing_reason: invoice.billing_reason || null,
+        hosted_invoice_url: invoice.hosted_invoice_url || null,
+        invoice_pdf: invoice.invoice_pdf || null,
+      },
+    });
+    if (ledgerError) {
+      if (ledgerError.code === '23505') {
+        return { status: receiptCreated ? 'imported_receipt_only' : 'skipped', invoice_id: invoice.id, reason: 'ledger_exists', receipt_id: receipt.id };
+      }
+      throw new Error(ledgerError.message);
+    }
+    ledgerCreated = true;
+  }
+
+  if (receiptCreated || receiptUpdated || ledgerCreated) {
+    return {
+      status: 'imported',
+      invoice_id: invoice.id,
+      receipt_id: receipt.id,
+      receipt_created: receiptCreated,
+      receipt_updated: receiptUpdated,
+      ledger_created: ledgerCreated,
+    };
+  }
+
+  return { status: 'skipped', invoice_id: invoice.id, reason: 'already_imported', receipt_id: receipt.id };
 }
 
 function stockholmTimeFromIso(value: string | null | undefined) {
@@ -1312,6 +1848,82 @@ Deno.serve(async (req) => {
           .eq('id', importConnection.id);
         return errorResponse(message, 500);
       }
+    }
+
+    // ── STRIPE SUBSCRIPTION INVOICE BACKFILL ──
+    if (req.method === 'POST' && path === 'stripe-invoice-backfill') {
+      await requireSuperAdmin(admin, userId);
+      const body = await req.json().catch(() => ({}));
+      const target = await resolveStripeBackfillTarget(admin, venueId!, body);
+      const invoices = await fetchStripePaidInvoices(target.stripeCustomerId, target.stripeSubscriptionId);
+      const paidInvoices = invoices.filter((invoice: any) =>
+        invoice.status === 'paid' &&
+        invoice.paid !== false &&
+        Number(invoice.amount_paid || 0) > 0
+      );
+      const invoiceSubscriptionIds = Array.from(new Set(
+        paidInvoices
+          .map((invoice: any) => stripeInvoiceSubscriptionId(invoice))
+          .filter(Boolean)
+      ));
+      if (!target.stripeSubscriptionId && invoiceSubscriptionIds.length > 1) {
+        return errorResponse(
+          'Multiple Stripe subscriptions found for this customer. Provide stripe_subscription_id for a safe backfill.',
+          400,
+        );
+      }
+
+      const results: any[] = [];
+      for (const invoice of paidInvoices) {
+        try {
+          results.push(await importStripeSubscriptionInvoice(admin, venueId!, target, invoice));
+        } catch (invoiceError) {
+          results.push({
+            status: 'failed',
+            invoice_id: invoice?.id || null,
+            reason: invoiceError instanceof Error ? invoiceError.message : 'Invoice import failed',
+          });
+        }
+      }
+
+      const imported = results.filter((row) => row.status === 'imported' || row.status === 'imported_receipt_only').length;
+      const skipped = results.filter((row) => row.status === 'skipped').length;
+      const failed = results.filter((row) => row.status === 'failed').length;
+
+      await writeAuditLog(admin, {
+        venue_id: venueId,
+        actor_user_id: userId,
+        actor_type: 'user',
+        action: 'api-admin.stripe-invoice-backfill.completed',
+        entity_table: 'booking_receipts',
+        entity_id: target.stripeCustomerId,
+        metadata: {
+          customer_id: target.customer.id,
+          stripe_customer_id: target.stripeCustomerId,
+          stripe_subscription_id: target.stripeSubscriptionId,
+          fetched_count: invoices.length,
+          paid_count: paidInvoices.length,
+          imported,
+          skipped,
+          failed,
+          results: results.slice(0, 100),
+        },
+        user_agent: req.headers.get('user-agent') || null,
+      });
+
+      return jsonResponse({
+        ok: failed === 0,
+        venue_id: venueId,
+        customer_id: target.customer.id,
+        stripe_customer_id: target.stripeCustomerId,
+        stripe_subscription_id: target.stripeSubscriptionId,
+        fetched_count: invoices.length,
+        paid_count: paidInvoices.length,
+        imported,
+        skipped,
+        failed,
+        results,
+      }, failed === 0 ? 200 : 207, 0);
     }
 
     // ── REVENUE LEDGER ──
