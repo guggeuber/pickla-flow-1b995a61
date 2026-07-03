@@ -54,6 +54,17 @@ Implemented:
 - Product owns pricing: `access_products.base_price_sek` is the fallback/default product price; concrete sessions can override via `activity_sessions.price_sek` and metadata.
 - Value-first customer pricing: public program/session UI prioritizes included access, day pass inclusion, membership inclusion, member discounts, savings, and final customer price over raw product mechanics.
 
+### Experience Foundation
+
+Canonical experience documents:
+
+- [Product Constitution](./docs/constitution/Product%20Constitution.md): the single product law. It replaces older constitution/design-language documents.
+- [Product Evolution System](./docs/evolution/Product%20Evolution%20System.md): the observation-to-release loop for evolving Pickla without drifting from the Constitution.
+- [Cognitive Load System](./docs/evolution/Cognitive%20Load%20System.md): the way Pickla measures decision, reading, tap, thinking, and waiting load.
+- [Decision Framework](./docs/evolution/Decision%20Framework.md): the lightweight template for future product decisions.
+
+The Constitution lives in [docs/constitution](./docs/constitution/). Product area notes live in [docs/product](./docs/product/) and should remain lightweight until reality demands more detail.
+
 ### Investor Platform
 
 Implemented:
