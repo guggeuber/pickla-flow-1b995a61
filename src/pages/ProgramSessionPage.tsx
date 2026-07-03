@@ -11,13 +11,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { MembershipValueCard } from "@/components/membership/MembershipValueCard";
 import {
   ACCESS_ACTIVITY_DISCOUNT_PERCENT,
   DAY_MEMBERSHIP_SEK,
   PICKLA_ACCESS_LABEL,
-  PICKLA_ACCESS_MONTHLY_SEK,
   PICKLA_UNLIMITED_LABEL,
-  PICKLA_UNLIMITED_MONTHLY_SEK,
   formatSek,
 } from "@/lib/activityPricing";
 
@@ -29,11 +28,6 @@ const NAVY = "#111827";
 const GREEN = "#16a34a";
 const MENU_BORDER = "rgba(17,17,17,0.12)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
-const OFFER_STYLES = {
-  access: { border: "#f9a8d4", background: "#fff1f7", accent: "#be185d" },
-  unlimited: { border: "#93c5fd", background: "#eff6ff", accent: "#1d4ed8" },
-  day: { border: "#86efac", background: "#f0fdf4", accent: "#15803d" },
-} as const;
 
 function safeLocalPath(path: string) {
   return path.startsWith("/") && !path.startsWith("//") ? path : "/today";
@@ -179,6 +173,18 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const publicPlayPrice = Math.max(0, Math.round(basePrice * (1 - ACCESS_ACTIVITY_DISCOUNT_PERCENT / 100)));
   const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
   const hasDayAccess = Boolean(accessSnapshotForResolvedSession.data?.hasDayAccess);
+  const membershipName = String(
+    backendPricing?.membershipTierName ||
+    pricingDebug.membership_tier_name ||
+    accessSnapshotForResolvedSession.data?.membershipTierName ||
+    ""
+  );
+  const includedLabel = pricingIsIncluded
+    ? backendPricing?.accessDecision === "day_access_included"
+      ? "Ingår idag"
+      : `Ingår i ${membershipName || "medlemskap"}`
+    : null;
+  const membershipAlreadyCoversActivity = pricingIsIncluded || /play\+|founder|unlimited/i.test(membershipName);
   const ctaLabel = isRegistered
     ? "Anmäld"
     : isFull
@@ -350,6 +356,41 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       void startDayPassSignup();
     }
   };
+  const valueOfferRows = !userHasMembership
+    ? hasSpecialPricingOverride
+      ? pricingMode === "member_discount" && specialMemberPrice < onlinePrice
+        ? [{
+          label: "Medlem",
+          priceLabel: formatSek(specialMemberPrice),
+          savingLabel: `Spara ${formatSek(onlinePrice - specialMemberPrice)} idag`,
+          onClick: () => openUpsell("access"),
+        }]
+        : []
+      : [
+        {
+          label: `${PICKLA_ACCESS_LABEL}`,
+          priceLabel: formatSek(publicPlayPrice),
+          savingLabel: `Spara ${formatSek(Math.max(0, basePrice - publicPlayPrice))} idag`,
+          onClick: () => openUpsell("access"),
+        },
+        {
+          label: `${PICKLA_UNLIMITED_LABEL}`,
+          priceLabel: "Ingår",
+          savingLabel: `Spara ${formatSek(basePrice)} idag`,
+          onClick: () => openUpsell("unlimited"),
+        },
+        dayPassIncludedForDisplay && !hasDayAccess && !membershipAlreadyCoversActivity && (dayPassPricing || pricingPending)
+          ? {
+            label: "Spela hela dagen",
+            priceLabel: dayPassPricing?.checkoutLabel || "Hämtar pris...",
+            savingLabel: dayPassPricing && data?.upgradeDeltaSek > 0
+              ? `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr · +${formatSek(data.upgradeDeltaSek)}`
+              : `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
+            onClick: dayPassPricing ? () => openUpsell("day") : undefined,
+          }
+          : null,
+      ].filter(Boolean) as Array<{ label: string; priceLabel: string; savingLabel: string; onClick?: () => void }>
+    : [];
 
   const toggleInterest = async (source: "secondary" | "primary" = "secondary") => {
     if (!session || !occurrenceDate) return;
@@ -550,136 +591,35 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     ) : null}
                   </div>
 
-                  <div className="rounded-[24px] bg-[#f8fafc] p-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
-                    {hasSpecialPricingOverride ? (
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="rounded-2xl bg-white p-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Playpickla.com</p>
-                            <p className="mt-1 text-[28px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                              {formatSek(onlinePrice)}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl bg-white p-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Drop-in på plats</p>
-                            <p className="mt-1 text-[28px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                              {formatSek(deskPrice)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-[12px] font-semibold text-neutral-500">
-                            {pricingMode === "fixed_ticket"
-                              ? `Alla betalar ${formatSek(onlinePrice)} online.`
-                              : `Medlemmar betalar ${formatSek(specialMemberPrice)} online.`}
-                          </p>
-                          <p className="text-right text-[12px] font-black" style={{ color: GREEN }}>
-                            Billigare online
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">Biljettpris</p>
-                          <p className="mt-1 text-[17px] font-semibold text-neutral-500" style={{ fontFamily: FONT_HEADING }}>
-                            {basePrice > 0 ? formatSek(basePrice) : "Ingår"}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: GREEN }}>Ditt pris</p>
-                          <p className="mt-1 text-[30px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                            {checkoutLabel}
-                          </p>
-                        </div>
-                      </div>
-                    )}
+                  <MembershipValueCard
+                    ordinaryPriceSek={basePrice || onlinePrice}
+                    onlinePriceSek={onlinePrice}
+                    deskPriceSek={deskPrice}
+                    customerPriceSek={effectivePrice}
+                    pricingPending={pricingPending}
+                    includedLabel={includedLabel}
+                    membershipName={membershipName || null}
+                    isLoggedIn={!!user?.id}
+                    hasActiveMembership={userHasMembership}
+                    offerRows={valueOfferRows}
+                  />
+                  <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
                     {pricingPending && (
-                      <p className="mt-2 text-[12px] font-semibold text-neutral-500">
+                      <p className="text-[12px] font-semibold text-neutral-500">
                         Vi kontrollerar medlemskap, dagsaccess och entitlements.
                       </p>
                     )}
-                    {!hasSpecialPricingOverride && !pricingPending && savingsSek > 0 && (
-                      <p className="mt-2 text-[12px] font-semibold text-neutral-500">
-                        Du sparar {formatSek(savingsSek)} på det här passet.
+                    {!pricingPending && savingsSek > 0 && (
+                      <p className="text-[12px] font-semibold text-neutral-500">
+                        Dagens sparande: {formatSek(savingsSek)}.
                       </p>
                     )}
                     {requiresCheckout && (
-                      <p className="mt-2 text-[12px] text-neutral-500">
+                      <p className="mt-1 text-[12px] text-neutral-500">
                         Betalning sker via Stripe innan platsen bekräftas.
                       </p>
                     )}
                   </div>
-
-                  {(() => {
-                    if (hasSpecialPricingOverride) return null;
-                    const upsellRows = [
-                      !userHasMembership ? {
-                        kind: "access" as const,
-                        label: `${PICKLA_ACCESS_LABEL} ${PICKLA_ACCESS_MONTHLY_SEK} kr/mån`,
-                        value: formatSek(publicPlayPrice),
-                        helper: "Köp Play och boka billigare",
-                      } : null,
-                      !userHasMembership ? {
-                        kind: "unlimited" as const,
-                        label: `${PICKLA_UNLIMITED_LABEL} ${PICKLA_UNLIMITED_MONTHLY_SEK} kr/mån`,
-                        value: "Ingår",
-                        helper: "Ingår när aktiviteten täcks av Play+",
-                      } : null,
-                      dayPassIncludedForDisplay && !hasDayAccess && (dayPassPricing || pricingPending) ? {
-                        kind: "day" as const,
-                        label: `Spela hela dagen`,
-                        value: dayPassPricing?.checkoutLabel || "Hämtar pris...",
-                        helper: dayPassPricing && data?.upgradeDeltaSek > 0
-                          ? `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr · bara +${formatSek(data.upgradeDeltaSek)} extra`
-                          : `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
-                      } : null,
-                    ].filter(Boolean) as Array<{ kind: "access" | "unlimited" | "day"; label: string; value: string; helper: string }>;
-
-                    if (upsellRows.length === 0) return null;
-
-                    return (
-                      <div className="grid gap-2">
-                        {upsellRows.map((row) => {
-                          const isMembershipUpsell = row.kind === "access" || row.kind === "unlimited";
-                          const isDayUpsell = row.kind === "day" && !hasDayAccess;
-                          const clickable = !pricingPending && (isMembershipUpsell || (isDayUpsell && !!dayPassPricing));
-                          const offerStyle = OFFER_STYLES[row.kind];
-                          const dayRow = row.kind === "day";
-                          return (
-                            <button
-                              key={row.label}
-                              type="button"
-                              onClick={() => clickable && openUpsell(row.kind)}
-                              disabled={pricingPending}
-                              className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-4 text-left ${dayRow ? "py-3.5 shadow-sm" : "py-3"}`}
-                              style={{
-                                border: `1px solid ${offerStyle.border}`,
-                                background: offerStyle.background,
-                              }}
-                            >
-                              <span className="min-w-0">
-                                {dayRow && (
-                                  <span className="mb-1 inline-flex rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: offerStyle.accent }}>
-                                    Bästa uppgradering
-                                  </span>
-                                )}
-                                <span className={`block truncate font-semibold text-neutral-950 ${dayRow ? "text-[15px]" : "text-[14px]"}`} style={{ fontFamily: FONT_HEADING }}>
-                                  {row.label}
-                                </span>
-                                <span className="mt-0.5 block truncate text-[11px] text-neutral-500">
-                                  {row.helper}
-                                </span>
-                              </span>
-                              <span className="shrink-0 text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING, color: offerStyle.accent }}>
-                                {row.value}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
                 </div>
               </div>
 

@@ -9,9 +9,17 @@ import { DateTime } from "luxon";
 import { useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
-import { activityPriceLabels, formatSek, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
+import {
+  PICKLA_ACCESS_LABEL,
+  PICKLA_UNLIMITED_LABEL,
+  activityPriceLabels,
+  formatSek,
+  hasActiveMembership,
+  mergeBackendActivityPricing,
+} from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { getPublicProfileMap } from "@/lib/publicProfiles";
+import { MembershipValueCard } from "@/components/membership/MembershipValueCard";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -221,7 +229,6 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const backendPricing = publicActivityPreview?.activityTicketPricing || publicActivityPreview?.pricing || null;
     const pricingDebug = backendPricing?.debug || {};
     const pricingMode = String(pricingDebug.pricing_mode || (effectiveProgramSession as any).metadata?.pricing_mode || "standard");
-    const hasSpecialPricingOverride = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
     const onlinePrice = Number(pricingDebug.online_price_sek ?? (effectiveProgramSession as any).metadata?.online_price_sek ?? effectiveProgramSession.price_sek ?? 0);
     const deskPrice = Number(pricingDebug.desk_price_sek ?? (effectiveProgramSession as any).metadata?.desk_price_sek ?? onlinePrice);
     const memberDiscountPercent = Number(pricingDebug.member_discount_percent ?? (effectiveProgramSession as any).metadata?.member_discount_percent ?? 0);
@@ -240,6 +247,55 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const chatPath = roomId
       ? `/chat/${roomId}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`
       : `/hub${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ""}`;
+    const membershipName = String(
+      backendPricing?.membershipTierName ||
+      pricingDebug.membership_tier_name ||
+      membership?.membership_tiers?.name ||
+      ""
+    );
+    const customerPrice = Number(backendPricing?.effectivePriceSek ?? backendPricing?.finalAmountSek ?? pricing.finalPrice ?? onlinePrice);
+    const includedLabel = backendPricing?.requiresCheckout === false
+      ? backendPricing.accessDecision === "day_access_included"
+        ? "Ingår idag"
+        : `Ingår i ${membershipName || "medlemskap"}`
+      : pricing.includedLabel
+        ? pricing.includedLabel === "Ingår" && membershipName
+          ? `Ingår i ${membershipName}`
+          : pricing.includedLabel
+        : null;
+    const openMembership = () => {
+      const params = new URLSearchParams();
+      if (venueSlug) params.set("v", venueSlug);
+      params.set("returnTo", chatPath);
+      navigate(`/membership?${params.toString()}`);
+    };
+    const membershipOfferRows = !userHasMembership
+      ? pricingMode === "fixed_ticket"
+        ? []
+        : pricingMode === "member_discount"
+          ? specialMemberPrice < onlinePrice
+            ? [{
+              label: "Medlem",
+              priceLabel: formatSek(specialMemberPrice),
+              savingLabel: `Spara ${formatSek(onlinePrice - specialMemberPrice)} idag`,
+              onClick: openMembership,
+            }]
+            : []
+          : [
+            {
+              label: PICKLA_ACCESS_LABEL,
+              priceLabel: formatSek(pricing.accessPrice),
+              savingLabel: `Spara ${formatSek(Math.max(0, pricing.basePrice - pricing.accessPrice))} idag`,
+              onClick: openMembership,
+            },
+            {
+              label: PICKLA_UNLIMITED_LABEL,
+              priceLabel: "Ingår",
+              savingLabel: `Spara ${formatSek(pricing.basePrice)} idag`,
+              onClick: openMembership,
+            },
+          ]
+      : [];
     const announceJoin = async () => {
       if (!roomId || !user?.id) return;
       const { data: profile } = await supabase
@@ -298,18 +354,6 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
         toast.error(err.message || "Kunde inte starta anmälan");
       } finally {
         setLoading(false);
-      }
-    };
-    const handleProgramUpsell = (label: string) => {
-      if ((label.includes("Access") || label.includes("Unlimited")) && !userHasMembership) {
-        const params = new URLSearchParams();
-        if (venueSlug) params.set("v", venueSlug);
-        params.set("returnTo", chatPath);
-        navigate(`/membership?${params.toString()}`);
-        return;
-      }
-      if (label.includes("Dagsmedlemskap") && !dayAccess) {
-        toast.info("Dagsmedlemskap kommer strax här.");
       }
     };
     const handleCollapsedPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
@@ -415,27 +459,6 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
           </div>
           <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-              <Ticket style={{ width: 14, height: 14 }} />
-              {hasSpecialPricingOverride ? `Playpickla.com ${formatSek(onlinePrice)}` : pricing.publicChips[0]}
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-              {hasSpecialPricingOverride ? `Drop-in ${formatSek(deskPrice)}` : pricing.publicChips[1]}
-            </span>
-            {hasSpecialPricingOverride ? (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-                {pricingMode === "fixed_ticket" ? `Alla ${formatSek(onlinePrice)}` : `Medlem ${formatSek(specialMemberPrice)}`}
-              </span>
-            ) : (
-              <>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-                  {pricing.includedLabel || "Unlimited ingår"}
-                </span>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#ecfdf5", border: "1px solid rgba(34,197,94,0.16)", color: "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-                  Dag ingår
-                </span>
-              </>
-            )}
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
               <CalendarClock style={{ width: 14, height: 14 }} />
               {sessionType}{timeStr ? ` · ${timeStr}` : ""}
             </span>
@@ -516,52 +539,18 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
                 </div>
               </div>
 
-              {pricing.detailRows.map((row) => {
-                const isMembershipUpsell = !userHasMembership && (row.label.includes("Access") || row.label.includes("Unlimited"));
-                const isDayUpsell = !dayAccess && row.label.includes("Dagsmedlemskap");
-                const clickable = isMembershipUpsell || isDayUpsell;
-                return (
-                  <button
-                    key={row.label}
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (clickable) handleProgramUpsell(row.label);
-                    }}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr auto",
-                      alignItems: "center",
-                      gap: 10,
-                      border: "1px solid rgba(15,23,42,0.08)",
-                      background: "#f8fafc",
-                      borderRadius: 18,
-                      padding: "10px 12px",
-                      textAlign: "left",
-                      cursor: clickable ? "pointer" : "default",
-                    }}
-                  >
-                    <span>
-                      <span style={{ display: "block", fontFamily: FONT_HEADING, fontSize: 14, fontWeight: 950, color: "#0f172a" }}>
-                        {row.label}
-                      </span>
-                      {isMembershipUpsell && (
-                        <span style={{ display: "block", marginTop: 1, fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 800, color: "#64748b" }}>
-                          {row.label.includes("Access") ? `Köp Access och boka för ${row.value}` : "Köp Unlimited och boka när det ingår"}
-                        </span>
-                      )}
-                      {isDayUpsell && (
-                        <span style={{ display: "block", marginTop: 1, fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 800, color: "#64748b" }}>
-                          Uppgradera till heldag
-                        </span>
-                      )}
-                    </span>
-                    <span style={{ fontFamily: FONT_HEADING, fontSize: 18, fontWeight: 950, color: "#0f172a" }}>
-                      {row.value}
-                    </span>
-                  </button>
-                );
-              })}
+              <MembershipValueCard
+                ordinaryPriceSek={Number(pricing.basePrice || onlinePrice)}
+                onlinePriceSek={onlinePrice}
+                deskPriceSek={deskPrice}
+                customerPriceSek={customerPrice}
+                includedLabel={includedLabel}
+                membershipName={membershipName || null}
+                isLoggedIn={!!user?.id}
+                hasActiveMembership={userHasMembership}
+                offerRows={membershipOfferRows}
+                compact
+              />
             </motion.div>
           )}
         </div>

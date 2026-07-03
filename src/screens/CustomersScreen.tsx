@@ -187,6 +187,11 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
   const [editPhone, setEditPhone] = useState("");
   const [showMembershipModal, setShowMembershipModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showCompleteCustomerModal, setShowCompleteCustomerModal] = useState(false);
+  const [pendingMembershipTierId, setPendingMembershipTierId] = useState<string | null>(null);
+  const [completeFirstName, setCompleteFirstName] = useState("");
+  const [completeLastName, setCompleteLastName] = useState("");
+  const [completePhone, setCompletePhone] = useState("");
   const [checkingInId, setCheckingInId] = useState<string | null>(null);
   const [checkedInIds, setCheckedInIds] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
@@ -202,7 +207,7 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
   });
 
   const updateProfile = useMutation({
-    mutationFn: (updates: { id: string; display_name: string; phone: string }) =>
+    mutationFn: (updates: { id: string; display_name?: string; first_name?: string; last_name?: string; phone?: string }) =>
       apiPatch("api-customers", "update", updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["player-profiles"] });
@@ -298,6 +303,49 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
 
     const memberTier = currentMembership?.membership_tiers || selected.active_membership_tier;
     const isCheckedIn = checkedInIds.has(selected.id);
+    const selectedProfileId = selected.profile_id || selected.id;
+    const needsCustomerCompletion = !selected.first_name || !selected.last_name || !selected.phone;
+    const beginMembershipAssignment = (tierId: string) => {
+      if (!selected.auth_user_id) {
+        toast.error("Kunden saknar inloggningsidentitet för medlemskap");
+        return;
+      }
+      if (needsCustomerCompletion) {
+        const nameParts = String(selected.display_name || selected.full_name || "").trim().split(/\s+/).filter(Boolean);
+        setPendingMembershipTierId(tierId);
+        setCompleteFirstName(selected.first_name || nameParts[0] || "");
+        setCompleteLastName(selected.last_name || nameParts.slice(1).join(" ") || "");
+        setCompletePhone(selected.phone || "");
+        setShowCompleteCustomerModal(true);
+        return;
+      }
+      assignMembership.mutate(tierId);
+    };
+    const saveCompletedCustomer = async () => {
+      if (!pendingMembershipTierId) return;
+      if (!completeFirstName.trim() || !completeLastName.trim() || !completePhone.trim()) {
+        toast.error("Fyll i förnamn, efternamn och telefon");
+        return;
+      }
+      if (!selectedProfileId) {
+        toast.error("Kunden saknar profil som kan uppdateras");
+        return;
+      }
+      try {
+        await updateProfile.mutateAsync({
+          id: selectedProfileId,
+          first_name: completeFirstName.trim(),
+          last_name: completeLastName.trim(),
+          phone: completePhone.trim(),
+          display_name: selected.display_name || `${completeFirstName.trim()} ${completeLastName.trim()}`,
+        });
+        setShowCompleteCustomerModal(false);
+        assignMembership.mutate(pendingMembershipTierId);
+        setPendingMembershipTierId(null);
+      } catch (err: any) {
+        toast.error(err.message || "Kunde inte komplettera kunden");
+      }
+    };
 
     return (
       <div className="pb-24 px-4 pt-2 space-y-4">
@@ -433,7 +481,7 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
                 </div>
                 <div className="space-y-2">
                   {(membershipTiers || []).filter((t: any) => t.is_assignable !== false).map((mt: any) => (
-                    <motion.button key={mt.id} whileTap={{ scale: 0.97 }} onClick={() => assignMembership.mutate(mt.id)} disabled={assignMembership.isPending} className={`w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all ${memberTier?.id === mt.id ? "ring-2 ring-primary" : ""}`}>
+                    <motion.button key={mt.id} whileTap={{ scale: 0.97 }} onClick={() => beginMembershipAssignment(mt.id)} disabled={assignMembership.isPending || updateProfile.isPending} className={`w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left transition-all ${memberTier?.id === mt.id ? "ring-2 ring-primary" : ""}`}>
                       <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `${mt.color}20` }}>
                         <Crown className="w-5 h-5" style={{ color: mt.color }} />
                       </div>
@@ -453,6 +501,55 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
                   )}
                 </div>
                 <div className="h-6" />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Complete customer before membership assignment */}
+        <AnimatePresence>
+          {showCompleteCustomerModal && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] bg-black/55 flex items-end justify-center" onClick={() => setShowCompleteCustomerModal(false)}>
+              <motion.div initial={{ y: 220 }} animate={{ y: 0 }} exit={{ y: 220 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-lg rounded-t-3xl p-5 space-y-4" style={{ background: "hsl(var(--background))" }}>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-display font-bold">Komplettera kund</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Medlemskap kräver förnamn, efternamn och telefon. Spara så fortsätter tilldelningen automatiskt.
+                    </p>
+                  </div>
+                  <button onClick={() => setShowCompleteCustomerModal(false)}><X className="w-5 h-5 text-muted-foreground" /></button>
+                </div>
+                <div className="grid gap-2">
+                  <input
+                    value={completeFirstName}
+                    onChange={(e) => setCompleteFirstName(e.target.value)}
+                    placeholder="Förnamn"
+                    className="w-full bg-secondary rounded-xl py-3 px-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    autoFocus
+                  />
+                  <input
+                    value={completeLastName}
+                    onChange={(e) => setCompleteLastName(e.target.value)}
+                    placeholder="Efternamn"
+                    className="w-full bg-secondary rounded-xl py-3 px-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  <input
+                    value={completePhone}
+                    onChange={(e) => setCompletePhone(e.target.value)}
+                    placeholder="Telefon"
+                    className="w-full bg-secondary rounded-xl py-3 px-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                </div>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={saveCompletedCustomer}
+                  disabled={updateProfile.isPending || assignMembership.isPending}
+                  className="w-full rounded-2xl bg-primary py-3.5 text-sm font-bold text-primary-foreground flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {(updateProfile.isPending || assignMembership.isPending) && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Spara och tilldela medlemskap
+                </motion.button>
               </motion.div>
             </motion.div>
           )}
