@@ -8,6 +8,7 @@ import { format, parseISO, isBefore } from "date-fns";
 import { sv } from "date-fns/locale";
 import { toast } from "sonner";
 import { useState } from "react";
+import { getPublicProfileMap } from "@/lib/publicProfiles";
 
 const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } };
 
@@ -44,11 +45,16 @@ export function CrewSessionsList({ crewId, isMember, isLeader }: Props) {
       const ids = sessions.map((s: any) => s.id);
       const { data, error } = await supabase
         .from("crew_session_signups" as any)
-        .select("*, player_profiles(display_name, avatar_url)")
+        .select("*")
         .in("crew_session_id", ids)
         .eq("status", "signed_up");
       if (error) throw error;
-      return data || [];
+      const profileIds = (data || []).map((signup: any) => signup.player_profile_id).filter(Boolean);
+      const profiles = await getPublicProfileMap(profileIds);
+      return (data || []).map((signup: any) => ({
+        ...signup,
+        player_profiles: profiles.get(signup.player_profile_id) || null,
+      }));
     },
     enabled: !!sessions?.length,
   });

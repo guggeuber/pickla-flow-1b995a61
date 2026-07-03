@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Loader2, Hash, Users, ChevronLeft, Zap, MessageCircle } from "lucide-react";
+import { getPublicProfileMap } from "@/lib/publicProfiles";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -158,12 +159,17 @@ function ChatRoom({ channel, onBack, profileId }: { channel: ChatChannel; onBack
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from("chat_messages")
-        .select("*, player_profiles(display_name, avatar_url)")
+        .select("*")
         .eq("channel_id", channel.id)
         .order("created_at", { ascending: true })
         .limit(100);
       if (error) throw error;
-      return (data || []) as ChatMessage[];
+      const profileIds = (data || []).map((message: ChatMessage) => message.sender_profile_id).filter(Boolean);
+      const profiles = await getPublicProfileMap(profileIds);
+      return ((data || []) as ChatMessage[]).map((message) => ({
+        ...message,
+        player_profiles: profiles.get(message.sender_profile_id) || null,
+      }));
     },
   });
 

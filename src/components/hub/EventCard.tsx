@@ -11,6 +11,7 @@ import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
 import { activityPriceLabels, formatSek, hasActiveMembership, mergeBackendActivityPricing } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
+import { getPublicProfileMap } from "@/lib/publicProfiles";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -191,15 +192,10 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
       const authIds = (playerRows || []).map((p) => p.auth_user_id).filter(Boolean) as string[];
       if (authIds.length === 0) return playerRows || [];
 
-      const { data: profiles } = await supabase
-        .from("player_profiles")
-        .select("auth_user_id, avatar_url")
-        .in("auth_user_id", authIds);
-
-      const avatarByUser = new Map((profiles || []).map((profile) => [profile.auth_user_id, profile.avatar_url]));
+      const profileByUser = await getPublicProfileMap(authIds);
       return (playerRows || []).map((player) => ({
         ...player,
-        avatar_url: player.auth_user_id ? avatarByUser.get(player.auth_user_id) : null,
+        avatar_url: player.auth_user_id ? profileByUser.get(player.auth_user_id)?.avatar_url || null : null,
       }));
     },
   });

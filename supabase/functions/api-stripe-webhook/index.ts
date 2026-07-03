@@ -95,9 +95,31 @@ Deno.serve(async (req) => {
     return errorResponse(`Webhook signature error: ${(err as Error).message}`, 400);
   }
 
+  const serviceClient = getServiceClient();
+  const eventId = String(event.id || '');
+  if (!eventId) {
+    return errorResponse('Missing Stripe event id', 400);
+  }
+
+  const { error: eventInsertError } = await serviceClient.from('stripe_events').insert({
+    id: eventId,
+    type: String(event.type || 'unknown'),
+    payload: event,
+    status: 'received',
+  });
+  if (eventInsertError) {
+    if (eventInsertError.code === '23505') {
+      return jsonResponse({ received: true, duplicate: true }, 200);
+    }
+    console.error('Failed to record Stripe event:', eventInsertError.message);
+    return errorResponse('Failed to record Stripe event', 500);
+  }
+
   if (event.type !== 'checkout.session.completed') {
-    // Acknowledge but ignore other event types
-    return new Response('ok', { status: 200 });
+    await serviceClient.from('stripe_events')
+      .update({ status: 'skipped', processed_at: new Date().toISOString() })
+      .eq('id', eventId);
+    return jsonResponse({ received: true, skipped: true }, 200);
   }
 
   const session = event.data.object;
@@ -106,10 +128,11 @@ Deno.serve(async (req) => {
 
   if (!product_type) {
     console.error('Missing product_type in session', session.id);
-    return errorResponse('Missing session metadata', 400);
+    await serviceClient.from('stripe_events')
+      .update({ status: 'failed', processed_at: new Date().toISOString(), error: 'Missing session metadata' })
+      .eq('id', eventId);
+    return jsonResponse({ received: true, failed: true, error: 'Missing session metadata' }, 200);
   }
-
-  const serviceClient = getServiceClient();
 
   try {
     if (product_type === 'court_booking') {
@@ -121,12 +144,18 @@ Deno.serve(async (req) => {
     } else if (product_type === 'membership') {
       await handleMembership(session, meta, serviceClient);
     }
+    await serviceClient.from('stripe_events')
+      .update({ status: 'processed', processed_at: new Date().toISOString(), error: null })
+      .eq('id', eventId);
   } catch (err) {
     console.error('Error processing webhook:', err);
+    await serviceClient.from('stripe_events')
+      .update({ status: 'failed', processed_at: new Date().toISOString(), error: (err as Error).message })
+      .eq('id', eventId);
     return errorResponse((err as Error).message, 500);
   }
 
-  return new Response('ok', { status: 200 });
+  return jsonResponse({ received: true }, 200);
 });
 
 // ── Court booking ─────────────────────────────────────────────────────────────

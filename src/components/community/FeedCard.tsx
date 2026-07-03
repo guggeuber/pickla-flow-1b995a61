@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
+import { getPublicProfileMap } from "@/lib/publicProfiles";
 
 const BLUE = "#0066FF";
 const GREEN = "#22C55E";
@@ -69,10 +70,15 @@ function SessionSignupButton({ sessionId }: { sessionId: string }) {
     queryFn: async () => {
       const { data } = await supabase
         .from("crew_session_signups" as any)
-        .select("id, player_profile_id, player_profiles(display_name, avatar_url)")
+        .select("id, player_profile_id")
         .eq("crew_session_id", sessionId)
         .eq("status", "signed_up");
-      return data || [];
+      const profileIds = (data || []).map((signup: any) => signup.player_profile_id).filter(Boolean);
+      const profiles = await getPublicProfileMap(profileIds);
+      return (data || []).map((signup: any) => ({
+        ...signup,
+        player_profiles: profiles.get(signup.player_profile_id) || null,
+      }));
     },
   });
 

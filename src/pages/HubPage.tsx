@@ -34,6 +34,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
+import { getPublicProfileMap } from "@/lib/publicProfiles";
 import { DateTime } from "luxon";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { EventCard } from "@/components/hub/EventCard";
@@ -701,12 +702,10 @@ function useRoomPreviews(roomIds: string[]) {
       ];
       const profileMap: Record<string, { display_name: string | null; avatar_url: string | null }> = {};
       if (userIds.length) {
-        const { data: profiles } = await supabase
-          .from("player_profiles")
-          .select("auth_user_id, display_name, avatar_url")
-          .in("auth_user_id", userIds);
-        for (const p of profiles ?? []) {
-          profileMap[p.auth_user_id] = { display_name: p.display_name, avatar_url: p.avatar_url };
+        const profiles = await getPublicProfileMap(userIds);
+        for (const userId of userIds) {
+          const profile = profiles.get(userId);
+          if (profile) profileMap[userId] = { display_name: profile.display_name, avatar_url: profile.avatar_url };
         }
       }
 

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { getPublicProfileMap } from "@/lib/publicProfiles";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -258,9 +259,14 @@ function LfgSignupButton({ postId }: { postId: string }) {
     queryFn: async () => {
       const { data } = await (supabase as any)
         .from("forum_post_signups")
-        .select("*, player_profiles(display_name)")
+        .select("*")
         .eq("post_id", postId);
-      return data || [];
+      const profileIds = (data || []).map((signup: any) => signup.player_profile_id).filter(Boolean);
+      const profiles = await getPublicProfileMap(profileIds);
+      return (data || []).map((signup: any) => ({
+        ...signup,
+        player_profiles: profiles.get(signup.player_profile_id) || null,
+      }));
     },
   });
 
@@ -678,11 +684,16 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from("post_comments")
-        .select("*, player_profiles(display_name, avatar_url)")
+        .select("*")
         .eq("post_id", eventPost.id)
         .order("created_at", { ascending: true });
       if (error) throw error;
-      return data || [];
+      const profileIds = (data || []).map((comment: any) => comment.author_profile_id).filter(Boolean);
+      const profiles = await getPublicProfileMap(profileIds);
+      return (data || []).map((comment: any) => ({
+        ...comment,
+        player_profiles: profiles.get(comment.author_profile_id) || null,
+      }));
     },
   });
 
@@ -1074,11 +1085,16 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from("post_comments")
-        .select("*, player_profiles(display_name, avatar_url)")
+        .select("*")
         .eq("post_id", post.id)
         .order("created_at", { ascending: true });
       if (error) throw error;
-      return data || [];
+      const profileIds = (data || []).map((comment: any) => comment.author_profile_id).filter(Boolean);
+      const profiles = await getPublicProfileMap(profileIds);
+      return (data || []).map((comment: any) => ({
+        ...comment,
+        player_profiles: profiles.get(comment.author_profile_id) || null,
+      }));
     },
   });
 
@@ -1584,7 +1600,7 @@ export function ForumFeed() {
     queryFn: async () => {
       let query = (supabase as any)
         .from("forum_posts")
-        .select("*, player_profiles(display_name, avatar_url)");
+        .select("*");
 
       if (activeTag !== "all") {
         query = query.eq("tag", activeTag);
@@ -1619,7 +1635,13 @@ export function ForumFeed() {
         localStorage.setItem("community_forum_last_seen", new Date().toISOString());
       }
 
-      return (data || []).map((p: any) => ({ ...p, user_vote: userVotes[p.id] || 0 }));
+      const profileIds = (data || []).map((post: any) => post.author_profile_id).filter(Boolean);
+      const profiles = await getPublicProfileMap(profileIds);
+      return (data || []).map((p: any) => ({
+        ...p,
+        user_vote: userVotes[p.id] || 0,
+        player_profiles: profiles.get(p.author_profile_id) || null,
+      }));
     },
   });
 
