@@ -28,6 +28,7 @@ import {
   Trophy,
   Users,
   Workflow,
+  Wrench,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -55,6 +56,7 @@ import AdminEventProducts from "@/components/admin/AdminEventProducts";
 import AdminResourceBlocks from "@/components/admin/AdminResourceBlocks";
 import AdminVenueOperations from "@/components/admin/AdminVenueOperations";
 import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
+import AdminFinancialMaintenance from "@/components/admin/AdminFinancialMaintenance";
 import CustomersScreen from "@/screens/CustomersScreen";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
 import AdminToday from "@/components/admin/shell/AdminToday";
@@ -153,6 +155,7 @@ const sectionLabels: Record<string, { label: string; icon: any }> = {
   resourceBlocks: { label: "Blockeringar", icon: Ban },
   operations: { label: "Drift", icon: ShieldAlert },
   revenueLedger: { label: "Revenue Ledger", icon: ReceiptText },
+  financialMaintenance: { label: "Financial Maintenance", icon: Wrench },
   memberships: { label: "Medlemskap", icon: Crown },
   templates: { label: "Event-mallar", icon: FileText },
   corporate: { label: "Företag", icon: Building2 },
@@ -201,6 +204,7 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
             {id === "resourceBlocks" && <AdminResourceBlocks venueId={venueId} />}
             {id === "operations" && <AdminVenueOperations venueId={venueId} />}
             {id === "revenueLedger" && <AdminRevenueLedger venueId={venueId} />}
+            {id === "financialMaintenance" && <AdminFinancialMaintenance venueId={venueId} />}
             {id === "memberships" && <AdminMemberships venueId={venueId} />}
             {id === "templates" && <AdminTemplates />}
             {id === "corporate" && <AdminCorporate venueId={venueId} />}

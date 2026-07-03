@@ -8,7 +8,8 @@ const ZETTLE_OAUTH_BASE_URL = 'https://oauth.zettle.com';
 const ZETTLE_PURCHASE_BASE_URL = 'https://purchase.izettle.com';
 const ZETTLE_SCOPES = ['READ:PURCHASE'];
 
-const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact']);
+const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact', 'stripe-invoice-maintenance']);
+const FINANCIAL_MAINTENANCE_TOKEN_TTL_MS = 10 * 60 * 1000;
 const SENSITIVE_AUDIT_KEYS = new Set([
   'access_token',
   'refresh_token',
@@ -39,6 +40,7 @@ function adminEntityTableForPath(path: string) {
     'zettle-connect': 'zettle_connections',
     'zettle-import': 'zettle_purchases',
     'stripe-invoice-backfill': 'booking_receipts',
+    'stripe-invoice-maintenance': 'booking_receipts',
   };
   return map[path] || path || 'api_admin';
 }
@@ -61,6 +63,7 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'event-categories') return body.id || body.categoryKey || url.searchParams.get('id');
   if (path === 'zettle-import') return body.date || null;
   if (path === 'stripe-invoice-backfill') return body.stripe_customer_id || body.customer_id || null;
+  if (path === 'stripe-invoice-maintenance') return body.mode || null;
   return body.id || null;
 }
 
@@ -917,6 +920,577 @@ async function importStripeSubscriptionInvoice(admin: any, venueId: string, targ
   }
 
   return { status: 'skipped', invoice_id: invoice.id, reason: 'already_imported', receipt_id: receipt.id };
+}
+
+function uniqueCompactStrings(values: unknown[]) {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function maintenanceCustomerName(customer: any, profile: any) {
+  return [customer?.first_name, customer?.last_name].filter(Boolean).join(' ')
+    || customer?.display_name
+    || [profile?.first_name, profile?.last_name].filter(Boolean).join(' ')
+    || profile?.display_name
+    || customer?.primary_email
+    || profile?.email
+    || 'Okänd kund';
+}
+
+function emptyFinancialMaintenanceSummary() {
+  return {
+    customers_scanned: 0,
+    subscriptions_found: 0,
+    invoices_found: 0,
+    already_imported: 0,
+    would_import: 0,
+    imported: 0,
+    skipped: 0,
+    failed: 0,
+    conflicts: 0,
+    missing_receipts: 0,
+    missing_ledger: 0,
+    synchronized: 0,
+  };
+}
+
+function rollupMaintenanceCustomerStatus(rows: any[]) {
+  if (rows.some((row) => row.status === 'conflict')) return 'conflict';
+  if (rows.some((row) => row.status === 'failed')) return 'failed';
+  if (rows.some((row) => row.status === 'would_import')) return 'would_import';
+  if (rows.length && rows.every((row) => row.status === 'already_imported')) return 'already_imported';
+  if (rows.some((row) => row.status === 'imported')) return 'imported';
+  return 'skipped';
+}
+
+function addMaintenanceSummary(summary: any, row: any) {
+  const status = row.status;
+  if (status === 'already_imported') summary.already_imported += 1;
+  else if (status === 'would_import') summary.would_import += 1;
+  else if (status === 'imported' || status === 'imported_receipt_only') summary.imported += 1;
+  else if (status === 'failed') summary.failed += 1;
+  else if (status === 'conflict') summary.conflicts += 1;
+  else summary.skipped += 1;
+}
+
+function base64UrlEncode(input: string | Uint8Array) {
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecodeToString(input: string) {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+async function financialMaintenanceSignature(payload: string) {
+  const secret = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('STRIPE_SECRET_KEY');
+  if (!secret) throw new Error('Financial maintenance signing secret is not configured');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
+function financialMaintenanceReportRows(report: any) {
+  return (report.customers || []).map((customer: any) => ({
+    customer_id: customer.customer_id || null,
+    membership_id: customer.membership_id || null,
+    stripe_customer_id: customer.stripe_customer_id || null,
+    status: customer.status || null,
+    invoices: (customer.invoices || []).map((invoice: any) => ({
+      invoice_id: invoice.invoice_id,
+      subscription_id: invoice.subscription_id || null,
+      status: invoice.status,
+      reason: invoice.reason || null,
+    })).sort((a: any, b: any) => String(a.invoice_id).localeCompare(String(b.invoice_id))),
+  })).sort((a: any, b: any) =>
+    String(a.customer_id || a.stripe_customer_id || a.membership_id || '').localeCompare(
+      String(b.customer_id || b.stripe_customer_id || b.membership_id || '')
+    )
+  );
+}
+
+async function createFinancialMaintenanceReportToken(report: any, userId: string, venueId: string) {
+  const now = Date.now();
+  const payload = {
+    version: 1,
+    user_id: userId,
+    venue_id: venueId,
+    mode: 'dry_run',
+    issued_at: now,
+    expires_at: now + FINANCIAL_MAINTENANCE_TOKEN_TTL_MS,
+    customers_scanned: report.summary?.customers_scanned || 0,
+    rows: financialMaintenanceReportRows(report),
+  };
+  const payloadJson = JSON.stringify(payload);
+  const payloadPart = base64UrlEncode(payloadJson);
+  const signature = await financialMaintenanceSignature(payloadPart);
+  const executableInvoiceIds = payload.rows
+    .flatMap((row: any) => row.invoices || [])
+    .filter((invoice: any) => invoice.status === 'would_import' && invoice.invoice_id)
+    .map((invoice: any) => invoice.invoice_id);
+
+  return {
+    report_hash: `financial_maintenance_v1.${payloadPart}.${signature}`,
+    expires_at: new Date(payload.expires_at).toISOString(),
+    executable_invoice_ids: executableInvoiceIds,
+  };
+}
+
+async function verifyFinancialMaintenanceReportToken(token: string, userId: string, venueId: string) {
+  const [prefix, payloadPart, signature] = String(token || '').split('.');
+  if (prefix !== 'financial_maintenance_v1' || !payloadPart || !signature) {
+    throw new Error('Invalid dry run report hash');
+  }
+
+  const expectedSignature = await financialMaintenanceSignature(payloadPart);
+  if (signature !== expectedSignature) throw new Error('Invalid dry run report signature');
+
+  const payload = JSON.parse(base64UrlDecodeToString(payloadPart));
+  if (payload.user_id !== userId || payload.venue_id !== venueId) {
+    throw new Error('Dry run report does not match this user or venue');
+  }
+  if (Number(payload.expires_at || 0) <= Date.now()) {
+    throw new Error('Dry run report has expired. Run Dry Run again.');
+  }
+
+  const executableInvoiceIds = (payload.rows || [])
+    .flatMap((row: any) => row.invoices || [])
+    .filter((invoice: any) => invoice.status === 'would_import' && invoice.invoice_id)
+    .map((invoice: any) => String(invoice.invoice_id));
+
+  return {
+    payload,
+    executableInvoiceIds,
+  };
+}
+
+async function listStripeInvoiceMaintenanceTargets(admin: any, venueId: string) {
+  const { data: memberships, error: membershipError } = await admin
+    .from('memberships')
+    .select('id, venue_id, tier_id, user_id, customer_id, status, created_at, membership_tiers(id, name, monthly_price)')
+    .eq('venue_id', venueId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false });
+  if (membershipError) throw new Error(membershipError.message);
+
+  const customerIds = uniqueCompactStrings((memberships || []).map((row: any) => row.customer_id));
+  const userIds = uniqueCompactStrings((memberships || []).map((row: any) => row.user_id));
+
+  const { data: customersByIdRows, error: customersByIdError } = customerIds.length
+    ? await admin
+      .from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone')
+      .in('id', customerIds)
+    : { data: [], error: null };
+  if (customersByIdError) throw new Error(customersByIdError.message);
+
+  const { data: customersByUserRows, error: customersByUserError } = userIds.length
+    ? await admin
+      .from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone')
+      .in('auth_user_id', userIds)
+    : { data: [], error: null };
+  if (customersByUserError) throw new Error(customersByUserError.message);
+
+  const customerMap = new Map<string, any>();
+  const customerByUserMap = new Map<string, any>();
+  for (const customer of [...(customersByIdRows || []), ...(customersByUserRows || [])]) {
+    customerMap.set(customer.id, customer);
+    if (customer.auth_user_id) customerByUserMap.set(customer.auth_user_id, customer);
+  }
+
+  const { data: profilesByCustomerRows, error: profilesByCustomerError } = customerIds.length
+    ? await admin
+      .from('player_profiles')
+      .select('auth_user_id, customer_id, display_name, first_name, last_name, phone, stripe_customer_id')
+      .in('customer_id', customerIds)
+    : { data: [], error: null };
+  if (profilesByCustomerError) throw new Error(profilesByCustomerError.message);
+
+  const { data: profilesByUserRows, error: profilesByUserError } = userIds.length
+    ? await admin
+      .from('player_profiles')
+      .select('auth_user_id, customer_id, display_name, first_name, last_name, phone, stripe_customer_id')
+      .in('auth_user_id', userIds)
+    : { data: [], error: null };
+  if (profilesByUserError) throw new Error(profilesByUserError.message);
+
+  const profiles = [...(profilesByCustomerRows || []), ...(profilesByUserRows || [])];
+  const profileByCustomer = new Map<string, any[]>();
+  const profileByUser = new Map<string, any>();
+  for (const profile of profiles) {
+    if (profile.customer_id) {
+      const list = profileByCustomer.get(profile.customer_id) || [];
+      list.push(profile);
+      profileByCustomer.set(profile.customer_id, list);
+    }
+    if (profile.auth_user_id) profileByUser.set(profile.auth_user_id, profile);
+  }
+
+  const allCustomerIds = uniqueCompactStrings([
+    ...customerIds,
+    ...(customersByUserRows || []).map((row: any) => row.id),
+    ...profiles.map((row: any) => row.customer_id),
+  ]);
+  const { data: stripeIdentityRows, error: stripeIdentityError } = allCustomerIds.length
+    ? await admin
+      .from('customer_identities')
+      .select('customer_id, provider_id')
+      .eq('provider', 'stripe')
+      .in('customer_id', allCustomerIds)
+    : { data: [], error: null };
+  if (stripeIdentityError) throw new Error(stripeIdentityError.message);
+
+  const identityByCustomer = new Map<string, any[]>();
+  for (const identity of stripeIdentityRows || []) {
+    const list = identityByCustomer.get(identity.customer_id) || [];
+    list.push(identity);
+    identityByCustomer.set(identity.customer_id, list);
+  }
+
+  const rawTargets: any[] = [];
+  for (const membership of memberships || []) {
+    const customer = (membership.customer_id && customerMap.get(membership.customer_id))
+      || (membership.user_id && customerByUserMap.get(membership.user_id))
+      || null;
+    const profileRows = [
+      ...(customer?.id ? (profileByCustomer.get(customer.id) || []) : []),
+      ...(membership.user_id && profileByUser.get(membership.user_id) ? [profileByUser.get(membership.user_id)] : []),
+    ];
+    const profile = profileRows[0] || null;
+    const stripeIds = uniqueCompactStrings([
+      ...profileRows.map((row) => row?.stripe_customer_id),
+      ...(customer?.id ? (identityByCustomer.get(customer.id) || []).map((row) => row.provider_id) : []),
+    ]);
+
+    if (!customer) {
+      rawTargets.push({
+        status: 'failed',
+        reason: 'missing_customer',
+        membership,
+        customer: null,
+        profile,
+        customer_name: maintenanceCustomerName(customer, profile),
+        invoices: [],
+      });
+      continue;
+    }
+
+    if (!stripeIds.length) {
+      rawTargets.push({
+        status: 'failed',
+        reason: 'missing_stripe_customer',
+        membership,
+        customer,
+        profile,
+        customer_name: maintenanceCustomerName(customer, profile),
+        invoices: [],
+      });
+      continue;
+    }
+
+    if (stripeIds.length > 1) {
+      rawTargets.push({
+        status: 'conflict',
+        reason: 'multiple_stripe_customer_ids',
+        membership,
+        customer,
+        profile,
+        stripe_customer_ids: stripeIds,
+        customer_name: maintenanceCustomerName(customer, profile),
+        invoices: [],
+      });
+      continue;
+    }
+
+    rawTargets.push({
+      status: 'ready',
+      reason: 'ready',
+      customer,
+      profile,
+      membership,
+      stripeCustomerId: stripeIds[0],
+      stripeSubscriptionId: null,
+      userId: customer.auth_user_id || profile?.auth_user_id || membership.user_id || null,
+      customerName: maintenanceCustomerName(customer, profile),
+      customerEmail: customer.primary_email || null,
+      customerPhone: customer.primary_phone || profile?.phone || null,
+      tierId: membership.tier_id,
+      tierName: membership.membership_tiers?.name || null,
+    });
+  }
+
+  const readyTargets = rawTargets.filter((row) => row.status === 'ready');
+  const byStripeCustomer = new Map<string, any[]>();
+  for (const target of readyTargets) {
+    const list = byStripeCustomer.get(target.stripeCustomerId) || [];
+    list.push(target);
+    byStripeCustomer.set(target.stripeCustomerId, list);
+  }
+
+  const dedupedTargets = rawTargets.filter((row) => row.status !== 'ready');
+  for (const [stripeCustomerId, targets] of byStripeCustomer.entries()) {
+    if (targets.length > 1) {
+      const first = targets[0];
+      dedupedTargets.push({
+        status: 'conflict',
+        reason: 'multiple_active_memberships_for_stripe_customer',
+        customer: first.customer,
+        profile: first.profile,
+        membership: first.membership,
+        stripeCustomerId,
+        customer_name: first.customerName,
+        invoices: [],
+      });
+    } else {
+      dedupedTargets.push(targets[0]);
+    }
+  }
+
+  return dedupedTargets;
+}
+
+async function assessStripeSubscriptionInvoice(admin: any, venueId: string, target: any, invoice: any) {
+  if (!invoice?.id) return { status: 'failed', invoice_id: null, reason: 'missing_invoice_id' };
+  const amountPaidMinor = Math.round(Number(invoice.amount_paid || 0));
+  const amountRefundedMinor = stripeInvoiceAmountRefunded(invoice);
+  if (invoice.status !== 'paid' || invoice.paid === false || amountPaidMinor <= 0) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'not_paid_or_zero' };
+  }
+  if (amountRefundedMinor > 0 && amountPaidMinor <= amountRefundedMinor) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'fully_refunded' };
+  }
+  if (amountRefundedMinor > 0) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'partial_refund_manual_review' };
+  }
+
+  const invoiceCustomerId = stripeId(invoice.customer);
+  if (invoiceCustomerId && invoiceCustomerId !== target.stripeCustomerId) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'invoice_customer_mismatch' };
+  }
+
+  const invoiceSubscriptionId = stripeInvoiceSubscriptionId(invoice);
+  const invoiceMeta = stripeInvoiceMetadata(invoice);
+  const invoiceVenueId = invoiceMeta.venue_id || null;
+  const invoiceTierId = invoiceMeta.tier_id || null;
+  if (invoiceVenueId && invoiceVenueId !== venueId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'venue_mismatch' };
+  }
+  if (invoiceTierId && invoiceTierId !== target.tierId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'tier_mismatch' };
+  }
+  if (target.stripeSubscriptionId && !invoiceSubscriptionId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'missing_subscription_id' };
+  }
+  if (target.stripeSubscriptionId && invoiceSubscriptionId && invoiceSubscriptionId !== target.stripeSubscriptionId) {
+    return { status: 'skipped', invoice_id: invoice.id, reason: 'subscription_mismatch' };
+  }
+  if (!invoiceTierId && !target.tierId && !invoiceMeta.tier_name && !target.tierName) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'missing_tier_snapshot' };
+  }
+
+  const { data: existingReceipt, error: existingReceiptError } = await admin
+    .from('booking_receipts')
+    .select('id, receipt_number, stripe_session_id, stripe_invoice_id, stripe_subscription_id, stripe_customer_id, customer_id, user_id, customer_name, product_description, total_inc_vat_sek, vat_rate, issued_at, metadata')
+    .eq('stripe_invoice_id', invoice.id)
+    .maybeSingle();
+  if (existingReceiptError) throw new Error(existingReceiptError.message);
+  if (existingReceipt && !receiptMatchesStripeBackfillTarget(existingReceipt, target)) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'existing_invoice_receipt_customer_mismatch', receipt_id: existingReceipt.id };
+  }
+  if (existingReceipt?.stripe_subscription_id && invoiceSubscriptionId && existingReceipt.stripe_subscription_id !== invoiceSubscriptionId) {
+    return { status: 'failed', invoice_id: invoice.id, reason: 'existing_invoice_receipt_subscription_mismatch', receipt_id: existingReceipt.id };
+  }
+  if (existingReceipt) {
+    if (await hasLedgerForReceiptOrSession(admin, existingReceipt)) {
+      return { status: 'already_imported', invoice_id: invoice.id, reason: 'receipt_and_ledger_exist', receipt_id: existingReceipt.id };
+    }
+    return { status: 'would_import', invoice_id: invoice.id, reason: 'ledger_missing', receipt_id: existingReceipt.id };
+  }
+
+  if (invoice.billing_reason === 'subscription_create') {
+    if (!invoiceSubscriptionId) {
+      return { status: 'failed', invoice_id: invoice.id, reason: 'initial_invoice_missing_subscription_id' };
+    }
+
+    const { data: checkoutReceipts, error: checkoutReceiptError } = await admin
+      .from('booking_receipts')
+      .select('id, receipt_number, stripe_session_id, stripe_invoice_id, stripe_subscription_id, stripe_customer_id, customer_id, user_id, customer_name, product_description, total_inc_vat_sek, vat_rate, issued_at, stripe_payment_intent_id, metadata')
+      .eq('stripe_subscription_id', invoiceSubscriptionId)
+      .eq('purchase_type', 'membership')
+      .not('stripe_session_id', 'is', null)
+      .order('issued_at', { ascending: false })
+      .limit(5);
+    if (checkoutReceiptError) throw new Error(checkoutReceiptError.message);
+
+    const matchingCheckoutReceipts = (checkoutReceipts || []).filter((row: any) =>
+      receiptMatchesStripeBackfillTarget(row, target)
+    );
+    if ((checkoutReceipts || []).length && !matchingCheckoutReceipts.length) {
+      return { status: 'failed', invoice_id: invoice.id, reason: 'initial_checkout_receipt_customer_mismatch' };
+    }
+    if (matchingCheckoutReceipts.length > 1) {
+      return { status: 'failed', invoice_id: invoice.id, reason: 'multiple_initial_checkout_receipts' };
+    }
+    const checkoutReceipt = matchingCheckoutReceipts[0] || null;
+    if (checkoutReceipt) {
+      if (checkoutReceipt.stripe_invoice_id && checkoutReceipt.stripe_invoice_id !== invoice.id) {
+        return { status: 'failed', invoice_id: invoice.id, reason: 'checkout_receipt_has_different_invoice', receipt_id: checkoutReceipt.id };
+      }
+      if (await hasLedgerForReceiptOrSession(admin, checkoutReceipt)) {
+        return {
+          status: checkoutReceipt.stripe_invoice_id ? 'already_imported' : 'would_import',
+          invoice_id: invoice.id,
+          reason: checkoutReceipt.stripe_invoice_id ? 'checkout_receipt_and_ledger_exist' : 'would_link_checkout_receipt_only',
+          receipt_id: checkoutReceipt.id,
+        };
+      }
+      return { status: 'would_import', invoice_id: invoice.id, reason: 'would_link_checkout_receipt_and_create_ledger', receipt_id: checkoutReceipt.id };
+    }
+  }
+
+  return { status: 'would_import', invoice_id: invoice.id, reason: 'missing_receipt_and_ledger' };
+}
+
+async function runStripeInvoiceMaintenance(admin: any, venueId: string, mode: 'dry_run' | 'execute', allowedInvoiceIds?: string[] | null) {
+  const summary = emptyFinancialMaintenanceSummary();
+  const allowedInvoiceSet = mode === 'execute' && allowedInvoiceIds?.length
+    ? new Set(allowedInvoiceIds)
+    : null;
+  const targets = await listStripeInvoiceMaintenanceTargets(admin, venueId);
+  summary.customers_scanned = targets.length;
+  const customers: any[] = [];
+
+  for (const target of targets) {
+    if (target.status !== 'ready') {
+      const customerRow = {
+        customer_id: target.customer?.id || null,
+        user_id: target.membership?.user_id || target.profile?.auth_user_id || null,
+        customer_name: target.customer_name || target.customerName || maintenanceCustomerName(target.customer, target.profile),
+        stripe_customer_id: target.stripeCustomerId || null,
+        membership_id: target.membership?.id || null,
+        tier_id: target.membership?.tier_id || null,
+        tier_name: target.membership?.membership_tiers?.name || target.tierName || null,
+        subscription_count: 0,
+        invoice_count: 0,
+        status: target.status === 'conflict' ? 'conflict' : 'failed',
+        reason: target.reason,
+        invoices: [],
+      };
+      customers.push(customerRow);
+      addMaintenanceSummary(summary, { status: customerRow.status });
+      continue;
+    }
+
+    const customerRow = {
+      customer_id: target.customer.id,
+      user_id: target.userId || null,
+      customer_name: target.customerName,
+      stripe_customer_id: target.stripeCustomerId,
+      membership_id: target.membership.id,
+      tier_id: target.tierId,
+      tier_name: target.tierName,
+      subscription_count: 0,
+      invoice_count: 0,
+      status: 'skipped',
+      reason: 'not_scanned',
+      invoices: [] as any[],
+    };
+
+    try {
+      const invoices = await fetchStripePaidInvoices(target.stripeCustomerId, target.stripeSubscriptionId);
+      const paidInvoices = invoices.filter((invoice: any) =>
+        invoice.status === 'paid' &&
+        invoice.paid !== false &&
+        Number(invoice.amount_paid || 0) > 0
+      );
+      const invoiceSubscriptionIds = uniqueCompactStrings(paidInvoices.map((invoice: any) => stripeInvoiceSubscriptionId(invoice)));
+      customerRow.subscription_count = invoiceSubscriptionIds.length;
+      customerRow.invoice_count = paidInvoices.length;
+      summary.subscriptions_found += invoiceSubscriptionIds.length;
+      summary.invoices_found += paidInvoices.length;
+
+      if (invoiceSubscriptionIds.length > 1) {
+        customerRow.status = 'conflict';
+        customerRow.reason = 'multiple_stripe_subscriptions';
+        customers.push(customerRow);
+        addMaintenanceSummary(summary, { status: 'conflict' });
+        continue;
+      }
+
+      const scopedTarget = {
+        ...target,
+        stripeSubscriptionId: target.stripeSubscriptionId || invoiceSubscriptionIds[0] || null,
+      };
+
+      if (!paidInvoices.length) {
+        customerRow.status = 'skipped';
+        customerRow.reason = 'no_paid_invoices';
+        customers.push(customerRow);
+        addMaintenanceSummary(summary, { status: 'skipped' });
+        continue;
+      }
+
+      for (const invoice of paidInvoices) {
+        const assessment = await assessStripeSubscriptionInvoice(admin, venueId, scopedTarget, invoice);
+        let result = assessment;
+        const blockedBySelection = mode === 'execute' && allowedInvoiceSet && !allowedInvoiceSet.has(invoice.id);
+        if (blockedBySelection) {
+          result = { status: 'skipped', invoice_id: invoice.id, reason: 'not_in_dry_run_selection' };
+        }
+        if (!blockedBySelection && mode === 'execute' && assessment.status === 'would_import') {
+          result = await importStripeSubscriptionInvoice(admin, venueId, scopedTarget, invoice);
+        }
+        customerRow.invoices.push({
+          invoice_id: invoice.id,
+          subscription_id: stripeInvoiceSubscriptionId(invoice),
+          billing_reason: invoice.billing_reason || null,
+          amount_paid_minor: Math.round(Number(invoice.amount_paid || 0)),
+          amount_refunded_minor: stripeInvoiceAmountRefunded(invoice),
+          status: result.status,
+          reason: result.reason || null,
+          receipt_id: result.receipt_id || null,
+          receipt_created: result.receipt_created || false,
+          receipt_updated: result.receipt_updated || false,
+          ledger_created: result.ledger_created || false,
+        });
+        addMaintenanceSummary(summary, result);
+        if (result.status === 'would_import') {
+          if (String(result.reason || '').includes('receipt')) summary.missing_receipts += 1;
+          if (String(result.reason || '').includes('ledger')) summary.missing_ledger += 1;
+        }
+      }
+
+      customerRow.status = rollupMaintenanceCustomerStatus(customerRow.invoices);
+      customerRow.reason = customerRow.invoices.find((row) => row.status === customerRow.status)?.reason || customerRow.status;
+      if (customerRow.status === 'already_imported') summary.synchronized += 1;
+      customers.push(customerRow);
+    } catch (error) {
+      customerRow.status = 'failed';
+      customerRow.reason = error instanceof Error ? error.message : 'stripe_scan_failed';
+      customers.push(customerRow);
+      addMaintenanceSummary(summary, { status: 'failed' });
+    }
+  }
+
+  return {
+    mode,
+    venue_id: venueId,
+    summary,
+    customers,
+  };
 }
 
 function stockholmTimeFromIso(value: string | null | undefined) {
@@ -1924,6 +2498,63 @@ Deno.serve(async (req) => {
         failed,
         results,
       }, failed === 0 ? 200 : 207, 0);
+    }
+
+    // ── FINANCIAL MAINTENANCE ──
+    if (req.method === 'POST' && path === 'stripe-invoice-maintenance') {
+      await requireSuperAdmin(admin, userId);
+      const body = await req.json().catch(() => ({}));
+      const mode = body.mode === 'execute' ? 'execute' : 'dry_run';
+      const requestedInvoiceIds = Array.isArray(body.invoice_ids)
+        ? body.invoice_ids.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+        : null;
+      let invoiceIds = requestedInvoiceIds;
+      let verifiedReport: any = null;
+
+      if (mode === 'execute') {
+        const reportHash = String(body.report_hash || body.reportHash || '').trim();
+        if (!reportHash) return errorResponse('Execute requires report_hash from the latest dry run.', 400);
+        verifiedReport = await verifyFinancialMaintenanceReportToken(reportHash, userId, venueId!);
+        const allowedInvoiceSet = new Set(verifiedReport.executableInvoiceIds);
+        const unknownInvoiceIds = (requestedInvoiceIds || []).filter((invoiceId: string) => !allowedInvoiceSet.has(invoiceId));
+        if (unknownInvoiceIds.length) {
+          return errorResponse(`Execute contains invoice ids not present as would_import in the dry run: ${unknownInvoiceIds.join(', ')}`, 400);
+        }
+        invoiceIds = requestedInvoiceIds?.length ? requestedInvoiceIds : verifiedReport.executableInvoiceIds;
+        if (!invoiceIds.length) return errorResponse('Dry run report has no invoices eligible for execute.', 400);
+      }
+
+      const report = await runStripeInvoiceMaintenance(admin, venueId!, mode, invoiceIds);
+      if (mode === 'dry_run') {
+        Object.assign(report, await createFinancialMaintenanceReportToken(report, userId, venueId!));
+      }
+
+      // Dry Run intentionally writes audit_log, but it does not mutate Stripe,
+      // booking_receipts, ledger_entries, memberships, or customer records.
+      await writeAuditLog(admin, {
+        venue_id: venueId,
+        actor_user_id: userId,
+        actor_type: 'user',
+        action: `api-admin.stripe-invoice-maintenance.${mode}`,
+        entity_table: 'booking_receipts',
+        entity_id: mode,
+        metadata: {
+          mode,
+          summary: report.summary,
+          report_hash_present: Boolean((report as any).report_hash || body.report_hash || body.reportHash),
+          report_expires_at: (report as any).expires_at || verifiedReport?.payload?.expires_at || null,
+          customers: report.customers.slice(0, 100).map((customer: any) => ({
+            customer_id: customer.customer_id,
+            stripe_customer_id: customer.stripe_customer_id,
+            status: customer.status,
+            reason: customer.reason,
+            invoice_count: customer.invoice_count,
+          })),
+        },
+        user_agent: req.headers.get('user-agent') || null,
+      });
+
+      return jsonResponse(report, 200, 0);
     }
 
     // ── REVENUE LEDGER ──

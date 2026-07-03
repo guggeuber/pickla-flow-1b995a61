@@ -231,6 +231,73 @@ export function useAdminZettleImport(venueId: string | undefined, date: string |
   });
 }
 
+export type AdminFinancialMaintenanceInvoice = {
+  invoice_id: string;
+  subscription_id?: string | null;
+  billing_reason?: string | null;
+  amount_paid_minor?: number | null;
+  amount_refunded_minor?: number | null;
+  status: "would_import" | "already_imported" | "imported" | "skipped" | "failed" | "conflict" | string;
+  reason?: string | null;
+  receipt_id?: string | null;
+  receipt_created?: boolean;
+  receipt_updated?: boolean;
+  ledger_created?: boolean;
+};
+
+export type AdminFinancialMaintenanceCustomer = {
+  customer_id?: string | null;
+  user_id?: string | null;
+  customer_name: string;
+  stripe_customer_id?: string | null;
+  membership_id?: string | null;
+  tier_id?: string | null;
+  tier_name?: string | null;
+  subscription_count: number;
+  invoice_count: number;
+  status: "would_import" | "already_imported" | "imported" | "skipped" | "failed" | "conflict" | string;
+  reason?: string | null;
+  invoices: AdminFinancialMaintenanceInvoice[];
+};
+
+export type AdminFinancialMaintenanceReport = {
+  mode: "dry_run" | "execute";
+  venue_id: string;
+  report_hash?: string | null;
+  expires_at?: string | null;
+  executable_invoice_ids?: string[];
+  summary: {
+    customers_scanned: number;
+    subscriptions_found: number;
+    invoices_found: number;
+    already_imported: number;
+    would_import: number;
+    imported: number;
+    skipped: number;
+    failed: number;
+    conflicts: number;
+    missing_receipts: number;
+    missing_ledger: number;
+    synchronized: number;
+  };
+  customers: AdminFinancialMaintenanceCustomer[];
+};
+
+export function useAdminFinancialMaintenance(venueId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { mode: "dry_run" | "execute"; invoice_ids?: string[]; report_hash?: string | null }) =>
+      apiPost<AdminFinancialMaintenanceReport>(
+        "api-admin",
+        venueId ? `stripe-invoice-maintenance?venueId=${venueId}` : "stripe-invoice-maintenance",
+        { ...body, venueId }
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-revenue-ledger", venueId] });
+    },
+  });
+}
+
 export type AdminCalendarItem = {
   id: string;
   source_id: string;
