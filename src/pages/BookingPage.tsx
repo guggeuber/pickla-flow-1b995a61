@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Loader2, CheckCircle2, Building2, Check } from "lucide-react";
+import { Loader2, CheckCircle2, Building2, Check, CircleDot, Target } from "lucide-react";
 import { toast } from "sonner";
 import { format, addDays } from "date-fns";
 import { sv } from "date-fns/locale";
@@ -825,9 +825,9 @@ export default function BookingPage() {
             </h1>
             <div className="mt-7 grid grid-cols-3 gap-3">
               {([
-                { value: "pickleball", label: "Boka\nPickleball", meta: `${sportCounts.pickleball} banor`, image: null },
-                { value: "dart", label: "Boka darts", meta: `${sportCounts.dart} bord`, image: null },
-                { value: "event", label: "Planera event", meta: "grupper", image: weekendVibes },
+                { value: "pickleball", label: "Boka\nPickleball", meta: `${sportCounts.pickleball} banor`, image: null, icon: <CircleDot className="h-8 w-8" /> },
+                { value: "dart", label: "Boka darts", meta: `${sportCounts.dart} bord`, image: null, icon: <Target className="h-8 w-8" /> },
+                { value: "event", label: "Planera event", meta: "grupper", image: weekendVibes, icon: null },
               ] as const).map((option) => {
                 const active = option.value !== "event" && sportFilter === option.value;
                 return (
@@ -841,7 +841,9 @@ export default function BookingPage() {
                     {option.image ? (
                       <img src={option.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
                     ) : (
-                      <div className="absolute inset-x-4 top-5 h-16 rounded-full bg-white/55" />
+                      <div className="absolute left-3 top-4 grid h-14 w-14 place-items-center rounded-2xl bg-white/70 text-neutral-950">
+                        {option.icon}
+                      </div>
                     )}
                     {option.image && <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/5 to-transparent" />}
                     <span

@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
+import { ScarcityBadge } from "@/components/ui/PeopleRow";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 
@@ -26,7 +27,6 @@ export function ActionCard({
 }: ActionCardProps) {
   const hasSpots = spotsTotal !== undefined && spotsTotal > 0;
   const spotsLeft = hasSpots ? spotsTotal! - spotsTaken : null;
-  const fillPct = hasSpots ? Math.min((spotsTaken / spotsTotal!) * 100, 100) : null;
   const isFull = hasSpots && spotsLeft === 0;
 
   return (
@@ -65,35 +65,13 @@ export function ActionCard({
         </p>
       )}
 
-      {/* Spots progress */}
       {hasSpots && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
-            {Array.from({ length: spotsTotal! }).map((_, i) => (
-              <div
-                key={i}
-                style={{
-                  flex: 1,
-                  height: 6,
-                  borderRadius: 3,
-                  background: i < spotsTaken ? "#CC2936" : "rgba(255,255,255,0.15)",
-                  transition: "background 0.3s",
-                }}
-              />
-            ))}
-          </div>
-          <p style={{ fontSize: 11, fontFamily: "Inter, sans-serif", color: "rgba(255,255,255,0.55)" }}>
-            {isFull ? (
-              <span style={{ color: "#CC2936" }}>Fullbokad</span>
-            ) : (
-              <>
-                <span style={{ color: "rgba(255,255,255,0.9)", fontWeight: 700 }}>
-                  {spotsLeft}
-                </span>{" "}
-                av {spotsTotal} platser kvar
-              </>
-            )}
-          </p>
+          <ScarcityBadge
+            remaining={spotsLeft}
+            capacity={spotsTotal}
+            style={{ background: "rgba(255,255,255,0.12)", color: "#fff" }}
+          />
         </div>
       )}
 

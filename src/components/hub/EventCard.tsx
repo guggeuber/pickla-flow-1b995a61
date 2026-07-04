@@ -1,6 +1,6 @@
 import { useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, CalendarClock, Check, ChevronDown, Loader2, MessageCircle, Ticket, Users } from "lucide-react";
+import { ArrowRight, CalendarClock, Check, ChevronDown, Loader2, MessageCircle, Ticket } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -10,8 +10,6 @@ import { useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { toast } from "sonner";
 import {
-  PICKLA_ACCESS_LABEL,
-  PICKLA_UNLIMITED_LABEL,
   activityPriceLabels,
   formatSek,
   hasActiveMembership,
@@ -19,7 +17,9 @@ import {
 } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { getPublicProfileMap } from "@/lib/publicProfiles";
-import { MembershipValueCard } from "@/components/membership/MembershipValueCard";
+import { MemberStrip } from "@/components/ui/MemberStrip";
+import { PriceLine } from "@/components/ui/PriceLine";
+import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -45,13 +45,6 @@ function parseProgramChatResourceId(resourceId: string) {
   const match = resourceId.match(/^activity_session:([^:]+):([^:]+)$/);
   if (!match) return null;
   return { sessionId: match[1], occurrenceDate: match[2] === "next" ? null : match[2] };
-}
-
-function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
-  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
-  if (registrationsCount > 0) return `${registrationsCount} kommer`;
-  if (interestedCount > 0) return `${interestedCount} intresserade`;
-  return "";
 }
 
 export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publicActivityPreview }: EventCardProps) {
@@ -222,8 +215,6 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
         : "Aktivitet";
     const capacity = Number(effectiveProgramSession.capacity || 0);
     const registrationCount = Number(publicActivityPreview?.registrations?.count ?? programRegistrations.length ?? 0);
-    const interestedCount = Number(publicActivityPreview?.interests?.interested_count ?? programSocialProof?.interested_count ?? 0);
-    const socialProof = activitySocialProofLabel(registrationCount, interestedCount);
     const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
     const isFull = spotsLeft === 0;
     const backendPricing = publicActivityPreview?.activityTicketPricing || publicActivityPreview?.pricing || null;
@@ -263,39 +254,13 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
           ? `Ingår i ${membershipName}`
           : pricing.includedLabel
         : null;
-    const openMembership = () => {
-      const params = new URLSearchParams();
-      if (venueSlug) params.set("v", venueSlug);
-      params.set("returnTo", chatPath);
-      navigate(`/membership?${params.toString()}`);
-    };
-    const membershipOfferRows = !userHasMembership
-      ? pricingMode === "fixed_ticket"
-        ? []
-        : pricingMode === "member_discount"
-          ? specialMemberPrice < onlinePrice
-            ? [{
-              label: "Medlem",
-              priceLabel: formatSek(specialMemberPrice),
-              savingLabel: `Spara ${formatSek(onlinePrice - specialMemberPrice)} idag`,
-              onClick: openMembership,
-            }]
-            : []
-          : [
-            {
-              label: PICKLA_ACCESS_LABEL,
-              priceLabel: formatSek(pricing.accessPrice),
-              savingLabel: `Spara ${formatSek(Math.max(0, pricing.basePrice - pricing.accessPrice))} idag`,
-              onClick: openMembership,
-            },
-            {
-              label: PICKLA_UNLIMITED_LABEL,
-              priceLabel: "Ingår",
-              savingLabel: `Spara ${formatSek(pricing.basePrice)} idag`,
-              onClick: openMembership,
-            },
-          ]
-      : [];
+    const pricingIsIncluded = backendPricing?.requiresCheckout === false || Boolean(includedLabel);
+    const displayedPrice = pricingIsIncluded ? customerPrice : customerPrice <= 0 ? 0 : customerPrice;
+    const memberContextLine = !userHasMembership && pricingMode === "member_discount" && specialMemberPrice < onlinePrice
+      ? <>Medlemmar spelar för {formatSek(specialMemberPrice)} eller fritt</>
+      : !userHasMembership && pricingMode === "standard"
+        ? <>Medlemmar kan spela billigare eller fritt</>
+        : undefined;
     const announceJoin = async () => {
       if (!roomId || !user?.id) return;
       const { data: profile } = await supabase
@@ -462,18 +427,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
               <CalendarClock style={{ width: 14, height: 14 }} />
               {sessionType}{timeStr ? ` · ${timeStr}` : ""}
             </span>
-            {capacity ? (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: spotsLeft === 0 ? "#fff1f2" : "#f0fdf4", border: `1px solid ${spotsLeft === 0 ? "rgba(225,29,72,0.14)" : "rgba(34,197,94,0.16)"}`, color: spotsLeft === 0 ? "#be123c" : "#15803d", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-                <Users style={{ width: 14, height: 14 }} />
-                {spotsLeft === 0 ? "Fullt" : `${spotsLeft} platser kvar`}
-              </span>
-            ) : null}
-            {socialProof && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", borderRadius: 999, background: "#f8fafc", border: "1px solid rgba(15,23,42,0.08)", color: "#334155", padding: "7px 10px", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 850 }}>
-                <MessageCircle style={{ width: 14, height: 14 }} />
-                {socialProof}
-              </span>
-            )}
+            <ScarcityBadge remaining={spotsLeft} capacity={capacity} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", marginTop: 10 }}>
@@ -484,11 +438,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
               <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
                 {isRegistered ? "Du är anmäld i chatten" : isFull ? "Chatta om reservplats" : "Säkra platsen direkt i chatten"}
               </p>
-              {socialProof && (
-                <p style={{ margin: "3px 0 0", color: "#94a3b8", fontSize: 11, fontFamily: "Inter, sans-serif", fontWeight: 800 }}>
-                  {socialProof}
-                </p>
-              )}
+              <PeopleRow participantCount={registrationCount} style={{ marginTop: 4 }} />
             </div>
             <motion.button
               whileTap={{ scale: 0.97 }}
@@ -527,30 +477,52 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
               animate={{ opacity: 1, y: 0 }}
               style={{ marginTop: 12, display: "grid", gap: 8 }}
             >
-              <div style={{ border: "1px solid rgba(15,23,42,0.08)", borderRadius: 18, background: "#f8fafc", padding: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 900, color: "#0f172a" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <Users style={{ width: 14, height: 14 }} />
-                    {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
-                  </span>
-                  <span style={{ color: spotsLeft === 0 ? "#be123c" : "#16a34a" }}>
-                    {isRegistered ? "Anmäld" : "Live"}
-                  </span>
-                </div>
-              </div>
+              <PeopleRow participantCount={registrationCount} />
+              <ScarcityBadge remaining={spotsLeft} capacity={capacity} />
 
-              <MembershipValueCard
-                ordinaryPriceSek={Number(pricing.basePrice || onlinePrice)}
-                onlinePriceSek={onlinePrice}
-                deskPriceSek={deskPrice}
-                customerPriceSek={customerPrice}
-                includedLabel={includedLabel}
-                membershipName={membershipName || null}
-                isLoggedIn={!!user?.id}
-                hasActiveMembership={userHasMembership}
-                offerRows={membershipOfferRows}
-                compact
-              />
+              {pricingIsIncluded ? (
+                <MemberStrip
+                  planName={backendPricing?.accessDecision === "day_access_included" ? "dagspass" : membershipName || "medlemskap"}
+                  amountSek={customerPrice}
+                />
+              ) : (
+                <div style={{ border: "1px solid rgba(15,23,42,0.08)", borderRadius: 18, background: "#f8fafc", padding: 12 }}>
+                  <PriceLine
+                    amountSek={displayedPrice}
+                    contextLine={!userHasMembership && memberContextLine ? (
+                      <details className="[&:not([open])_.price-details]:hidden" style={{ fontFamily: "Inter, sans-serif" }}>
+                        <summary style={{ cursor: "pointer", color: "#334155", textDecoration: "underline", textUnderlineOffset: 2 }}>
+                          {memberContextLine} · Se detaljer
+                        </summary>
+                        <div className="price-details" style={{ display: "grid", gap: 6, marginTop: 10, fontSize: 12, fontWeight: 750, color: "#64748b" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                            <span>Online</span>
+                            <span>{formatSek(onlinePrice || Number(pricing.basePrice || 0))}</span>
+                          </div>
+                          {deskPrice > onlinePrice ? (
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                              <span>På plats</span>
+                              <span>{formatSek(deskPrice)}</span>
+                            </div>
+                          ) : null}
+                          {pricingMode === "member_discount" && specialMemberPrice < onlinePrice ? (
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                              <span>Medlem</span>
+                              <span>{formatSek(specialMemberPrice)}</span>
+                            </div>
+                          ) : null}
+                          {pricingMode === "standard" ? (
+                            <p style={{ margin: 0, color: "#94a3b8" }}>
+                              Medlemspris eller inkludering beror på aktivt medlemskap.
+                            </p>
+                          ) : null}
+                        </div>
+                      </details>
+                    ) : undefined}
+                    size="md"
+                  />
+                </div>
+              )}
             </motion.div>
           )}
         </div>
@@ -704,25 +676,15 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
             </p>
           )}
 
-          {/* Spots bar */}
-          {maxP && (
+          {maxP ? (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", gap: 3, marginBottom: 5 }}>
-                {Array.from({ length: Math.min(maxP, 20) }).map((_, i) => (
-                  <div key={i} style={{
-                    flex: 1, height: 5, borderRadius: 3,
-                    background: i < Math.min(playerCount, maxP) ? HUB_RED : "rgba(255,255,255,0.15)",
-                  }} />
-                ))}
-              </div>
-              <p style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", fontFamily: "Inter, sans-serif" }}>
-                {isFull
-                  ? <span style={{ color: HUB_RED }}>Fullbokad</span>
-                  : <><span style={{ color: "#fff", fontWeight: 700 }}>{spotsLeft}</span> av {maxP} platser kvar</>
-                }
-              </p>
+              <ScarcityBadge
+                remaining={spotsLeft}
+                capacity={maxP}
+                style={{ background: "rgba(255,255,255,0.12)", color: "#fff" }}
+              />
             </div>
-          )}
+          ) : null}
 
           <motion.button
             whileTap={isRegistered ? undefined : { scale: 0.97 }}

@@ -2,27 +2,22 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { ArrowRight, Loader2, X } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
-import {
-  useVenueOpenStatus,
-  useVenueWithHours,
-  type OpeningHour,
-  type VenueOperationOverride,
-} from "@/lib/venueStatus";
+import { useVenueWithHours } from "@/lib/venueStatus";
 import {
   getBookingChatResourceId,
   getBookingCourtLabel,
   groupBookingRows,
 } from "@/lib/bookingGroups";
-import { activityPriceLabels, formatSek } from "@/lib/activityPricing";
+import { formatSek } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
-import heroPhoto from "@/assets/pickla-hero-photo.jpg";
-import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
+import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
+import { PriceLine } from "@/components/ui/PriceLine";
+import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 
 
 const PAGE_BG = "#fffaf7";
@@ -30,7 +25,6 @@ const SOFT = "#f4f0ee";
 const TEXT = "#111111";
 const MUTED = "#76716f";
 const PINK = "#ed3f8f";
-const GREEN = "#32ef87";
 const BORDER = "rgba(17,17,17,0.07)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -47,12 +41,11 @@ type FeedItem = {
   status: string;
   spotsLeft?: number | null;
   registrationsCount?: number;
-  interestedCount?: number;
   userIsInterested?: boolean;
-  socialProofLabel?: string;
-  priceChips?: string[];
+  priceSek?: number | null;
   isSpecialPass?: boolean;
   onlineCheaper?: boolean;
+  participants?: PublicProfile[];
   activitySession?: {
     id: string;
     name: string;
@@ -69,7 +62,7 @@ type FeedItem = {
     access_policy?: Record<string, unknown> | null;
     metadata?: Record<string, unknown> | null;
   };
-  availabilityLabel?: string;
+  capacity?: number | null;
   href: string;
   cta: string;
   chatResourceId?: string;
@@ -104,6 +97,7 @@ type RegistrationRow = {
   activity_session_id: string;
   session_date: string;
   status: string | null;
+  user_id?: string | null;
 };
 
 type ActivitySocialProofRow = {
@@ -147,70 +141,8 @@ type BookingGroup = BookingRow & {
 };
 
 
-type GuideKey = "pickleball" | "darts" | "pickla";
-
-const GUIDES: Record<GuideKey, {
-  title: string;
-  kicker: string;
-  body: string;
-  cta: string;
-  href: (slug: string) => string;
-}> = {
-  pickleball: {
-    title: "Pickleball 101",
-    kicker: "världens snabbaste lilla racketsport",
-    body: "Pickleball är en lättstartad racketsport och en av de snabbast växande sporterna i Nordamerika och Asien. Man spelar oftast till 11 och måste vinna med 2. Bara servande lag kan ta poäng. Serven slås underhand, bakom baslinjen, diagonalt över nätet. Efter serve måste returen studsa, och sedan måste även nästa slag studsa. Därefter får man volleya, men inte stå i köket och slå volley.",
-    cta: "Boka pickleball",
-    href: (slug) => `/book?v=${slug}&sport=pickleball`,
-  },
-  darts: {
-    title: "Darts 101",
-    kicker: "tre pilar, enkel matte, mycket känsla",
-    body: "På Pickla spelar många klassisk 501: varje spelare börjar på 501 och kastar tre pilar per runda. Poängen räknas ner mot exakt 0. Vanligt upplägg är dubbel ut, alltså att sista pilen måste träffa en dubbel. Bullseye är 50, yttre bull är 25, och tripplar ger mest tryck i spelet.",
-    cta: "Boka darts",
-    href: (slug) => `/book?v=${slug}&sport=dart`,
-  },
-  pickla: {
-    title: "Pickla 101",
-    kicker: "så funkar hallen",
-    body: "Boka bana, dartbord eller ett pass i appen. Du får bokningen på Mina sidor och en fyrsiffrig kod. När du kommer till hallen checkar du in på paddan vid din resurs. För grupper och företag planerar vi upplägget tillsammans via en förfrågan.",
-    cta: "Boka aktivitet",
-    href: (slug) => `/book?v=${slug}`,
-  },
-};
-
-function sectionLabel(date: DateTime, now: DateTime) {
-  const prefix = date.hasSame(now, "day")
-    ? "IDAG"
-    : date.hasSame(now.plus({ days: 1 }), "day")
-      ? "IMORGON"
-      : date.setLocale("sv").toFormat("cccc").toUpperCase();
-  return `${prefix} ${date.toFormat("d/M")}`;
-}
-
-
 function programChatResourceId(sessionId: string, occurrenceDate: string) {
   return `activity_session:${sessionId}:${occurrenceDate}`;
-}
-
-function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
-  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
-  if (registrationsCount > 0) return `${registrationsCount} kommer`;
-  if (interestedCount > 0) return `${interestedCount} intresserade`;
-  return "";
-}
-
-function HeroSticker({ guideKey, onClick }: { guideKey: GuideKey; onClick: (key: GuideKey) => void }) {
-  const guide = GUIDES[guideKey];
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(guideKey)}
-      className="block w-fit bg-neutral-950 px-4 py-2.5 text-left shadow-sm active:scale-[0.98]"
-    >
-      <p className="text-[20px] leading-none text-pink-100" style={{ fontFamily: FONT_MONO }}>{guide.title}</p>
-    </button>
-  );
 }
 
 function useTodayFeed(venueId: string | undefined, userId: string | undefined, slug: string) {
@@ -284,7 +216,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         sessionIds.length
           ? supabase
               .from("session_registrations")
-              .select("activity_session_id, session_date, status")
+              .select("activity_session_id, session_date, status, user_id")
               .in("activity_session_id", sessionIds)
               .gte("session_date", startDate)
               .lte("session_date", endDate)
@@ -303,11 +235,22 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       ]);
 
       const registrationCounts = new Map<string, number>();
+      const participantUserIdsByKey = new Map<string, string[]>();
       for (const row of registrationsRes.data || []) {
         if (row.status === "cancelled") continue;
         const key = `${row.activity_session_id}:${row.session_date}`;
         registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
+        if (row.user_id) {
+          const existing = participantUserIdsByKey.get(key) || [];
+          if (existing.length < 3 && !existing.includes(row.user_id)) {
+            participantUserIdsByKey.set(key, [...existing, row.user_id]);
+          }
+        }
       }
+      const participantUserIds = [...new Set([...participantUserIdsByKey.values()].flat())];
+      const publicProfilesByUserId = participantUserIds.length
+        ? await getPublicProfileMap(participantUserIds).catch(() => new Map<string, PublicProfile | null>())
+        : new Map<string, PublicProfile | null>();
       const socialProofByKey = new Map<string, ActivitySocialProofRow>();
       for (const row of socialProofRes.occurrences || []) {
         socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
@@ -319,29 +262,16 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       });
 
       const sessionItems: FeedItem[] = visibleSessionOccurrences.map((session) => {
-        const socialProof = socialProofByKey.get(`${session.id}:${session.occurrence_date}`);
-        const count = socialProof?.registrations_count ?? registrationCounts.get(`${session.id}:${session.occurrence_date}`) ?? 0;
-        const interestedCount = socialProof?.interested_count ?? 0;
+        const occurrenceKey = `${session.id}:${session.occurrence_date}`;
+        const socialProof = socialProofByKey.get(occurrenceKey);
+        const count = socialProof?.registrations_count ?? registrationCounts.get(occurrenceKey) ?? 0;
         const capacity = Number(session.capacity || 0);
         const metadata = session.metadata || {};
         const pricingMode = String(metadata.pricing_mode || "standard");
         const isSpecialPass = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
         const onlinePrice = Number(metadata.online_price_sek ?? session.price_sek ?? 0);
         const deskPrice = Number(metadata.desk_price_sek ?? onlinePrice);
-        const memberDiscountPercent = Number(metadata.member_discount_percent || 0);
-        const memberPrice = Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100);
         const spotsLeft = capacity ? Math.max(capacity - count, 0) : null;
-        const pricing = isSpecialPass
-          ? {
-            publicChips: pricingMode === "fixed_ticket"
-              ? [`Playpickla.com ${formatSek(onlinePrice)}`, `Drop-in ${formatSek(deskPrice)}`]
-              : [`Playpickla.com ${formatSek(onlinePrice)}`, `Medlem ${formatSek(memberPrice)}`, `Drop-in ${formatSek(deskPrice)}`],
-          }
-          : activityPriceLabels({
-            basePrice: Number(session.price_sek || 165),
-            productKey: session.product_key,
-            sessionType: session.session_type,
-          });
         return {
           id: `session:${session.id}:${session.occurrence_date}`,
           kind: "session",
@@ -353,14 +283,15 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           status: capacity && count >= capacity ? "Full" : "Drop-in",
           spotsLeft,
           registrationsCount: count,
-          interestedCount,
           userIsInterested: Boolean(socialProof?.user_is_interested),
-          socialProofLabel: activitySocialProofLabel(count, interestedCount),
-          priceChips: pricing.publicChips,
+          priceSek: onlinePrice || Number(session.price_sek || 0),
           isSpecialPass,
           onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
+          participants: (participantUserIdsByKey.get(occurrenceKey) || [])
+            .map((participantUserId) => publicProfilesByUserId.get(participantUserId))
+            .filter(Boolean) as PublicProfile[],
           activitySession: session,
-          availabilityLabel: spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : spotsLeft <= 4 ? `Få platser · ${spotsLeft} kvar` : `${spotsLeft} kvar`,
+          capacity,
           href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
           cta: capacity && count >= capacity ? "Visa" : "Anmäl",
           chatResourceId: programChatResourceId(session.id, session.occurrence_date),
@@ -378,7 +309,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         startTime: String(event.start_time || "00:00").slice(0, 5),
         endTime: String(event.end_time || "").slice(0, 5),
         category: event.category || "Event",
-        status: event.status === "live" || event.status === "active" ? "Live" : "Kommande",
+        status: event.status === "live" || event.status === "active" ? "Nu" : "Kommande",
         href: event.slug ? `/e/${event.slug}` : `/event/${event.id}`,
         cta: "Visa",
         chatResourceId: event.id,
@@ -422,14 +353,11 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
   const [opening, setOpening] = useState(false);
   const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
   const isPast = !!end && end < now;
-  const meta = item.availabilityLabel || (item.spotsLeft != null
-    ? item.spotsLeft === 0 ? "Fullt" : `${item.spotsLeft} kvar`
-    : item.status);
-  const popBorder = item.isSpecialPass ? "rgba(237,63,143,0.38)" : highlight ? "rgba(50,239,135,0.55)" : BORDER;
+  const popBorder = item.isSpecialPass ? "rgba(237,63,143,0.28)" : highlight ? "rgba(17,17,17,0.14)" : BORDER;
   const popBackground = item.isSpecialPass
-    ? "linear-gradient(135deg, #fff7fb 0%, #f3fff8 100%)"
+    ? "#fff7fb"
     : highlight
-    ? GREEN
+    ? "#ece7e2"
     : SOFT;
   const openItem = async () => {
     if (item.kind === "session") {
@@ -485,60 +413,136 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
       }}
     >
       <span className="text-[15px]">{item.startTime}</span>
-      <span className="min-w-0">
+      <div className="min-w-0">
         {item.isSpecialPass && (
           <span className="mb-1 inline-flex rounded-full bg-black px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-white">
             Specialpass
           </span>
         )}
         <span className="block truncate text-[15px]">{item.title}</span>
-        {item.priceChips && (
-          <span className="mt-1 flex min-w-0 flex-wrap gap-1">
-            {item.priceChips.map((chip) => (
-              <span key={chip} className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${item.isSpecialPass ? "bg-white text-black/75 shadow-sm" : "bg-white/65 text-black/55"}`}>
-                {chip}
-              </span>
-            ))}
+        {item.kind === "session" && (
+          <PeopleRow
+            people={item.participants}
+            participantCount={item.registrationsCount}
+            className="mt-1 text-[10px] !text-black/45"
+          />
+        )}
+        {item.kind === "session" && item.priceSek != null && item.priceSek > 0 && (
+          <span className="mt-1 block">
+            <PriceLine amountSek={item.priceSek} size="sm" />
           </span>
         )}
-        {item.onlineCheaper && (
-          <span className="mt-1 block truncate text-[10px] font-black" style={{ color: PINK }}>
-            Billigare online
-          </span>
-        )}
-        {item.socialProofLabel && (
-          <span className="mt-1 block truncate text-[10px] font-bold text-black/45">
-            {item.socialProofLabel}
-          </span>
-        )}
-      </span>
-      <span className="rounded-full bg-white/65 px-2 py-1 text-[10px] font-bold text-black/55">
-        {opening ? "Öppnar" : meta}
-      </span>
+      </div>
+      {opening ? (
+        <span className="rounded-full bg-white/65 px-2 py-1 text-[10px] font-bold text-black/55">Öppnar</span>
+      ) : (
+        <ScarcityBadge remaining={item.spotsLeft} capacity={item.capacity} />
+      )}
     </button>
+  );
+}
+
+function displayNameForUser(user: any) {
+  const metadata = user?.user_metadata || {};
+  const raw = metadata.first_name || metadata.name || metadata.display_name || user?.email?.split("@")[0] || "";
+  const name = String(raw).trim();
+  if (!name) return null;
+  return name.split(/\s+/)[0];
+}
+
+function ParticipantLine({ participants, count }: { participants?: PublicProfile[]; count?: number }) {
+  return <PeopleRow people={participants} participantCount={count} />;
+}
+
+function FeaturedTonightHero({
+  item,
+  date,
+  now,
+  userName,
+  priceLabel,
+  included,
+  onOpen,
+}: {
+  item: FeedItem | null;
+  date: DateTime | null;
+  now: DateTime;
+  userName: string | null;
+  priceLabel: string | null;
+  included: boolean;
+  onOpen: () => void;
+}) {
+  const isToday = date?.hasSame(now, "day");
+  const isTomorrow = date?.hasSame(now.plus({ days: 1 }), "day");
+  const startsAt = item ? DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" }) : null;
+  const hoursUntil = startsAt ? Math.round(startsAt.diff(now, "hours").hours) : null;
+  const timing = item
+    ? hoursUntil != null && hoursUntil > 0 && hoursUntil <= 8 && isToday
+      ? `Börjar om ${hoursUntil} ${hoursUntil === 1 ? "timme" : "timmar"}`
+      : isTomorrow
+        ? "Imorgon"
+        : "Ikväll"
+    : "Nästa kväll på Pickla";
+  const kicker = isToday ? "IKVÄLL" : isTomorrow ? "IMORGON" : "NÄSTA";
+  const ctaLabel = included ? "Häng på · Ingår" : `Häng på${priceLabel ? ` · ${priceLabel}` : ""}`;
+
+  return (
+    <section className="mx-auto max-w-md px-5 pt-2">
+      <div
+        className="overflow-hidden rounded-[28px] px-5 pb-5 pt-5"
+        style={{
+          background: "#fff",
+          border: `1px solid ${BORDER}`,
+          boxShadow: "0 14px 36px rgba(17,17,17,0.06)",
+        }}
+      >
+        <p className="text-[11px] font-black uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: PINK }}>
+          {kicker}
+        </p>
+        <div className="mt-5">
+          {userName && (
+            <p className="mb-2 text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING, color: MUTED }}>
+              Hej {userName}.
+            </p>
+          )}
+          <h2 className="break-words text-[31px] font-black leading-[0.98] tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING, color: TEXT }}>
+            {item?.title || "Något händer snart"}
+          </h2>
+          <p className="mt-3 text-[15px] font-semibold leading-snug" style={{ color: MUTED }}>
+            {item ? `${item.startTime}-${item.endTime} · ${timing}` : timing}
+          </p>
+        </div>
+
+        <div className="mt-6 grid gap-4">
+          <div className="min-w-0">
+            <ParticipantLine participants={item?.participants} count={item?.registrationsCount} />
+          </div>
+          <button
+            type="button"
+            onClick={onOpen}
+            disabled={!item}
+            className="inline-flex w-fit items-center gap-2 rounded-full px-5 py-3 text-[15px] font-black text-white shadow-sm disabled:opacity-60"
+            style={{ fontFamily: FONT_HEADING, background: TEXT }}
+          >
+            <span>{ctaLabel}</span>
+            <ArrowRight className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
 export default function TodayPage() {
   const [searchParams] = useSearchParams();
-  const [activeGuide, setActiveGuide] = useState<GuideKey | null>(null);
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
-  const { data: status } = useVenueOpenStatus(venue);
 
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const now = DateTime.now().setZone("Europe/Stockholm");
-  const heroImage = venue?.cover_image_url || heroPhoto;
-  const heroText = venue?.description?.trim() || "Weekend Vibes";
-  const openGuide = (guideKey: GuideKey) => {
-    setActiveGuide(guideKey);
-  };
-  const go = (href: string) => {
-    setActiveGuide(null);
-    navigate(href);
-  };
+  const userName = displayNameForUser(user);
   const liveHighlightId = items.find((item) => {
     const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
     const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
@@ -562,13 +566,60 @@ export default function TodayPage() {
       };
     })
   ), [items, now]);
-  const emptyDayText = (date: DateTime) => {
-    if (!date.hasSame(now, "day")) return "inget schemalagt ännu";
-    if (!status) return "inget mer schemalagt idag";
-    if (status.open) return "inget mer schemalagt idag";
-    if (status.label?.startsWith("Öppnar")) return `Pickla ${status.label.toLowerCase()}`;
-    if (status.label === "Stängt idag") return "Pickla är stängt idag";
-    return "Pickla är stängt för idag";
+  const activityItems = items.filter((item) => item.kind === "session" || item.kind === "event");
+  const todayKey = now.toISODate();
+  const tomorrowKey = now.plus({ days: 1 }).toISODate();
+  const todayActivities = activityItems.filter((item) => item.date === todayKey);
+  const tomorrowActivities = activityItems.filter((item) => item.date === tomorrowKey);
+  const featuredItem = (
+    todayActivities.find((item) => item.startTime >= "16:00" && item.status !== "Full") ||
+    todayActivities.find((item) => item.status !== "Full") ||
+    tomorrowActivities.find((item) => item.startTime >= "16:00" && item.status !== "Full") ||
+    tomorrowActivities.find((item) => item.status !== "Full") ||
+    activityItems.find((item) => item.status !== "Full") ||
+    null
+  );
+  const featuredDate = featuredItem ? DateTime.fromISO(featuredItem.date, { zone: "Europe/Stockholm" }) : null;
+  const featuredDayItems = featuredItem
+    ? items.filter((item) => item.date === featuredItem.date && item.id !== featuredItem.id)
+    : [];
+  const fallbackListItems = days.flatMap((day) => day.items).filter((item) => item.id !== featuredItem?.id).slice(0, 5);
+  const moreHeading = featuredDate?.hasSame(now, "day")
+    ? "Mer händer idag"
+    : featuredDate?.hasSame(now.plus({ days: 1 }), "day")
+      ? "Mer händer imorgon"
+      : featuredDate
+        ? `Mer händer ${featuredDate.setLocale("sv").toFormat("cccc")}`
+        : "Mer händer snart";
+  const { data: featuredPreview } = useQuery({
+    queryKey: ["today-featured-preview", user?.id || "anon", featuredItem?.id],
+    enabled: !!featuredItem?.activitySession?.id,
+    staleTime: user?.id ? 0 : 15000,
+    queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
+      sessionId: featuredItem!.activitySession!.id,
+      date: featuredItem!.date,
+      venueSlug: slug,
+    }),
+  });
+  const featuredPricing = featuredPreview?.activityTicketPricing || featuredPreview?.pricing || null;
+  const featuredIncluded = featuredPricing?.requiresCheckout === false;
+  const featuredFallbackPrice = Number(
+    featuredItem?.activitySession?.metadata?.online_price_sek ??
+    featuredItem?.activitySession?.price_sek ??
+    0
+  );
+  const featuredPriceLabel = featuredIncluded
+    ? null
+    : featuredPricing?.checkoutLabel ||
+      (featuredFallbackPrice > 0 ? formatSek(featuredFallbackPrice) : null) ||
+      null;
+  const openFeatured = () => {
+    if (!featuredItem) return;
+    if (featuredItem.kind === "session") {
+      navigate(featuredItem.href, { state: { backgroundLocation: location, activitySession: featuredItem.activitySession } });
+      return;
+    }
+    navigate(featuredItem.href);
   };
 
   return (
@@ -582,136 +633,39 @@ export default function TodayPage() {
 
       <main>
         <h1 className="sr-only">Pickla Arena Stockholm — Pickleball, dart och event i Solna</h1>
-        <section className="relative mx-auto h-[510px] max-w-md overflow-hidden sm:rounded-b-[28px]">
-          <img src={heroImage} alt="Pickla Arena Stockholm — pickleballbanor, dart och lounge" className="absolute inset-0 h-full w-full object-cover object-center" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-black/5" />
-          <div className="absolute left-0 top-[34%] flex flex-col items-start gap-2">
-            <HeroSticker guideKey="pickleball" onClick={openGuide} />
-            <HeroSticker guideKey="darts" onClick={openGuide} />
-            <HeroSticker guideKey="pickla" onClick={openGuide} />
-          </div>
-          <p
-            className="absolute bottom-8 left-6 right-4 max-w-[88%] text-[46px] uppercase leading-[0.9] text-white sm:text-[58px]"
-            style={{
-              fontFamily: FONT_MONO,
-              display: "-webkit-box",
-              WebkitLineClamp: 3,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            }}
-          >
-            {heroText}
-          </p>
-        </section>
+        {venueLoading || isLoading ? (
+          <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2">
+            <Loader2 className="h-6 w-6 animate-spin" style={{ color: PINK }} />
+          </section>
+        ) : (
+          <FeaturedTonightHero
+            item={featuredItem}
+            date={featuredDate}
+            now={now}
+            userName={userName}
+            priceLabel={featuredPriceLabel}
+            included={featuredIncluded}
+            onOpen={openFeatured}
+          />
+        )}
 
-        <section className="mx-auto max-w-md px-6 py-7">
-          <div className="flex gap-3 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-            {[
-              { label: "Boka\nPickleball", href: `/book?v=${slug}&sport=pickleball`, image: null },
-              { label: "Boka darts", href: `/book?v=${slug}&sport=dart`, image: null },
-              { label: "Planera\nEvent", href: `/book/group?v=${slug}`, image: heroImage },
-            ].map((action) => (
-              <button
-                key={action.label}
-                type="button"
-                onClick={() => navigate(action.href)}
-                className="relative h-32 w-[31%] min-w-[104px] overflow-hidden rounded-2xl border text-left shadow-sm active:scale-[0.98]"
-                style={{ background: SOFT, borderColor: BORDER }}
-              >
-                {action.image ? (
-                  <img src={action.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                ) : (
-                  <div className="absolute inset-x-4 top-5 h-14 rounded-full bg-white/45" />
-                )}
-                {action.image && <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />}
-                <span
-                  className="absolute bottom-4 left-3 right-3 whitespace-pre-line text-[15px] leading-[0.95]"
-                  style={{ color: action.image ? "#fff" : TEXT, fontFamily: FONT_HEADING }}
-                >
-                  {action.label}
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="mx-auto max-w-md px-5 pt-1">
+        <section className="mx-auto max-w-md px-5 pt-7">
           {venueLoading || isLoading ? (
-            <div className="grid min-h-48 place-items-center">
-              <Loader2 className="h-6 w-6 animate-spin" style={{ color: PINK }} />
-            </div>
+            null
           ) : (
-            <div className="space-y-9">
-              {days.map(({ key, date, items: dayItems }) => (
-                <section key={key}>
-                  <h2 className="mb-4 text-[36px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_MONO }}>
-                    {sectionLabel(date, now)}
-                  </h2>
-                  {dayItems.length > 0 ? (
-                    <div className="space-y-2">
-                      {dayItems.map((item) => (
-                        <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} venueId={venue?.id} slug={slug} />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="px-3 py-3 text-[14px]" style={{ background: SOFT, color: MUTED, fontFamily: FONT_MONO }}>
-                      {emptyDayText(date)}
-                    </div>
-                  )}
-                </section>
-              ))}
-            </div>
+            <section>
+              <h2 className="mb-4 text-[28px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING }}>
+                {moreHeading}
+              </h2>
+              <div className="space-y-2">
+                {(featuredDayItems.length > 0 ? featuredDayItems : fallbackListItems).map((item) => (
+                  <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} venueId={venue?.id} slug={slug} />
+                ))}
+              </div>
+            </section>
           )}
         </section>
       </main>
-
-
-
-      <Drawer open={!!activeGuide} onOpenChange={(open) => !open && setActiveGuide(null)}>
-        <DrawerContent className="rounded-t-[28px] border-0 bg-white px-6 pb-[calc(env(safe-area-inset-bottom,0px)+22px)] pt-5">
-          {activeGuide && (
-            <div className="mx-auto w-full max-w-md">
-              <div className="mb-6 flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    {GUIDES[activeGuide].kicker}
-                  </p>
-                  <h2 className="mt-2 text-[32px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                    {GUIDES[activeGuide].title}
-                  </h2>
-                </div>
-                <button type="button" onClick={() => setActiveGuide(null)} aria-label="Stäng" className="rounded-full p-2 text-neutral-950">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              <p className="text-[14px] leading-relaxed text-neutral-700" style={{ fontFamily: FONT_MONO }}>
-                {GUIDES[activeGuide].body}
-              </p>
-              <button
-                type="button"
-                onClick={() => go(GUIDES[activeGuide].href(slug))}
-                className="mt-7 flex w-full items-center justify-between rounded-2xl bg-neutral-950 px-5 py-4 text-left text-white active:scale-[0.98]"
-                style={{ fontFamily: FONT_HEADING }}
-              >
-                <span>{GUIDES[activeGuide].cta}</span>
-                <ArrowRight className="h-5 w-5" />
-              </button>
-              {activeGuide === "pickla" && (
-                <button
-                  type="button"
-                  onClick={() => go(`/book/group?v=${slug}`)}
-                  className="mt-3 flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-5 py-4 text-left text-neutral-950 active:scale-[0.98]"
-                  style={{ fontFamily: FONT_HEADING }}
-                >
-                  <span>Planera event</span>
-                  <ArrowRight className="h-5 w-5" />
-                </button>
-              )}
-            </div>
-          )}
-        </DrawerContent>
-      </Drawer>
-
     </div>
   );
 }

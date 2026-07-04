@@ -38,6 +38,7 @@ import { getPublicProfileMap } from "@/lib/publicProfiles";
 import { DateTime } from "luxon";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { EventCard } from "@/components/hub/EventCard";
+import { PeopleRow } from "@/components/ui/PeopleRow";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { toast } from "sonner";
 
@@ -135,13 +136,6 @@ function relativeTime(iso: string): string {
   if (diff.minutes < 60) return `${Math.floor(diff.minutes)}m`;
   if (diff.hours < 24) return dt.toFormat("HH:mm");
   return dt.toFormat("d/M");
-}
-
-function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
-  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
-  if (registrationsCount > 0) return `${registrationsCount} kommer`;
-  if (interestedCount > 0) return `${interestedCount} intresserade`;
-  return "";
 }
 
 function formatSwedishTime(timeStr: string): string {
@@ -2882,9 +2876,6 @@ function HubList({
                 const timeLabel = ev.start_time ? `${String(ev.start_time).slice(0, 5)}-${String(ev.end_time || "").slice(0, 5)}` : null;
                 const isProgramSession = !!ev.occurrence_date || !!ev.activity_series;
                 const programUrl = `/program/${ev.id}?date=${encodeURIComponent(ev.occurrence_date || "")}&v=${encodeURIComponent(slug)}`;
-                const socialProof = isProgramSession
-                  ? activitySocialProofLabel(Number(ev.registrations_count || 0), Number(ev.interested_count || 0))
-                  : "";
                 return (
                   <motion.div
                     key={ev.id}
@@ -2915,11 +2906,9 @@ function HubList({
                         ? `${preview.senderName || "Någon"}: ${preview.lastMessage}`
                         : [timeLabel, ev.price_sek ? `${ev.price_sek} kr` : null, isProgramSession ? "Schema & anmälan" : "Öppen eventkanal"].filter(Boolean).join(" · ")}
                     </p>
-                    {socialProof && (
-                      <p style={{ fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: HUB_MUTED, margin: "4px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {socialProof}
-                      </p>
-                    )}
+                    {isProgramSession ? (
+                      <PeopleRow participantCount={Number(ev.registrations_count || 0)} style={{ marginTop: 4 }} />
+                    ) : null}
                     <div style={{ display: "flex", gap: 8, marginTop: 13 }}>
                       <button
                         type="button"
@@ -2937,7 +2926,7 @@ function HubList({
                           cursor: "pointer",
                         }}
                       >
-                        Öppna chat
+                        Öppna chatt
                       </button>
                       <button
                         type="button"

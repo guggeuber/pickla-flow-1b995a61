@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, Star, Ticket, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, Star, Ticket } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
@@ -11,21 +11,16 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { MembershipValueCard } from "@/components/membership/MembershipValueCard";
-import {
-  ACCESS_ACTIVITY_DISCOUNT_PERCENT,
-  DAY_MEMBERSHIP_SEK,
-  PICKLA_ACCESS_LABEL,
-  PICKLA_UNLIMITED_LABEL,
-  formatSek,
-} from "@/lib/activityPricing";
+import { MemberStrip } from "@/components/ui/MemberStrip";
+import { PriceLine } from "@/components/ui/PriceLine";
+import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
+import { formatSek } from "@/lib/activityPricing";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
 const MUTED = "#64748b";
 const BORDER = "rgba(15,23,42,0.10)";
 const NAVY = "#111827";
-const GREEN = "#16a34a";
 const MENU_BORDER = "rgba(17,17,17,0.12)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 
@@ -37,13 +32,6 @@ function sessionTypeLabel(type?: string | null) {
   if (type === "open_play") return "Open Play";
   if (type === "group_training") return "Träning";
   return type || "Aktivitet";
-}
-
-function activitySocialProofLabel(registrationsCount = 0, interestedCount = 0) {
-  if (registrationsCount > 0 && interestedCount > 0) return `${registrationsCount} kommer · ${interestedCount} intresserade`;
-  if (registrationsCount > 0) return `${registrationsCount} kommer`;
-  if (interestedCount > 0) return `${interestedCount} intresserade`;
-  return "";
 }
 
 export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnly?: boolean }) {
@@ -141,21 +129,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
   const isRegistered = !!user?.id && registrations.some((row: any) => row.user_id === user.id);
-  const interestedCount = optimisticInterest?.count ?? Number(data?.interests?.interested_count || 0);
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
-  const socialProofLabel = activitySocialProofLabel(registrationCount, interestedCount);
   const backendPricing = data?.activityTicketPricing || data?.pricing || null;
-  const dayPassPricing = data?.dayPassPricing || null;
   const pricingDebug = backendPricing?.debug || {};
   const pricingMode = String(pricingDebug.pricing_mode || session?.metadata?.pricing_mode || "standard");
-  const hasSpecialPricingOverride = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
   const onlinePrice = Number(pricingDebug.online_price_sek ?? session?.metadata?.online_price_sek ?? backendPricing?.baseAmountSek ?? session?.price_sek ?? 0);
   const deskPrice = Number(pricingDebug.desk_price_sek ?? session?.metadata?.desk_price_sek ?? onlinePrice);
   const memberDiscountPercent = Number(pricingDebug.member_discount_percent ?? session?.metadata?.member_discount_percent ?? 0);
   const specialMemberPrice = pricingMode === "member_discount"
     ? Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100)
     : onlinePrice;
-  const dayPassIncludedForDisplay = pricingMode === "standard" && Boolean(pricingDebug.day_pass_included ?? session?.metadata?.day_pass_included ?? session?.access_policy?.allows_day_access);
   const pricingPending = !!user?.id && (
     waitForAccessSnapshot ||
     accessSnapshotForResolvedSession.isLoading ||
@@ -164,15 +147,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   );
   const basePrice = Number(backendPricing?.baseAmountSek ?? session?.price_sek ?? 0);
   const effectivePrice = Number(backendPricing?.effectivePriceSek ?? backendPricing?.finalAmountSek ?? basePrice);
+  const displayedPrice = pricingPending ? "Hämtar pris..." : effectivePrice <= 0 ? 0 : effectivePrice;
   const checkoutLabel = pricingPending
     ? "Hämtar ditt pris..."
     : backendPricing?.checkoutLabel || formatSek(effectivePrice);
   const pricingIsIncluded = !pricingPending && backendPricing?.requiresCheckout === false;
   const requiresCheckout = !pricingPending && backendPricing?.requiresCheckout === true;
-  const savingsSek = Math.max(0, Math.round(basePrice - effectivePrice));
-  const publicPlayPrice = Math.max(0, Math.round(basePrice * (1 - ACCESS_ACTIVITY_DISCOUNT_PERCENT / 100)));
   const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
-  const hasDayAccess = Boolean(accessSnapshotForResolvedSession.data?.hasDayAccess);
   const membershipName = String(
     backendPricing?.membershipTierName ||
     pricingDebug.membership_tier_name ||
@@ -184,7 +165,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       ? "Ingår idag"
       : `Ingår i ${membershipName || "medlemskap"}`
     : null;
-  const membershipAlreadyCoversActivity = pricingIsIncluded || /play\+|founder|unlimited/i.test(membershipName);
+  const memberContextLine = !userHasMembership && pricingMode === "member_discount" && specialMemberPrice < onlinePrice
+    ? <>Medlemmar spelar för {formatSek(specialMemberPrice)} eller fritt</>
+    : !userHasMembership && pricingMode === "standard"
+      ? <>Medlemmar kan spela billigare eller fritt</>
+      : undefined;
+  const savedTodaySek = !pricingPending && pricingIsIncluded && basePrice > effectivePrice
+    ? Math.round((basePrice - effectivePrice) * 100) / 100
+    : 0;
   const ctaLabel = isRegistered
     ? "Anmäld"
     : isFull
@@ -290,107 +278,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       setLoading(false);
     }
   };
-
-  const startDayPassSignup = async () => {
-    if (occurrenceHidden) {
-      toast.error("Aktiviteten är inte tillgänglig för anmälan");
-      return;
-    }
-    if (isRegistered || !session || !occurrenceDate) return;
-    if (!user?.id) {
-      navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
-      return;
-    }
-    if (!dayPassPricing || pricingPending) {
-      toast.info("Hämtar ditt pris...");
-      return;
-    }
-    if (loading) return;
-    setLoading(true);
-    try {
-      const result = await apiPost("api-bookings", "create-checkout", {
-        product_type: "day_pass",
-        amount_sek: dayPassPricing.effectivePriceSek ?? dayPassPricing.finalAmountSek ?? 0,
-        venue_id: session.venue_id,
-        metadata: {
-          date: occurrenceDate,
-          activity_session_id: sessionId,
-          chat_room_id: room?.id || "",
-          session_name: session.name,
-          session_type: session.session_type || "open_play",
-          product_key: "day_access",
-          preview_effective_amount_sek: String(dayPassPricing.effectivePriceSek ?? dayPassPricing.finalAmountSek ?? ""),
-          pricing_reason: dayPassPricing.pricingReason || "",
-          user_id: user.id,
-          slug: venueSlug,
-          redirect_path: safeLocalPath(programPath),
-          success_path: `/booking/confirmed?type=day_pass&next=${encodeURIComponent(safeLocalPath(programPath))}`,
-        },
-      });
-      if (result.free) {
-        queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
-        queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
-        queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
-        await refetchRegistrations();
-        toast.success("Dagsmedlemskap aktiverat");
-        return;
-      }
-      if (!result.url) throw new Error("Kunde inte starta betalning");
-      window.location.href = result.url;
-    } catch (err: any) {
-      toast.error(err.message || "Kunde inte starta dagsmedlemskap");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const openUpsell = (kind: "access" | "unlimited" | "day") => {
-    if ((kind === "access" || kind === "unlimited") && !userHasMembership) {
-      const params = new URLSearchParams();
-      params.set("v", venueSlug);
-      params.set("returnTo", safeLocalPath(programPath));
-      navigate(`/membership?${params.toString()}`);
-      return;
-    }
-    if (kind === "day" && !hasDayAccess) {
-      void startDayPassSignup();
-    }
-  };
-  const valueOfferRows = !userHasMembership
-    ? hasSpecialPricingOverride
-      ? pricingMode === "member_discount" && specialMemberPrice < onlinePrice
-        ? [{
-          label: "Medlem",
-          priceLabel: formatSek(specialMemberPrice),
-          savingLabel: `Spara ${formatSek(onlinePrice - specialMemberPrice)} idag`,
-          onClick: () => openUpsell("access"),
-        }]
-        : []
-      : [
-        {
-          label: `${PICKLA_ACCESS_LABEL}`,
-          priceLabel: formatSek(publicPlayPrice),
-          savingLabel: `Spara ${formatSek(Math.max(0, basePrice - publicPlayPrice))} idag`,
-          onClick: () => openUpsell("access"),
-        },
-        {
-          label: `${PICKLA_UNLIMITED_LABEL}`,
-          priceLabel: "Ingår",
-          savingLabel: `Spara ${formatSek(basePrice)} idag`,
-          onClick: () => openUpsell("unlimited"),
-        },
-        dayPassIncludedForDisplay && !hasDayAccess && !membershipAlreadyCoversActivity && (dayPassPricing || pricingPending)
-          ? {
-            label: "Spela hela dagen",
-            priceLabel: dayPassPricing?.checkoutLabel || "Hämtar pris...",
-            savingLabel: dayPassPricing && data?.upgradeDeltaSek > 0
-              ? `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr · +${formatSek(data.upgradeDeltaSek)}`
-              : `Dagsmedlemskap ${DAY_MEMBERSHIP_SEK} kr`,
-            onClick: dayPassPricing ? () => openUpsell("day") : undefined,
-          }
-          : null,
-      ].filter(Boolean) as Array<{ label: string; priceLabel: string; savingLabel: string; onClick?: () => void }>
-    : [];
 
   const toggleInterest = async (source: "secondary" | "primary" = "secondary") => {
     if (!session || !occurrenceDate) return;
@@ -520,7 +407,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 <MessageCircle className="h-7 w-7" />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-lg font-black" style={{ fontFamily: FONT_HEADING }}>Öppna chat</span>
+                <span className="block text-lg font-black" style={{ fontFamily: FONT_HEADING }}>Öppna chatt</span>
                 <span className="block truncate text-sm font-bold" style={{ color: MUTED }}>
                   Frågor, sena platser och staff updates
                 </span>
@@ -554,64 +441,69 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       <p className="mt-1.5 text-[13px] font-normal text-neutral-500">
                         {dateLabel} · {timeLabel}
                       </p>
-                      {socialProofLabel && (
-                        <p className="mt-1 text-[12px] font-normal text-neutral-400">
-                          {socialProofLabel}
-                        </p>
-                      )}
+                      <div className="mt-2">
+                        <PeopleRow participantCount={registrationCount} />
+                      </div>
                     </div>
                     <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
                       <Ticket className="h-6 w-6 text-neutral-950" />
                     </div>
                   </div>
 
-                  <div className="rounded-2xl bg-white px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
-                    <div className="flex items-center justify-between gap-4">
-                      <span className="inline-flex items-center gap-2 text-[14px] font-semibold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
-                        <Users className="h-4 w-4" />
-                        {spotsLeft == null ? "Öppet" : spotsLeft === 0 ? "Fullt" : `${spotsLeft} kvar`}
-                      </span>
-                      <span className="text-[13px] font-semibold" style={{ color: isFull ? "#be123c" : "#16a34a" }}>
-                        {isRegistered ? "Anmäld" : "Live"}
-                      </span>
-                    </div>
-                    <p className="mt-1.5 text-[12px] font-normal text-neutral-400">
-                      {socialProofLabel || "Inga anmälda ännu"}
-                    </p>
-                    {capacity ? (
-                      <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${Math.min(100, (registrationCount / capacity) * 100)}%`,
-                            background: isFull ? "#be123c" : GREEN,
-                          }}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
+                  <ScarcityBadge remaining={spotsLeft} capacity={capacity} />
 
-                  <MembershipValueCard
-                    ordinaryPriceSek={basePrice || onlinePrice}
-                    onlinePriceSek={onlinePrice}
-                    deskPriceSek={deskPrice}
-                    customerPriceSek={effectivePrice}
-                    pricingPending={pricingPending}
-                    includedLabel={includedLabel}
-                    membershipName={membershipName || null}
-                    isLoggedIn={!!user?.id}
-                    hasActiveMembership={userHasMembership}
-                    offerRows={valueOfferRows}
-                  />
+                  {pricingIsIncluded ? (
+                    <MemberStrip
+                      planName={backendPricing?.accessDecision === "day_access_included" ? "dagspass" : membershipName || "medlemskap"}
+                      amountSek={effectivePrice}
+                    />
+                  ) : (
+                    <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
+                      <PriceLine
+                        amountSek={displayedPrice}
+                        contextLine={!userHasMembership && memberContextLine ? (
+                          <details className="[&:not([open])_.price-details]:hidden">
+                            <summary className="cursor-pointer select-none list-none text-neutral-700 underline underline-offset-2">
+                              {memberContextLine} · Se detaljer
+                            </summary>
+                            <div className="price-details mt-3 grid gap-1.5 text-[12px] font-semibold text-neutral-500">
+                              <div className="flex justify-between gap-3">
+                                <span>Online</span>
+                                <span>{formatSek(onlinePrice || basePrice)}</span>
+                              </div>
+                              {deskPrice > onlinePrice ? (
+                                <div className="flex justify-between gap-3">
+                                  <span>På plats</span>
+                                  <span>{formatSek(deskPrice)}</span>
+                                </div>
+                              ) : null}
+                              {pricingMode === "member_discount" && specialMemberPrice < onlinePrice ? (
+                                <div className="flex justify-between gap-3">
+                                  <span>Medlem</span>
+                                  <span>{formatSek(specialMemberPrice)}</span>
+                                </div>
+                              ) : null}
+                              {pricingMode === "standard" ? (
+                                <p className="pt-1 text-neutral-400">
+                                  Medlemspris eller inkludering beror på aktivt medlemskap.
+                                </p>
+                              ) : null}
+                            </div>
+                          </details>
+                        ) : undefined}
+                        size="lg"
+                      />
+                    </div>
+                  )}
                   <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
                     {pricingPending && (
                       <p className="text-[12px] font-semibold text-neutral-500">
                         Vi kontrollerar medlemskap, dagsaccess och entitlements.
                       </p>
                     )}
-                    {!pricingPending && savingsSek > 0 && (
+                    {isRegistered && savedTodaySek > 0 && (
                       <p className="text-[12px] font-semibold text-neutral-500">
-                        Dagens sparande: {formatSek(savingsSek)}.
+                        Du sparade {formatSek(savedTodaySek)} idag.
                       </p>
                     )}
                     {requiresCheckout && (
@@ -661,7 +553,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     style={{ fontFamily: FONT_HEADING }}
                   >
                     {previewLoading && !room?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
-                    <span className="truncate">Lobbyn</span>
+                    <span className="truncate">Chatt</span>
                   </button>
                   <button
                     type="button"
