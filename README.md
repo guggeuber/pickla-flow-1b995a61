@@ -384,6 +384,27 @@ VITE_SUPABASE_PUBLISHABLE_KEY=...
 VITE_SUPABASE_PROJECT_ID=...
 ```
 
+Local setup:
+
+```bash
+cp .env.example .env
+npm run dev
+```
+
+`VITE_SUPABASE_PUBLISHABLE_KEY` is the frontend key used by [src/integrations/supabase/client.ts](./src/integrations/supabase/client.ts). Local `.env` files must use the current variable names below.
+
+Required local variables:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+- `VITE_SUPABASE_PROJECT_ID`
+
+Optional local variables:
+
+- `VITE_GIPHY_API_KEY`
+- `VITE_ENABLE_SCORE_POLLING`
+- `VITE_MAINTENANCE_MODE`
+
 Supabase secrets required where features are enabled:
 
 - `STRIPE_SECRET_KEY`
