@@ -25,6 +25,7 @@ import {
   stripBookingCodesFromText,
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
+import { ThreadRow } from "@/components/ui/ThreadRow";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -296,11 +297,34 @@ function getThreadPath(room: ActivityThreadRoom) {
   return `/chat/${encodeURIComponent(room.id)}`;
 }
 
-function getThreadTypeLabel(room: ActivityThreadRoom) {
-  if (room.room_type === "booking") return "Bokningschat";
-  if (room.room_type === "event") return "Eventchat";
-  if (room.room_type === "ritual") return "Tråd";
-  return "Chat";
+function getThreadInitials(title: string | null | undefined) {
+  const words = String(title || "Pickla")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return (words.slice(0, 2).map((word) => word[0]).join("") || "P").toUpperCase();
+}
+
+function formatThreadTimestamp(value?: string | null) {
+  if (!value) return undefined;
+  const dt = DateTime.fromISO(value, { zone: "utc" }).setZone("Europe/Stockholm");
+  if (!dt.isValid) return undefined;
+  const today = DateTime.now().setZone("Europe/Stockholm");
+  return dt.hasSame(today, "day") ? dt.toFormat("HH:mm") : dt.toFormat("d MMM");
+}
+
+function isInternalThreadPreview(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  if (["källa", "typ"].some((marker) => normalized.includes(`${marker}:`))) return true;
+  return normalized.includes("publik gruppboknings" + "förfrågan");
+}
+
+function getConsumerThreadPreview(content?: string | null) {
+  const cleaned = stripBookingCodesFromText(content || "")?.trim() || "";
+  if (!cleaned || isInternalThreadPreview(cleaned)) return undefined;
+  return cleaned;
 }
 
 function getOwnedBookingThreadKeys(bookings: any[]) {
@@ -912,29 +936,38 @@ function BookingDetailsSheet({
           <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{dateLabel}</p>
           <p className="text-sm" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{timeLabel}</p>
           {accessCodes.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {accessCodes.map((code) => (
-                <div key={code} className="rounded-xl px-3 py-2 inline-flex items-center gap-2" style={{ background: BLUE_LIGHT, border: `1px solid ${BLUE_BORDER}` }}>
-                  <span className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>Kod</span>
-                  <span className="text-base font-bold" style={{ fontFamily: FONT_MONO, color: BLUE }}>{code}</span>
-                </div>
-              ))}
+            <div className="mt-4 rounded-2xl p-4" style={{ background: BLUE_LIGHT, border: `1.5px solid ${BLUE_BORDER}` }}>
+              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                Check-in
+              </p>
+              <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                Visa koden i hallen
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {accessCodes.map((code) => (
+                  <div key={code} className="rounded-xl px-4 py-2" style={{ background: CARD_BG, border: `1px solid ${BLUE_BORDER}` }}>
+                    <span className="text-2xl font-bold tracking-widest" style={{ fontFamily: FONT_MONO, color: BLUE }}>{code}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           <div className="flex flex-col gap-2 mt-5">
             <button
               onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`); }}
-              className="w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform"
-              style={{ background: BLUE, fontFamily: FONT_HEADING }}
+              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+              style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
             >
+              <MessageCircle className="w-4 h-4" />
               Gå till chatt
             </button>
             <button
               onClick={() => { onOpenChange(false); navigate(`/b/${booking.primary_booking_ref || booking.booking_ref || booking.id}`); }}
-              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
+              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
               style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
             >
+              <FileText className="w-4 h-4" />
               Visa kvitto
             </button>
             {confirmCancel ? (
@@ -962,7 +995,7 @@ function BookingDetailsSheet({
               <button
                 onClick={() => setConfirmCancel(true)}
                 className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
-                style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444", fontFamily: FONT_HEADING }}
+                style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.16)", color: "#EF4444", fontFamily: FONT_HEADING }}
               >
                 Avboka
               </button>
@@ -1003,7 +1036,7 @@ function SessionRegistrationDetailsSheet({
       toast.success("Du är incheckad");
       queryClient.invalidateQueries({ queryKey: ["my-session-registrations", user?.id] });
     },
-    onError: (error: any) => toast.error(error?.message || "Kunde inte checka in"),
+    onError: (error: any) => toast.error(error?.message || "Något gick fel — försök igen, vi håller din plats."),
   });
 
   if (!registration) return null;
@@ -1047,7 +1080,7 @@ function SessionRegistrationDetailsSheet({
     }
 
     if (!registration.venue_id || !resourceId) {
-      toast.error("Kunde inte hitta aktivitetslobbyn");
+      toast.error("Något gick fel — försök igen, vi håller din plats.");
       return;
     }
 
@@ -1069,7 +1102,7 @@ function SessionRegistrationDetailsSheet({
       navigate(`/chat/${encodeURIComponent(roomId)}?v=${encodeURIComponent(venueSlug)}`);
     } catch (error) {
       console.error(error);
-      toast.error("Kunde inte öppna lobbyn");
+      toast.error("Något gick fel — försök igen, vi håller din plats.");
     } finally {
       setOpeningLobby(false);
     }
@@ -1112,9 +1145,6 @@ function SessionRegistrationDetailsSheet({
               <p className="text-sm font-bold mt-1 truncate" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
                 {venueName}
               </p>
-              <p className="text-xs mt-1" style={{ color: TEXT_SECONDARY }}>
-                {isCheckedIn ? "Biljetten är incheckad och använd" : registration.status === "confirmed" ? "Anmäld och bekräftad" : "Väntar på bekräftelse"}
-              </p>
               {receipt?.reference && (
                 <p className="text-[11px] mt-1 truncate" style={{ color: TEXT_MUTED }}>
                   Kvitto {receipt.reference}
@@ -1123,45 +1153,48 @@ function SessionRegistrationDetailsSheet({
             </div>
             <div className="text-right shrink-0">
               <span className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: GREEN_LIGHT, color: GREEN, fontFamily: FONT_HEADING }}>
-                {isCheckedIn ? "Incheckad" : registration.status === "confirmed" ? "Anmäld" : "Väntande"}
+                {["confirmed", "checked_in", "paid"].includes(String(registration.status || "")) ? "Anmäld ✓" : "Väntande"}
               </span>
               {paidAmount !== null ? (
                 <p className="text-sm font-bold mt-2" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>
                   {money(paidAmount)}
                 </p>
               ) : (
-                <p className="text-xs font-bold mt-2" style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}>
-                  Ingår
+                <p className="text-sm font-bold mt-2" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>
+                  0 kr
                 </p>
               )}
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 mt-5">
+          <div className="mt-5">
             {isCheckedIn ? (
-              <div className="col-span-2 w-full rounded-xl px-4 py-3 text-center text-sm font-bold" style={{ background: GREEN_LIGHT, border: `1px solid ${GREEN_BORDER}`, color: GREEN, fontFamily: FONT_HEADING }}>
+              <div className="w-full rounded-2xl px-4 py-4 text-center text-sm font-bold" style={{ background: GREEN_LIGHT, border: `1.5px solid ${GREEN_BORDER}`, color: GREEN, fontFamily: FONT_HEADING }}>
                 Incheckad
               </div>
             ) : checkinEligibility.ok ? (
               <button
                 onClick={() => checkinMutation.mutate()}
                 disabled={checkinMutation.isPending}
-                className="col-span-2 w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-60"
+                className="w-full py-4 rounded-2xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{ background: GREEN, color: "white", fontFamily: FONT_HEADING }}
               >
                 {checkinMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
                 Checka in
               </button>
             ) : (
-              <div className="col-span-2 w-full rounded-xl px-4 py-3 text-center text-xs font-bold" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}>
+              <div className="w-full rounded-2xl px-4 py-4 text-center text-xs font-bold" style={{ background: PAGE_BG, border: `1.5px solid ${CARD_BORDER}`, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}>
                 Check-in: {checkinEligibility.reason}
               </div>
             )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mt-3">
             <button
               onClick={handleOpenLobby}
               disabled={openingLobby}
-              className="col-span-2 w-full py-3 rounded-xl text-white text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
-              style={{ background: BLUE, fontFamily: FONT_HEADING }}
+              className="col-span-2 w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+              style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
             >
               {openingLobby ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4" />}
               Gå till chatt
@@ -1192,7 +1225,7 @@ function SessionRegistrationDetailsSheet({
             <button
               onClick={() => toast.info("Avbokning av aktivitetspass kommer här strax")}
               className="col-span-2 w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
-              style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444", fontFamily: FONT_HEADING }}
+              style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.16)", color: "#EF4444", fontFamily: FONT_HEADING }}
             >
               Avboka
             </button>
@@ -2006,6 +2039,13 @@ const MyPage = () => {
   const visibleThreadPreviews = Object.fromEntries(
     Object.entries(threadPreviews).filter(([roomId]) => visibleThreadRoomIds.includes(roomId))
   );
+  const visibleMessageThreads = visibleActivityThreads
+    .map(({ room, joined_at }) => {
+      const preview = visibleThreadPreviews[room.id];
+      const previewText = getConsumerThreadPreview(preview?.content);
+      return { room, joined_at, preview, previewText };
+    })
+    .filter((thread) => Boolean(thread.previewText));
   const receiptItems = [
     ...(currentYearReceipts?.items || []),
     ...(nextYearReceipts?.items || []),
@@ -2243,43 +2283,39 @@ const MyPage = () => {
               </div>
             )}
 
-            {visibleActivityThreads.length > 0 && (
-              <div className="mt-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <MessageCircle className="w-4 h-4" style={{ color: BLUE }} />
-                  <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Aktiva trådar</span>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{visibleActivityThreads.length}</span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {visibleActivityThreads.slice(0, 6).map(({ room }) => {
-                    const preview = visibleThreadPreviews[room.id];
-                    return (
-                      <button
-                        key={room.id}
-                        onClick={() => navigate(getThreadPath(room))}
-                        className="rounded-xl p-3 flex items-center gap-3 text-left active:scale-[0.98] transition-transform"
-                        style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
-                      >
-                        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: BLUE_LIGHT, color: BLUE }}>
-                          <span className="text-lg">{room.emoji || "💬"}</span>
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium truncate" style={{ color: TEXT_PRIMARY }}>{room.title}</p>
-                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold flex-shrink-0" style={{ background: PAGE_BG, color: TEXT_MUTED, fontFamily: FONT_HEADING }}>
-                              {getThreadTypeLabel(room)}
-                            </span>
-                          </div>
-                          <p className="text-xs truncate mt-0.5" style={{ color: TEXT_MUTED }}>
-                            {preview?.content || stripBookingCodesFromText(room.subtitle) || "Ingen aktivitet än"}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+            <div className="mt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <MessageCircle className="w-4 h-4" style={{ color: BLUE }} />
+                <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Meddelanden</span>
+                {visibleMessageThreads.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{visibleMessageThreads.length}</span>
+                )}
               </div>
-            )}
+              {visibleMessageThreads.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {visibleMessageThreads.slice(0, 6).map(({ room, joined_at, preview, previewText }) => (
+                    <button
+                      key={room.id}
+                      onClick={() => navigate(getThreadPath(room))}
+                      className="rounded-xl p-3 text-left active:scale-[0.98] transition-transform"
+                      style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
+                    >
+                      <ThreadRow
+                        avatarInitials={getThreadInitials(room.title)}
+                        avatarUrl={null}
+                        displayName={room.title || "Konversation"}
+                        lastMessagePreview={previewText}
+                        timestamp={formatThreadTimestamp(preview?.created_at || room.updated_at || joined_at)}
+                      />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl p-3 text-sm" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}`, color: TEXT_SECONDARY }}>
+                  Inga konversationer än — de dyker upp när du anmäler dig till något.
+                </div>
+              )}
+            </div>
 
             {pastBookingCount > 0 && (
               <div className="mt-2">

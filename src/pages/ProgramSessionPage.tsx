@@ -399,20 +399,20 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             <button
               type="button"
               onClick={openChat}
-              className="mt-10 flex w-full items-center gap-4 rounded-[28px] bg-white p-5 text-left shadow-sm disabled:opacity-50"
+              className="mt-10 flex w-full items-center gap-3 rounded-2xl bg-white/70 p-3 text-left shadow-sm disabled:opacity-50"
               disabled={!room?.id}
               style={{ border: `1px solid ${BORDER}` }}
             >
-              <span className="grid h-14 w-14 place-items-center rounded-2xl" style={{ background: "#eef2ff" }}>
-                <MessageCircle className="h-7 w-7" />
+              <span className="grid h-10 w-10 place-items-center rounded-xl" style={{ background: "#eef2ff" }}>
+                <MessageCircle className="h-5 w-5" />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-lg font-black" style={{ fontFamily: FONT_HEADING }}>Öppna chatt</span>
-                <span className="block truncate text-sm font-bold" style={{ color: MUTED }}>
-                  Frågor, sena platser och staff updates
+                <span className="block text-sm font-bold" style={{ fontFamily: FONT_HEADING }}>Öppna chatt</span>
+                <span className="block truncate text-xs font-medium" style={{ color: MUTED }}>
+                  Frågor och sena platser
                 </span>
               </span>
-              <ArrowRight className="h-5 w-5" />
+              <ArrowRight className="h-4 w-4" />
             </button>
           </section>
         )}

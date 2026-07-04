@@ -55,6 +55,18 @@ const HUB_MUTED = "#9ca3af";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const PICKLA_MAP_URL = "https://maps.google.com/?q=Svetsarvägen+22,+171+41+Solna";
 
+function isInternalRoomText(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (["källa", "typ"].some((marker) => normalized.includes(`${marker}:`))) return true;
+  return normalized.includes("publik gruppboknings" + "förfrågan");
+}
+
+function consumerRoomText(value?: string | null) {
+  const cleaned = stripBookingCodesFromText(value || "")?.trim() || "";
+  return cleaned && !isInternalRoomText(cleaned) ? cleaned : "";
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 interface ChatRoom {
   id: string;
@@ -843,9 +855,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
   const [gifLoading, setGifLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const headerSubtitle = room.room_type === "booking"
-    ? stripBookingCodesFromText(room.subtitle)
-    : room.subtitle;
+  const headerSubtitle = consumerRoomText(room.subtitle);
   const isInquiryEvent =
     room.room_type === "event" &&
     !!inquiryEvent &&
@@ -1459,7 +1469,7 @@ function BookingSmartPanel({
     ? DateTime.fromISO(booking.end_time, { zone: "utc" }).setZone("Europe/Stockholm")
     : null;
   const dateLabel = start ? start.toFormat("ccc d LLL", { locale: "sv" }) : "";
-  const timeLabel = start && end ? `${start.toFormat("HH:mm")}–${end.toFormat("HH:mm")}` : room.subtitle || "";
+  const timeLabel = start && end ? `${start.toFormat("HH:mm")}–${end.toFormat("HH:mm")}` : consumerRoomText(room.subtitle);
   const status = booking?.status || "confirmed";
   const isCancelled = status === "cancelled";
   const statusLabel = isCancelled ? "Avbokad" : status === "pending" ? "Väntande" : "Bekräftad";
@@ -1534,7 +1544,7 @@ function BookingSmartPanel({
             {courtName}
           </p>
           <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
-            {isLoading ? "Hämtar bokningen..." : [dateLabel, timeLabel].filter(Boolean).join(" · ") || room.subtitle}
+            {isLoading ? "Hämtar bokningen..." : [dateLabel, timeLabel].filter(Boolean).join(" · ") || consumerRoomText(room.subtitle)}
           </p>
           {booking && (
             <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_MUTED, margin: "5px 0 0", lineHeight: 1.35 }}>
@@ -2914,11 +2924,10 @@ function HubList({
                         type="button"
                         onClick={() => openEventRoom(ev)}
                         style={{
-                          flex: 1,
-                          border: 0,
+                          border: `1px solid ${HUB_BORDER}`,
                           borderRadius: 13,
-                          background: HUB_NAVY,
-                          color: "#fff",
+                          background: "#f8fafc",
+                          color: HUB_TEXT,
                           padding: "10px 12px",
                           fontFamily: FONT_HEADING,
                           fontSize: 12,
@@ -2932,10 +2941,11 @@ function HubList({
                         type="button"
                         onClick={() => isProgramSession ? navigate(programUrl) : openEventRoom(ev)}
                         style={{
-                          border: `1px solid ${HUB_BORDER}`,
+                          flex: 1,
+                          border: 0,
                           borderRadius: 13,
-                          background: "#f8fafc",
-                          color: HUB_TEXT,
+                          background: HUB_NAVY,
+                          color: "#fff",
                           padding: "10px 12px",
                           fontFamily: FONT_HEADING,
                           fontSize: 12,
