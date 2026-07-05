@@ -57,6 +57,13 @@
   "rewrites": [
     {
       "source": "/p/:sessionId",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(facebookexternalhit|Facebot|facebot|WhatsApp|whatsapp|Twitterbot|TwitterBot|Slackbot|Slackbot-LinkExpanding|Discordbot|LinkedInBot|TelegramBot|SkypeUriPreview|Applebot|bot|crawler|spider|preview).*"
+        }
+      ],
       "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/activity-og?sessionId=:sessionId"
     },
     { "source": "/(.*)", "destination": "/index.html" }

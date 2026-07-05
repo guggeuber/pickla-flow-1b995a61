@@ -267,8 +267,8 @@ function ogTitleForActivity(session: any, occurrenceDate: string) {
 function ogDescriptionForActivity(registrationsCount: number) {
   // TODO(presence-consent): named visibility pending presence settings.
   return registrationsCount >= 3
-    ? `${registrationsCount} spelare är med. Häng på!`
-    : 'Plats för fler — häng på!';
+    ? `${registrationsCount} spelare är med. Boka plats!`
+    : 'Plats för fler — boka plats!';
 }
 
 function activityOgHtml({

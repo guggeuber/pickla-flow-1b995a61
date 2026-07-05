@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, Star, Ticket } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, Star, Ticket, UserCheck } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
@@ -15,6 +15,7 @@ import { MemberStrip } from "@/components/ui/MemberStrip";
 import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { formatSek } from "@/lib/activityPricing";
+import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -36,6 +37,11 @@ function publicProgramPath(sessionId: string, date: string | null | undefined, v
   return `/p/${encodeURIComponent(sessionId)}${params.toString() ? `?${params.toString()}` : ""}`;
 }
 
+function ticketProgramPath(sessionId: string, date: string | null | undefined, venueSlug: string) {
+  const path = publicProgramPath(sessionId, date, venueSlug);
+  return `${path}${path.includes("?") ? "&" : "?"}ticket=1`;
+}
+
 function sessionTypeLabel(type?: string | null) {
   if (type === "open_play") return "Open Play";
   if (type === "group_training") return "Träning";
@@ -54,8 +60,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [queueLoading, setQueueLoading] = useState(false);
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
+  const ticketMode = searchParams.get("ticket") === "1";
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
   const programPath = sessionId ? publicProgramPath(sessionId, requestedDate, venueSlug) : "/today";
+  const ticketPath = sessionId ? ticketProgramPath(sessionId, requestedDate, venueSlug) : "/today";
   const todayPath = `/today?v=${encodeURIComponent(venueSlug)}`;
   const routeState = location.state as { activitySession?: any } | null;
   const optimisticSession = routeState?.activitySession || null;
@@ -129,11 +137,34 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     },
   });
 
+  const participantUserIds = useMemo(() => {
+    const ids = registrations
+      .map((row: any) => row.user_id)
+      .filter(Boolean);
+    return [...new Set(ids)].slice(0, 3);
+  }, [registrations]);
+
+  const { data: participantProfiles = [] } = useQuery({
+    queryKey: ["program-session-participant-profiles", participantUserIds],
+    enabled: participantUserIds.length > 0,
+    staleTime: 30000,
+    queryFn: async () => {
+      const map = await getPublicProfileMap(participantUserIds);
+      return participantUserIds
+        .map((id) => map.get(id))
+        .filter(Boolean) as PublicProfile[];
+    },
+  });
+
   const capacity = Number(session?.capacity || 0);
   const registrationCount = Number(data?.registrations?.count ?? registrations.length ?? 0);
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
-  const isRegistered = !!user?.id && registrations.some((row: any) => row.user_id === user.id);
+  const currentRegistration = user?.id ? registrations.find((row: any) => row.user_id === user.id) : null;
+  const isRegistered = !!currentRegistration;
+  const [localCheckedIn, setLocalCheckedIn] = useState(false);
+  const [checkinLoading, setCheckinLoading] = useState(false);
+  const isCheckedIn = localCheckedIn || currentRegistration?.status === "checked_in";
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const backendPricing = data?.activityTicketPricing || data?.pricing || null;
   const pricingDebug = backendPricing?.debug || {};
@@ -178,19 +209,39 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const savedTodaySek = !pricingPending && pricingIsIncluded && basePrice > effectivePrice
     ? Math.round((basePrice - effectivePrice) * 100) / 100
     : 0;
+  const now = DateTime.now().setZone("Europe/Stockholm");
+  const checkinWindow = occurrenceDate && session?.start_time && session?.end_time
+    ? {
+        opens: DateTime.fromISO(`${occurrenceDate}T${String(session.start_time).slice(0, 5)}:00`, { zone: "Europe/Stockholm" }).minus({ minutes: 30 }),
+        closes: DateTime.fromISO(`${occurrenceDate}T${String(session.end_time).slice(0, 5)}:00`, { zone: "Europe/Stockholm" }),
+      }
+    : null;
+  const canCheckInNow = Boolean(
+    isRegistered &&
+    !isCheckedIn &&
+    checkinWindow?.opens.isValid &&
+    checkinWindow?.closes.isValid &&
+    now >= checkinWindow.opens &&
+    now <= checkinWindow.closes
+  );
+  const checkinOpensLabel = checkinWindow?.opens?.isValid ? checkinWindow.opens.toFormat("HH:mm") : null;
   const ctaLabel = isRegistered
-    ? "Anmäld"
+    ? isCheckedIn
+      ? "Incheckad"
+      : canCheckInNow
+        ? "Checka in"
+        : "Biljett klar"
     : isFull
       ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
       : pricingPending
         ? "Hämtar ditt pris..."
-        : `${user?.id ? (pricingIsIncluded ? "Anmäl" : "Fortsätt till betalning") : "Logga in & anmäl"} · ${checkoutLabel}`;
+        : `${user?.id ? (pricingIsIncluded ? "Boka plats" : "Betala och boka plats") : "Logga in och boka plats"} · ${checkoutLabel}`;
 
   const timeLabel = useMemo(() => {
     if (!session) return "";
     const start = session.start_time ? String(session.start_time).slice(0, 5) : "";
     const end = session.end_time ? String(session.end_time).slice(0, 5) : "";
-    return [start, end].filter(Boolean).join("-");
+    return [start, end].filter(Boolean).join("–");
   }, [session]);
 
   const dateLabel = occurrenceDate
@@ -262,8 +313,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             pricing_reason: backendPricing.pricingReason || "",
             user_id: user.id,
             slug: venueSlug,
-          redirect_path: safeLocalPath(programPath),
-          success_path: `/booking/confirmed?type=session_ticket&next=${encodeURIComponent(safeLocalPath(programPath))}`,
+          redirect_path: safeLocalPath(ticketPath),
+          success_path: `/booking/confirmed?type=session_ticket&next=${encodeURIComponent(safeLocalPath(ticketPath))}`,
         },
       });
       if (result.free) {
@@ -272,7 +323,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
         queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
         await refetchRegistrations();
-        toast.success("Du är anmäld");
+        toast.success("Biljetten är klar");
+        navigate(safeLocalPath(ticketPath), { replace: true });
         return;
       }
       if (!result.url) throw new Error("Kunde inte starta betalning");
@@ -281,6 +333,27 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       toast.error(err.message || "Kunde inte starta anmälan");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkInTicket = async () => {
+    if (!venueId || !currentRegistration?.id || !canCheckInNow || checkinLoading) return;
+    setCheckinLoading(true);
+    try {
+      await apiPost("api-checkins", "self", {
+        venue_id: venueId,
+        venue_slug: venueSlug,
+        entry_type: "session_ticket",
+        entitlement_id: currentRegistration.id,
+      });
+      setLocalCheckedIn(true);
+      await refetchRegistrations();
+      queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
+      toast.success("Du är incheckad");
+    } catch (err: any) {
+      toast.error(err.message || "Kunde inte checka in");
+    } finally {
+      setCheckinLoading(false);
     }
   };
 
@@ -317,7 +390,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     if (!session || !occurrenceDate) return;
     const sharePath = publicProgramPath(session.id, occurrenceDate, venueSlug);
     const shareUrl = `${window.location.origin}${sharePath}`;
-    const shareText = `${session.name} ${dateLabel} ${timeLabel} — häng på! ${shareUrl}`;
+    const shareDate = DateTime.fromISO(occurrenceDate, { zone: "Europe/Stockholm" })
+      .setLocale("sv")
+      .toFormat("ccc d MMM");
+    const shareText = `${session.name} · ${shareDate} ${timeLabel}\nBoka plats på Pickla`;
     try {
       if (navigator.share) {
         await navigator.share({
@@ -327,12 +403,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         });
         return;
       }
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
       toast.success("Länk kopierad");
     } catch (err: any) {
       if (err?.name === "AbortError") return;
       try {
-        await navigator.clipboard.writeText(shareUrl);
+        await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
         toast.success("Länk kopierad");
       } catch {
         toast.error("Kunde inte dela länken");
@@ -447,7 +523,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                         {dateLabel} · {timeLabel}
                       </p>
                       <div className="mt-2">
-                        <PeopleRow participantCount={registrationCount} />
+                        <PeopleRow people={participantProfiles} participantCount={registrationCount} />
                       </div>
                     </div>
                     <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
@@ -456,6 +532,39 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   </div>
 
                   <ScarcityBadge remaining={spotsLeft} capacity={capacity} />
+
+                  {isRegistered ? (
+                    <div
+                      className="rounded-[22px] bg-emerald-50 px-4 py-3"
+                      style={{ border: "1px solid rgba(16,185,129,0.22)" }}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white text-emerald-700">
+                          {isCheckedIn ? <UserCheck className="h-5 w-5" /> : <Ticket className="h-5 w-5" />}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[15px] font-black text-emerald-950" style={{ fontFamily: FONT_HEADING }}>
+                            {isCheckedIn ? "Du är incheckad" : "Din biljett är klar"}
+                          </p>
+                          <p className="mt-1 text-[12px] font-semibold text-emerald-800/75">
+                            {isCheckedIn
+                              ? "Du är redo att spela."
+                              : canCheckInNow
+                                ? "Nästa steg: checka in när du kommer."
+                                : checkinOpensLabel
+                                  ? `Nästa steg: check-in öppnar ${checkinOpensLabel}.`
+                                  : "Nästa steg: check-in öppnar innan passet."}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : ticketMode ? (
+                    <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
+                      <p className="text-[13px] font-semibold text-neutral-600">
+                        Logga in så visar vi din biljett här direkt efter bokning.
+                      </p>
+                    </div>
+                  ) : null}
 
                   {pricingIsIncluded ? (
                     <MemberStrip
@@ -527,16 +636,20 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               <div className="mx-auto grid max-w-md gap-2">
                 <button
                   type="button"
-                  onClick={startSignup}
-                  disabled={loading || queueLoading || isRegistered || pricingPending}
+                  onClick={isRegistered ? checkInTicket : startSignup}
+                  disabled={loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow)}
                   className="flex h-14 items-center justify-center gap-3 rounded-[22px] px-5 text-[17px] font-semibold disabled:opacity-60"
                   style={{
-                    background: isRegistered || (isFull && userIsInterested) ? "#dcfce7" : NAVY,
-                    color: isRegistered || (isFull && userIsInterested) ? "#15803d" : "white",
+                    background: (isRegistered && !canCheckInNow) || (isFull && userIsInterested) ? "#dcfce7" : NAVY,
+                    color: (isRegistered && !canCheckInNow) || (isFull && userIsInterested) ? "#15803d" : "white",
                     fontFamily: FONT_HEADING,
                   }}
                 >
-                  {loading || queueLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isRegistered ? <Check className="h-5 w-5" /> : null}
+                  {loading || queueLoading || checkinLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : isRegistered ? (
+                    isCheckedIn ? <UserCheck className="h-5 w-5" /> : <Check className="h-5 w-5" />
+                  ) : null}
                   {ctaLabel}
                 </button>
                 <div className={`grid gap-2 ${isRegistered ? "grid-cols-2" : "grid-cols-3"}`}>

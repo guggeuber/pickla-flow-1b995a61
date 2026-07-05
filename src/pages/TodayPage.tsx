@@ -482,12 +482,13 @@ function ParticipantLine({ participants, count }: { participants?: PublicProfile
   return <PeopleRow people={participants} participantCount={count} />;
 }
 
-function itemStartDateTime(item: FeedItem) {
-  return DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
+function itemEndDateTime(item: FeedItem) {
+  const endTime = item.endTime || item.startTime;
+  return DateTime.fromISO(`${item.date}T${endTime}`, { zone: "Europe/Stockholm" });
 }
 
 function isJoinableItem(item: FeedItem, now: DateTime) {
-  return item.status !== "Full" && itemStartDateTime(item) > now;
+  return item.status !== "Full" && itemEndDateTime(item) > now;
 }
 
 function sortBySoonestThenPeople(items: FeedItem[]) {
@@ -523,7 +524,7 @@ function FeaturedTonightHero({
         now,
       })
     : { eyebrow: "NÄSTA", subtitle: "Nästa kväll på Pickla" };
-  const ctaLabel = included ? "Häng på · Ingår" : `Häng på${priceLabel ? ` · ${priceLabel}` : ""}`;
+  const ctaLabel = included ? "Boka plats · Ingår" : `Boka plats${priceLabel ? ` · ${priceLabel}` : ""}`;
 
   return (
     <section className="mx-auto max-w-md px-5 pt-2">

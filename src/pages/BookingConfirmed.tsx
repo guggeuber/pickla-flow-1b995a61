@@ -76,8 +76,9 @@ export default function BookingConfirmed() {
       const programParams = new URLSearchParams();
       if (data.session_date) programParams.set("date", data.session_date);
       if (venueSlug) programParams.set("v", venueSlug);
+      programParams.set("ticket", "1");
       const programPath = data.activity_session_id
-        ? `/program/${encodeURIComponent(data.activity_session_id)}${programParams.toString() ? `?${programParams.toString()}` : ""}`
+        ? `/p/${encodeURIComponent(data.activity_session_id)}${programParams.toString() ? `?${programParams.toString()}` : ""}`
         : "";
       if (storedCheckinReturn) {
         sessionStorage.removeItem("pickla_checkin_return");
