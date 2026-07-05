@@ -18,6 +18,7 @@ import { apiGet } from "@/lib/api";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
+import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
 
 
 const PAGE_BG = "#fffaf7";
@@ -372,7 +373,7 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
 
     if (!authLoading && !user?.id) {
       const redirect = item.href || `${window.location.pathname}${window.location.search}`;
-      sessionStorage.setItem("pickla_auth_redirect", redirect);
+      preserveIntendedRoute(redirect);
       navigate(`/auth?redirect=${encodeURIComponent(redirect)}`);
       return;
     }
@@ -459,6 +460,7 @@ function FeaturedTonightHero({
   date,
   now,
   userName,
+  welcomeLine,
   priceLabel,
   included,
   onOpen,
@@ -467,6 +469,7 @@ function FeaturedTonightHero({
   date: DateTime | null;
   now: DateTime;
   userName: string | null;
+  welcomeLine?: string | null;
   priceLabel: string | null;
   included: boolean;
   onOpen: () => void;
@@ -499,7 +502,11 @@ function FeaturedTonightHero({
           {kicker}
         </p>
         <div className="mt-5">
-          {userName && (
+          {welcomeLine ? (
+            <p className="mb-2 text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING, color: MUTED }}>
+              {welcomeLine}
+            </p>
+          ) : userName && (
             <p className="mb-2 text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING, color: MUTED }}>
               Hej {userName}.
             </p>
@@ -537,6 +544,7 @@ export default function TodayPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const [welcomeLine] = useState(() => consumeFirstRunWelcome() ? "Välkommen till Pickla" : null);
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
 
@@ -643,6 +651,7 @@ export default function TodayPage() {
             date={featuredDate}
             now={now}
             userName={userName}
+            welcomeLine={welcomeLine}
             priceLabel={featuredPriceLabel}
             included={featuredIncluded}
             onOpen={openFeatured}

@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { resolveEntryDestination } from "@/lib/entryResolver";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -49,7 +50,7 @@ const ClaimPassPage = () => {
       clearPendingClaimToken();
       setClaimStatus("claimed");
       toast.success("Dagspass hämtat! Du hittar det under Mitt konto.");
-      window.setTimeout(() => navigate("/my"), 1200);
+      window.setTimeout(() => navigate(resolveEntryDestination()), 1200);
     } catch (err: any) {
       const message = err.message || "Kunde inte hämta passet";
       setClaimError(message);

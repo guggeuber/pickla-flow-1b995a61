@@ -238,7 +238,7 @@ export function PicklaTopBar({
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white to-white/70 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
               <button
                 type="button"
-                onClick={() => go(user ? `/my?v=${slug}` : `/auth?redirect=/my&v=${slug}`)}
+                onClick={() => go(user ? `/my?v=${slug}` : `/auth?v=${slug}`)}
                 className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fffaf7] px-4 py-3 text-left shadow-sm"
               >
                 {user ? (
@@ -277,4 +277,3 @@ export function PicklaTopBar({
     </>
   );
 }
-

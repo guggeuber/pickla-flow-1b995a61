@@ -1937,7 +1937,7 @@ const MyPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
   const isActivityPage = pathname.startsWith("/activity");
-  const authRedirectPath = isActivityPage ? "/activity" : "/my";
+  const authRedirectPath = isActivityPage ? "/activity" : "/today";
 
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();

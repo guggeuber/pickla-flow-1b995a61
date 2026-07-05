@@ -10,6 +10,7 @@ import { ArrowLeft, Loader2, Zap } from "lucide-react";
 import { DateTime } from "luxon";
 import { useAuth } from "@/hooks/useAuth";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
+import { resolveEntryDestination } from "@/lib/entryResolver";
 
 const CREAM = "#faf8f5";
 const DARK_BLUE = "#1a1f3a";
@@ -125,7 +126,7 @@ const OpenPlayPage = () => {
       });
       if (result.free) {
         toast.success("Dagspass aktiverat via ditt medlemskap!");
-        navigate(result.redirect || "/my");
+        navigate(resolveEntryDestination({ intendedRoute: result.redirect }));
         return;
       }
       window.location.href = result.url;

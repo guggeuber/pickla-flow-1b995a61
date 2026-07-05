@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { preserveIntendedRoute } from "@/lib/entryResolver";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
@@ -632,7 +633,7 @@ export default function BookingPage() {
   const bookingMode: BookingMode = useCorporate || baseTotalPrice === 0 ? "direct" : "stripe";
 
   const goToAuth = () => {
-    sessionStorage.setItem("pickla_auth_redirect", window.location.pathname + window.location.search);
+    preserveIntendedRoute(window.location.pathname + window.location.search);
     navigate("/auth");
   };
 
@@ -742,7 +743,7 @@ export default function BookingPage() {
       const firstBooking = result.bookings?.[0];
       const firstRef = firstBooking?.booking_ref;
       if (firstRef) {
-        navigate(user ? `/my?booking=${encodeURIComponent(firstRef)}&v=${encodeURIComponent(slug)}` : `/b/${firstRef}`);
+        navigate(`/b/${encodeURIComponent(firstRef)}`);
       } else {
         setConfirmed(true);
         toast.success("Bokad!");

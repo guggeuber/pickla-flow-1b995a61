@@ -5,12 +5,11 @@ import { CheckCircle2, Loader2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { resolveEntryDestination, safeLocalPath } from "@/lib/entryResolver";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
 const TIMEOUT_MS   = 30_000;
-const safeLocalPath = (path: string | null | undefined) =>
-  path && path.startsWith("/") && !path.startsWith("//") ? path : "";
 
 type BookingBySessionResponse = {
   pending?: boolean;
@@ -28,10 +27,10 @@ export default function BookingConfirmed() {
   const type     = searchParams.get("type") ?? "";
   const storedCheckinReturn =
     typeof window !== "undefined" ? safeLocalPath(sessionStorage.getItem("pickla_checkin_return")) : "";
-  const next     = safeLocalPath(searchParams.get("next")) || storedCheckinReturn || "/my";
+  const next     = resolveEntryDestination({ intendedRoute: safeLocalPath(searchParams.get("next")) || storedCheckinReturn });
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { user, loading: authLoading } = useAuth();
+  const { loading: authLoading } = useAuth();
   const [timedOut, setTimedOut] = useState(false);
 
   const isDayPass = type === "day_pass";
@@ -74,23 +73,24 @@ export default function BookingConfirmed() {
     const bookingRef = data?.booking_ref;
     const venueSlug = data?.venue_slug;
     if (isSessionTicket && data && !data.pending && !authLoading) {
-      const params = new URLSearchParams();
-      if (data.registration_id) params.set("registration", data.registration_id);
-      if (venueSlug) params.set("v", venueSlug);
-      const myPath = params.toString() ? `/my?${params.toString()}` : "/my";
+      const programParams = new URLSearchParams();
+      if (data.session_date) programParams.set("date", data.session_date);
+      if (venueSlug) programParams.set("v", venueSlug);
+      const programPath = data.activity_session_id
+        ? `/program/${encodeURIComponent(data.activity_session_id)}${programParams.toString() ? `?${programParams.toString()}` : ""}`
+        : "";
       if (storedCheckinReturn) {
         sessionStorage.removeItem("pickla_checkin_return");
         navigate(storedCheckinReturn, { replace: true });
         return;
       }
-      navigate(user ? myPath : next, { replace: true });
+      navigate(resolveEntryDestination({ intendedRoute: programPath || next, venueSlug }), { replace: true });
       return;
     }
     if (bookingRef && !authLoading) {
-      const venueParam = venueSlug ? `&v=${encodeURIComponent(venueSlug)}` : "";
-      navigate(user ? `/my?booking=${encodeURIComponent(bookingRef)}${venueParam}` : `/b/${encodeURIComponent(bookingRef)}`, { replace: true });
+      navigate(`/b/${encodeURIComponent(bookingRef)}`, { replace: true });
     }
-  }, [authLoading, data, isSessionTicket, navigate, next, storedCheckinReturn, user]);
+  }, [authLoading, data, isSessionTicket, navigate, next, storedCheckinReturn]);
 
   // Fallback: give up after TIMEOUT_MS and show a static message
   useEffect(() => {

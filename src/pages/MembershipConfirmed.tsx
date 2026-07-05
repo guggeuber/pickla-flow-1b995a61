@@ -4,11 +4,10 @@ import { CheckCircle2 } from "lucide-react";
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { resolveEntryDestination, safeLocalPath } from "@/lib/entryResolver";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
-const safeLocalPath = (path: string | null | undefined) =>
-  path && path.startsWith("/") && !path.startsWith("//") ? path : "";
 
 export default function MembershipConfirmed() {
   const navigate = useNavigate();
@@ -17,7 +16,7 @@ export default function MembershipConfirmed() {
   const storedCheckinReturn =
     typeof window !== "undefined" ? safeLocalPath(sessionStorage.getItem("pickla_checkin_return")) : "";
   const returnTo = safeLocalPath(searchParams.get("returnTo")) || storedCheckinReturn;
-  const nextPath = returnTo || "/my";
+  const nextPath = resolveEntryDestination({ intendedRoute: returnTo });
 
   useEffect(() => {
     queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
@@ -68,7 +67,7 @@ export default function MembershipConfirmed() {
         className="mt-2 px-6 py-2.5 rounded-xl text-[13px] font-bold"
         style={{ background: "#1a1f3a", color: "#fff", fontFamily: FONT_MONO }}
       >
-        {returnTo ? "fortsätt checka in →" : "min sida →"}
+        {returnTo ? "fortsätt checka in →" : "till Pickla idag →"}
       </motion.button>
     </div>
   );

@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { ArrowRight } from "lucide-react";
+import { resolveEntryDestination } from "@/lib/entryResolver";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -48,9 +49,8 @@ const PlayPage = () => {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
 
-  // Redirect authenticated users to /my
   if (!loading && user) {
-    return <Navigate to="/my" replace />;
+    return <Navigate to={resolveEntryDestination()} replace />;
   }
 
   if (loading) return null;

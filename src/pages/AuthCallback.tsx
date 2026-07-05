@@ -4,6 +4,11 @@ import { motion } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import type { EmailOtpType } from "@supabase/supabase-js";
+import {
+  consumePreservedIntendedRoute,
+  markFirstRunWelcome,
+  resolveEntryDestination,
+} from "@/lib/entryResolver";
 
 const CREAM = "#faf8f5";
 const DARK_BLUE = "#1a1f3a";
@@ -23,10 +28,12 @@ function normalizeOtpType(type?: string | null): EmailOtpType {
   return OTP_TYPES.has(type || "") ? (type as EmailOtpType) : "signup";
 }
 
-function postAuthTarget() {
+function postAuthTarget(isFirstRunCandidate = false) {
   const pendingClaim = localStorage.getItem(PENDING_CLAIM_KEY);
-  if (pendingClaim) return `/pass/${pendingClaim}`;
-  return "/my";
+  const intendedRoute = pendingClaim ? `/pass/${pendingClaim}` : consumePreservedIntendedRoute();
+  const target = resolveEntryDestination({ intendedRoute });
+  if (isFirstRunCandidate && !pendingClaim && !intendedRoute) markFirstRunWelcome();
+  return target;
 }
 
 export default function AuthCallback() {
@@ -61,7 +68,7 @@ export default function AuthCallback() {
         }
         setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
         setStatus("success");
-        setTimeout(() => navigate(postAuthTarget(), { replace: true }), 1200);
+        setTimeout(() => navigate(postAuthTarget(isSignup), { replace: true }), 1200);
         return;
       }
 
@@ -79,7 +86,7 @@ export default function AuthCallback() {
         }
         setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
         setStatus("success");
-        setTimeout(() => navigate(postAuthTarget(), { replace: true }), 1200);
+        setTimeout(() => navigate(postAuthTarget(isSignup), { replace: true }), 1200);
         return;
       }
 
@@ -88,7 +95,7 @@ export default function AuthCallback() {
       if (session) {
         setSuccessText("Du är inloggad");
         setStatus("success");
-        setTimeout(() => navigate(postAuthTarget(), { replace: true }), 1200);
+        setTimeout(() => navigate(postAuthTarget(false), { replace: true }), 1200);
         return;
       }
 
@@ -157,7 +164,7 @@ export default function AuthCallback() {
               </p>
             </div>
             <button
-              onClick={() => navigate(postAuthTarget(), { replace: true })}
+              onClick={() => navigate(postAuthTarget(status === "success" && successText === "Din e-post är bekräftad"), { replace: true })}
               className="px-8 py-3 rounded-2xl text-[14px] font-bold active:scale-95 transition-transform"
               style={{ background: DARK_BLUE, color: "#fff", fontFamily: FONT_MONO }}
             >

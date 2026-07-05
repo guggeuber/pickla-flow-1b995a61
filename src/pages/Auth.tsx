@@ -6,16 +6,22 @@ import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
+import {
+  consumePreservedIntendedRoute,
+  getPreservedIntendedRoute,
+  markFirstRunWelcome,
+  preserveIntendedRoute,
+  resolveEntryDestination,
+  safeLocalPath,
+} from "@/lib/entryResolver";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-const REDIRECT_KEY = "pickla_auth_redirect";
-
 const Auth = () => {
   const { user, loading, signIn, signUp } = useAuth();
   const [searchParams] = useSearchParams();
-  const redirectTo = searchParams.get("redirect") || "/my";
+  const redirectTo = safeLocalPath(searchParams.get("redirect"));
   const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -32,13 +38,13 @@ const Auth = () => {
   }
 
   const venueParam = searchParams.get("v");
-  const fullRedirect = venueParam && !redirectTo.includes("v=") ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}v=${venueParam}` : redirectTo;
+  const fullRedirect = venueParam && redirectTo && !redirectTo.includes("v=")
+    ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}v=${venueParam}`
+    : redirectTo;
 
   if (user) {
-    // sessionStorage takes priority (set by ProtectedRoute), then ?redirect param, then /my
-    const intended = sessionStorage.getItem(REDIRECT_KEY);
-    if (intended) sessionStorage.removeItem(REDIRECT_KEY);
-    return <Navigate to={intended || fullRedirect} replace />;
+    const intended = consumePreservedIntendedRoute() || fullRedirect;
+    return <Navigate to={resolveEntryDestination({ intendedRoute: intended, venueSlug: venueParam })} replace />;
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -58,6 +64,8 @@ const Auth = () => {
       if (error) {
         toast.error(error.message);
       } else {
+        if (!getPreservedIntendedRoute() && !fullRedirect) markFirstRunWelcome();
+        if (fullRedirect) preserveIntendedRoute(fullRedirect);
         toast.success("Konto skapat! Kolla din e-post för att verifiera.");
         setMode("login");
       }

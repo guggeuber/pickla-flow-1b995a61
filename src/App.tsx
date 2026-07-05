@@ -70,10 +70,9 @@ import InvestPage from "./pages/InvestPage";
 import InvestMemoPage from "./pages/InvestMemoPage";
 import AdminInvestorPage from "./pages/AdminInvestorPage";
 import { Loader2 } from "lucide-react";
+import { preserveIntendedRoute } from "@/lib/entryResolver";
 
 const queryClient = new QueryClient();
-
-const REDIRECT_KEY = "pickla_auth_redirect";
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
@@ -87,7 +86,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   }
 
   if (!user) {
-    sessionStorage.setItem(REDIRECT_KEY, window.location.pathname + window.location.search);
+    preserveIntendedRoute(window.location.pathname + window.location.search);
     return <Navigate to="/auth" replace />;
   }
   return <>{children}</>;

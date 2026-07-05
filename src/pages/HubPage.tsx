@@ -35,6 +35,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { getPublicProfileMap } from "@/lib/publicProfiles";
+import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { DateTime } from "luxon";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { EventCard } from "@/components/hub/EventCard";
@@ -2579,7 +2580,7 @@ function HubList({
       const redirect = isProgramSession
         ? `/program/${event.id}?date=${encodeURIComponent(event.occurrence_date || "")}&v=${encodeURIComponent(slug)}`
         : `/hub?v=${encodeURIComponent(slug)}`;
-      sessionStorage.setItem("pickla_auth_redirect", redirect);
+      preserveIntendedRoute(redirect);
       navigate(`/auth?redirect=${encodeURIComponent(redirect)}`);
       return;
     }
@@ -3178,7 +3179,7 @@ const HubPage = () => {
     if (!directRoomId || authLoading || user?.id || activeRoom || directPublicPreviewLoading) return;
     if (!directPublicPreviewError) return;
     const redirect = `${window.location.pathname}${window.location.search}`;
-    sessionStorage.setItem("pickla_auth_redirect", redirect);
+    preserveIntendedRoute(redirect);
     navigate(`/auth?redirect=${encodeURIComponent(redirect)}`, { replace: true });
   }, [directPublicPreviewError, directPublicPreviewLoading, directRoomId, authLoading, user?.id, activeRoom, navigate]);
 

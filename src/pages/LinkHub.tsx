@@ -325,7 +325,7 @@ const LinkHub = () => {
         </button>
 
         <button
-          onClick={() => navigate(user ? "/my" : "/auth?redirect=/my")}
+          onClick={() => navigate(user ? "/my" : "/auth")}
           className="text-white/90 text-[13px] font-bold underline underline-offset-4 decoration-white/25 active:opacity-60 transition-opacity"
           style={{ fontFamily: "'Space Grotesk', sans-serif" }}
         >
