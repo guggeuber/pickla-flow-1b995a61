@@ -19,6 +19,7 @@ import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
+import { getTodayHeroTiming } from "@/lib/todayHeroTiming";
 
 
 const PAGE_BG = "#fffaf7";
@@ -349,7 +350,21 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
   });
 }
 
-function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now: DateTime; highlight: boolean; venueId?: string; slug: string }) {
+function FeedRow({
+  item,
+  now,
+  highlight,
+  venueId,
+  slug,
+  emphasis = "default",
+}: {
+  item: FeedItem;
+  now: DateTime;
+  highlight: boolean;
+  venueId?: string;
+  slug: string;
+  emphasis?: "default" | "secondary";
+}) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, loading: authLoading } = useAuth();
@@ -362,6 +377,7 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
     : highlight
     ? "#ece7e2"
     : SOFT;
+  const priceEmphasisClass = emphasis === "secondary" ? "opacity-60" : "";
   const openItem = async () => {
     if (item.kind === "session") {
       navigate(item.href, { state: { backgroundLocation: location, activitySession: item.activitySession } });
@@ -432,12 +448,15 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
           />
         )}
         {item.kind === "session" && item.priceSek != null && item.priceSek > 0 && (
-          <span className="mt-1 block">
+          <span className={`mt-1 block ${priceEmphasisClass}`}>
             <PriceLine amountSek={item.priceSek} size="sm" />
           </span>
         )}
         {item.kind === "session" && Number(item.priceSek || 0) <= 0 && (
-          <span className="mt-1 block text-[12px] font-black text-black/55" style={{ fontFamily: FONT_HEADING }}>
+          <span
+            className={`mt-1 block text-[12px] font-black ${emphasis === "secondary" ? "text-black/40" : "text-black/55"}`}
+            style={{ fontFamily: FONT_HEADING }}
+          >
             Ingår
           </span>
         )}
@@ -481,7 +500,6 @@ function sortBySoonestThenPeople(items: FeedItem[]) {
 
 function FeaturedTonightHero({
   item,
-  date,
   now,
   userName,
   welcomeLine,
@@ -490,7 +508,6 @@ function FeaturedTonightHero({
   onOpen,
 }: {
   item: FeedItem | null;
-  date: DateTime | null;
   now: DateTime;
   userName: string | null;
   welcomeLine?: string | null;
@@ -498,18 +515,14 @@ function FeaturedTonightHero({
   included: boolean;
   onOpen: () => void;
 }) {
-  const isToday = date?.hasSame(now, "day");
-  const isTomorrow = date?.hasSame(now.plus({ days: 1 }), "day");
-  const startsAt = item ? DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" }) : null;
-  const hoursUntil = startsAt ? Math.round(startsAt.diff(now, "hours").hours) : null;
   const timing = item
-    ? hoursUntil != null && hoursUntil > 0 && hoursUntil <= 8 && isToday
-      ? `Börjar om ${hoursUntil} ${hoursUntil === 1 ? "timme" : "timmar"}`
-      : isTomorrow
-        ? `Imorgon ${item.startTime}`
-        : "Ikväll"
-    : "Nästa kväll på Pickla";
-  const kicker = isToday ? "IKVÄLL" : isTomorrow ? "IMORGON" : "NÄSTA";
+    ? getTodayHeroTiming({
+        sessionDate: item.date,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        now,
+      })
+    : { eyebrow: "NÄSTA", subtitle: "Nästa kväll på Pickla" };
   const ctaLabel = included ? "Häng på · Ingår" : `Häng på${priceLabel ? ` · ${priceLabel}` : ""}`;
 
   return (
@@ -523,7 +536,7 @@ function FeaturedTonightHero({
         }}
       >
         <p className="text-[11px] font-black uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: PINK }}>
-          {kicker}
+          {timing.eyebrow}
         </p>
         <div className="mt-5">
           {welcomeLine ? (
@@ -539,7 +552,7 @@ function FeaturedTonightHero({
             {item?.title || "Något händer snart"}
           </h2>
           <p className="mt-3 text-[15px] font-semibold leading-snug" style={{ color: MUTED }}>
-            {item ? (isTomorrow ? timing : `${item.startTime}-${item.endTime} · ${timing}`) : timing}
+            {timing.subtitle}
           </p>
         </div>
 
@@ -600,7 +613,6 @@ export default function TodayPage() {
     tomorrowJoinable[0] ||
     null
   );
-  const featuredDate = featuredItem ? DateTime.fromISO(featuredItem.date, { zone: "Europe/Stockholm" }) : null;
   const todayListItems = todayActivities.filter((item) => item.id !== featuredItem?.id);
   const weekendMode = WEEKEND_SECTION_TRIGGER_WEEKDAYS.includes(now.weekday);
   const daysUntilSaturday = (6 - now.weekday + 7) % 7 || 7;
@@ -664,7 +676,6 @@ export default function TodayPage() {
         ) : (
           <FeaturedTonightHero
             item={featuredItem}
-            date={featuredDate}
             now={now}
             userName={userName}
             welcomeLine={welcomeLine}
@@ -699,7 +710,15 @@ export default function TodayPage() {
                   </h2>
                   <div className="space-y-2">
                     {horizonItems.map((item) => (
-                      <FeedRow key={item.id} item={item} now={now} highlight={false} venueId={venue?.id} slug={slug} />
+                      <FeedRow
+                        key={item.id}
+                        item={item}
+                        now={now}
+                        highlight={false}
+                        venueId={venue?.id}
+                        slug={slug}
+                        emphasis="secondary"
+                      />
                     ))}
                   </div>
                 </section>
