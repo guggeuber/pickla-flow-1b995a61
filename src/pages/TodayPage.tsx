@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
@@ -30,6 +30,8 @@ const BORDER = "rgba(17,17,17,0.07)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 const DAYS_AHEAD = 7;
+const HORIZON_SECTION_MAX_ROWS = 3;
+const WEEKEND_SECTION_TRIGGER_WEEKDAYS = [4, 5];
 
 type FeedItem = {
   id: string;
@@ -426,11 +428,17 @@ function FeedRow({ item, now, highlight, venueId, slug }: { item: FeedItem; now:
             people={item.participants}
             participantCount={item.registrationsCount}
             className="mt-1 text-[10px] !text-black/45"
+            showInvitation={false}
           />
         )}
         {item.kind === "session" && item.priceSek != null && item.priceSek > 0 && (
           <span className="mt-1 block">
             <PriceLine amountSek={item.priceSek} size="sm" />
+          </span>
+        )}
+        {item.kind === "session" && Number(item.priceSek || 0) <= 0 && (
+          <span className="mt-1 block text-[12px] font-black text-black/55" style={{ fontFamily: FONT_HEADING }}>
+            Ingår
           </span>
         )}
       </div>
@@ -453,6 +461,22 @@ function displayNameForUser(user: any) {
 
 function ParticipantLine({ participants, count }: { participants?: PublicProfile[]; count?: number }) {
   return <PeopleRow people={participants} participantCount={count} />;
+}
+
+function itemStartDateTime(item: FeedItem) {
+  return DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
+}
+
+function isJoinableItem(item: FeedItem, now: DateTime) {
+  return item.status !== "Full" && itemStartDateTime(item) > now;
+}
+
+function sortBySoonestThenPeople(items: FeedItem[]) {
+  return [...items].sort((a, b) => {
+    const timeCompare = `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`);
+    if (timeCompare !== 0) return timeCompare;
+    return Number(b.registrationsCount || 0) - Number(a.registrationsCount || 0);
+  });
 }
 
 function FeaturedTonightHero({
@@ -482,7 +506,7 @@ function FeaturedTonightHero({
     ? hoursUntil != null && hoursUntil > 0 && hoursUntil <= 8 && isToday
       ? `Börjar om ${hoursUntil} ${hoursUntil === 1 ? "timme" : "timmar"}`
       : isTomorrow
-        ? "Imorgon"
+        ? `Imorgon ${item.startTime}`
         : "Ikväll"
     : "Nästa kväll på Pickla";
   const kicker = isToday ? "IKVÄLL" : isTomorrow ? "IMORGON" : "NÄSTA";
@@ -515,7 +539,7 @@ function FeaturedTonightHero({
             {item?.title || "Något händer snart"}
           </h2>
           <p className="mt-3 text-[15px] font-semibold leading-snug" style={{ color: MUTED }}>
-            {item ? `${item.startTime}-${item.endTime} · ${timing}` : timing}
+            {item ? (isTomorrow ? timing : `${item.startTime}-${item.endTime} · ${timing}`) : timing}
           </p>
         </div>
 
@@ -564,41 +588,33 @@ export default function TodayPage() {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, []);
 
-  const days = useMemo(() => (
-    Array.from({ length: DAYS_AHEAD }, (_, offset) => {
-      const date = now.plus({ days: offset }).startOf("day");
-      return {
-        key: date.toISODate()!,
-        date,
-        items: items.filter((item) => item.date === date.toISODate()),
-      };
-    })
-  ), [items, now]);
   const activityItems = items.filter((item) => item.kind === "session" || item.kind === "event");
   const todayKey = now.toISODate();
   const tomorrowKey = now.plus({ days: 1 }).toISODate();
-  const todayActivities = activityItems.filter((item) => item.date === todayKey);
-  const tomorrowActivities = activityItems.filter((item) => item.date === tomorrowKey);
+  const todayActivities = sortBySoonestThenPeople(activityItems.filter((item) => item.date === todayKey));
+  const tomorrowActivities = sortBySoonestThenPeople(activityItems.filter((item) => item.date === tomorrowKey));
+  const todayJoinable = todayActivities.filter((item) => isJoinableItem(item, now));
+  const tomorrowJoinable = tomorrowActivities.filter((item) => isJoinableItem(item, now));
   const featuredItem = (
-    todayActivities.find((item) => item.startTime >= "16:00" && item.status !== "Full") ||
-    todayActivities.find((item) => item.status !== "Full") ||
-    tomorrowActivities.find((item) => item.startTime >= "16:00" && item.status !== "Full") ||
-    tomorrowActivities.find((item) => item.status !== "Full") ||
-    activityItems.find((item) => item.status !== "Full") ||
+    todayJoinable[0] ||
+    tomorrowJoinable[0] ||
     null
   );
   const featuredDate = featuredItem ? DateTime.fromISO(featuredItem.date, { zone: "Europe/Stockholm" }) : null;
-  const featuredDayItems = featuredItem
-    ? items.filter((item) => item.date === featuredItem.date && item.id !== featuredItem.id)
-    : [];
-  const fallbackListItems = days.flatMap((day) => day.items).filter((item) => item.id !== featuredItem?.id).slice(0, 5);
-  const moreHeading = featuredDate?.hasSame(now, "day")
-    ? "Mer händer idag"
-    : featuredDate?.hasSame(now.plus({ days: 1 }), "day")
-      ? "Mer händer imorgon"
-      : featuredDate
-        ? `Mer händer ${featuredDate.setLocale("sv").toFormat("cccc")}`
-        : "Mer händer snart";
+  const todayListItems = todayActivities.filter((item) => item.id !== featuredItem?.id);
+  const weekendMode = WEEKEND_SECTION_TRIGGER_WEEKDAYS.includes(now.weekday);
+  const daysUntilSaturday = (6 - now.weekday + 7) % 7 || 7;
+  const saturdayKey = now.plus({ days: daysUntilSaturday }).toISODate();
+  const sundayKey = now.plus({ days: daysUntilSaturday + 1 }).toISODate();
+  const horizonCandidates = weekendMode
+    ? activityItems.filter((item) => item.date === saturdayKey || item.date === sundayKey)
+    : tomorrowActivities;
+  const horizonItems = sortBySoonestThenPeople(
+    horizonCandidates
+      .filter((item) => item.id !== featuredItem?.id)
+      .filter((item) => isJoinableItem(item, now))
+  ).slice(0, HORIZON_SECTION_MAX_ROWS);
+  const horizonHeading = weekendMode ? "I helgen" : "Imorgon";
   const { data: featuredPreview } = useQuery({
     queryKey: ["today-featured-preview", user?.id || "anon", featuredItem?.id],
     enabled: !!featuredItem?.activitySession?.id,
@@ -662,16 +678,42 @@ export default function TodayPage() {
           {venueLoading || isLoading ? (
             null
           ) : (
-            <section>
-              <h2 className="mb-4 text-[28px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING }}>
-                {moreHeading}
-              </h2>
-              <div className="space-y-2">
-                {(featuredDayItems.length > 0 ? featuredDayItems : fallbackListItems).map((item) => (
-                  <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} venueId={venue?.id} slug={slug} />
-                ))}
-              </div>
-            </section>
+            <div className="space-y-8">
+              {todayListItems.length > 0 && (
+                <section>
+                  <h2 className="mb-4 text-[28px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING }}>
+                    Mer händer idag
+                  </h2>
+                  <div className="space-y-2">
+                    {todayListItems.map((item) => (
+                      <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} venueId={venue?.id} slug={slug} />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {horizonItems.length > 0 && (
+                <section>
+                  <h2 className="mb-4 text-[24px] leading-none tracking-[-0.03em]" style={{ fontFamily: FONT_HEADING }}>
+                    {horizonHeading}
+                  </h2>
+                  <div className="space-y-2">
+                    {horizonItems.map((item) => (
+                      <FeedRow key={item.id} item={item} now={now} highlight={false} venueId={venue?.id} slug={slug} />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <button
+                type="button"
+                onClick={() => navigate(`/openplay?v=${encodeURIComponent(slug)}`)}
+                className="text-sm font-black underline underline-offset-4"
+                style={{ color: MUTED, fontFamily: FONT_HEADING }}
+              >
+                Hela veckan →
+              </button>
+            </div>
           )}
         </section>
       </main>

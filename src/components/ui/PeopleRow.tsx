@@ -14,6 +14,7 @@ type PeopleRowProps = {
   participantCount?: number | null;
   className?: string;
   style?: CSSProperties;
+  showInvitation?: boolean;
 };
 
 type ScarcityBadgeProps = {
@@ -91,13 +92,14 @@ function AvatarStack({ people, count }: { people: PeopleRowPerson[]; count: numb
   );
 }
 
-export function PeopleRow({ people = [], participantCount, className = "", style }: PeopleRowProps) {
+export function PeopleRow({ people = [], participantCount, className = "", style, showInvitation = true }: PeopleRowProps) {
   if (participantCount == null) return null;
   const count = Math.max(0, Number(participantCount || 0));
   if (count < PEOPLE_ROW_NAMED_THRESHOLD) {
+    if (!showInvitation) return null;
     return (
       <p className={`text-[13px] font-semibold text-neutral-500 ${className}`} style={style}>
-        Bli först — ta med en vän
+        Plats för fler — ta gärna med en vän
       </p>
     );
   }
