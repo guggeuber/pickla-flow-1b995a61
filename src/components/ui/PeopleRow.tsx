@@ -30,7 +30,7 @@ function firstName(name?: string | null) {
 
 function initialsFor(person: PeopleRowPerson, index: number) {
   const name = String(person.display_name || "").trim();
-  if (!name) return `P${index + 1}`;
+  if (!name) return "";
   return name
     .split(/\s+/)
     .filter(Boolean)
@@ -51,7 +51,7 @@ function namesLine(names: string[], count: number) {
     return remaining > 0 ? `${names[0]} och ${remaining} till är med` : `${names[0]} är med`;
   }
   // TODO(presence-consent): named visibility pending presence settings.
-  return `${count} är med`;
+  return `${count} spelare är med`;
 }
 
 function AvatarStack({ people, count }: { people: PeopleRowPerson[]; count: number }) {
@@ -74,6 +74,8 @@ function AvatarStack({ people, count }: { people: PeopleRowPerson[]; count: numb
           >
             {person.avatar_url ? (
               <img src={person.avatar_url} alt={label} className="h-full w-full object-cover" />
+            ) : !person.display_name ? (
+              <span className="h-2 w-2 rounded-full bg-white/70" aria-hidden="true" />
             ) : (
               initialsFor(person, index)
             )}

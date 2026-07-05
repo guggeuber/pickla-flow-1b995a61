@@ -123,6 +123,7 @@ function AppRoutes() {
             <Route path="/play" element={<PlayPage />} />
             <Route path="/events" element={<EventsListPage />} />
             <Route path="/openplay" element={<OpenPlayPage />} />
+            <Route path="/p/:sessionId" element={<ProgramSessionPage />} />
             <Route path="/program/:sessionId" element={<ProgramSessionPage />} />
             <Route path="/event-ops" element={<ProtectedRoute><EventOps /></ProtectedRoute>} />
             <Route path="/event/:id" element={<EventPage />} />
@@ -174,6 +175,7 @@ function AppRoutes() {
           </Routes>
           {backgroundLocation && (
             <Routes>
+              <Route path="/p/:sessionId" element={<ProgramSessionPage overlayOnly />} />
               <Route path="/program/:sessionId" element={<ProgramSessionPage overlayOnly />} />
             </Routes>
           )}

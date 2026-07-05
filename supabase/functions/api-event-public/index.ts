@@ -212,6 +212,112 @@ function publicActivitySubtitle(session: any, occurrence: DateTime) {
   return [dayLabel, startTime && endTime ? `${startTime}-${endTime}` : startTime].filter(Boolean).join(' · ');
 }
 
+function isLinkPreviewBot(userAgent: string | null) {
+  const ua = String(userAgent || '').toLowerCase();
+  return [
+    'facebookexternalhit',
+    'facebot',
+    'whatsapp',
+    'twitterbot',
+    'slackbot',
+    'discordbot',
+    'linkedinbot',
+    'telegrambot',
+    'skypeuripreview',
+    'applebot',
+    'messages',
+    'imessage',
+    'bot',
+    'crawler',
+    'spider',
+    'preview',
+  ].some((needle) => ua.includes(needle));
+}
+
+function publicSiteOrigin(req: Request) {
+  const configured = Deno.env.get('PUBLIC_SITE_URL') || Deno.env.get('SITE_URL') || 'https://www.playpickla.com';
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return new URL(req.url).origin;
+  }
+}
+
+function publicPassPath(sessionId: string, sessionDate: string | null, venueSlug: string | null) {
+  const params = new URLSearchParams();
+  if (sessionDate) params.set('date', sessionDate);
+  if (venueSlug) params.set('v', venueSlug);
+  return `/p/${encodeURIComponent(sessionId)}${params.toString() ? `?${params.toString()}` : ''}`;
+}
+
+function programSessionPath(sessionId: string, sessionDate: string | null, venueSlug: string | null) {
+  const params = new URLSearchParams();
+  if (sessionDate) params.set('date', sessionDate);
+  if (venueSlug) params.set('v', venueSlug);
+  return `/program/${encodeURIComponent(sessionId)}${params.toString() ? `?${params.toString()}` : ''}`;
+}
+
+function ogTitleForActivity(session: any, occurrenceDate: string) {
+  const occurrence = DateTime.fromISO(occurrenceDate, { zone: 'Europe/Stockholm' });
+  const startTime = session?.start_time ? String(session.start_time).slice(0, 5) : '';
+  const dayTime = [occurrence.setLocale('sv').toFormat('ccc'), startTime].filter(Boolean).join(' ');
+  return `${session?.name || 'Pickla'} · ${dayTime}`;
+}
+
+function ogDescriptionForActivity(registrationsCount: number) {
+  // TODO(presence-consent): named visibility pending presence settings.
+  return registrationsCount >= 3
+    ? `${registrationsCount} spelare är med. Häng på!`
+    : 'Plats för fler — häng på!';
+}
+
+function activityOgHtml({
+  title,
+  description,
+  canonicalUrl,
+  imageUrl,
+}: {
+  title: string;
+  description: string;
+  canonicalUrl: string;
+  imageUrl: string;
+}) {
+  const safeTitle = escapeHtml(title);
+  const safeDescription = escapeHtml(description);
+  const safeUrl = escapeHtml(canonicalUrl);
+  const safeImage = escapeHtml(imageUrl);
+  return `<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle}</title>
+    <meta name="description" content="${safeDescription}" />
+    <link rel="canonical" href="${safeUrl}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Pickla" />
+    <meta property="og:title" content="${safeTitle}" />
+    <meta property="og:description" content="${safeDescription}" />
+    <meta property="og:url" content="${safeUrl}" />
+    <meta property="og:image" content="${safeImage}" />
+    <meta property="og:image:width" content="1216" />
+    <meta property="og:image:height" content="640" />
+    <meta property="og:locale" content="sv_SE" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${safeTitle}" />
+    <meta name="twitter:description" content="${safeDescription}" />
+    <meta name="twitter:image" content="${safeImage}" />
+  </head>
+  <body>
+    <main>
+      <h1>${safeTitle}</h1>
+      <p>${safeDescription}</p>
+      <p><a href="${safeUrl}">Öppna passet på Pickla</a></p>
+    </main>
+  </body>
+</html>`;
+}
+
 function safePreviewMessage(message: any) {
   const metadata = message?.metadata || {};
   if (metadata?.channel === 'email') return null;
@@ -337,6 +443,7 @@ async function buildActivityPreview(client: any, {
       metadata: session.metadata,
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
+      venue_slug: session.venues?.slug || null,
     },
     registrations: { count: 0 },
     messages,
@@ -858,7 +965,58 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true, communication_id: pendingCommunication.id });
     }
 
-    // GET /api-event-public/detail?id=X or ?slug=X — public event info
+    // GET /api-event-public/activity-og?sessionId=X&date=YYYY-MM-DD&v=venue-slug — bot-safe OG HTML
+    if (req.method === 'GET' && path === 'activity-og') {
+      const sessionId = String(url.searchParams.get('sessionId') || url.searchParams.get('id') || '').trim();
+      const sessionDate = String(url.searchParams.get('date') || '').trim() || null;
+      const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim() || null;
+      if (!sessionId) return errorResponse('Missing sessionId', 400);
+
+      const browserPath = programSessionPath(sessionId, sessionDate, venueSlug);
+      if (!isLinkPreviewBot(req.headers.get('User-Agent'))) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            Location: browserPath,
+            'Cache-Control': 'no-store',
+          },
+        });
+      }
+
+      try {
+        const preview = await buildActivityPreview(client, {
+          sessionId,
+          date: sessionDate,
+          venueSlug,
+        });
+        const registrationCount = await activityRegistrationCount(
+          client,
+          preview.activity_session.id,
+          preview.activity_session.occurrence_date,
+        );
+        const origin = publicSiteOrigin(req);
+        const canonicalPath = publicPassPath(preview.activity_session.id, preview.activity_session.occurrence_date, preview.activity_session.venue_slug || venueSlug);
+        const canonicalUrl = `${origin}${canonicalPath}`;
+        const imageUrl = `${origin}/og-pickla.jpg`;
+        const html = activityOgHtml({
+          title: ogTitleForActivity(preview.activity_session, preview.activity_session.occurrence_date),
+          description: ogDescriptionForActivity(registrationCount),
+          canonicalUrl,
+          imageUrl,
+        });
+        return new Response(html, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'public, max-age=300, s-maxage=600, stale-while-revalidate=300',
+          },
+        });
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Activity OG preview not found', 404);
+      }
+    }
+
+    // GET /api-event-public/activity-preview?id=X — public activity info
     if (req.method === 'GET' && path === 'activity-preview') {
       try {
         const totalStartedAt = performance.now();

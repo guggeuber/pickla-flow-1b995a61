@@ -28,6 +28,14 @@ function safeLocalPath(path: string) {
   return path.startsWith("/") && !path.startsWith("//") ? path : "/today";
 }
 
+function publicProgramPath(sessionId: string, date: string | null | undefined, venueSlug: string) {
+  const params = new URLSearchParams({
+    ...(date ? { date } : {}),
+    v: venueSlug,
+  });
+  return `/p/${encodeURIComponent(sessionId)}${params.toString() ? `?${params.toString()}` : ""}`;
+}
+
 function sessionTypeLabel(type?: string | null) {
   if (type === "open_play") return "Open Play";
   if (type === "group_training") return "Träning";
@@ -47,10 +55,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
-  const programPath = `/program/${sessionId || ""}?${new URLSearchParams({
-    ...(requestedDate ? { date: requestedDate } : {}),
-    v: venueSlug,
-  }).toString()}`;
+  const programPath = sessionId ? publicProgramPath(sessionId, requestedDate, venueSlug) : "/today";
   const todayPath = `/today?v=${encodeURIComponent(venueSlug)}`;
   const routeState = location.state as { activitySession?: any } | null;
   const optimisticSession = routeState?.activitySession || null;
@@ -310,9 +315,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
   const shareActivity = async () => {
     if (!session || !occurrenceDate) return;
-    const sharePath = `/program/${session.id}?date=${encodeURIComponent(occurrenceDate)}&v=${encodeURIComponent(venueSlug)}`;
+    const sharePath = publicProgramPath(session.id, occurrenceDate, venueSlug);
     const shareUrl = `${window.location.origin}${sharePath}`;
-    const shareText = `Jag funderar på ${session.name} ${dateLabel} ${timeLabel} på Pickla. Häng på?`;
+    const shareText = `${session.name} ${dateLabel} ${timeLabel} — häng på! ${shareUrl}`;
     try {
       if (navigator.share) {
         await navigator.share({
@@ -534,7 +539,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   {loading || queueLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isRegistered ? <Check className="h-5 w-5" /> : null}
                   {ctaLabel}
                 </button>
-                <div className="grid grid-cols-3 gap-2">
+                <div className={`grid gap-2 ${isRegistered ? "grid-cols-2" : "grid-cols-3"}`}>
                   <button
                     type="button"
                     onClick={toggleInterest}
@@ -555,16 +560,29 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     {previewLoading && !room?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
                     <span className="truncate">Chatt</span>
                   </button>
+                  {!isRegistered ? (
+                    <button
+                      type="button"
+                      onClick={shareActivity}
+                      className="flex h-12 min-w-0 items-center justify-center gap-1.5 rounded-2xl bg-slate-100 px-2 text-[13px] font-normal text-slate-950"
+                      style={{ fontFamily: FONT_HEADING }}
+                    >
+                      <Share2 className="h-4 w-4" />
+                      <span className="truncate">Dela</span>
+                    </button>
+                  ) : null}
+                </div>
+                {isRegistered ? (
                   <button
                     type="button"
                     onClick={shareActivity}
-                    className="flex h-12 min-w-0 items-center justify-center gap-1.5 rounded-2xl bg-slate-100 px-2 text-[13px] font-normal text-slate-950"
+                    className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-100 px-4 text-[14px] font-semibold text-slate-950"
                     style={{ fontFamily: FONT_HEADING }}
                   >
                     <Share2 className="h-4 w-4" />
-                    <span className="truncate">Dela</span>
+                    Bjud in en vän
                   </button>
-                </div>
+                ) : null}
               </div>
               </div>
             </div>
