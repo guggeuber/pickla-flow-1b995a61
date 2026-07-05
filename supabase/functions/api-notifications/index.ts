@@ -1,5 +1,5 @@
 // api-notifications — Web Push notification subscriptions and sending
-// Deploy: supabase functions deploy api-notifications --no-verify-jwt --project-ref cqnjpudmsreubgviqptg
+// Deploy: supabase functions deploy api-notifications --no-verify-jwt --project-ref ptnvhbniiiapzbyofctg
 // Required secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (mailto:info@playpickla.com)
 //
 // Generate VAPID keys (run locally):

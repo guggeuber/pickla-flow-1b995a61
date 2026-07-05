@@ -283,7 +283,7 @@ For Edge Functions that need “the venue day”, use `stockholmDateRangeUtc(dat
 
 ## Infrastructure
 
-- **Supabase project**: `pickla-base` — project ref `cqnjpudmsreubgviqptg`
+- **Supabase project**: `pickla-base` — project ref `ptnvhbniiiapzbyofctg`
 - **Frontend**: Vercel, live at `playpickla.com`, auto-deploys on every `git push` to `main`
 - **Email**: Resend — `playpickla.com` verified, SMTP configured in Supabase Auth
 - **Auth**: Supabase Auth with HS256 Standby Key (ECC/ES256 revoked). Site URL: `https://playpickla.com`, redirect URL: `https://playpickla.com/auth/callback`
@@ -302,9 +302,9 @@ For Edge Functions that need “the venue day”, use `stockholmDateRangeUtc(dat
 
 **Deploy process:**
 - Frontend: `git push` → Vercel deploys automatically (no Lovable step needed)
-- Edge Functions: `supabase functions deploy --no-verify-jwt --project-ref cqnjpudmsreubgviqptg`
+- Edge Functions: `supabase functions deploy --no-verify-jwt --project-ref ptnvhbniiiapzbyofctg`
 - Migrations: run manually in the Supabase SQL editor, then run `NOTIFY pgrst, 'reload schema'` to flush PostgREST cache
-- Stripe webhook URL: `https://cqnjpudmsreubgviqptg.supabase.co/functions/v1/api-stripe-webhook`
+- Stripe webhook URL: `https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-stripe-webhook`
 
 **Git:** `git pull --rebase` before pushing if Lovable has made changes.
 

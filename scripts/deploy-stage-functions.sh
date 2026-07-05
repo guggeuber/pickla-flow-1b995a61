@@ -8,7 +8,7 @@ if [[ -z "$PROJECT_REF" ]]; then
   exit 1
 fi
 
-if [[ "$PROJECT_REF" == "cqnjpudmsreubgviqptg" ]]; then
+if [[ "$PROJECT_REF" == "ptnvhbniiiapzbyofctg" ]]; then
   echo "Refusing to deploy stage functions to production project ref: $PROJECT_REF" >&2
   exit 1
 fi

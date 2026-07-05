@@ -360,7 +360,7 @@ Live today:
 Important production notes:
 
 - Frontend is deployed by Vercel from `main`.
-- Supabase project ref in this repo is `cqnjpudmsreubgviqptg`.
+- Supabase project ref in this repo is `ptnvhbniiiapzbyofctg`.
 - Edge Functions need manual deploy.
 - Migrations are applied manually and PostgREST schema cache should be reloaded after SQL editor changes.
 - Do not commit Supabase `.temp` files.
@@ -416,7 +416,7 @@ Supabase secrets required where features are enabled:
 Deploy process:
 
 - Frontend: `git push` to `main` deploys through Vercel.
-- Edge Functions: `supabase functions deploy --no-verify-jwt --project-ref cqnjpudmsreubgviqptg`.
+- Edge Functions: `supabase functions deploy --no-verify-jwt --project-ref ptnvhbniiiapzbyofctg`.
 - Migrations: run manually in Supabase SQL editor, then run `NOTIFY pgrst, 'reload schema'`.
 
 ## Development Rules

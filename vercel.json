@@ -57,7 +57,7 @@
   "rewrites": [
     {
       "source": "/p/:sessionId",
-      "destination": "https://cqnjpudmsreubgviqptg.supabase.co/functions/v1/api-event-public/activity-og?sessionId=:sessionId"
+      "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/activity-og?sessionId=:sessionId"
     },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

@@ -34,7 +34,7 @@ RESEND_WEBHOOK_SECRET=<stage-resend-webhook-secret>
 
 ## Stage Bring-up
 
-Production Supabase project ref is `cqnjpudmsreubgviqptg`. Never use that ref for stage commands.
+Production Supabase project ref is `ptnvhbniiiapzbyofctg`. Never use that ref for stage commands.
 Current stage Supabase project ref is `nuqozynzdamyuzeusroe`.
 
 1. Create the Supabase stage project and write down its project ref.

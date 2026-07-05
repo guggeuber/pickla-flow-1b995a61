@@ -11,7 +11,7 @@ if (!modes.has(mode)) {
   process.exit(1);
 }
 
-const projectRef = "cqnjpudmsreubgviqptg";
+const projectRef = "ptnvhbniiiapzbyofctg";
 const productionUrl = "https://playpickla.com";
 const docs = [
   "docs/production-readiness.md",
@@ -148,4 +148,3 @@ if (mode === "incident") {
   console.log("Follow-up:");
   console.log("Owner:");
 }
-

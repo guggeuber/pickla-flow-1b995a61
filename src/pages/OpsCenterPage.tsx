@@ -26,7 +26,7 @@ import { useAdminCheck, useAdminHistory, useAdminStats, useAdminVenues } from "@
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
-const SUPABASE_PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID || "cqnjpudmsreubgviqptg";
+const SUPABASE_PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID || "ptnvhbniiiapzbyofctg";
 
 type OpsMode = "deploy" | "opening" | "closing" | "weekly";
 type OpsColor = "green" | "yellow" | "red";

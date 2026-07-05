@@ -1,5 +1,5 @@
 // api-stripe — Stripe customer & payment method management
-// Deploy: supabase functions deploy api-stripe --no-verify-jwt --project-ref cqnjpudmsreubgviqptg
+// Deploy: supabase functions deploy api-stripe --no-verify-jwt --project-ref ptnvhbniiiapzbyofctg
 // Required secrets: STRIPE_SECRET_KEY
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';

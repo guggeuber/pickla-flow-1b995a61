@@ -38,7 +38,7 @@ NOTIFY pgrst, 'reload schema';
 Deploy only changed functions unless doing a full backend cutover.
 
 ```bash
-supabase functions deploy <function-name> --no-verify-jwt --project-ref cqnjpudmsreubgviqptg
+supabase functions deploy <function-name> --no-verify-jwt --project-ref ptnvhbniiiapzbyofctg
 ```
 
 Common production functions:
