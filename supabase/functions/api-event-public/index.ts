@@ -1004,10 +1004,10 @@ Deno.serve(async (req) => {
           canonicalUrl,
           imageUrl,
         });
-        return new Response(html, {
+        return new Response(new Blob([html], { type: 'text/html; charset=utf-8' }), {
           status: 200,
           headers: {
-            'Content-Type': 'text/html; charset=utf-8',
+            'content-type': 'text/html; charset=utf-8',
             'Cache-Control': 'public, max-age=300, s-maxage=600, stale-while-revalidate=300',
           },
         });

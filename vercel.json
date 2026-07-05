@@ -52,6 +52,12 @@
       "headers": [
         { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" }
       ]
+    },
+    {
+      "source": "/p/:sessionId",
+      "headers": [
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" }
+      ]
     }
   ],
   "rewrites": [
