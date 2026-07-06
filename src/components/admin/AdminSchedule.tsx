@@ -109,7 +109,7 @@ const hostOptionName = (host: HostOption) =>
   [host.first_name, host.last_name].filter(Boolean).join(" ") ||
   host.identity_title ||
   host.email ||
-  "Värd";
+  "Kund";
 
 const courtLabel = (court: VenueCourtOption) => court.name || `Bana ${court.court_number || ""}`.trim() || "Bana";
 
@@ -1194,7 +1194,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                   </div>
                   <div className="rounded-xl bg-muted/40 p-3 space-y-3">
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Värd</p>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Värdar</p>
                       <p className="mt-1 text-[11px] text-muted-foreground">Tilldelade värdar syns på passet och betalar 0 kr när de anmäler sig till just detta pass.</p>
                     </div>
                     {(draft.hosts || []).length > 0 ? (
@@ -1402,7 +1402,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         </p>
                         {(session.hosts || []).length > 0 ? (
                           <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
-                            Värd: {(session.hosts || []).map((host: HostOption) => hostOptionName(host)).join(", ")}
+                            Värdar: {(session.hosts || []).map((host: HostOption) => hostOptionName(host)).join(", ")}
                           </p>
                         ) : null}
                       </div>

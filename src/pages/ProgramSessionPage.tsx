@@ -53,12 +53,35 @@ function hostFirstName(host: any) {
   return String(host?.first_name || host?.display_name || "Värd").trim().split(/\s+/)[0] || "Värd";
 }
 
+function hostDisplayName(host: any) {
+  return String(host?.display_name || [host?.first_name, host?.last_name].filter(Boolean).join(" ") || hostFirstName(host)).trim();
+}
+
 function hostsLabel(hosts: any[]) {
-  const names = hosts.map(hostFirstName).filter(Boolean);
-  if (names.length === 1) return `Värd: ${names[0]}`;
-  if (names.length === 2) return `Värdar: ${names[0]} och ${names[1]}`;
-  if (names.length > 2) return `Värdar: ${names[0]}, ${names[1]} och ${names.length - 2} till`;
+  const names = hosts.map(hostDisplayName).filter(Boolean);
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} och ${names[1]}`;
+  if (names.length > 2) return `${names[0]}, ${names[1]} och ${names.length - 2} till`;
   return "";
+}
+
+function formatCourtRange(courts: Array<{ name?: string | null; court_number?: number | null }>) {
+  const ordered = [...courts].sort((a, b) => {
+    const aNumber = Number(a.court_number || 0);
+    const bNumber = Number(b.court_number || 0);
+    if (aNumber && bNumber) return aNumber - bNumber;
+    return String(a.name || "").localeCompare(String(b.name || ""), "sv");
+  });
+  const numbers = ordered
+    .map((court) => Number(court.court_number || 0))
+    .filter((number) => Number.isFinite(number) && number > 0);
+  if (numbers.length === ordered.length && numbers.length > 0) {
+    const contiguous = numbers.every((number, index) => index === 0 || number === numbers[index - 1] + 1);
+    if (numbers.length === 1) return `Bana ${numbers[0]}`;
+    if (contiguous) return `Bana ${numbers[0]}–${numbers[numbers.length - 1]}`;
+    return `Bana ${numbers.join(", ")}`;
+  }
+  return ordered.map((court) => court.name || "Bana").join(", ");
 }
 
 export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnly?: boolean }) {
@@ -88,7 +111,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     queryFn: async () => {
       const { data: row, error: sessionError } = await supabase
         .from("activity_sessions")
-        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, court_ids, access_policy, metadata")
         .eq("id", sessionId!)
         .maybeSingle();
       if (sessionError) throw sessionError;
@@ -123,6 +146,25 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const room = data?.room;
   const occurrenceDate = data?.occurrence_date || requestedDate || session?.session_date || null;
   const venueId = session?.venue_id || data?.venue?.id;
+  const sessionCourtIds = useMemo(() => (
+    Array.isArray(session?.court_ids) ? session.court_ids.filter(Boolean) : []
+  ), [session?.court_ids]);
+  const { data: reservedCourts = [] } = useQuery({
+    queryKey: ["program-session-reserved-courts", venueId, sessionCourtIds],
+    enabled: !!venueId && sessionCourtIds.length > 0,
+    staleTime: 60000,
+    queryFn: async () => {
+      const { data: rows, error: courtsError } = await supabase
+        .from("venue_courts")
+        .select("id, name, court_number")
+        .eq("venue_id", venueId!)
+        .in("id", sessionCourtIds);
+      if (courtsError) throw courtsError;
+      const courtById = new Map((rows || []).map((court: any) => [court.id, court]));
+      return sessionCourtIds.map((id: string) => courtById.get(id)).filter(Boolean);
+    },
+  });
+  const reservedCourtLabel = reservedCourts.length > 0 ? formatCourtRange(reservedCourts as any[]) : "";
   const { data: occurrenceOverrideMap = new Map() } = useQuery({
     queryKey: ["program-session-override", venueId, sessionId, occurrenceDate],
     enabled: !!venueId && !!sessionId && !!occurrenceDate,
@@ -156,8 +198,17 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const hostOrderByCustomerId = useMemo(() => {
     return new Map(sessionHosts.map((host: any, index: number) => [host.customer_id, Number(host.sort_order ?? index)]));
   }, [sessionHosts]);
+  const hostCustomerIds = useMemo(() => new Set(sessionHosts.map((host: any) => host.customer_id).filter(Boolean)), [sessionHosts]);
+  const nonHostRegistrations = useMemo(
+    () => registrations.filter((row: any) => !row.customer_id || !hostCustomerIds.has(row.customer_id)),
+    [hostCustomerIds, registrations],
+  );
+  const registeredHostCount = useMemo(
+    () => registrations.filter((row: any) => row.customer_id && hostCustomerIds.has(row.customer_id)).length,
+    [hostCustomerIds, registrations],
+  );
   const participantUserIds = useMemo(() => {
-    const orderedRegistrations = [...registrations].sort((a: any, b: any) => {
+    const orderedRegistrations = [...nonHostRegistrations].sort((a: any, b: any) => {
       const aHost = a.customer_id ? hostOrderByCustomerId.get(a.customer_id) : undefined;
       const bHost = b.customer_id ? hostOrderByCustomerId.get(b.customer_id) : undefined;
       if (aHost != null && bHost != null) return Number(aHost) - Number(bHost);
@@ -169,7 +220,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       .map((row: any) => row.user_id)
       .filter(Boolean);
     return [...new Set(ids)].slice(0, 3);
-  }, [hostOrderByCustomerId, registrations]);
+  }, [hostOrderByCustomerId, nonHostRegistrations]);
 
   const { data: participantProfiles = [] } = useQuery({
     queryKey: ["program-session-participant-profiles", participantUserIds],
@@ -184,7 +235,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   });
 
   const capacity = Number(session?.capacity || 0);
-  const registrationCount = Number(data?.registrations?.count ?? registrations.length ?? 0);
+  const registrationCount = Math.max(Number(data?.registrations?.count ?? 0), registrations.length);
+  const remainingParticipantCount = Math.max(registrationCount - registeredHostCount, 0);
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
   const currentRegistration = user?.id ? registrations.find((row: any) => row.user_id === user.id) : null;
@@ -566,22 +618,34 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                           {timingStatusLabel}
                         </p>
                       ) : null}
-                      {sessionHosts.length > 0 ? (
-                        <div className="mt-2 flex min-w-0 items-center gap-2 rounded-2xl bg-[#f8fafc] px-3 py-2" style={{ border: `1px solid ${MENU_BORDER}` }}>
-                          <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-neutral-950 text-[11px] font-black text-white">
-                            {sessionHosts[0]?.avatar_url ? (
-                              <img src={sessionHosts[0].avatar_url} alt={hostFirstName(sessionHosts[0])} className="h-full w-full object-cover" />
-                            ) : (
-                              hostFirstName(sessionHosts[0]).slice(0, 1).toUpperCase()
-                            )}
-                          </span>
-                          <p className="min-w-0 truncate text-[13px] font-semibold text-neutral-700">
-                            {hostsLabel(sessionHosts)}
+                      <div className="mt-3 grid gap-2">
+                        {sessionHosts.length > 0 ? (
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex shrink-0 -space-x-2">
+                              {sessionHosts.slice(0, 3).map((host: any, index: number) => (
+                                <span
+                                  key={host.customer_id || `${hostDisplayName(host)}-${index}`}
+                                  className="grid h-9 w-9 place-items-center overflow-hidden rounded-full bg-neutral-950 text-[12px] font-black text-white ring-2 ring-white"
+                                >
+                                  {host.avatar_url ? (
+                                    <img src={host.avatar_url} alt={hostFirstName(host)} className="h-full w-full object-cover" />
+                                  ) : (
+                                    hostFirstName(host).slice(0, 1).toUpperCase()
+                                  )}
+                                </span>
+                              ))}
+                            </div>
+                            <p className="min-w-0 truncate text-[14px] font-black text-neutral-900" style={{ fontFamily: FONT_HEADING }}>
+                              {hostsLabel(sessionHosts)}
+                            </p>
+                          </div>
+                        ) : null}
+                        {reservedCourtLabel ? (
+                          <p className="text-[13px] font-semibold text-neutral-600">
+                            🎾 {reservedCourtLabel}
                           </p>
-                        </div>
-                      ) : null}
-                      <div className="mt-2">
-                        <PeopleRow people={participantProfiles} participantCount={registrationCount} />
+                        ) : null}
+                        <PeopleRow people={participantProfiles} participantCount={remainingParticipantCount} />
                       </div>
                     </div>
                     <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
