@@ -30,6 +30,7 @@ Implemented:
 - Shared Pass Claim flow: `/pass/:token`, `day_pass_shares`, `access_vouchers`, and `api-day-passes/claim` support gift/shared pass claim flows that survive login/signup redirects and write audit where available.
 - Revenue Ledger: `ledger_entries` is the append-only daily sales truth for Stripe-finalized Pickla sales and imported Zettle purchases.
 - Zettle import: venue-level connection/import endpoints in `api-admin` import Zettle purchases into `zettle_purchases` and `ledger_entries`. The MVP is purchase totals only, with no automatic customer matching.
+- Zettle automated sync: production cron setup lives in [docs/financial-operations/zettle-cron-setup.md](./docs/financial-operations/zettle-cron-setup.md).
 
 ### Financial Operations 1A
 
