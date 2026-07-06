@@ -27,6 +27,7 @@ import {
 import { subscribeToPush } from "@/lib/push";
 import { ThreadRow } from "@/components/ui/ThreadRow";
 import { activityTimingLabel } from "@/lib/activityTiming";
+import { getDisplayName, getFirstName } from "@/lib/displayName";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -2034,7 +2035,8 @@ const MyPage = () => {
 
   if (!user) return <Navigate to={`/auth?redirect=${authRedirectPath}&v=${venueSlug}`} replace />;
 
-  const displayName = profile?.display_name || user.email?.split("@")[0] || "Spelare";
+  const displayName = getDisplayName({ playerProfile: profile, authUser: user, fallback: "Spelare" }) || "Spelare";
+  const greetingName = getFirstName({ playerProfile: profile, authUser: user, fallback: displayName }) || displayName;
   const now = Date.now();
   const activeBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now));
   const pastBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now));
@@ -2115,7 +2117,7 @@ const MyPage = () => {
         <motion.div variants={container} initial="hidden" animate="show" className="flex flex-col gap-4 max-w-md mx-auto">
           <motion.div variants={item}>
             <p className="text-lg font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-              {isActivityPage ? "Aktivitet" : `Hej ${displayName} 👋`}
+              {isActivityPage ? "Aktivitet" : `Hej ${greetingName} 👋`}
             </p>
             <p className="text-xs mt-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
               {isActivityPage ? "Kommande, tidigare och delade spel." : "Konto, medlemskap och betalning."}

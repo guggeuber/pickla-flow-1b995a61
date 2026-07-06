@@ -21,6 +21,7 @@ import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
 import { getTodayHeroTiming } from "@/lib/todayHeroTiming";
 import { activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
+import { getFirstName } from "@/lib/displayName";
 
 
 const PAGE_BG = "#fffaf7";
@@ -409,6 +410,45 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
   });
 }
 
+function useCurrentIdentity(userId: string | undefined) {
+  return useQuery({
+    queryKey: ["current-identity", userId],
+    enabled: !!userId,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data: profile } = await supabase
+        .from("player_profiles")
+        .select("display_name, first_name, last_name, customer_id")
+        .eq("auth_user_id", userId!)
+        .maybeSingle();
+
+      let customer = null;
+      if ((profile as any)?.customer_id) {
+        const { data } = await supabase
+          .from("customers")
+          .select("display_name, first_name, last_name")
+          .eq("id", (profile as any).customer_id)
+          .maybeSingle();
+        customer = data;
+      }
+
+      if (!customer) {
+        const { data } = await supabase
+          .from("customers")
+          .select("display_name, first_name, last_name")
+          .eq("auth_user_id", userId!)
+          .maybeSingle();
+        customer = data;
+      }
+
+      return {
+        playerProfile: profile,
+        customer,
+      };
+    },
+  });
+}
+
 function FeedRow({
   item,
   now,
@@ -527,14 +567,6 @@ function FeedRow({
       )}
     </button>
   );
-}
-
-function displayNameForUser(user: any) {
-  const metadata = user?.user_metadata || {};
-  const raw = metadata.first_name || metadata.name || metadata.display_name || user?.email?.split("@")[0] || "";
-  const name = String(raw).trim();
-  if (!name) return null;
-  return name.split(/\s+/)[0];
 }
 
 function ParticipantLine({ participants, count }: { participants?: PublicProfile[]; count?: number }) {
@@ -660,8 +692,13 @@ export default function TodayPage() {
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
 
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
+  const { data: currentIdentity } = useCurrentIdentity(user?.id);
   const now = useActivityNow();
-  const userName = displayNameForUser(user);
+  const userName = getFirstName({
+    playerProfile: currentIdentity?.playerProfile,
+    customer: currentIdentity?.customer,
+    authUser: user,
+  });
   const liveHighlightId = items.find((item) => {
     const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
     const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
