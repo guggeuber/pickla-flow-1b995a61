@@ -18,6 +18,13 @@ type PulseResponse = {
   ok: boolean;
   generated_at: string;
   period: { month: string; label: string };
+  revenue_freshness?: {
+    source: "zettle";
+    status: "ok" | "failed" | "never_synced" | string;
+    updated_at: string | null;
+    last_failure_at?: string | null;
+    stale: boolean;
+  };
   metrics: PulseMetric[];
   omitted?: Array<{ key: string; label: string; reason: string }>;
 };
@@ -73,6 +80,23 @@ function Trend({ value }: { value: number | null }) {
       {positive ? "+" : ""}
       {value.toLocaleString("sv-SE", { maximumFractionDigits: 1 })}%
     </span>
+  );
+}
+
+function RevenueFreshness({ freshness }: { freshness?: PulseResponse["revenue_freshness"] }) {
+  if (!freshness) return null;
+  const lastSync = freshness.updated_at ? formatGeneratedAt(freshness.updated_at) : "never";
+  if (freshness.stale || freshness.status === "failed" || freshness.status === "never_synced") {
+    return (
+      <p className="text-xs leading-relaxed text-amber-300/80">
+        Revenue may be delayed. Last Zettle sync: {lastSync}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs leading-relaxed text-neutral-500">
+      Revenue data updated: {lastSync}
+    </p>
   );
 }
 
@@ -192,7 +216,10 @@ export default function PulsePage() {
         </section>
 
         <div className="mb-4 mt-10 flex items-center justify-between gap-4">
-          <p className="text-xs uppercase tracking-[0.24em] text-neutral-500">Live Index</p>
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-neutral-500">Live Index</p>
+            <RevenueFreshness freshness={data.revenue_freshness} />
+          </div>
           <p className="text-xs text-neutral-700">Tal från befintlig verksamhetsdata</p>
         </div>
 

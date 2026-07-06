@@ -29,9 +29,21 @@ function formatTime(value: string) {
   return parsed.isValid ? parsed.toFormat("HH:mm") : "-";
 }
 
+function formatDateTime(value: string) {
+  const parsed = DateTime.fromISO(value, { zone: "utc" }).setZone("Europe/Stockholm");
+  return parsed.isValid ? parsed.toFormat("d LLL yyyy HH:mm") : "-";
+}
+
 function formatDate(value: string) {
   const parsed = DateTime.fromISO(value, { zone: "Europe/Stockholm" });
   return parsed.isValid ? parsed.toFormat("d LLL yyyy") : value;
+}
+
+function zettleSyncStatus(connection: ReturnType<typeof useAdminZettleStatus>["data"] | undefined) {
+  if (!connection?.connected) return { label: "Never synced", tone: "muted" as const };
+  if (connection.connection?.last_import_error) return { label: "Failed", tone: "failed" as const };
+  if (connection.connection?.last_import_finished_at) return { label: "OK", tone: "ok" as const };
+  return { label: "Never synced", tone: "muted" as const };
 }
 
 function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerPeriodSummary }) {
@@ -67,6 +79,7 @@ export default function AdminRevenueLedger({ venueId }: Props) {
   const zettleConnect = useAdminZettleConnect(venueId);
   const zettleImport = useAdminZettleImport(venueId, date);
   const data = ledgerQ.data;
+  const zettleStatus = zettleSyncStatus(zettleQ.data);
 
   const selectedTotal = data?.selected?.ledger.total_minor || 0;
   const selectedReceiptTotal = data?.selected?.receipts.total_minor || 0;
@@ -141,9 +154,20 @@ export default function AdminRevenueLedger({ venueId }: Props) {
                   Not connected
                 </span>
               )}
+              <span
+                className={
+                  zettleStatus.tone === "ok"
+                    ? "rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-500"
+                    : zettleStatus.tone === "failed"
+                      ? "rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase text-destructive"
+                      : "rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold uppercase text-muted-foreground"
+                }
+              >
+                Status: {zettleStatus.label}
+              </span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Importerar purchases för vald dag till ledgern som <span className="font-mono">source_type=zettle</span>.
+              Automatisk sync använder samma säkra import som manuell fallback och skriver <span className="font-mono">source_type=zettle</span>.
             </p>
             {zettleQ.data?.auth_mode === "api_key" && (
               <p className="mt-1 text-[11px] text-muted-foreground">
@@ -152,7 +176,7 @@ export default function AdminRevenueLedger({ venueId }: Props) {
             )}
             {zettleQ.data?.connection?.last_import_finished_at && (
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Senast importerat: {formatTime(zettleQ.data.connection.last_import_finished_at)} · {zettleQ.data.connection.last_import_count || 0} köp
+                Last Zettle sync: {formatDateTime(zettleQ.data.connection.last_import_finished_at)} · {zettleQ.data.connection.last_import_count || 0} köp
               </p>
             )}
             {zettleQ.data?.connection?.last_import_error && (
@@ -179,7 +203,7 @@ export default function AdminRevenueLedger({ venueId }: Props) {
                 disabled={zettleImport.isPending}
               >
                 {zettleImport.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
-                Importera vald dag
+                Sync now
               </Button>
             )}
           </div>
