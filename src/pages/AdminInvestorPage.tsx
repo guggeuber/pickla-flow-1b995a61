@@ -30,6 +30,18 @@ type Lead = {
   created_at: string;
 };
 
+type PulseToken = {
+  id: string;
+  label: string | null;
+  venue_id: string | null;
+  organization_id: string | null;
+  status: "active" | "revoked";
+  token_expires_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+  last_viewed_at?: string | null;
+};
+
 type JsonKey = "use_of_funds" | "traction_metrics" | "risks" | "team" | "memo_sections";
 
 const statusStyles: Record<Lead["status"], string> = {
@@ -55,8 +67,9 @@ function cleanFileName(name: string) {
 }
 
 export default function AdminInvestorPage() {
-  const [tab, setTab] = useState<"leads" | "content">("leads");
+  const [tab, setTab] = useState<"leads" | "pulse" | "content">("leads");
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [pulseTokens, setPulseTokens] = useState<PulseToken[]>([]);
   const [settings, setSettings] = useState<InvestorSettings>(() => mergeInvestorSettings());
   const [assets, setAssets] = useState<InvestorAsset[]>([]);
   const [jsonFields, setJsonFields] = useState<Record<JsonKey, string>>({
@@ -72,6 +85,8 @@ export default function AdminInvestorPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [issuedLinks, setIssuedLinks] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [pulseLabel, setPulseLabel] = useState("Partner Pulse");
+  const [issuedPulseLink, setIssuedPulseLink] = useState<string | null>(null);
   const [assetType, setAssetType] = useState<InvestorAssetType>("hero");
   const [assetTitle, setAssetTitle] = useState("");
   const [assetDescription, setAssetDescription] = useState("");
@@ -84,6 +99,9 @@ export default function AdminInvestorPage() {
         apiGet<{ settings: InvestorSettings; assets: InvestorAsset[] }>("api-investor", "admin-settings"),
       ]);
       setLeads(leadRes.leads);
+      apiGet<{ tokens: PulseToken[] }>("api-pulse", "tokens")
+        .then((res) => setPulseTokens(res.tokens || []))
+        .catch((error) => toast.error((error as Error).message));
       const nextSettings = mergeInvestorSettings(contentRes.settings);
       setSettings(nextSettings);
       setAssets(contentRes.assets || []);
@@ -218,6 +236,37 @@ export default function AdminInvestorPage() {
     }
   }
 
+  async function createPulseLink() {
+    setBusyId("pulse-create");
+    try {
+      const res = await apiPost<{ token: string; pulse_token: PulseToken }>("api-pulse", "create-token", {
+        label: pulseLabel.trim() || "Pulse report",
+      });
+      const link = `${window.location.origin}/pulse/${res.pulse_token.id}`;
+      setIssuedPulseLink(link);
+      setPulseTokens((current) => [res.pulse_token, ...current]);
+      toast.success("Pulse link created");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function revokePulseLink(id: string) {
+    if (!confirm("Revoke this Pulse link? The report link will stop working.")) return;
+    setBusyId(id);
+    try {
+      await apiPost("api-pulse", "revoke-token", { id });
+      toast.success("Pulse link revoked");
+      await load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   function copy(id: string, text: string) {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(id);
@@ -241,11 +290,12 @@ export default function AdminInvestorPage() {
         <div className="mb-6 inline-flex rounded-lg border border-neutral-800 bg-neutral-950 p-1">
           {[
             ["leads", "Leads"],
+            ["pulse", "Pulse links"],
             ["content", "Content & assets"],
           ].map(([value, label]) => (
             <button
               key={value}
-              onClick={() => setTab(value as "leads" | "content")}
+              onClick={() => setTab(value as "leads" | "pulse" | "content")}
               className={`h-9 rounded-md px-4 text-sm ${tab === value ? "bg-white text-black" : "text-neutral-400 hover:text-neutral-100"}`}
             >
               {label}
@@ -264,6 +314,18 @@ export default function AdminInvestorPage() {
             onApprove={approve}
             onReject={reject}
             onRevoke={revoke}
+            onCopy={copy}
+          />
+        ) : tab === "pulse" ? (
+          <PulseLinksPanel
+            tokens={pulseTokens}
+            label={pulseLabel}
+            issuedLink={issuedPulseLink}
+            copied={copied}
+            busyId={busyId}
+            onLabelChange={setPulseLabel}
+            onCreate={createPulseLink}
+            onRevoke={revokePulseLink}
             onCopy={copy}
           />
         ) : (
@@ -435,6 +497,136 @@ function LeadsList(props: {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function PulseLinksPanel(props: {
+  tokens: PulseToken[];
+  label: string;
+  issuedLink: string | null;
+  copied: string | null;
+  busyId: string | null;
+  onLabelChange: (value: string) => void;
+  onCreate: () => void;
+  onRevoke: (id: string) => void;
+  onCopy: (id: string, text: string) => void;
+}) {
+  const activeTokens = props.tokens.filter((token) => token.status === "active");
+
+  return (
+    <div className="space-y-6">
+      <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h2 className="text-lg font-medium">Create Pulse Link</h2>
+            <p className="mt-1 text-sm text-neutral-500">
+              Creates a private `/pulse/:token` report link. The token is shown once.
+            </p>
+          </div>
+          <div className="flex w-full flex-col gap-3 md:w-auto md:min-w-[420px] md:flex-row">
+            <label className="flex-1">
+              <span className="text-xs text-neutral-500">Label</span>
+              <input
+                value={props.label}
+                onChange={(event) => props.onLabelChange(event.target.value)}
+                className="mt-1 h-10 w-full rounded-lg border border-neutral-800 bg-[#0B0C0E] px-3 text-sm outline-none focus:border-neutral-600"
+                placeholder="Partner Pulse"
+              />
+            </label>
+            <button
+              onClick={props.onCreate}
+              disabled={props.busyId === "pulse-create"}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50 md:mt-5"
+            >
+              {props.busyId === "pulse-create" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Create Pulse Link
+            </button>
+          </div>
+        </div>
+
+        {props.issuedLink && (
+          <div className="mt-5 rounded-lg border border-blue-900 bg-blue-950/30 p-3">
+            <div className="mb-2 text-xs text-blue-300">One-time Pulse link (copy now)</div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 overflow-auto whitespace-nowrap rounded bg-black/40 px-3 py-2 text-xs">{props.issuedLink}</code>
+              <button
+                onClick={() => props.onCopy("pulse-issued", props.issuedLink!)}
+                className="inline-flex h-9 items-center gap-1 rounded-md bg-white px-3 text-sm font-medium text-black"
+              >
+                {props.copied === "pulse-issued" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {props.copied === "pulse-issued" ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-medium">Active Pulse Links</h2>
+            <p className="mt-1 text-sm text-neutral-500">Copy or revoke private operational report links.</p>
+          </div>
+          <span className="rounded-full border border-neutral-800 px-3 py-1 text-xs text-neutral-500">
+            {activeTokens.length} active
+          </span>
+        </div>
+
+        {props.tokens.length === 0 ? (
+          <div className="mt-6 rounded-xl border border-neutral-900 p-12 text-center text-sm text-neutral-500">
+            No Pulse links yet.
+          </div>
+        ) : (
+          <div className="mt-6 space-y-3">
+            {props.tokens.map((token) => {
+              const active = token.status === "active";
+              const link = `${window.location.origin}/pulse/${token.id}`;
+              return (
+                <div key={token.id} className="rounded-xl border border-neutral-900 bg-[#0B0C0E] p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="font-medium">{token.label || "Pulse report"}</div>
+                        <span className={`rounded px-2 py-0.5 text-[10px] uppercase tracking-wider ${active ? "border border-emerald-800 bg-emerald-900/30 text-emerald-300" : "border border-red-900 bg-red-950/30 text-red-300"}`}>
+                          {token.status}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600">
+                        <span>Created {new Date(token.created_at).toLocaleString()}</span>
+                        <span>Last viewed {token.last_viewed_at ? new Date(token.last_viewed_at).toLocaleString() : "—"}</span>
+                        {token.token_expires_at && <span>Expires {new Date(token.token_expires_at).toLocaleDateString()}</span>}
+                        {token.revoked_at && <span>Revoked {new Date(token.revoked_at).toLocaleString()}</span>}
+                      </div>
+                      <div className="mt-3 text-xs text-neutral-700">
+                        Token id: <span className="font-mono">{token.id}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => props.onCopy(`pulse-${token.id}`, link)}
+                        className="inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 px-3 text-sm hover:bg-neutral-900"
+                      >
+                        {props.copied === `pulse-${token.id}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        Copy
+                      </button>
+                      {active && (
+                        <button
+                          disabled={props.busyId === token.id}
+                          onClick={() => props.onRevoke(token.id)}
+                          className="h-9 rounded-md border border-red-900 px-3 text-sm text-red-300 hover:bg-red-950 disabled:opacity-50"
+                        >
+                          Revoke
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

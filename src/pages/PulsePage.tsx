@@ -48,12 +48,17 @@ function formatValue(metric: PulseMetric) {
 function formatGeneratedAt(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("sv-SE", {
+  const formatted = new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
-    month: "long",
+    month: "short",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/Stockholm",
+    timeZoneName: "short",
   }).format(date);
+  return /GMT[+-]/.test(formatted) ? `${formatted.replace(/\sGMT[+-]\d+$/, "")} Stockholm time` : formatted;
 }
 
 function Trend({ value }: { value: number | null }) {
@@ -164,11 +169,12 @@ export default function PulsePage() {
         <section className="border-b border-neutral-900 pb-10 pt-10 sm:pt-20">
           <div className="flex flex-col gap-8 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-neutral-500">Pickla OS</p>
-              <h1 className="mt-5 text-5xl font-medium tracking-tight sm:text-7xl">Pickla · Pulse</h1>
-              <p className="mt-5 max-w-xl text-base leading-relaxed text-neutral-500">
-                Ett fåtal sanna tal om verksamheten. Inga prognoser, inga gissningar.
-              </p>
+              <p className="text-xs uppercase tracking-[0.24em] text-neutral-500">PICKLA PULSE</p>
+              <h1 className="mt-5 text-5xl font-medium tracking-tight sm:text-7xl">Pickla by Numbers</h1>
+              <div className="mt-6">
+                <p className="text-xs uppercase tracking-[0.22em] text-neutral-600">Generated</p>
+                <p className="mt-2 text-base text-neutral-300">{formatGeneratedAt(data.generated_at)}</p>
+              </div>
             </div>
             <label className="flex w-full flex-col gap-2 sm:w-64">
               <span className="text-xs uppercase tracking-[0.2em] text-neutral-600">Period</span>
@@ -184,6 +190,11 @@ export default function PulsePage() {
             </label>
           </div>
         </section>
+
+        <div className="mb-4 mt-10 flex items-center justify-between gap-4">
+          <p className="text-xs uppercase tracking-[0.24em] text-neutral-500">Live Index</p>
+          <p className="text-xs text-neutral-700">Tal från befintlig verksamhetsdata</p>
+        </div>
 
         <section className="grid gap-px overflow-hidden rounded-2xl border border-neutral-900 bg-neutral-900 sm:grid-cols-2">
           {data.metrics.map((metric) => (
@@ -215,7 +226,7 @@ export default function PulsePage() {
         )}
 
         <footer className="mt-12 pb-4 text-xs uppercase tracking-[0.2em] text-neutral-700">
-          Genererad {formatGeneratedAt(data.generated_at)} · Pickla OS
+          Generated {formatGeneratedAt(data.generated_at)} · Pickla OS
         </footer>
       </main>
     </div>

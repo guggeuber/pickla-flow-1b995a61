@@ -133,11 +133,19 @@ async function fetchAll(admin: any, table: string, select: string, apply: (query
 async function resolveToken(admin: any, token: string): Promise<PulseToken | null> {
   if (!token || token.length < 32) return null;
   const hash = await sha256Hex(token);
-  const { data, error } = await admin
+  let query = admin
     .from('pulse_tokens')
     .select('id, organization_id, venue_id, label, token_expires_at, status')
-    .eq('access_token_hash', hash)
-    .maybeSingle();
+    .eq('access_token_hash', hash);
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
+    query = admin
+      .from('pulse_tokens')
+      .select('id, organization_id, venue_id, label, token_expires_at, status')
+      .or(`access_token_hash.eq.${hash},id.eq.${token}`);
+  }
+
+  const { data, error } = await query.maybeSingle();
   if (error) throw new Error(error.message);
   if (!data || data.status !== 'active') return null;
   if (data.token_expires_at && new Date(data.token_expires_at) < new Date()) return null;
@@ -279,6 +287,7 @@ Deno.serve(async (req) => {
 
       const monthStart = resolveMonth(url.searchParams.get('month'));
       const metrics = await buildMetrics(admin, token, monthStart);
+      await admin.from('pulse_tokens').update({ last_viewed_at: new Date().toISOString() }).eq('id', token.id);
       return privateJsonResponse({
         ok: true,
         generated_at: new Date().toISOString(),
@@ -324,7 +333,7 @@ Deno.serve(async (req) => {
       const { data, error } = await admin
         .from('pulse_tokens')
         .insert(insert)
-        .select('id,label,venue_id,organization_id,token_expires_at,created_at')
+        .select('id,label,venue_id,organization_id,status,token_expires_at,created_at,revoked_at,last_viewed_at')
         .single();
       if (error) return errorResponse(error.message, 500);
       try {
@@ -375,7 +384,7 @@ Deno.serve(async (req) => {
     if (path === 'tokens' && req.method === 'GET') {
       const { data, error } = await admin
         .from('pulse_tokens')
-        .select('id,label,venue_id,organization_id,status,token_expires_at,created_at,revoked_at')
+        .select('id,label,venue_id,organization_id,status,token_expires_at,created_at,revoked_at,last_viewed_at')
         .order('created_at', { ascending: false })
         .limit(100);
       if (error) return errorResponse(error.message, 500);

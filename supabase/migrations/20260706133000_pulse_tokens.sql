@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.pulse_tokens (
   created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   revoked_at TIMESTAMPTZ,
   revoked_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  last_viewed_at TIMESTAMPTZ,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
