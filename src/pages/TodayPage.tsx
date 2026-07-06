@@ -189,6 +189,22 @@ function sessionSummary(session: Pick<SessionRow, "id" | "name" | "session_date"
   };
 }
 
+function errorSummary(error: unknown) {
+  if (error instanceof Error) return { name: error.name, message: error.message, stack: error.stack };
+  return error;
+}
+
+async function logMergeStep<T>(label: string, promise: Promise<T>) {
+  try {
+    const result = await promise;
+    logTodayDebug(`merge source ${label} fulfilled`, result);
+    return result;
+  } catch (error) {
+    logTodayDebug(`merge source ${label} rejected`, errorSummary(error));
+    throw error;
+  }
+}
+
 
 function programChatResourceId(sessionId: string, occurrenceDate: string) {
   return `activity_session:${sessionId}:${occurrenceDate}`;
@@ -324,32 +340,71 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       });
 
       const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
-      const [registrationsRes, socialProofRes, hostsRes, overrideMap] = await Promise.all([
-        sessionIds.length
-          ? supabase
-              .from("session_registrations")
-              .select("activity_session_id, session_date, status, user_id, customer_id")
-              .in("activity_session_id", sessionIds)
-              .gte("session_date", startDate)
-              .lte("session_date", endDate)
-          : Promise.resolve({ data: [] as RegistrationRow[] }),
-        sessionIds.length
-          ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
-              venueSlug: slug,
-              sessionIds: sessionIds.join(","),
-              startDate,
-              endDate,
-            }).catch(() => ({ occurrences: [] }))
-          : Promise.resolve({ occurrences: [] }),
-        sessionIds.length
-          ? (supabase as any)
-              .rpc("get_public_activity_session_hosts", { session_ids: sessionIds })
-              .catch(() => ({ data: [] as PublicSessionHost[] }))
-          : Promise.resolve({ data: [] as PublicSessionHost[] }),
-        sessionIds.length
-          ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
-          : Promise.resolve(new Map()),
-      ]);
+      let registrationsRes;
+      let socialProofRes;
+      let hostsRes;
+      let overrideMap;
+      try {
+        [registrationsRes, socialProofRes, hostsRes, overrideMap] = await Promise.all([
+          logMergeStep(
+            "session_registrations",
+            sessionIds.length
+              ? supabase
+                  .from("session_registrations")
+                  .select("activity_session_id, session_date, status, user_id, customer_id")
+                  .in("activity_session_id", sessionIds)
+                  .gte("session_date", startDate)
+                  .lte("session_date", endDate)
+              : Promise.resolve({ data: [] as RegistrationRow[] }),
+          ),
+          logMergeStep(
+            "activity-social-proof",
+            sessionIds.length
+              ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
+                  venueSlug: slug,
+                  sessionIds: sessionIds.join(","),
+                  startDate,
+                  endDate,
+                }).catch((error) => {
+                  logTodayDebug("activity-social-proof fallback to empty", errorSummary(error));
+                  return { occurrences: [] };
+                })
+              : Promise.resolve({ occurrences: [] }),
+          ),
+          logMergeStep(
+            "get_public_activity_session_hosts",
+            sessionIds.length
+              ? (supabase as any)
+                  .rpc("get_public_activity_session_hosts", { session_ids: sessionIds })
+                  .catch((error: unknown) => {
+                    logTodayDebug("get_public_activity_session_hosts fallback to empty", errorSummary(error));
+                    return { data: [] as PublicSessionHost[] };
+                  })
+              : Promise.resolve({ data: [] as PublicSessionHost[] }),
+          ),
+          logMergeStep(
+            "activity_session_overrides",
+            sessionIds.length
+              ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
+              : Promise.resolve(new Map()),
+          ),
+        ]);
+      } catch (error) {
+        logTodayDebug("merge pipeline error after occurrence expansion", errorSummary(error));
+        throw error;
+      }
+
+      logTodayDebug("merge source summary", {
+        expandedOccurrences: sessionOccurrences.length,
+        sessionIds,
+        registrationsRows: (registrationsRes.data || []).length,
+        registrationsError: "error" in registrationsRes ? registrationsRes.error?.message : undefined,
+        socialProofRows: (socialProofRes.occurrences || []).length,
+        hostsRows: (hostsRes.data || []).length,
+        hostsError: "error" in hostsRes ? hostsRes.error?.message : undefined,
+        overrideRows: overrideMap instanceof Map ? overrideMap.size : null,
+        overrideMapType: overrideMap?.constructor?.name,
+      });
 
       if ("error" in registrationsRes && registrationsRes.error) {
         logTodayDebug("session_registrations query error", registrationsRes.error.message);
@@ -402,9 +457,24 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
       }
 
+      const mergeTrace: Array<Record<string, unknown>> = [];
+
       const visibleSessionOccurrences = sessionOccurrences.filter((session) => {
-        const override = overrideMap.get(occurrenceOverrideKey(session.id, session.occurrence_date));
+        const occurrenceKey = occurrenceOverrideKey(session.id, session.occurrence_date);
+        const override = overrideMap.get(occurrenceKey);
         const hidden = isPublicActivityOverrideHidden(override?.status);
+        const socialProof = socialProofByKey.get(occurrenceKey);
+        const registrationCount = registrationCounts.get(occurrenceKey) || 0;
+        mergeTrace.push({
+          ...sessionSummary(session),
+          occurrence_id: occurrenceKey,
+          occurrence_date: session.occurrence_date,
+          matchingOverride: override || null,
+          matchingSocialProof: socialProof || null,
+          registrationCount,
+          mergeResult: hidden ? "discarded" : "kept_for_session_item_map",
+          discardReason: hidden ? "activity_session_override_hidden_or_cancelled" : null,
+        });
         if (hidden) {
           logTodayDebug("discard session occurrence", {
             ...sessionSummary(session),
@@ -459,6 +529,8 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           chatEmoji: "📅",
         };
       });
+
+      logTodayDebug("merge occurrence trace", mergeTrace);
 
       const eventItems: FeedItem[] = ((eventsRes.data || []) as EventRow[]).map((event) => ({
         id: `event:${event.id}`,
