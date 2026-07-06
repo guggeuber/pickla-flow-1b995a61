@@ -20,7 +20,7 @@ import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
 import { getTodayHeroTiming } from "@/lib/todayHeroTiming";
-import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
+import { activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
 
 
 const PAGE_BG = "#fffaf7";
@@ -583,22 +583,14 @@ function FeaturedTonightHero({
         now,
       })
     : { eyebrow: "NÄSTA", subtitle: "Nästa kväll på Pickla" };
-  const checkInAvailable = Boolean(item?.userIsRegistered && activityCheckInAvailable({
-    sessionDate: item?.date,
-    startTime: item?.startTime,
-    endTime: item?.endTime,
-    now,
-  }));
-  const statusLabel = item
-    ? activityTimingLabel({
+  const activityStatus = item
+    ? activityTimingStatus({
         sessionDate: item.date,
         startTime: item.startTime,
         endTime: item.endTime,
         now,
-        checkedIn: item.userIsCheckedIn,
-        checkInAvailable,
       })
-    : timing.subtitle;
+    : null;
   const ctaLabel = item?.userIsCheckedIn
     ? "✓ Incheckad"
     : item?.userIsRegistered
@@ -621,7 +613,7 @@ function FeaturedTonightHero({
         }}
       >
         <p className="text-[11px] font-black uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: PINK }}>
-          {timing.eyebrow}
+          {activityStatus?.stateLabel || timing.eyebrow}
         </p>
         <div className="mt-5">
           {welcomeLine ? (
@@ -637,7 +629,7 @@ function FeaturedTonightHero({
             {item?.title || "Något händer snart"}
           </h2>
           <p className="mt-3 text-[15px] font-semibold leading-snug" style={{ color: MUTED }}>
-            {statusLabel || timing.subtitle}
+            {activityStatus?.detailLabel || timing.subtitle}
           </p>
         </div>
 
@@ -668,7 +660,7 @@ export default function TodayPage() {
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
 
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
-  const now = DateTime.now().setZone("Europe/Stockholm");
+  const now = useActivityNow();
   const userName = displayNameForUser(user);
   const liveHighlightId = items.find((item) => {
     const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });

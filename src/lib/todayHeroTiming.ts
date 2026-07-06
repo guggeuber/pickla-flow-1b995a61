@@ -1,8 +1,8 @@
 import { DateTime } from "luxon";
+import { STOCKHOLM_ZONE } from "./activityTiming";
 
 export const HERO_EVENING_START_HOUR = 16;
 export const HERO_RELATIVE_WINDOW_HOURS = 3;
-export const STOCKHOLM_ZONE = "Europe/Stockholm";
 
 type HeroTimingInput = {
   sessionDate: string;

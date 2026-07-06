@@ -16,7 +16,7 @@ import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { formatSek } from "@/lib/activityPricing";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
-import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
+import { activityCheckInAvailable, activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -310,7 +310,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const savedTodaySek = !pricingPending && pricingIsIncluded && basePrice > effectivePrice
     ? Math.round((basePrice - effectivePrice) * 100) / 100
     : 0;
-  const now = DateTime.now().setZone("Europe/Stockholm");
+  const now = useActivityNow();
   const checkinWindow = occurrenceDate && session?.start_time && session?.end_time
     ? {
         opens: DateTime.fromISO(`${occurrenceDate}T${String(session.start_time).slice(0, 5)}:00`, { zone: "Europe/Stockholm" }).minus({ minutes: 30 }),
@@ -328,13 +328,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     })
   );
   const checkinOpensLabel = checkinWindow?.opens?.isValid ? checkinWindow.opens.toFormat("HH:mm") : null;
-  const timingStatusLabel = activityTimingLabel({
+  const activityStatus = activityTimingStatus({
     sessionDate: occurrenceDate,
     startTime: session?.start_time,
     endTime: session?.end_time,
     now,
-    checkedIn: isCheckedIn,
-    checkInAvailable: canCheckInNow,
   });
   const ctaLabel = isRegistered
     ? isCheckedIn
@@ -624,18 +622,18 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 <div className="flex min-w-0 flex-col gap-3">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: "'Space Mono', monospace" }}>
-                        {sessionTypeLabel(session.session_type)}
+                      <p className="text-[10px] font-black uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: "'Space Mono', monospace" }}>
+                        {activityStatus.stateLabel}
                       </p>
                       <h2 className="mt-1 text-[25px] font-black leading-none text-neutral-950" style={{ fontFamily: FONT_HEADING }}>
                         {session.name}
                       </h2>
                       <p className="mt-1.5 text-[13px] font-normal text-neutral-500">
-                        {dateLabel} · {timeLabel}
+                        {dateLabel} · {activityStatus.rangeLabel || timeLabel}
                       </p>
-                      {timingStatusLabel ? (
+                      {activityStatus.detailLabel ? (
                         <p className="mt-1 text-[13px] font-semibold text-neutral-600">
-                          {timingStatusLabel}
+                          {activityStatus.detailLabel}
                         </p>
                       ) : null}
                       <div className="mt-3 grid gap-2">
@@ -656,7 +654,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                               ))}
                             </div>
                             <p className="min-w-0 truncate text-[14px] font-black text-neutral-900" style={{ fontFamily: FONT_HEADING }}>
-                              {hostsLabel(sessionHosts)}
+                              {sessionHosts.length === 1 ? "Värd" : "Värdar"}: {hostsLabel(sessionHosts)}
                             </p>
                           </div>
                         ) : null}
