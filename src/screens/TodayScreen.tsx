@@ -234,7 +234,9 @@ const TodayScreen = () => {
 
     return courts.map((court) => {
       const courtBookings = bookings?.filter(
-        (b) => b.kind !== "activity_registration" && b.venue_court_id === court.id && (b.status === "confirmed" || b.status === "completed")
+        (b) => b.kind !== "activity_registration"
+          && b.venue_court_id === court.id
+          && (b.kind === "activity_court_block" || b.status === "confirmed" || b.status === "completed")
       ) || [];
 
       const activeBooking = courtBookings.find((b) => {
@@ -256,7 +258,7 @@ const TodayScreen = () => {
           id: court.id,
           name: court.name,
           status: (isSoon ? "soon" : "active") as CourtStatus,
-          players: activeBooking.booked_by || undefined,
+          players: activeBooking.booked_by || activeBooking.notes || undefined,
           endsAt: endTime,
         };
       }
@@ -310,11 +312,11 @@ const TodayScreen = () => {
     };
   }, [queryClient, venueId]);
   const courtBookingCount = useMemo(
-    () => bookings?.filter((booking) => booking.kind !== "activity_registration").length || 0,
+    () => bookings?.filter((booking) => booking.kind !== "activity_registration" && booking.kind !== "activity_court_block").length || 0,
     [bookings]
   );
   const courtBookingRows = useMemo(
-    () => bookings?.filter((booking) => booking.kind !== "activity_registration") || [],
+    () => bookings?.filter((booking) => booking.kind !== "activity_registration" && booking.kind !== "activity_court_block") || [],
     [bookings]
   );
   const openBookingFromRow = (booking: any, sourceRows = courtBookingRows) => {
@@ -338,7 +340,7 @@ const TodayScreen = () => {
       .slice(0, 6);
   }, [bookings, now]);
   const openFirstUpcomingBooking = () => {
-    const row = upcomingBookings.find((booking) => booking.kind !== "activity_registration");
+    const row = upcomingBookings.find((booking) => booking.kind !== "activity_registration" && booking.kind !== "activity_court_block");
     if (row) openBookingFromRow(row);
   };
 
@@ -422,7 +424,7 @@ const TodayScreen = () => {
           { label: "Courts", value: `${activeCourts}/${totalCourts}`, icon: Activity, onClick: undefined },
           { label: "Bookings", value: String(courtBookingCount), icon: Zap, onClick: courtBookingCount > 0 ? openFirstBooking : undefined },
           { label: "Aktivitet", value: String(activityRegistrationCount), icon: Users, onClick: undefined },
-          { label: "Upcoming", value: String(upcomingBookings.length), icon: Users, onClick: upcomingBookings.some((booking) => booking.kind !== "activity_registration") ? openFirstUpcomingBooking : undefined },
+          { label: "Upcoming", value: String(upcomingBookings.length), icon: Users, onClick: upcomingBookings.some((booking) => booking.kind !== "activity_registration" && booking.kind !== "activity_court_block") ? openFirstUpcomingBooking : undefined },
         ].map((stat, i) => (
           <motion.button
             key={stat.label}
@@ -560,14 +562,18 @@ const TodayScreen = () => {
           <div className="space-y-1.5">
             {upcomingBookings.map((booking, i) => {
               const startTime = new Date(booking.start_time);
-              const isActivity = booking.kind === "activity_registration";
-              const courtName = isActivity
+              const isActivityRegistration = booking.kind === "activity_registration";
+              const isActivityBlock = booking.kind === "activity_court_block";
+              const isActivity = isActivityRegistration || isActivityBlock;
+              const courtName = isActivityRegistration
                 ? booking.activity_session?.name || booking.notes || "Aktivitet"
+                : isActivityBlock
+                ? (booking.venue_courts as any)?.name || "Bana"
                 : (booking.venue_courts as any)?.name || "–";
               const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
               const paymentLabel = paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
               const paymentTone = paymentStatus === "paid" || paymentStatus === "free" ? "bg-badge-paid/15 text-badge-paid" : "bg-badge-unpaid/15 text-badge-unpaid";
-              const activityCheckedIn = isActivity && (booking.checked_in || booking.consumed || booking.status === "checked_in");
+              const activityCheckedIn = isActivityRegistration && (booking.checked_in || booking.consumed || booking.status === "checked_in");
               return (
                 <motion.button
                   key={booking.id}
@@ -585,13 +591,13 @@ const TodayScreen = () => {
                     </p>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate">{booking.booked_by || "Gäst"}</p>
+                    <p className="text-sm font-semibold truncate">{booking.booked_by || booking.notes || "Gäst"}</p>
                     <p className="text-[11px] text-muted-foreground">
-                      {courtName}{isActivity ? " · Aktivitet" : ""}
+                      {courtName}{isActivityRegistration ? " · Aktivitet" : isActivityBlock ? " · Reserverad för aktivitet" : ""}
                     </p>
                   </div>
                   <span className={`status-chip text-[9px] ${isActivity ? activityCheckedIn ? "bg-court-free/15 text-court-free" : "bg-primary/15 text-primary" : paymentTone}`}>
-                    {isActivity ? activityCheckedIn ? "Incheckad" : "Aktivitet" : paymentLabel}
+                    {isActivityRegistration ? activityCheckedIn ? "Incheckad" : "Aktivitet" : isActivityBlock ? "Blockerad" : paymentLabel}
                   </span>
                 </motion.button>
               );

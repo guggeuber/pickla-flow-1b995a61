@@ -39,6 +39,14 @@ interface TierPricing {
   discount_percent: number | null;
 }
 
+type VenueCourtOption = {
+  id: string;
+  name: string;
+  court_number?: number | null;
+  sport_type?: string | null;
+  is_available?: boolean | null;
+};
+
 const SOLD_AS_OPTIONS: { key: SoldAs; label: string; helper: string }[] = [
   {
     key: "activity_ticket",
@@ -80,6 +88,18 @@ const sortDays = (days: number[]) => {
 const productKeyForActivityTicket = (sessionType: string) => {
   if (sessionType === "group_training") return "group_training";
   return "open_play_slot";
+};
+
+const courtLabel = (court: VenueCourtOption) => court.name || `Bana ${court.court_number || ""}`.trim() || "Bana";
+
+const selectedCourtNames = (courtIds: string[] | null | undefined, courts: VenueCourtOption[]) => {
+  const ids = Array.isArray(courtIds) ? courtIds : [];
+  if (!ids.length) return "Inga banor reserverade";
+  const courtById = new Map(courts.map((court) => [court.id, court]));
+  return ids.map((id) => {
+    const court = courtById.get(id);
+    return court ? courtLabel(court) : "Bana";
+  }).join(", ");
 };
 
 const soldAsFromSession = (session: any): SoldAs => {
@@ -226,6 +246,7 @@ const draftWarnings = (draft: {
   included_in_day_pass?: boolean;
   price_sek?: number | string | null;
   capacity?: number | string | null;
+  court_ids?: string[] | null;
   publish_status?: string;
   is_active?: boolean;
 }) => {
@@ -241,6 +262,9 @@ const draftWarnings = (draft: {
   }
   if (isPublished && soldAs !== "included_only" && (!capacity || capacity <= 0)) {
     warnings.push({ message: "Lägg in max antal platser innan passet publiceras.", blocking: true });
+  }
+  if (isPublished && capacity && capacity > 0 && (!draft.court_ids || draft.court_ids.length === 0)) {
+    warnings.push({ message: "Välj vilka banor passet reserverar. Annars kan samma banor säljas som privatbokning." });
   }
   if (soldAs === "day_pass" && isOpenPlayLike(sessionType)) {
     warnings.push({ message: "Det här passet säljs som dagsmedlemskap och kan ge heldagstillgång. Är det avsiktligt?" });
@@ -262,6 +286,7 @@ const sessionWarnings = (session: any) => draftWarnings({
   included_in_day_pass: Boolean(session.access_policy?.allows_day_access),
   price_sek: sessionOnlinePrice(session),
   capacity: session.capacity,
+  court_ids: session.court_ids || [],
   publish_status: session.publish_status || "published",
   is_active: session.is_active,
 });
@@ -373,6 +398,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [corporatePrice, setCorporatePrice] = useState("");
   const [promoPrice, setPromoPrice] = useState("");
   const [capacity, setCapacity] = useState("");
+  const [sessionCourtIds, setSessionCourtIds] = useState<string[]>([]);
 
   const [editingSeriesId, setEditingSeriesId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -406,6 +432,17 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     queryKey: ["admin-activity-sessions", venueId],
     queryFn: () => apiGet("api-admin", "activity-sessions", { venueId }),
   });
+
+  const { data: venueCourts = [] } = useQuery<VenueCourtOption[]>({
+    queryKey: ["admin-venue-courts", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-admin", "courts", { venueId }),
+  });
+
+  const pickleballCourts = useMemo(
+    () => venueCourts.filter((court) => !court.sport_type || court.sport_type === "pickleball"),
+    [venueCourts]
+  );
 
   const productMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -490,6 +527,25 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     });
   };
 
+  const toggleSessionCourt = (courtId: string) => {
+    setSessionCourtIds((current) => (
+      current.includes(courtId)
+        ? current.filter((id) => id !== courtId)
+        : [...current, courtId]
+    ));
+  };
+
+  const toggleDraftCourt = (sessionId: string, courtId: string) => {
+    setSessionDrafts((current) => {
+      const draft = current[sessionId] || {};
+      const currentIds = Array.isArray(draft.court_ids) ? draft.court_ids : [];
+      const nextIds = currentIds.includes(courtId)
+        ? currentIds.filter((id: string) => id !== courtId)
+        : [...currentIds, courtId];
+      return { ...current, [sessionId]: { ...draft, court_ids: nextIds } };
+    });
+  };
+
   const handleCreateSeries = () => {
     if (!seriesName.trim()) {
       toast.error("Namn krävs");
@@ -530,6 +586,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       included_in_day_pass: includedInDayPass,
       price_sek: effectiveInputPrice,
       capacity,
+      court_ids: sessionCourtIds,
       publish_status: "published",
       is_active: true,
     });
@@ -549,6 +606,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       end_time: endTime,
       price_sek: effectiveInputPrice,
       capacity: capacity ? Math.round(Number(capacity)) : null,
+      court_ids: sessionCourtIds,
       access_policy: config.access_policy,
       metadata: buildPricingMetadata({
         onlinePrice: effectiveInputPrice,
@@ -557,6 +615,10 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         promoPrice,
       }),
       is_active: true,
+    }, {
+      onSuccess: () => {
+        setSessionCourtIds([]);
+      },
     });
   };
 
@@ -622,6 +684,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         corporate_price_sek: metadata.corporate_price_sek ?? "",
         promo_price_sek: metadata.promo_price_sek ?? "",
         capacity: session.capacity ?? "",
+        court_ids: session.court_ids || [],
         is_active: Boolean(session.is_active),
         publish_status: session.publish_status || "published",
       },
@@ -667,6 +730,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       end_time: draft.end_time,
       price_sek: onlinePrice,
       capacity: draft.capacity === "" || draft.capacity == null ? null : Math.max(0, Math.round(Number(draft.capacity))),
+      court_ids: Array.isArray(draft.court_ids) ? draft.court_ids : [],
       is_active: Boolean(draft.is_active),
       publish_status: draft.publish_status || "published",
       access_policy: config.access_policy,
@@ -700,6 +764,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     included_in_day_pass: includedInDayPass,
     price_sek: createOnlinePrice,
     capacity,
+    court_ids: sessionCourtIds,
     publish_status: "published",
     is_active: true,
   });
@@ -945,6 +1010,32 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className={baseInputClass} style={inputStyle} />
           <input type="number" placeholder="Max antal platser" value={capacity} onChange={(e) => setCapacity(e.target.value)} className="col-span-2 rounded-xl px-3 py-2.5 text-xs outline-none" style={inputStyle} />
         </div>
+        <div className="rounded-xl bg-muted/40 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Banor som reserveras</p>
+            <span className="text-[10px] font-semibold text-muted-foreground">{sessionCourtIds.length} valda</span>
+          </div>
+          {pickleballCourts.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {pickleballCourts.map((court) => {
+                const selected = sessionCourtIds.includes(court.id);
+                return (
+                  <button
+                    key={court.id}
+                    type="button"
+                    onClick={() => toggleSessionCourt(court.id)}
+                    className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${selected ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground"}`}
+                  >
+                    {courtLabel(court)}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">Inga banor hittades för venue.</p>
+          )}
+          <p className="text-[11px] text-muted-foreground">Valda banor blockeras för privatbokning under passets tid.</p>
+        </div>
         <button onClick={handleCreateSession} disabled={createSession.isPending} className="w-full rounded-xl bg-court-free py-2.5 text-sm font-bold text-white disabled:opacity-50 flex items-center justify-center gap-2">
           {createSession.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           Lägg i schema
@@ -1148,6 +1239,32 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                     <input type="time" value={draft.end_time || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, end_time: e.target.value } }))} className={baseInputClass} style={inputStyle} />
                     <input type="number" placeholder="Max antal platser" value={draft.capacity ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, capacity: e.target.value } }))} className="col-span-2 rounded-xl px-3 py-2.5 text-xs outline-none" style={inputStyle} />
                   </div>
+                  <div className="rounded-xl bg-muted/40 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Banor som reserveras</p>
+                      <span className="text-[10px] font-semibold text-muted-foreground">{(draft.court_ids || []).length} valda</span>
+                    </div>
+                    {pickleballCourts.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {pickleballCourts.map((court) => {
+                          const selected = (draft.court_ids || []).includes(court.id);
+                          return (
+                            <button
+                              key={court.id}
+                              type="button"
+                              onClick={() => toggleDraftCourt(session.id, court.id)}
+                              className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${selected ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground"}`}
+                            >
+                              {courtLabel(court)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-foreground">Inga banor hittades för venue.</p>
+                    )}
+                    <p className="text-[11px] text-muted-foreground">Valda banor blockeras för privatbokning under passets tid.</p>
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     <select value={draft.is_active ? "true" : "false"} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, is_active: e.target.value === "true" } }))} className={baseInputClass} style={inputStyle}>
                       <option value="true">Aktiv</option>
@@ -1202,6 +1319,12 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Access</span>
                         <span className="mt-1 block font-bold text-foreground">{includedLabel}</span>
                       </div>
+                    </div>
+                    <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-[11px]">
+                      <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Reserverar banor</span>
+                      <span className={`mt-1 block font-bold ${session.court_ids?.length ? "text-foreground" : "text-badge-vip"}`}>
+                        {selectedCourtNames(session.court_ids, venueCourts)}
+                      </span>
                     </div>
                     <div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-3">
                       <div className="rounded-xl bg-court-free/10 px-3 py-2 text-court-free">

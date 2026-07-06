@@ -96,6 +96,84 @@ async function getCourtResourceBlocks(
   );
 }
 
+function activityOccurrenceMatchesDate(session: any, date: string) {
+  if (session.session_date) return String(session.session_date).slice(0, 10) === date;
+  const recurrenceDays = Array.isArray(session.recurrence_days) ? session.recurrence_days : [];
+  const weekday = DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7;
+  return recurrenceDays.includes(weekday);
+}
+
+function activityOccurrenceRangeUtc(session: any, date: string) {
+  const startTime = String(session.start_time || '').slice(0, 5);
+  const endTime = String(session.end_time || '').slice(0, 5);
+  const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' }).toUTC();
+  const end = DateTime.fromISO(`${date}T${endTime}:00`, { zone: 'Europe/Stockholm' }).toUTC();
+  if (!start.isValid || !end.isValid) return null;
+  return { start: start.toISO()!, end: end.toISO()! };
+}
+
+async function getActivityCourtBlocks(
+  admin: any,
+  venueId: string,
+  courtIds: string[],
+  startISO: string,
+  endISO: string,
+) {
+  if (!courtIds.length) return [];
+
+  const start = DateTime.fromISO(startISO, { zone: 'utc' }).setZone('Europe/Stockholm');
+  const end = DateTime.fromISO(endISO, { zone: 'utc' }).setZone('Europe/Stockholm');
+  if (!start.isValid || !end.isValid) return [];
+
+  const dates: string[] = [];
+  for (let cursor = start.startOf('day'); cursor <= end.startOf('day'); cursor = cursor.plus({ days: 1 })) {
+    const date = cursor.toISODate();
+    if (date) dates.push(date);
+  }
+
+  const { data, error } = await admin
+    .from('activity_sessions')
+    .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .eq('venue_id', venueId)
+    .eq('is_active', true)
+    .eq('publish_status', 'published')
+    .limit(1000);
+
+  if (error) {
+    console.error('activity session court block lookup failed', error.message);
+    return [];
+  }
+
+  const requestedCourtSet = new Set(courtIds);
+  const blocks: any[] = [];
+  for (const session of data || []) {
+    const sessionCourtIds = Array.isArray(session.court_ids)
+      ? session.court_ids.map((id: unknown) => String(id)).filter((id: string) => requestedCourtSet.has(id))
+      : [];
+    if (!sessionCourtIds.length) continue;
+
+    for (const date of dates) {
+      if (!activityOccurrenceMatchesDate(session, date)) continue;
+      const range = activityOccurrenceRangeUtc(session, date);
+      if (!range) continue;
+      if (range.start < endISO && range.end > startISO) {
+        blocks.push(...sessionCourtIds.map((courtId: string) => ({
+          id: session.id,
+          court_id: courtId,
+          start: range.start,
+          end: range.end,
+          title: session.name || 'Aktivitet',
+          kind: 'activity_session',
+          activity_session_id: session.id,
+          session_type: session.session_type || null,
+        })));
+      }
+    }
+  }
+
+  return blocks;
+}
+
 async function isActivityOccurrenceBlocked(admin: any, venueId: string, activitySessionId: string, sessionDate: string) {
   if (!venueId || !activitySessionId || !sessionDate) return false;
   const { data, error } = await admin
@@ -556,6 +634,12 @@ Deno.serve(async (req) => {
       const resourceBlocks = await getCourtResourceBlocks(adminCheckout, venue_id, courtIds, startISO, endISO);
       if (resourceBlocks.length) {
         return errorResponse('En eller flera banor är blockerade för event eller intern planering', 409);
+      }
+
+      const activityBlocks = await getActivityCourtBlocks(adminCheckout, venue_id, courtIds, startISO, endISO);
+      if (activityBlocks.length) {
+        const title = activityBlocks[0]?.title || 'aktivitet';
+        return errorResponse(`En eller flera banor är reserverade för ${title}`, 409);
       }
     }
 
@@ -1475,6 +1559,7 @@ Deno.serve(async (req) => {
 
     const courtIds = (courts || []).map((court: any) => court.id).filter(Boolean);
     const resourceBlocks = await getCourtResourceBlocks(admin, venue.id, courtIds, start, end);
+    const activityBlocks = await getActivityCourtBlocks(admin, venue.id, courtIds, start, end);
     for (const block of resourceBlocks) {
       for (const requestedDate of requestedDates) {
         const range = stockholmDateRangeUtc(requestedDate);
@@ -1488,6 +1573,26 @@ Deno.serve(async (req) => {
             block_id: block.id,
             title: block.title,
             kind: 'resource_block',
+          });
+          availabilityByDate[requestedDate] = bucket;
+        }
+      }
+    }
+
+    for (const block of activityBlocks) {
+      for (const requestedDate of requestedDates) {
+        const range = stockholmDateRangeUtc(requestedDate);
+        if (block.start < range.end && block.end > range.start) {
+          const bucket = availabilityByDate[requestedDate] || emptyAvailability();
+          bucket.bookings.push({
+            court_id: block.court_id,
+            start: block.start,
+            end: block.end,
+            status: 'blocked',
+            title: block.title,
+            kind: 'activity_session',
+            activity_session_id: block.activity_session_id,
+            session_type: block.session_type || null,
           });
           availabilityByDate[requestedDate] = bucket;
         }
@@ -1549,6 +1654,12 @@ Deno.serve(async (req) => {
     const resourceBlocks = await getCourtResourceBlocks(admin, venue.id, courtIds, startISO, endISO);
     if (resourceBlocks.length) {
       return errorResponse('En eller flera banor är blockerade för event eller intern planering', 409);
+    }
+
+    const activityBlocks = await getActivityCourtBlocks(admin, venue.id, courtIds, startISO, endISO);
+    if (activityBlocks.length) {
+      const title = activityBlocks[0]?.title || 'aktivitet';
+      return errorResponse(`En eller flera banor är reserverade för ${title}`, 409);
     }
 
     // Try to resolve authenticated user from Authorization header
@@ -1891,6 +2002,45 @@ Deno.serve(async (req) => {
         checked_in_at: checkinByBookingId.get(booking.id)?.checked_in_at || null,
       }));
 
+      let activityCourtBlocks: any[] = [];
+      if (date) {
+        const { start, end } = stockholmDateRangeUtc(date);
+        const { data: venueCourtRows } = await lookupClient
+          .from('venue_courts')
+          .select('id, name, court_number, sport_type')
+          .eq('venue_id', venueId);
+        const courtById = new Map((venueCourtRows || []).map((court: any) => [court.id, court]));
+        const courtIds = (venueCourtRows || []).map((court: any) => court.id).filter(Boolean);
+        const activityBlocks = await getActivityCourtBlocks(lookupClient, venueId, courtIds, start, end);
+        activityCourtBlocks = activityBlocks.map((block: any) => ({
+          id: `activity_block:${block.activity_session_id}:${date}:${block.court_id}`,
+          kind: 'activity_court_block',
+          booking_type: 'Aktivitetsblock',
+          activity_session_id: block.activity_session_id,
+          session_date: date,
+          venue_id: venueId,
+          venue_court_id: block.court_id,
+          start_time: block.start,
+          end_time: block.end,
+          status: 'blocked',
+          total_price: 0,
+          booked_by: block.title,
+          customer_name: block.title,
+          payment_status: 'blocked',
+          payment_method: null,
+          checked_in: false,
+          checked_in_at: null,
+          notes: block.title,
+          booking_ref: null,
+          venue_courts: courtById.get(block.court_id) || null,
+          activity_session: {
+            id: block.activity_session_id,
+            name: block.title,
+            session_type: block.session_type || null,
+          },
+        }));
+      }
+
       let activityRegistrations: any[] = [];
       if (date) {
         const { data: registrations, error: regErr } = await client
@@ -2026,7 +2176,7 @@ Deno.serve(async (req) => {
         });
       }
 
-      const items = [...courtBookings, ...activityRegistrations].sort((a: any, b: any) =>
+      const items = [...courtBookings, ...activityCourtBlocks, ...activityRegistrations].sort((a: any, b: any) =>
         new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
       );
 

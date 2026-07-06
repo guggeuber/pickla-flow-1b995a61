@@ -95,16 +95,22 @@ export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps
           {sortedBookings.map((booking: any) => {
             const start = new Date(booking.start_time);
             const end = new Date(booking.end_time);
-            const isActivity = booking.kind === "activity_registration";
-            const courtName = isActivity
+            const isActivityRegistration = booking.kind === "activity_registration";
+            const isActivityBlock = booking.kind === "activity_court_block";
+            const isActivity = isActivityRegistration || isActivityBlock;
+            const courtName = isActivityRegistration
               ? booking.activity_session?.name || booking.notes || "Aktivitet"
+              : isActivityBlock
+              ? (booking.venue_courts as any)?.name || "Bana"
               : (booking.venue_courts as any)?.name || "–";
             const customer = booking.booked_by || booking.notes || "Gäst";
             const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
-            const statusLabel = isActivity
+            const statusLabel = isActivityRegistration
               ? booking.checked_in || booking.consumed || booking.status === "checked_in"
                 ? "Incheckad"
                 : "Aktivitet"
+              : isActivityBlock
+                ? "Blockerad"
               : paymentStatus === "paid"
                 ? "Betald"
                 : paymentStatus === "free"
@@ -114,7 +120,9 @@ export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps
                   : booking.status === "cancelled"
                     ? "Avbokad"
                     : "Okänd";
-            const statusTone = isActivity && (booking.checked_in || booking.consumed || booking.status === "checked_in")
+            const statusTone = isActivityBlock
+              ? "bg-primary/15 text-primary"
+              : isActivityRegistration && (booking.checked_in || booking.consumed || booking.status === "checked_in")
               ? "bg-court-free/15 text-court-free"
               : paymentStatus === "paid" || paymentStatus === "free"
               ? "bg-court-free/15 text-court-free"
@@ -144,7 +152,7 @@ export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps
                   <p className="text-sm font-semibold truncate">{customer}</p>
                   <p className="text-[11px] text-muted-foreground">
                     {courtName}
-                    {isActivity ? " · Aktivitet" : booking.booking_ref && ` · ${booking.booking_ref}`}
+                    {isActivityRegistration ? " · Aktivitet" : isActivityBlock ? " · Reserverad för aktivitet" : booking.booking_ref && ` · ${booking.booking_ref}`}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
