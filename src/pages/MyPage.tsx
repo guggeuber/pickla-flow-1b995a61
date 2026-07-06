@@ -26,6 +26,7 @@ import {
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
 import { ThreadRow } from "@/components/ui/ThreadRow";
+import { activityTimingLabel } from "@/lib/activityTiming";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -902,8 +903,15 @@ function BookingDetailsSheet({
   const bookingIds = getBookingIds(booking);
   const start = new Date(booking.start_time);
   const end = new Date(booking.end_time);
+  const startSthlm = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+  const endSthlm = DateTime.fromISO(booking.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
   const dateLabel = start.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
   const timeLabel = `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
+  const bookingTimingLabel = activityTimingLabel({
+    sessionDate: startSthlm.toISODate(),
+    startTime: startSthlm.toFormat("HH:mm"),
+    endTime: endSthlm.toFormat("HH:mm"),
+  });
 
   const handleCancel = async () => {
     if (!bookingIds.length) return;
@@ -935,6 +943,11 @@ function BookingDetailsSheet({
           )}
           <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{dateLabel}</p>
           <p className="text-sm" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{timeLabel}</p>
+          {bookingTimingLabel && (
+            <p className="text-sm font-bold mt-1" style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}>
+              {bookingTimingLabel}
+            </p>
+          )}
           {accessCodes.length > 0 && (
             <div className="mt-4 rounded-2xl p-4" style={{ background: BLUE_LIGHT, border: `1.5px solid ${BLUE_BORDER}` }}>
               <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
@@ -1067,6 +1080,13 @@ function SessionRegistrationDetailsSheet({
   const venueSlug = session?.venues?.slug || fallbackVenueSlug;
   const isCheckedIn = registration.status === "checked_in";
   const checkinEligibility = sessionRegistrationCheckinEligibility(registration);
+  const timingStatusLabel = activityTimingLabel({
+    sessionDate: String(registration.session_date || session?.session_date || "").slice(0, 10),
+    startTime: session?.start_time,
+    endTime: session?.end_time,
+    checkedIn: isCheckedIn,
+    checkInAvailable: checkinEligibility.ok,
+  });
   const money = (amount: number) =>
     `${Number(amount || 0).toLocaleString("sv-SE", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })} kr`;
 
@@ -1136,6 +1156,11 @@ function SessionRegistrationDetailsSheet({
           </p>
           <p className="text-sm mt-1 capitalize" style={{ color: TEXT_SECONDARY }}>{dateLabel}</p>
           {timeLabel && <p className="text-sm" style={{ fontFamily: FONT_MONO, color: TEXT_SECONDARY }}>{timeLabel}</p>}
+          {timingStatusLabel && (
+            <p className="text-sm font-bold mt-1" style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}>
+              {timingStatusLabel}
+            </p>
+          )}
 
           <div className="mt-4 rounded-2xl p-4 flex items-center justify-between gap-3" style={{ background: PAGE_BG, border: `1.5px solid ${CARD_BORDER}` }}>
             <div className="min-w-0">

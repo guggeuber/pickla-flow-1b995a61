@@ -16,6 +16,7 @@ import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { formatSek } from "@/lib/activityPricing";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
+import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -219,15 +220,25 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const canCheckInNow = Boolean(
     isRegistered &&
     !isCheckedIn &&
-    checkinWindow?.opens.isValid &&
-    checkinWindow?.closes.isValid &&
-    now >= checkinWindow.opens &&
-    now <= checkinWindow.closes
+    activityCheckInAvailable({
+      sessionDate: occurrenceDate,
+      startTime: session?.start_time,
+      endTime: session?.end_time,
+      now,
+    })
   );
   const checkinOpensLabel = checkinWindow?.opens?.isValid ? checkinWindow.opens.toFormat("HH:mm") : null;
+  const timingStatusLabel = activityTimingLabel({
+    sessionDate: occurrenceDate,
+    startTime: session?.start_time,
+    endTime: session?.end_time,
+    now,
+    checkedIn: isCheckedIn,
+    checkInAvailable: canCheckInNow,
+  });
   const ctaLabel = isRegistered
     ? isCheckedIn
-      ? "Incheckad"
+      ? "✓ Incheckad"
       : canCheckInNow
         ? "Checka in"
         : "Biljett klar"
@@ -522,6 +533,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       <p className="mt-1.5 text-[13px] font-normal text-neutral-500">
                         {dateLabel} · {timeLabel}
                       </p>
+                      {timingStatusLabel ? (
+                        <p className="mt-1 text-[13px] font-semibold text-neutral-600">
+                          {timingStatusLabel}
+                        </p>
+                      ) : null}
                       <div className="mt-2">
                         <PeopleRow people={participantProfiles} participantCount={registrationCount} />
                       </div>

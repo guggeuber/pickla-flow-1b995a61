@@ -20,6 +20,7 @@ import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
 import { getTodayHeroTiming } from "@/lib/todayHeroTiming";
+import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
 
 
 const PAGE_BG = "#fffaf7";
@@ -46,6 +47,9 @@ type FeedItem = {
   spotsLeft?: number | null;
   registrationsCount?: number;
   userIsInterested?: boolean;
+  userIsRegistered?: boolean;
+  userIsCheckedIn?: boolean;
+  userRegistrationStatus?: string | null;
   priceSek?: number | null;
   isSpecialPass?: boolean;
   onlineCheaper?: boolean;
@@ -240,10 +244,17 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
 
       const registrationCounts = new Map<string, number>();
       const participantUserIdsByKey = new Map<string, string[]>();
+      const userRegistrationStatusByKey = new Map<string, string | null>();
       for (const row of registrationsRes.data || []) {
         if (row.status === "cancelled") continue;
         const key = `${row.activity_session_id}:${row.session_date}`;
         registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
+        if (userId && row.user_id === userId) {
+          const currentStatus = userRegistrationStatusByKey.get(key);
+          if (currentStatus !== "checked_in") {
+            userRegistrationStatusByKey.set(key, row.status || "confirmed");
+          }
+        }
         if (row.user_id) {
           const existing = participantUserIdsByKey.get(key) || [];
           if (existing.length < 3 && !existing.includes(row.user_id)) {
@@ -276,6 +287,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         const onlinePrice = Number(metadata.online_price_sek ?? session.price_sek ?? 0);
         const deskPrice = Number(metadata.desk_price_sek ?? onlinePrice);
         const spotsLeft = capacity ? Math.max(capacity - count, 0) : null;
+        const userRegistrationStatus = userRegistrationStatusByKey.get(occurrenceKey) || null;
         return {
           id: `session:${session.id}:${session.occurrence_date}`,
           kind: "session",
@@ -288,6 +300,9 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           spotsLeft,
           registrationsCount: count,
           userIsInterested: Boolean(socialProof?.user_is_interested),
+          userIsRegistered: Boolean(userRegistrationStatus),
+          userIsCheckedIn: userRegistrationStatus === "checked_in",
+          userRegistrationStatus,
           priceSek: onlinePrice || Number(session.price_sek || 0),
           isSpecialPass,
           onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
@@ -524,12 +539,37 @@ function FeaturedTonightHero({
         now,
       })
     : { eyebrow: "NÄSTA", subtitle: "Nästa kväll på Pickla" };
-  const ctaLabel = included ? "Boka plats · Ingår" : `Boka plats${priceLabel ? ` · ${priceLabel}` : ""}`;
+  const checkInAvailable = Boolean(item?.userIsRegistered && activityCheckInAvailable({
+    sessionDate: item?.date,
+    startTime: item?.startTime,
+    endTime: item?.endTime,
+    now,
+  }));
+  const statusLabel = item
+    ? activityTimingLabel({
+        sessionDate: item.date,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        now,
+        checkedIn: item.userIsCheckedIn,
+        checkInAvailable,
+      })
+    : timing.subtitle;
+  const ctaLabel = item?.userIsCheckedIn
+    ? "✓ Incheckad"
+    : item?.userIsRegistered
+      ? "✓ Redan anmäld"
+      : included
+        ? "Boka plats · Ingår"
+        : `Boka plats${priceLabel ? ` · ${priceLabel}` : ""}`;
 
   return (
     <section className="mx-auto max-w-md px-5 pt-2">
-      <div
-        className="overflow-hidden rounded-[28px] px-5 pb-5 pt-5"
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={!item}
+        className="w-full overflow-hidden rounded-[28px] px-5 pb-5 pt-5 text-left transition-transform active:scale-[0.99] disabled:opacity-70"
         style={{
           background: "#fff",
           border: `1px solid ${BORDER}`,
@@ -553,7 +593,7 @@ function FeaturedTonightHero({
             {item?.title || "Något händer snart"}
           </h2>
           <p className="mt-3 text-[15px] font-semibold leading-snug" style={{ color: MUTED }}>
-            {timing.subtitle}
+            {statusLabel || timing.subtitle}
           </p>
         </div>
 
@@ -561,18 +601,15 @@ function FeaturedTonightHero({
           <div className="min-w-0">
             <ParticipantLine participants={item?.participants} count={item?.registrationsCount} />
           </div>
-          <button
-            type="button"
-            onClick={onOpen}
-            disabled={!item}
+          <span
             className="inline-flex w-fit items-center gap-2 rounded-full px-5 py-3 text-[15px] font-black text-white shadow-sm disabled:opacity-60"
             style={{ fontFamily: FONT_HEADING, background: TEXT }}
           >
             <span>{ctaLabel}</span>
             <ArrowRight className="h-4 w-4" />
-          </button>
+          </span>
         </div>
-      </div>
+      </button>
     </section>
   );
 }
