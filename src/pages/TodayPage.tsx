@@ -374,12 +374,14 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           logMergeStep(
             "get_public_activity_session_hosts",
             sessionIds.length
-              ? (supabase as any)
-                  .rpc("get_public_activity_session_hosts", { session_ids: sessionIds })
-                  .catch((error: unknown) => {
+              ? (async () => {
+                  try {
+                    return await (supabase as any).rpc("get_public_activity_session_hosts", { session_ids: sessionIds });
+                  } catch (error) {
                     logTodayDebug("get_public_activity_session_hosts fallback to empty", errorSummary(error));
                     return { data: [] as PublicSessionHost[] };
-                  })
+                  }
+                })()
               : Promise.resolve({ data: [] as PublicSessionHost[] }),
           ),
           logMergeStep(
