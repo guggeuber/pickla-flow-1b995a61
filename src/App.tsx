@@ -69,6 +69,7 @@ import AuthReset from "./pages/AuthReset";
 import InvestPage from "./pages/InvestPage";
 import InvestMemoPage from "./pages/InvestMemoPage";
 import AdminInvestorPage from "./pages/AdminInvestorPage";
+import PulsePage from "./pages/PulsePage";
 import { Loader2 } from "lucide-react";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 
@@ -106,6 +107,7 @@ function AppRoutes() {
             <Route path="/" element={<TodayPage />} />
             <Route path="/invest" element={<InvestPage />} />
             <Route path="/invest/memo/:token" element={<InvestMemoPage />} />
+            <Route path="/pulse/:token" element={<PulsePage />} />
             <Route path="/hub/admin/investors" element={<ProtectedRoute><AdminInvestorPage /></ProtectedRoute>} />
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/hub" element={<HubPage />} />
