@@ -1,3 +1,5 @@
+import { resolveCustomerIdForUser } from './customers.ts';
+
 const DEFAULT_DAY_ACCESS_PRICE_SEK = 199;
 
 function roundSek(value: number) {
@@ -190,9 +192,43 @@ export async function resolveActivityPricingDecision({
     membership_included: membershipIncluded,
   };
 
+  if (purchaseKind === 'activity_ticket' && userId) {
+    const customerId = await resolveCustomerIdForUser(client, userId);
+    if (customerId) {
+      const { data: hostAssignment, error: hostError } = await client
+        .from('activity_session_hosts')
+        .select('id, customer_id')
+        .eq('venue_id', venueId)
+        .eq('activity_session_id', activitySessionId)
+        .eq('customer_id', customerId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (hostError) {
+        console.error('host compensation lookup failed', hostError.message);
+      }
+
+      if (hostAssignment?.id) {
+        finalAmountSek = 0;
+        accessDecision = 'membership_included';
+        entitlementType = 'host_comp';
+        pricingReason = 'host_comp';
+        sourceId = hostAssignment.id;
+        debug.host_comp = true;
+        debug.host_customer_id = customerId;
+        debug.host_assignment_id = hostAssignment.id;
+        debug.pricing_source = 'host_comp';
+        debug.channel_prices = {
+          ...(debug.channel_prices as Record<string, unknown>),
+          host: 0,
+        };
+      }
+    }
+  }
+
   if (pricingMode === 'fixed_ticket' && purchaseKind === 'activity_ticket') {
-    pricingReason = 'session_fixed_ticket_price';
-  } else if (userId) {
+    if (pricingReason !== 'host_comp') pricingReason = 'session_fixed_ticket_price';
+  } else if (userId && finalAmountSek > 0) {
     const { data: dayAccess } = await client
       .from('access_entitlements')
       .select('id, source_id')
@@ -313,7 +349,9 @@ export async function resolveActivityPricingDecision({
 
   finalAmountSek = roundSek(finalAmountSek);
   const checkoutLabel = finalAmountSek <= 0
-    ? accessDecision === 'day_access_included'
+    ? pricingReason === 'host_comp'
+      ? 'Ingår — du är värd'
+      : accessDecision === 'day_access_included'
       ? 'Ingår idag'
       : 'Ingår'
     : formatSek(finalAmountSek);

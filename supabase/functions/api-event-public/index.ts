@@ -264,7 +264,11 @@ function ogTitleForActivity(session: any, occurrenceDate: string) {
   return `${session?.name || 'Pickla'} · ${dayTime}`;
 }
 
-function ogDescriptionForActivity(registrationsCount: number) {
+function ogDescriptionForActivity(registrationsCount: number, hosts: any[] = []) {
+  const hostFirstName = String(hosts?.[0]?.first_name || '').trim();
+  if (hostFirstName) {
+    return `${hostFirstName}s pass — boka plats!`;
+  }
   // TODO(presence-consent): named visibility pending presence settings.
   return registrationsCount >= 3
     ? `${registrationsCount} spelare är med. Boka plats!`
@@ -424,6 +428,7 @@ async function buildActivityPreview(client: any, {
     .filter(Boolean)
     .reverse()
     .slice(-6);
+  const hosts = await publicActivitySessionHosts(client, [session.id]);
 
   return {
     room,
@@ -444,10 +449,23 @@ async function buildActivityPreview(client: any, {
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
       venue_slug: session.venues?.slug || null,
+      hosts: hosts.filter((host) => host.activity_session_id === session.id),
     },
     registrations: { count: 0 },
     messages,
   };
+}
+
+async function publicActivitySessionHosts(client: any, sessionIds: string[]) {
+  const cleanIds = [...new Set(sessionIds.filter(Boolean))];
+  if (!cleanIds.length) return [];
+  // Host first name is public because host assignment is an explicit public-facing role.
+  const { data, error } = await client.rpc('get_public_activity_session_hosts', { session_ids: cleanIds });
+  if (error) {
+    console.error('public host lookup failed', error.message);
+    return [];
+  }
+  return data || [];
 }
 
 async function activityRegistrationCount(client: any, activitySessionId: string, sessionDate: string) {
@@ -1000,7 +1018,7 @@ Deno.serve(async (req) => {
         const imageUrl = `${origin}/og-pickla.jpg`;
         const html = activityOgHtml({
           title: ogTitleForActivity(preview.activity_session, preview.activity_session.occurrence_date),
-          description: ogDescriptionForActivity(registrationCount),
+          description: ogDescriptionForActivity(registrationCount, preview.activity_session.hosts || []),
           canonicalUrl,
           imageUrl,
         });

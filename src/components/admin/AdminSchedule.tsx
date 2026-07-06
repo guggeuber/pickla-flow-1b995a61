@@ -39,6 +39,18 @@ interface TierPricing {
   discount_percent: number | null;
 }
 
+type HostOption = {
+  id?: string;
+  customer_id?: string | null;
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  full_name?: string | null;
+  identity_title?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
+
 type VenueCourtOption = {
   id: string;
   name: string;
@@ -89,6 +101,15 @@ const productKeyForActivityTicket = (sessionType: string) => {
   if (sessionType === "group_training") return "group_training";
   return "open_play_slot";
 };
+
+const hostOptionId = (host: HostOption) => host.customer_id || host.id || "";
+const hostOptionName = (host: HostOption) =>
+  host.display_name ||
+  host.full_name ||
+  [host.first_name, host.last_name].filter(Boolean).join(" ") ||
+  host.identity_title ||
+  host.email ||
+  "Värd";
 
 const courtLabel = (court: VenueCourtOption) => court.name || `Bana ${court.court_number || ""}`.trim() || "Bana";
 
@@ -404,6 +425,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [seriesDrafts, setSeriesDrafts] = useState<Record<string, any>>({});
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, any>>({});
+  const [hostSearch, setHostSearch] = useState("");
 
   const { data: products = [] } = useQuery<any[]>({
     queryKey: ["admin-access-products", venueId],
@@ -443,6 +465,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     () => venueCourts.filter((court) => !court.sport_type || court.sport_type === "pickleball"),
     [venueCourts]
   );
+
+  const normalizedHostSearch = hostSearch.trim();
+  const { data: hostSearchResults = [] } = useQuery<HostOption[]>({
+    queryKey: ["admin-schedule-host-search", venueId, normalizedHostSearch],
+    enabled: !!venueId && !!editingSessionId && normalizedHostSearch.length >= 2,
+    queryFn: () => apiGet("api-customers", "list", { venueId, search: normalizedHostSearch, limit: "8" }),
+  });
 
   const productMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -687,8 +716,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         court_ids: session.court_ids || [],
         is_active: Boolean(session.is_active),
         publish_status: session.publish_status || "published",
+        hosts: session.hosts || [],
+        host_customer_ids: session.host_customer_ids || (session.hosts || []).map((host: any) => host.customer_id).filter(Boolean),
       },
     }));
+    setHostSearch("");
   };
 
   const saveSession = (session: any) => {
@@ -741,6 +773,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         corporatePrice: draft.corporate_price_sek,
         promoPrice: draft.promo_price_sek,
       }),
+      host_customer_ids: Array.isArray(draft.host_customer_ids) ? draft.host_customer_ids : [],
     }, {
       onSuccess: () => setEditingSessionId(null),
     });
@@ -1159,6 +1192,76 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       </div>
                     </div>
                   </div>
+                  <div className="rounded-xl bg-muted/40 p-3 space-y-3">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Värd</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Tilldelade värdar syns på passet och betalar 0 kr när de anmäler sig till just detta pass.</p>
+                    </div>
+                    {(draft.hosts || []).length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {(draft.hosts || []).map((host: HostOption) => {
+                          const id = hostOptionId(host);
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setSessionDrafts((current) => ({
+                                ...current,
+                                [session.id]: {
+                                  ...draft,
+                                  hosts: (draft.hosts || []).filter((item: HostOption) => hostOptionId(item) !== id),
+                                  host_customer_ids: (draft.host_customer_ids || []).filter((customerId: string) => customerId !== id),
+                                },
+                              }))}
+                              className="inline-flex items-center gap-1 rounded-full bg-background px-2.5 py-1.5 text-[11px] font-bold text-foreground"
+                            >
+                              {hostOptionName(host)}
+                              <X className="h-3 w-3 text-muted-foreground" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    <input
+                      value={hostSearch}
+                      onChange={(e) => setHostSearch(e.target.value)}
+                      placeholder="Sök kund med namn, e-post eller telefon"
+                      className="w-full rounded-xl px-3 py-2.5 text-xs outline-none"
+                      style={inputStyle}
+                    />
+                    {normalizedHostSearch.length >= 2 && hostSearchResults.length > 0 ? (
+                      <div className="grid gap-1">
+                        {hostSearchResults
+                          .filter((host) => !((draft.host_customer_ids || []) as string[]).includes(hostOptionId(host)))
+                          .slice(0, 5)
+                          .map((host) => {
+                            const id = hostOptionId(host);
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                onClick={() => {
+                                  if (!id) return;
+                                  setSessionDrafts((current) => ({
+                                    ...current,
+                                    [session.id]: {
+                                      ...draft,
+                                      hosts: [...(draft.hosts || []), { ...host, customer_id: id }],
+                                      host_customer_ids: [...(draft.host_customer_ids || []), id],
+                                    },
+                                  }));
+                                  setHostSearch("");
+                                }}
+                                className="flex items-center justify-between gap-3 rounded-xl bg-background/70 px-3 py-2 text-left text-xs"
+                              >
+                                <span className="font-bold text-foreground">{hostOptionName(host)}</span>
+                                <span className="truncate text-muted-foreground">{host.email || host.phone || "Kund"}</span>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
                       Ingår i dagsmedlemskap
@@ -1297,6 +1400,11 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <p className="text-[11px] text-muted-foreground">
                           {dayLabel(session)} · {String(session.start_time).slice(0, 5)}-{String(session.end_time).slice(0, 5)}
                         </p>
+                        {(session.hosts || []).length > 0 ? (
+                          <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
+                            Värd: {(session.hosts || []).map((host: HostOption) => hostOptionName(host)).join(", ")}
+                          </p>
+                        ) : null}
                       </div>
                       <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${session.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}>
                         {session.is_active ? "Aktiv" : "Avstängd"} · {session.publish_status === "published" ? "Publicerad" : session.publish_status || "Utkast"}

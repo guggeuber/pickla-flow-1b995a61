@@ -49,6 +49,18 @@ function sessionTypeLabel(type?: string | null) {
   return type || "Aktivitet";
 }
 
+function hostFirstName(host: any) {
+  return String(host?.first_name || host?.display_name || "Värd").trim().split(/\s+/)[0] || "Värd";
+}
+
+function hostsLabel(hosts: any[]) {
+  const names = hosts.map(hostFirstName).filter(Boolean);
+  if (names.length === 1) return `Värd: ${names[0]}`;
+  if (names.length === 2) return `Värdar: ${names[0]} och ${names[1]}`;
+  if (names.length > 2) return `Värdar: ${names[0]}, ${names[1]} och ${names.length - 2} till`;
+  return "";
+}
+
 export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnly?: boolean }) {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
@@ -131,19 +143,33 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     queryFn: async () => {
       const { data: rows } = await supabase
         .from("session_registrations")
-        .select("id, user_id, status")
+        .select("id, user_id, customer_id, status")
         .eq("activity_session_id", sessionId!)
         .eq("session_date", occurrenceDate);
       return (rows || []).filter((row: any) => row.status !== "cancelled");
     },
   });
 
+  const sessionHosts = useMemo(() => {
+    return Array.isArray(session?.hosts) ? session.hosts : [];
+  }, [session?.hosts]);
+  const hostOrderByCustomerId = useMemo(() => {
+    return new Map(sessionHosts.map((host: any, index: number) => [host.customer_id, Number(host.sort_order ?? index)]));
+  }, [sessionHosts]);
   const participantUserIds = useMemo(() => {
-    const ids = registrations
+    const orderedRegistrations = [...registrations].sort((a: any, b: any) => {
+      const aHost = a.customer_id ? hostOrderByCustomerId.get(a.customer_id) : undefined;
+      const bHost = b.customer_id ? hostOrderByCustomerId.get(b.customer_id) : undefined;
+      if (aHost != null && bHost != null) return Number(aHost) - Number(bHost);
+      if (aHost != null) return -1;
+      if (bHost != null) return 1;
+      return 0;
+    });
+    const ids = orderedRegistrations
       .map((row: any) => row.user_id)
       .filter(Boolean);
     return [...new Set(ids)].slice(0, 3);
-  }, [registrations]);
+  }, [hostOrderByCustomerId, registrations]);
 
   const { data: participantProfiles = [] } = useQuery({
     queryKey: ["program-session-participant-profiles", participantUserIds],
@@ -198,7 +224,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     ""
   );
   const includedLabel = pricingIsIncluded
-    ? backendPricing?.accessDecision === "day_access_included"
+    ? backendPricing?.pricingReason === "host_comp" || backendPricing?.entitlementType === "host_comp"
+      ? "Ingår — du är värd"
+      : backendPricing?.accessDecision === "day_access_included"
       ? "Ingår idag"
       : `Ingår i ${membershipName || "medlemskap"}`
     : null;
@@ -538,6 +566,20 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                           {timingStatusLabel}
                         </p>
                       ) : null}
+                      {sessionHosts.length > 0 ? (
+                        <div className="mt-2 flex min-w-0 items-center gap-2 rounded-2xl bg-[#f8fafc] px-3 py-2" style={{ border: `1px solid ${MENU_BORDER}` }}>
+                          <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-neutral-950 text-[11px] font-black text-white">
+                            {sessionHosts[0]?.avatar_url ? (
+                              <img src={sessionHosts[0].avatar_url} alt={hostFirstName(sessionHosts[0])} className="h-full w-full object-cover" />
+                            ) : (
+                              hostFirstName(sessionHosts[0]).slice(0, 1).toUpperCase()
+                            )}
+                          </span>
+                          <p className="min-w-0 truncate text-[13px] font-semibold text-neutral-700">
+                            {hostsLabel(sessionHosts)}
+                          </p>
+                        </div>
+                      ) : null}
                       <div className="mt-2">
                         <PeopleRow people={participantProfiles} participantCount={registrationCount} />
                       </div>
@@ -583,10 +625,24 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   ) : null}
 
                   {pricingIsIncluded ? (
-                    <MemberStrip
-                      planName={backendPricing?.accessDecision === "day_access_included" ? "dagspass" : membershipName || "medlemskap"}
-                      amountSek={effectivePrice}
-                    />
+                    backendPricing?.pricingReason === "host_comp" || backendPricing?.entitlementType === "host_comp" ? (
+                      <div className="flex min-w-0 items-center justify-between gap-4 rounded-[22px] bg-emerald-50 px-4 py-3 text-emerald-900" style={{ border: "1px solid rgba(16,185,129,0.22)" }}>
+                        <span className="inline-flex min-w-0 items-center gap-2 text-[15px] font-black" style={{ fontFamily: FONT_HEADING }}>
+                          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-emerald-600 text-white">
+                            <Check className="h-4 w-4" />
+                          </span>
+                          <span className="truncate">Ingår — du är värd</span>
+                        </span>
+                        <span className="shrink-0 text-[22px] font-black leading-none" style={{ fontFamily: FONT_HEADING }}>
+                          0 kr
+                        </span>
+                      </div>
+                    ) : (
+                      <MemberStrip
+                        planName={backendPricing?.accessDecision === "day_access_included" ? "dagspass" : membershipName || "medlemskap"}
+                        amountSek={effectivePrice}
+                      />
+                    )
                   ) : (
                     <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
                       <PriceLine

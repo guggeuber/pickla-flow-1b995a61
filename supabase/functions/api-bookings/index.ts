@@ -45,6 +45,141 @@ function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
   };
 }
 
+async function createHostCompFinancialEvidence(admin: any, {
+  venueId,
+  userId,
+  customerId,
+  registrationId,
+  activitySessionId,
+  sessionDate,
+  meta,
+}: {
+  venueId: string;
+  userId: string;
+  customerId: string | null;
+  registrationId: string;
+  activitySessionId: string;
+  sessionDate: string;
+  meta: Record<string, any>;
+}) {
+  if (!registrationId) return;
+
+  const { data: existingLedger } = await admin
+    .from('ledger_entries')
+    .select('id')
+    .eq('source_type', 'host_comp')
+    .eq('source_id', registrationId)
+    .maybeSingle();
+  if (existingLedger?.id) return;
+
+  const productDescription = `Värdkomp: ${meta.session_name || 'Aktivitet'}`;
+  const { data: authResult } = await admin.auth.admin.getUserById(userId).catch(() => ({ data: null }));
+  const { data: customer } = customerId
+    ? await admin
+      .from('customers')
+      .select('display_name, first_name, last_name, primary_email, primary_phone')
+      .eq('id', customerId)
+      .maybeSingle()
+    : { data: null };
+  const customerName = meta.customer_name ||
+    customer?.display_name ||
+    [customer?.first_name, customer?.last_name].filter(Boolean).join(' ') ||
+    authResult?.user?.email ||
+    null;
+  const customerEmail = meta.customer_email || customer?.primary_email || authResult?.user?.email || null;
+  const customerPhone = meta.customer_phone || customer?.primary_phone || null;
+
+  let receipt: any = null;
+  const receiptPayload = {
+    booking_refs: [],
+    venue_id: venueId,
+    user_id: userId,
+    customer_id: customerId,
+    customer_name: customerName,
+    customer_email: customerEmail,
+    customer_phone: customerPhone,
+    purchase_type: 'activity_registration',
+    product_description: productDescription,
+    payment_method: 'Hostkomp',
+    payment_provider: 'pickla',
+    payment_status: 'paid',
+    total_inc_vat: 0,
+    total_ex_vat: 0,
+    vat_amount: 0,
+    total_inc_vat_sek: 0,
+    total_ex_vat_sek: 0,
+    vat_amount_sek: 0,
+    vat_rate: 6,
+    currency: 'SEK',
+    metadata: {
+      source_type: 'host_comp',
+      source_id: registrationId,
+      compensation_type: 'host_comp',
+      entitlement_type: 'host_comp',
+      activity_session_id: activitySessionId,
+      session_date: sessionDate,
+      session_type: meta.session_type || 'open_play',
+      host_assignment_id: meta.host_assignment_id || null,
+    },
+  };
+
+  const receiptResult = await admin
+    .from('booking_receipts')
+    .insert(receiptPayload)
+    .select('id, receipt_number, issued_at, customer_name')
+    .single();
+
+  if (receiptResult.error) {
+    if (receiptResult.error.code !== '23505') {
+      throw new Error(`Failed to create host comp receipt: ${receiptResult.error.message}`);
+    }
+    const { data: existingReceipt } = await admin
+      .from('booking_receipts')
+      .select('id, receipt_number, issued_at, customer_name')
+      .eq('metadata->>source_type', 'host_comp')
+      .eq('metadata->>source_id', registrationId)
+      .maybeSingle();
+    receipt = existingReceipt || null;
+  } else {
+    receipt = receiptResult.data;
+  }
+
+  const occurredAt = receipt?.issued_at || new Date().toISOString();
+  const accountingDate = DateTime
+    .fromISO(occurredAt, { zone: 'utc' })
+    .setZone('Europe/Stockholm')
+    .toISODate();
+  if (!accountingDate) throw new Error('Could not resolve host comp ledger date');
+
+  const { error: ledgerError } = await admin.from('ledger_entries').insert({
+    venue_id: venueId,
+    source_type: 'host_comp',
+    source_id: registrationId,
+    accounting_date: accountingDate,
+    occurred_at: occurredAt,
+    customer_id: customerId,
+    customer_name: receipt?.customer_name || customerName,
+    amount_inc_vat_minor: 0,
+    vat_amount_minor: 0,
+    payment_status: 'paid',
+    payment_method: 'Hostkomp',
+    receipt_number: receipt?.receipt_number || null,
+    booking_receipt_id: receipt?.id || null,
+    metadata: {
+      product_type: 'activity_ticket',
+      purchase_type: 'activity_registration',
+      compensation_type: 'host_comp',
+      activity_session_id: activitySessionId,
+      session_date: sessionDate,
+      session_type: meta.session_type || 'open_play',
+      host_assignment_id: meta.host_assignment_id || null,
+    },
+  });
+  if (ledgerError && ledgerError.code !== '23505') {
+    throw new Error(`Failed to create host comp ledger entry: ${ledgerError.message}`);
+  }
+}
+
 function normalizeCatalogResource(row: any) {
   const resource = row?.event_resource_catalog;
   return Array.isArray(resource) ? resource[0] : resource;
@@ -471,6 +606,48 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
+  if (product_type === 'activity_ticket' && meta.entitlement_type === 'host_comp') {
+    const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+    const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+    if (activitySessionId) {
+      const { data: registration, error: registrationError } = await adminFree.from('session_registrations').upsert({
+        venue_id,
+        activity_session_id: activitySessionId,
+        session_date: validDate,
+        user_id: entitlementUserId,
+        customer_id: entitlementCustomerId,
+        status: 'confirmed',
+        price_paid_sek: 0,
+        source_type: 'host_comp',
+        source_id: meta.host_assignment_id || null,
+        metadata: {
+          session_type: meta.session_type || 'open_play',
+          session_name: meta.session_name || null,
+          entitlement_type: 'host_comp',
+          pricing_reason: 'host_comp',
+          compensation_type: 'host_comp',
+          host_assignment_id: meta.host_assignment_id || null,
+        },
+      }, { onConflict: 'activity_session_id,session_date,user_id' })
+        .select('id')
+        .single();
+      if (registrationError) return errorResponse(registrationError.message, 500);
+      if (registration?.id) {
+        await createHostCompFinancialEvidence(adminFree, {
+          venueId: venue_id,
+          userId: entitlementUserId,
+          customerId: entitlementCustomerId,
+          registrationId: registration.id,
+          activitySessionId,
+          sessionDate: validDate,
+          meta,
+        });
+      }
+    }
+
+    return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
+  }
+
   if (product_type === 'activity_ticket' && meta.entitlement_type === 'open_play_unlimited') {
     const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
     const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
@@ -754,6 +931,9 @@ Deno.serve(async (req) => {
       meta.entitlement_type = activityPricingDecision.entitlementType || '';
       meta.membership_id = activityPricingDecision.membershipId || '';
       meta.pricing_reason = activityPricingDecision.pricingReason || '';
+      meta.host_assignment_id = activityPricingDecision.entitlementType === 'host_comp'
+        ? activityPricingDecision.sourceId || ''
+        : '';
       meta.pricing_mode = String(activityPricingDecision.debug?.pricing_mode || '');
       meta.online_price_sek = String(activityPricingDecision.debug?.online_price_sek || '');
       meta.desk_price_sek = String(activityPricingDecision.debug?.desk_price_sek || '');

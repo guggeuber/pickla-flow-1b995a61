@@ -116,6 +116,8 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
   delete next.sold_as;
   delete next.included_in_day_pass;
   delete next.included_in_unlimited;
+  delete next.host_customer_ids;
+  delete next.hosts;
 
   if (soldAs) {
     if (!['activity_ticket', 'day_pass', 'included_only'].includes(soldAs)) {
@@ -159,6 +161,127 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
   }
 
   return next;
+}
+
+function normalizeHostCustomerIds(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 10);
+}
+
+async function attachActivitySessionHosts(admin: any, sessions: any[]) {
+  const rows = Array.isArray(sessions) ? sessions : [];
+  const sessionIds = rows.map((session) => session.id).filter(Boolean);
+  if (!sessionIds.length) return rows;
+
+  const { data: hostRows, error } = await admin
+    .from('activity_session_hosts')
+    .select('id, venue_id, activity_session_id, customer_id, status, sort_order, customers(id, display_name, first_name, last_name, primary_email)')
+    .in('activity_session_id', sessionIds)
+    .eq('status', 'active')
+    .order('sort_order', { ascending: true });
+  if (error) throw new Error(error.message);
+
+  const hostsBySession = new Map<string, any[]>();
+  for (const host of hostRows || []) {
+    const customer = Array.isArray(host.customers) ? host.customers[0] : host.customers;
+    const list = hostsBySession.get(host.activity_session_id) || [];
+    list.push({
+      id: host.id,
+      customer_id: host.customer_id,
+      sort_order: host.sort_order || 0,
+      display_name: customer?.display_name || [customer?.first_name, customer?.last_name].filter(Boolean).join(' ') || customer?.primary_email || 'Värd',
+      first_name: customer?.first_name || null,
+      last_name: customer?.last_name || null,
+      email: customer?.primary_email || null,
+    });
+    hostsBySession.set(host.activity_session_id, list);
+  }
+
+  return rows.map((session) => ({
+    ...session,
+    hosts: hostsBySession.get(session.id) || [],
+    host_customer_ids: (hostsBySession.get(session.id) || []).map((host) => host.customer_id),
+  }));
+}
+
+async function syncActivitySessionHosts(admin: any, {
+  venueId,
+  sessionId,
+  hostCustomerIds,
+  userId,
+}: {
+  venueId: string;
+  sessionId: string;
+  hostCustomerIds: string[] | null;
+  userId: string;
+}) {
+  if (!hostCustomerIds) return;
+
+  const { data: session } = await admin
+    .from('activity_sessions')
+    .select('id')
+    .eq('id', sessionId)
+    .eq('venue_id', venueId)
+    .maybeSingle();
+  if (!session?.id) throw new Error('Activity session not found for host assignment');
+
+  const validCustomerIds = hostCustomerIds.length
+    ? (await admin
+      .from('customers')
+      .select('id')
+      .in('id', hostCustomerIds)
+      .eq('status', 'active')).data?.map((customer: any) => customer.id) || []
+    : [];
+  const validSet = new Set(validCustomerIds);
+  const orderedIds = hostCustomerIds.filter((id) => validSet.has(id));
+  if (hostCustomerIds.length && orderedIds.length !== hostCustomerIds.length) {
+    throw new Error('One or more selected hosts could not be found');
+  }
+
+  const { data: existing, error: existingError } = await admin
+    .from('activity_session_hosts')
+    .select('id, customer_id, status, sort_order')
+    .eq('venue_id', venueId)
+    .eq('activity_session_id', sessionId);
+  if (existingError) throw new Error(existingError.message);
+
+  const nextSet = new Set(orderedIds);
+  const existingByCustomer = new Map((existing || []).map((row: any) => [row.customer_id, row]));
+  const deactivateIds = (existing || [])
+    .filter((row: any) => row.status === 'active' && !nextSet.has(row.customer_id))
+    .map((row: any) => row.id);
+  if (deactivateIds.length) {
+    const { error } = await admin
+      .from('activity_session_hosts')
+      .update({ status: 'inactive' })
+      .in('id', deactivateIds);
+    if (error) throw new Error(error.message);
+  }
+
+  for (const [index, customerId] of orderedIds.entries()) {
+    const existingRow: any = existingByCustomer.get(customerId);
+    const payload = {
+      venue_id: venueId,
+      activity_session_id: sessionId,
+      customer_id: customerId,
+      status: 'active',
+      sort_order: index,
+      created_by: userId,
+    };
+    if (existingRow?.id) {
+      const needsUpdate = existingRow.status !== 'active' || Number(existingRow.sort_order || 0) !== index;
+      if (needsUpdate) {
+        const { error } = await admin
+          .from('activity_session_hosts')
+          .update({ status: 'active', sort_order: index })
+          .eq('id', existingRow.id);
+        if (error) throw new Error(error.message);
+      }
+    } else {
+      const { error } = await admin.from('activity_session_hosts').insert(payload);
+      if (error) throw new Error(error.message);
+    }
+  }
 }
 
 function stockholmBlockRange(date: string, startTime: string, endTime: string) {
@@ -4053,12 +4176,14 @@ Deno.serve(async (req) => {
         .eq('venue_id', venueId)
         .order('start_time', { ascending: true });
       if (e) return errorResponse(e.message);
-      return jsonResponse(data, 200, 15);
+      const sessionsWithHosts = await attachActivitySessionHosts(admin, data || []);
+      return jsonResponse(sessionsWithHosts, 200, 15);
     }
 
     if (req.method === 'POST' && path === 'activity-sessions') {
       const { venueId: _v, ...body } = await req.json();
       if (!body.name || !body.start_time || !body.end_time) return errorResponse('Missing name/start_time/end_time');
+      const hostCustomerIds = normalizeHostCustomerIds(body.host_customer_ids);
       const normalized = normalizeActivitySessionPayload(body);
       const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days : null;
       const { data, error: e } = await admin.from('activity_sessions').insert({
@@ -4082,17 +4207,30 @@ Deno.serve(async (req) => {
         metadata: normalized.metadata || {},
       }).select().single();
       if (e) return errorResponse(e.message);
-      return jsonResponse(data, 201);
+      try {
+        await syncActivitySessionHosts(admin, { venueId, sessionId: data.id, hostCustomerIds, userId });
+        const [sessionWithHosts] = await attachActivitySessionHosts(admin, [data]);
+        return jsonResponse(sessionWithHosts || data, 201);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Could not assign hosts', 400);
+      }
     }
 
     if (req.method === 'PATCH' && path === 'activity-sessions') {
       const { sessionId, ...updates } = await req.json();
       if (!sessionId) return errorResponse('Missing sessionId');
+      const hostCustomerIds = normalizeHostCustomerIds(updates.host_customer_ids);
       const normalized = normalizeActivitySessionPayload(updates);
       const { data, error: e } = await admin.from('activity_sessions')
         .update(normalized).eq('id', sessionId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
-      return jsonResponse(data);
+      try {
+        await syncActivitySessionHosts(admin, { venueId, sessionId, hostCustomerIds, userId });
+        const [sessionWithHosts] = await attachActivitySessionHosts(admin, [data]);
+        return jsonResponse(sessionWithHosts || data);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : 'Could not assign hosts', 400);
+      }
     }
 
     if (req.method === 'DELETE' && path === 'activity-sessions') {
