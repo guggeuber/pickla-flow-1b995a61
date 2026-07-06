@@ -69,7 +69,7 @@ CREATE POLICY "Venue admins can manage activity session hosts"
       WHERE vs.user_id = auth.uid()
         AND vs.venue_id = activity_session_hosts.venue_id
         AND vs.is_active = true
-        AND vs.role IN ('super_admin', 'admin', 'venue_admin')
+        AND vs.role = 'venue_admin'
     )
   )
   WITH CHECK (
@@ -80,7 +80,7 @@ CREATE POLICY "Venue admins can manage activity session hosts"
       WHERE vs.user_id = auth.uid()
         AND vs.venue_id = activity_session_hosts.venue_id
         AND vs.is_active = true
-        AND vs.role IN ('super_admin', 'admin', 'venue_admin')
+        AND vs.role = 'venue_admin'
     )
   );
 
