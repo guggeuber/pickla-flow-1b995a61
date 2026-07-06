@@ -158,6 +158,37 @@ type BookingGroup = BookingRow & {
   access_codes?: string[];
 };
 
+const TODAY_DEBUG_PREFIX = "[TodayPage]";
+
+function logTodayDebug(label: string, payload?: unknown) {
+  if (typeof window === "undefined") return;
+  console.info(`${TODAY_DEBUG_PREFIX} ${label}`, payload ?? "");
+}
+
+function summarizeFeedItem(item: FeedItem) {
+  return {
+    id: item.id,
+    kind: item.kind,
+    title: item.title,
+    date: item.date,
+    time: `${item.startTime}-${item.endTime}`,
+    status: item.status,
+    registrationsCount: item.registrationsCount,
+    capacity: item.capacity,
+  };
+}
+
+function sessionSummary(session: Pick<SessionRow, "id" | "name" | "session_date" | "recurrence_days" | "start_time" | "end_time" | "capacity">) {
+  return {
+    id: session.id,
+    name: session.name,
+    session_date: session.session_date,
+    recurrence_days: session.recurrence_days,
+    time: `${String(session.start_time).slice(0, 5)}-${String(session.end_time).slice(0, 5)}`,
+    capacity: session.capacity,
+  };
+}
+
 
 function programChatResourceId(sessionId: string, occurrenceDate: string) {
   return `activity_session:${sessionId}:${occurrenceDate}`;
@@ -210,13 +241,53 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           : Promise.resolve({ data: [] as BookingRow[], error: null }),
       ]);
 
+      if (sessionsRes.error || eventsRes.error || bookingsRes.error) {
+        logTodayDebug("source query errors", {
+          sessions: sessionsRes.error?.message,
+          events: eventsRes.error?.message,
+          bookings: bookingsRes.error?.message,
+        });
+      }
+
+      logTodayDebug("raw activity_sessions length", {
+        count: (sessionsRes.data || []).length,
+        venueId,
+        slug,
+        range: `${startDate}..${endDate}`,
+        now: now.toISO(),
+        sessions: ((sessionsRes.data || []) as SessionRow[]).map(sessionSummary),
+      });
+
       const sessionOccurrences: SessionOccurrence[] = [];
+      const occurrenceDiscards: Array<Record<string, unknown>> = [];
       for (const session of (sessionsRes.data || []) as SessionRow[]) {
+        let addedForSession = 0;
         if (session.session_date) {
           const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
           if (date >= now.startOf("day") && date < now.plus({ days: DAYS_AHEAD }).startOf("day")) {
             const occurrenceDate = date.toISODate();
-            if (occurrenceDate && !isPastOccurrence(date, session.end_time)) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+            if (occurrenceDate && !isPastOccurrence(date, session.end_time)) {
+              sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+              addedForSession += 1;
+            } else {
+              occurrenceDiscards.push({
+                ...sessionSummary(session),
+                date: occurrenceDate,
+                reason: "past_occurrence_end_time_lte_now",
+              });
+            }
+          } else {
+            occurrenceDiscards.push({
+              ...sessionSummary(session),
+              date: session.session_date,
+              reason: "one_off_outside_home_horizon",
+            });
+          }
+          if (addedForSession === 0) {
+            occurrenceDiscards.push({
+              ...sessionSummary(session),
+              reason: "no_visible_one_off_occurrence_created",
+            });
           }
           continue;
         }
@@ -224,10 +295,33 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           const date = now.plus({ days: offset });
           if ((session.recurrence_days || []).includes(date.weekday % 7)) {
             const occurrenceDate = date.toISODate();
-            if (occurrenceDate && !isPastOccurrence(date, session.end_time)) sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+            if (occurrenceDate && !isPastOccurrence(date, session.end_time)) {
+              sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+              addedForSession += 1;
+            } else {
+              occurrenceDiscards.push({
+                ...sessionSummary(session),
+                date: occurrenceDate,
+                reason: "past_occurrence_end_time_lte_now",
+              });
+            }
           }
         }
+        if (addedForSession === 0) {
+          occurrenceDiscards.push({
+            ...sessionSummary(session),
+            reason: "recurrence_days_do_not_match_home_horizon_or_all_occurrences_past",
+          });
+        }
       }
+
+      logTodayDebug("session occurrence expansion", {
+        created: sessionOccurrences.map((session) => ({
+          ...sessionSummary(session),
+          occurrence_date: session.occurrence_date,
+        })),
+        discarded: occurrenceDiscards,
+      });
 
       const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
       const [registrationsRes, socialProofRes, hostsRes, overrideMap] = await Promise.all([
@@ -256,6 +350,10 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
           : Promise.resolve(new Map()),
       ]);
+
+      if ("error" in registrationsRes && registrationsRes.error) {
+        logTodayDebug("session_registrations query error", registrationsRes.error.message);
+      }
 
       const registrationCounts = new Map<string, number>();
       const registrationsByKey = new Map<string, RegistrationRow[]>();
@@ -306,7 +404,16 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
 
       const visibleSessionOccurrences = sessionOccurrences.filter((session) => {
         const override = overrideMap.get(occurrenceOverrideKey(session.id, session.occurrence_date));
-        return !isPublicActivityOverrideHidden(override?.status);
+        const hidden = isPublicActivityOverrideHidden(override?.status);
+        if (hidden) {
+          logTodayDebug("discard session occurrence", {
+            ...sessionSummary(session),
+            occurrence_date: session.occurrence_date,
+            reason: "activity_session_override_hidden_or_cancelled",
+            override,
+          });
+        }
+        return !hidden;
       });
 
       const sessionItems: FeedItem[] = visibleSessionOccurrences.map((session) => {
@@ -391,9 +498,19 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         };
       });
 
-      return [...sessionItems, ...eventItems, ...bookingItems].sort((a, b) =>
+      const mergedItems = [...sessionItems, ...eventItems, ...bookingItems].sort((a, b) =>
         `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)
       );
+
+      logTodayDebug("merged feed items", {
+        sessionItems: sessionItems.length,
+        eventItems: eventItems.length,
+        bookingItems: bookingItems.length,
+        mergedActivityItems: mergedItems.filter((item) => item.kind === "session" || item.kind === "event").length,
+        items: mergedItems.map(summarizeFeedItem),
+      });
+
+      return mergedItems;
     },
   });
 }
@@ -537,6 +654,16 @@ function itemEndDateTime(item: FeedItem) {
 
 function isJoinableItem(item: FeedItem, now: DateTime) {
   return item.status !== "Full" && itemEndDateTime(item) > now;
+}
+
+function getHeroDiscardReason(item: FeedItem, now: DateTime, todayKey: string, tomorrowKey: string) {
+  const end = itemEndDateTime(item);
+  if (item.kind !== "session" && item.kind !== "event") return "not_activity_or_event";
+  if (item.date !== todayKey && item.date !== tomorrowKey) return "not_today_or_tomorrow";
+  if (item.status === "Full") return "full";
+  if (!end.isValid) return "invalid_end_datetime";
+  if (end <= now) return "end_time_lte_now";
+  return "kept";
 }
 
 function sortBySoonestThenPeople(items: FeedItem[]) {
@@ -684,6 +811,27 @@ export default function TodayPage() {
     tomorrowJoinable[0] ||
     null
   );
+
+  useEffect(() => {
+    const heroCandidates = activityItems.filter((item) => item.kind === "session" || item.kind === "event");
+    logTodayDebug("hero selection", {
+      now: now.toISO(),
+      rawItemsLength: items.length,
+      mergedActivityItemsLength: activityItems.length,
+      todayKey,
+      tomorrowKey,
+      todayItems: todayActivities.map(summarizeFeedItem),
+      todayJoinable: todayJoinable.map(summarizeFeedItem),
+      tomorrowJoinable: tomorrowJoinable.map(summarizeFeedItem),
+      featuredItem: featuredItem ? summarizeFeedItem(featuredItem) : null,
+      discardReasons: heroCandidates.map((item) => ({
+        ...summarizeFeedItem(item),
+        reason: getHeroDiscardReason(item, now, todayKey!, tomorrowKey!),
+        endDateTime: itemEndDateTime(item).toISO(),
+      })),
+    });
+  }, [items, activityItems, todayActivities, todayJoinable, tomorrowJoinable, featuredItem, now, todayKey, tomorrowKey]);
+
   const todayListItems = todayActivities.filter((item) => item.id !== featuredItem?.id);
   const weekendMode = WEEKEND_SECTION_TRIGGER_WEEKDAYS.includes(now.weekday);
   const daysUntilSaturday = (6 - now.weekday + 7) % 7 || 7;
