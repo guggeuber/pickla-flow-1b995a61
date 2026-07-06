@@ -5,11 +5,12 @@ const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
 const SLOW_API_MS = 700;
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
+async function getAuthHeaders(includeJsonContentType = true): Promise<Record<string, string>> {
   const { data: { session } } = await supabase.auth.getSession();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
+  if (includeJsonContentType) {
+    headers["Content-Type"] = "application/json";
+  }
   if (session?.access_token) {
     headers["Authorization"] = `Bearer ${session.access_token}`;
   }
@@ -40,7 +41,7 @@ export async function apiGet<T = unknown>(
   endpoint: string,
   params?: Record<string, string>
 ): Promise<T> {
-  const headers = await getAuthHeaders();
+  const headers = await getAuthHeaders(false);
   const url = new URL(`${BASE_URL}/${fn}/${endpoint}`);
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));

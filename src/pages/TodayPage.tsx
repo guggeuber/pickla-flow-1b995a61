@@ -158,54 +158,6 @@ type BookingGroup = BookingRow & {
   access_codes?: string[];
 };
 
-const TODAY_DEBUG_PREFIX = "[TodayPage]";
-
-function logTodayDebug(label: string, payload?: unknown) {
-  if (typeof window === "undefined") return;
-  console.info(`${TODAY_DEBUG_PREFIX} ${label}`, payload ?? "");
-}
-
-function summarizeFeedItem(item: FeedItem) {
-  return {
-    id: item.id,
-    kind: item.kind,
-    title: item.title,
-    date: item.date,
-    time: `${item.startTime}-${item.endTime}`,
-    status: item.status,
-    registrationsCount: item.registrationsCount,
-    capacity: item.capacity,
-  };
-}
-
-function sessionSummary(session: Pick<SessionRow, "id" | "name" | "session_date" | "recurrence_days" | "start_time" | "end_time" | "capacity">) {
-  return {
-    id: session.id,
-    name: session.name,
-    session_date: session.session_date,
-    recurrence_days: session.recurrence_days,
-    time: `${String(session.start_time).slice(0, 5)}-${String(session.end_time).slice(0, 5)}`,
-    capacity: session.capacity,
-  };
-}
-
-function errorSummary(error: unknown) {
-  if (error instanceof Error) return { name: error.name, message: error.message, stack: error.stack };
-  return error;
-}
-
-async function logMergeStep<T>(label: string, promise: Promise<T>) {
-  try {
-    const result = await promise;
-    logTodayDebug(`merge source ${label} fulfilled`, result);
-    return result;
-  } catch (error) {
-    logTodayDebug(`merge source ${label} rejected`, errorSummary(error));
-    throw error;
-  }
-}
-
-
 function programChatResourceId(sessionId: string, occurrenceDate: string) {
   return `activity_session:${sessionId}:${occurrenceDate}`;
 }
@@ -257,53 +209,15 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           : Promise.resolve({ data: [] as BookingRow[], error: null }),
       ]);
 
-      if (sessionsRes.error || eventsRes.error || bookingsRes.error) {
-        logTodayDebug("source query errors", {
-          sessions: sessionsRes.error?.message,
-          events: eventsRes.error?.message,
-          bookings: bookingsRes.error?.message,
-        });
-      }
-
-      logTodayDebug("raw activity_sessions length", {
-        count: (sessionsRes.data || []).length,
-        venueId,
-        slug,
-        range: `${startDate}..${endDate}`,
-        now: now.toISO(),
-        sessions: ((sessionsRes.data || []) as SessionRow[]).map(sessionSummary),
-      });
-
       const sessionOccurrences: SessionOccurrence[] = [];
-      const occurrenceDiscards: Array<Record<string, unknown>> = [];
       for (const session of (sessionsRes.data || []) as SessionRow[]) {
-        let addedForSession = 0;
         if (session.session_date) {
           const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
           if (date >= now.startOf("day") && date < now.plus({ days: DAYS_AHEAD }).startOf("day")) {
             const occurrenceDate = date.toISODate();
             if (occurrenceDate && !isPastOccurrence(date, session.end_time)) {
               sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
-              addedForSession += 1;
-            } else {
-              occurrenceDiscards.push({
-                ...sessionSummary(session),
-                date: occurrenceDate,
-                reason: "past_occurrence_end_time_lte_now",
-              });
             }
-          } else {
-            occurrenceDiscards.push({
-              ...sessionSummary(session),
-              date: session.session_date,
-              reason: "one_off_outside_home_horizon",
-            });
-          }
-          if (addedForSession === 0) {
-            occurrenceDiscards.push({
-              ...sessionSummary(session),
-              reason: "no_visible_one_off_occurrence_created",
-            });
           }
           continue;
         }
@@ -313,104 +227,42 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
             const occurrenceDate = date.toISODate();
             if (occurrenceDate && !isPastOccurrence(date, session.end_time)) {
               sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
-              addedForSession += 1;
-            } else {
-              occurrenceDiscards.push({
-                ...sessionSummary(session),
-                date: occurrenceDate,
-                reason: "past_occurrence_end_time_lte_now",
-              });
             }
           }
         }
-        if (addedForSession === 0) {
-          occurrenceDiscards.push({
-            ...sessionSummary(session),
-            reason: "recurrence_days_do_not_match_home_horizon_or_all_occurrences_past",
-          });
-        }
       }
-
-      logTodayDebug("session occurrence expansion", {
-        created: sessionOccurrences.map((session) => ({
-          ...sessionSummary(session),
-          occurrence_date: session.occurrence_date,
-        })),
-        discarded: occurrenceDiscards,
-      });
 
       const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
-      let registrationsRes;
-      let socialProofRes;
-      let hostsRes;
-      let overrideMap;
-      try {
-        [registrationsRes, socialProofRes, hostsRes, overrideMap] = await Promise.all([
-          logMergeStep(
-            "session_registrations",
-            sessionIds.length
-              ? supabase
-                  .from("session_registrations")
-                  .select("activity_session_id, session_date, status, user_id, customer_id")
-                  .in("activity_session_id", sessionIds)
-                  .gte("session_date", startDate)
-                  .lte("session_date", endDate)
-              : Promise.resolve({ data: [] as RegistrationRow[] }),
-          ),
-          logMergeStep(
-            "activity-social-proof",
-            sessionIds.length
-              ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
-                  venueSlug: slug,
-                  sessionIds: sessionIds.join(","),
-                  startDate,
-                  endDate,
-                }).catch((error) => {
-                  logTodayDebug("activity-social-proof fallback to empty", errorSummary(error));
-                  return { occurrences: [] };
-                })
-              : Promise.resolve({ occurrences: [] }),
-          ),
-          logMergeStep(
-            "get_public_activity_session_hosts",
-            sessionIds.length
-              ? (async () => {
-                  try {
-                    return await (supabase as any).rpc("get_public_activity_session_hosts", { session_ids: sessionIds });
-                  } catch (error) {
-                    logTodayDebug("get_public_activity_session_hosts fallback to empty", errorSummary(error));
-                    return { data: [] as PublicSessionHost[] };
-                  }
-                })()
-              : Promise.resolve({ data: [] as PublicSessionHost[] }),
-          ),
-          logMergeStep(
-            "activity_session_overrides",
-            sessionIds.length
-              ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
-              : Promise.resolve(new Map()),
-          ),
-        ]);
-      } catch (error) {
-        logTodayDebug("merge pipeline error after occurrence expansion", errorSummary(error));
-        throw error;
-      }
-
-      logTodayDebug("merge source summary", {
-        expandedOccurrences: sessionOccurrences.length,
-        sessionIds,
-        registrationsRows: (registrationsRes.data || []).length,
-        registrationsError: "error" in registrationsRes ? registrationsRes.error?.message : undefined,
-        socialProofRows: (socialProofRes.occurrences || []).length,
-        hostsRows: (hostsRes.data || []).length,
-        hostsError: "error" in hostsRes ? hostsRes.error?.message : undefined,
-        overrideRows: overrideMap instanceof Map ? overrideMap.size : null,
-        overrideMapType: overrideMap?.constructor?.name,
-      });
-
-      if ("error" in registrationsRes && registrationsRes.error) {
-        logTodayDebug("session_registrations query error", registrationsRes.error.message);
-      }
+      const [registrationsRes, socialProofRes, hostsRes, overrideMap] = await Promise.all([
+        sessionIds.length
+          ? supabase
+              .from("session_registrations")
+              .select("activity_session_id, session_date, status, user_id, customer_id")
+              .in("activity_session_id", sessionIds)
+              .gte("session_date", startDate)
+              .lte("session_date", endDate)
+          : Promise.resolve({ data: [] as RegistrationRow[] }),
+        sessionIds.length
+          ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
+              venueSlug: slug,
+              sessionIds: sessionIds.join(","),
+              startDate,
+              endDate,
+            }).catch(() => ({ occurrences: [] }))
+          : Promise.resolve({ occurrences: [] }),
+        sessionIds.length
+          ? (async () => {
+              try {
+                return await (supabase as any).rpc("get_public_activity_session_hosts", { session_ids: sessionIds });
+              } catch {
+                return { data: [] as PublicSessionHost[] };
+              }
+            })()
+          : Promise.resolve({ data: [] as PublicSessionHost[] }),
+        sessionIds.length
+          ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
+          : Promise.resolve(new Map()),
+      ]);
 
       const registrationCounts = new Map<string, number>();
       const registrationsByKey = new Map<string, RegistrationRow[]>();
@@ -459,32 +311,10 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
       }
 
-      const mergeTrace: Array<Record<string, unknown>> = [];
-
       const visibleSessionOccurrences = sessionOccurrences.filter((session) => {
         const occurrenceKey = occurrenceOverrideKey(session.id, session.occurrence_date);
         const override = overrideMap.get(occurrenceKey);
         const hidden = isPublicActivityOverrideHidden(override?.status);
-        const socialProof = socialProofByKey.get(occurrenceKey);
-        const registrationCount = registrationCounts.get(occurrenceKey) || 0;
-        mergeTrace.push({
-          ...sessionSummary(session),
-          occurrence_id: occurrenceKey,
-          occurrence_date: session.occurrence_date,
-          matchingOverride: override || null,
-          matchingSocialProof: socialProof || null,
-          registrationCount,
-          mergeResult: hidden ? "discarded" : "kept_for_session_item_map",
-          discardReason: hidden ? "activity_session_override_hidden_or_cancelled" : null,
-        });
-        if (hidden) {
-          logTodayDebug("discard session occurrence", {
-            ...sessionSummary(session),
-            occurrence_date: session.occurrence_date,
-            reason: "activity_session_override_hidden_or_cancelled",
-            override,
-          });
-        }
         return !hidden;
       });
 
@@ -532,8 +362,6 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         };
       });
 
-      logTodayDebug("merge occurrence trace", mergeTrace);
-
       const eventItems: FeedItem[] = ((eventsRes.data || []) as EventRow[]).map((event) => ({
         id: `event:${event.id}`,
         kind: "event",
@@ -575,14 +403,6 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const mergedItems = [...sessionItems, ...eventItems, ...bookingItems].sort((a, b) =>
         `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)
       );
-
-      logTodayDebug("merged feed items", {
-        sessionItems: sessionItems.length,
-        eventItems: eventItems.length,
-        bookingItems: bookingItems.length,
-        mergedActivityItems: mergedItems.filter((item) => item.kind === "session" || item.kind === "event").length,
-        items: mergedItems.map(summarizeFeedItem),
-      });
 
       return mergedItems;
     },
@@ -730,16 +550,6 @@ function isJoinableItem(item: FeedItem, now: DateTime) {
   return item.status !== "Full" && itemEndDateTime(item) > now;
 }
 
-function getHeroDiscardReason(item: FeedItem, now: DateTime, todayKey: string, tomorrowKey: string) {
-  const end = itemEndDateTime(item);
-  if (item.kind !== "session" && item.kind !== "event") return "not_activity_or_event";
-  if (item.date !== todayKey && item.date !== tomorrowKey) return "not_today_or_tomorrow";
-  if (item.status === "Full") return "full";
-  if (!end.isValid) return "invalid_end_datetime";
-  if (end <= now) return "end_time_lte_now";
-  return "kept";
-}
-
 function sortBySoonestThenPeople(items: FeedItem[]) {
   return [...items].sort((a, b) => {
     const timeCompare = `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`);
@@ -885,26 +695,6 @@ export default function TodayPage() {
     tomorrowJoinable[0] ||
     null
   );
-
-  useEffect(() => {
-    const heroCandidates = activityItems.filter((item) => item.kind === "session" || item.kind === "event");
-    logTodayDebug("hero selection", {
-      now: now.toISO(),
-      rawItemsLength: items.length,
-      mergedActivityItemsLength: activityItems.length,
-      todayKey,
-      tomorrowKey,
-      todayItems: todayActivities.map(summarizeFeedItem),
-      todayJoinable: todayJoinable.map(summarizeFeedItem),
-      tomorrowJoinable: tomorrowJoinable.map(summarizeFeedItem),
-      featuredItem: featuredItem ? summarizeFeedItem(featuredItem) : null,
-      discardReasons: heroCandidates.map((item) => ({
-        ...summarizeFeedItem(item),
-        reason: getHeroDiscardReason(item, now, todayKey!, tomorrowKey!),
-        endDateTime: itemEndDateTime(item).toISO(),
-      })),
-    });
-  }, [items, activityItems, todayActivities, todayJoinable, tomorrowJoinable, featuredItem, now, todayKey, tomorrowKey]);
 
   const todayListItems = todayActivities.filter((item) => item.id !== featuredItem?.id);
   const weekendMode = WEEKEND_SECTION_TRIGGER_WEEKDAYS.includes(now.weekday);

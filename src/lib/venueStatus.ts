@@ -119,6 +119,7 @@ export function useVenueWithHours(slug: string | undefined) {
   return useQuery({
     queryKey: ["venue-with-hours", slug],
     enabled: !!slug,
+    staleTime: 60_000,
     queryFn: async () => {
       const data = await apiGet<any>("api-bookings", "public-venue", { slug });
       return {
