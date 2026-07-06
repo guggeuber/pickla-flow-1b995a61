@@ -142,7 +142,27 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     }),
   });
 
-  const session = data?.activity_session || directSession || optimisticSession;
+  const session = useMemo(() => {
+    const baseSession = directSession || optimisticSession || null;
+    const previewSession = data?.activity_session || null;
+    if (!previewSession) return baseSession;
+    if (!baseSession) return previewSession;
+
+    return {
+      ...baseSession,
+      ...previewSession,
+      court_ids: Array.isArray(previewSession.court_ids)
+        ? previewSession.court_ids
+        : Array.isArray(baseSession.court_ids)
+          ? baseSession.court_ids
+          : [],
+      access_policy: previewSession.access_policy ?? baseSession.access_policy,
+      metadata: {
+        ...(baseSession.metadata || {}),
+        ...(previewSession.metadata || {}),
+      },
+    };
+  }, [data?.activity_session, directSession, optimisticSession]);
   const room = data?.room;
   const occurrenceDate = data?.occurrence_date || requestedDate || session?.session_date || null;
   const venueId = session?.venue_id || data?.venue?.id;
