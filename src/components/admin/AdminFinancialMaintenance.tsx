@@ -29,11 +29,12 @@ function formatSek(value: number | undefined | null) {
   return `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
 }
 
-function parseSekInput(value: string) {
+function parseSekInput(value: string): { value: number | null; key: string; invalid: boolean } {
   const normalized = value.trim().replace(/\s/g, "").replace(",", ".");
-  if (!normalized) return null;
+  if (!normalized) return { value: null, key: "", invalid: false };
   const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (!Number.isFinite(parsed)) return { value: null, key: normalized, invalid: true };
+  return { value: parsed, key: parsed.toFixed(2), invalid: false };
 }
 
 function statusLabel(status: string) {
@@ -200,11 +201,19 @@ export default function AdminFinancialMaintenance({ venueId }: Props) {
   const [backfillEndDate, setBackfillEndDate] = useState(stockholmToday());
   const [backfillExpectedTotal, setBackfillExpectedTotal] = useState("");
   const [backfillResult, setBackfillResult] = useState<AdminZettleBackfillResult | null>(null);
+  const [backfillDryRunKey, setBackfillDryRunKey] = useState<string | null>(null);
   const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
 
   const executableInvoiceIds = useMemo(() => reportInvoiceIds(latestDryRun), [latestDryRun]);
   const report = latestReport || latestDryRun;
   const summary = report?.summary;
+  const expectedTotalSek = parseSekInput(backfillExpectedTotal);
+  const backfillRequestKey = `${backfillStartDate}|${backfillEndDate}|${expectedTotalSek.key}`;
+  const canExecuteZettleBackfill =
+    backfillDryRunKey === backfillRequestKey
+    && backfillResult?.dry_run === true
+    && backfillResult.ok === true
+    && backfillResult.failures.length === 0;
 
   const run = async (mode: "dry_run" | "execute") => {
     setRunningMode(mode);
@@ -225,17 +234,32 @@ export default function AdminFinancialMaintenance({ venueId }: Props) {
   };
 
   const runZettleBackfill = async (dryRun: boolean) => {
+    if (expectedTotalSek.invalid) {
+      toast.error("Expected total måste vara ett giltigt belopp.");
+      return;
+    }
+    if (!dryRun && !canExecuteZettleBackfill) {
+      toast.error("Kör en lyckad Dry Run med samma datum och belopp först.");
+      return;
+    }
+    if (!dryRun) {
+      const confirmed = window.confirm(`Run historical Zettle backfill for ${backfillStartDate} to ${backfillEndDate}?`);
+      if (!confirmed) return;
+    }
     try {
-      const expectedTotalSek = parseSekInput(backfillExpectedTotal);
       const result = await zettleBackfill.mutateAsync({
         startDate: backfillStartDate,
         endDate: backfillEndDate,
         dryRun,
-        expectedTotalSek,
+        expectedTotalSek: expectedTotalSek.value,
       });
       setBackfillResult(result);
+      if (dryRun) {
+        setBackfillDryRunKey(result.ok && result.failures.length === 0 ? backfillRequestKey : null);
+      }
       toast.success(dryRun ? "Zettle dry run klar" : "Zettle backfill klar");
     } catch (error) {
+      if (dryRun) setBackfillDryRunKey(null);
       toast.error(error instanceof Error ? error.message : "Zettle backfill failed");
     }
   };
@@ -273,7 +297,7 @@ export default function AdminFinancialMaintenance({ venueId }: Props) {
             Exceptional repair for historical POS revenue that exists in Zettle App but is missing from Pickla Ledger. Kör dry run först.
           </p>
         </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-[150px_150px_1fr_auto_auto] sm:items-end">
+        <div className="mt-3 grid gap-3 sm:grid-cols-[150px_150px_1fr] sm:items-end">
           <label className="space-y-1">
             <span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-muted-foreground">Start</span>
             <Input
@@ -302,25 +326,38 @@ export default function AdminFinancialMaintenance({ venueId }: Props) {
               className="h-9"
             />
           </label>
+        </div>
+        {expectedTotalSek.invalid && (
+          <p className="mt-2 text-xs font-semibold text-destructive">Expected total måste vara ett giltigt SEK-belopp.</p>
+        )}
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <Button
             type="button"
             variant="outline"
             size="sm"
+            className="w-full"
             onClick={() => runZettleBackfill(true)}
-            disabled={zettleBackfill.isPending || !backfillStartDate || !backfillEndDate}
+            disabled={zettleBackfill.isPending || !backfillStartDate || !backfillEndDate || expectedTotalSek.invalid}
           >
             {zettleBackfill.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Search className="mr-2 h-3.5 w-3.5" />}
             Dry Run
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => runZettleBackfill(false)}
-            disabled={zettleBackfill.isPending || !backfillStartDate || !backfillEndDate}
-          >
-            {zettleBackfill.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
-            Execute
-          </Button>
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/15 hover:text-destructive"
+              onClick={() => runZettleBackfill(false)}
+              disabled={zettleBackfill.isPending || !canExecuteZettleBackfill}
+            >
+              {zettleBackfill.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+              Execute
+            </Button>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Aktiv först efter en lyckad Dry Run med samma datum och belopp.
+            </p>
+          </div>
         </div>
 
         {backfillResult && (
