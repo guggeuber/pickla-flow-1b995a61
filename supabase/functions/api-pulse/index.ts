@@ -12,6 +12,34 @@ type Metric = {
   footnote: string;
 };
 
+type RangeMode = 'month' | 'ytd' | '6m' | '12m';
+
+type PeriodWindow = {
+  mode: RangeMode;
+  label: string;
+  start: Date;
+  end: Date;
+  effectiveEnd: Date;
+  previousStart: Date;
+  previousEnd: Date;
+  previousEffectiveEnd: Date;
+};
+
+type PulseSeriesPoint = {
+  month: string;
+  label: string;
+  revenue_sek: number;
+  visits: number;
+  new_customers: number;
+};
+
+type RevenueSource = {
+  key: string;
+  label: string;
+  value: number;
+  share_pct: number;
+};
+
 type PulseToken = {
   id: string;
   organization_id: string | null;
@@ -24,6 +52,7 @@ const TOKEN_TTL_DAYS = 30;
 const CACHE_SECONDS = 900;
 const PAGE_SIZE = 1000;
 const DAY_MS = 86_400_000;
+const SERIES_MONTHS_FOR_MONTH_VIEW = 6;
 
 function privateJsonResponse(data: unknown, status = 200, cacheSeconds = 0) {
   const headers: Record<string, string> = {
@@ -60,6 +89,14 @@ function addMonthsUtc(date: Date, months: number) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
 }
 
+function addDaysUtc(date: Date, days: number) {
+  return new Date(date.getTime() + days * DAY_MS);
+}
+
+function addYearsUtc(date: Date, years: number) {
+  return new Date(Date.UTC(date.getUTCFullYear() + years, date.getUTCMonth(), date.getUTCDate()));
+}
+
 function monthKey(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
@@ -68,10 +105,17 @@ function monthLabel(date: Date) {
   return new Intl.DateTimeFormat('sv-SE', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
 }
 
+function rangeLabel(mode: RangeMode, start: Date, endExclusive: Date) {
+  if (mode === 'month') return monthLabel(start);
+  if (mode === 'ytd') return `YTD ${start.getUTCFullYear()}`;
+  const endMonth = addMonthsUtc(endExclusive, -1);
+  return `${monthLabel(start)} – ${monthLabel(endMonth)}`;
+}
+
 function resolveMonth(monthParam: string | null) {
   const now = new Date();
   const current = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const min = addMonthsUtc(current, -5);
+  const min = addMonthsUtc(current, -11);
   if (!monthParam || !/^\d{4}-\d{2}$/.test(monthParam)) return current;
   const [year, month] = monthParam.split('-').map(Number);
   const parsed = new Date(Date.UTC(year, month - 1, 1));
@@ -79,6 +123,71 @@ function resolveMonth(monthParam: string | null) {
   if (parsed < min) return min;
   if (parsed > current) return current;
   return parsed;
+}
+
+function resolveRangeMode(modeParam: string | null): RangeMode {
+  if (modeParam === 'ytd' || modeParam === '6m' || modeParam === '12m') return modeParam;
+  return 'month';
+}
+
+function equivalentPreviousEffectiveEnd(start: Date, effectiveEnd: Date, previousStart: Date, previousEnd: Date) {
+  const elapsed = effectiveEnd.getTime() - start.getTime();
+  const candidate = new Date(previousStart.getTime() + elapsed);
+  return candidate > previousEnd ? previousEnd : candidate;
+}
+
+function resolvePeriod(monthStart: Date, mode: RangeMode): PeriodWindow {
+  const now = new Date();
+  const end = addMonthsUtc(monthStart, 1);
+  const effectiveEnd = end > now ? now : end;
+
+  if (mode === 'ytd') {
+    const start = new Date(Date.UTC(monthStart.getUTCFullYear(), 0, 1));
+    const previousStart = addYearsUtc(start, -1);
+    const previousEnd = addYearsUtc(end, -1);
+    const previousEffectiveEnd = addYearsUtc(effectiveEnd, -1);
+    return {
+      mode,
+      label: rangeLabel(mode, start, end),
+      start,
+      end,
+      effectiveEnd,
+      previousStart,
+      previousEnd,
+      previousEffectiveEnd,
+    };
+  }
+
+  if (mode === '6m' || mode === '12m') {
+    const months = mode === '6m' ? 6 : 12;
+    const start = addMonthsUtc(monthStart, -(months - 1));
+    const previousEnd = start;
+    const previousStart = addMonthsUtc(start, -months);
+    return {
+      mode,
+      label: rangeLabel(mode, start, end),
+      start,
+      end,
+      effectiveEnd,
+      previousStart,
+      previousEnd,
+      previousEffectiveEnd: equivalentPreviousEffectiveEnd(start, effectiveEnd, previousStart, previousEnd),
+    };
+  }
+
+  const previousStart = addMonthsUtc(monthStart, -1);
+  const previousEnd = monthStart;
+
+  return {
+    mode,
+    label: rangeLabel(mode, monthStart, end),
+    start: monthStart,
+    end,
+    effectiveEnd,
+    previousStart,
+    previousEnd,
+    previousEffectiveEnd: equivalentPreviousEffectiveEnd(monthStart, effectiveEnd, previousStart, previousEnd),
+  };
 }
 
 function pctTrend(current: number, previous: number) {
@@ -99,6 +208,30 @@ function weeklyAverage(count: number, start: Date, end: Date) {
   return Math.round(count / (daysBetween(start, end) / 7));
 }
 
+function accountingEndDateExclusive(effectiveEnd: Date, plannedEnd: Date) {
+  if (effectiveEnd.getTime() === plannedEnd.getTime()) return dateOnly(plannedEnd);
+  return dateOnly(addDaysUtc(new Date(Date.UTC(effectiveEnd.getUTCFullYear(), effectiveEnd.getUTCMonth(), effectiveEnd.getUTCDate())), 1));
+}
+
+function displayEndDate(period: PeriodWindow) {
+  if (period.effectiveEnd.getTime() === period.end.getTime()) return dateOnly(addDaysUtc(period.end, -1));
+  return dateOnly(period.effectiveEnd);
+}
+
+function sourceLabel(sourceType: string) {
+  const labels: Record<string, string> = {
+    zettle: 'Zettle / POS',
+    court_booking: 'Court booking',
+    booking: 'Court booking',
+    activity_registration: 'Activities',
+    activity: 'Activities',
+    day_pass: 'Day passes',
+    membership: 'Memberships',
+    membership_invoice: 'Membership invoices',
+  };
+  return labels[sourceType] || sourceType.replace(/_/g, ' ');
+}
+
 async function isSuperAdmin(req: Request) {
   const { userId, error } = await getAuthenticatedClient(req);
   if (error || !userId) return { ok: false as const, userId: null };
@@ -115,9 +248,24 @@ function scoped(query: any, token: PulseToken) {
   return token.venue_id ? query.eq('venue_id', token.venue_id) : query;
 }
 
+function orgScoped(query: any, token: PulseToken) {
+  return token.organization_id ? query.eq('organization_id', token.organization_id) : query;
+}
+
 async function exactCount(admin: any, table: string, token: PulseToken, apply: (query: any) => any) {
   let query = admin.from(table).select('id', { count: 'exact', head: true });
   query = scoped(query, token);
+  query = apply(query);
+  const { count, error } = await query;
+  if (error) throw new Error(error.message);
+  return count || 0;
+}
+
+async function exactCustomerCount(admin: any, token: PulseToken, apply: (query: any) => any) {
+  const table = token.venue_id ? 'customer_venue_profiles' : 'customers';
+  let query = admin.from(table).select('id', { count: 'exact', head: true });
+  if (token.venue_id) query = query.eq('venue_id', token.venue_id);
+  else query = orgScoped(query, token).eq('status', 'active');
   query = apply(query);
   const { count, error } = await query;
   if (error) throw new Error(error.message);
@@ -184,36 +332,138 @@ function returnRate(rows: Array<{ customer_id: string | null; user_id: string | 
   return { firstTimers, returned, rate: percent(returned, firstTimers) };
 }
 
-async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
+function monthStartsBetween(start: Date, endExclusive: Date) {
+  const months: Date[] = [];
+  for (let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1)); cursor < endExclusive; cursor = addMonthsUtc(cursor, 1)) {
+    months.push(cursor);
+  }
+  return months;
+}
+
+function bucketMonth(value: string) {
+  if (/^\d{4}-\d{2}/.test(value)) return value.slice(0, 7);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return monthKey(date);
+}
+
+function sumLedgerSek(rows: Array<{ amount_inc_vat_minor: number | string | null }>) {
+  return Math.round(rows.reduce((sum, row) => sum + Number(row.amount_inc_vat_minor || 0), 0) / 100);
+}
+
+function revenueSources(rows: Array<{ source_type?: string | null; amount_inc_vat_minor: number | string | null }>) {
+  const totalMinor = rows.reduce((sum, row) => sum + Number(row.amount_inc_vat_minor || 0), 0);
+  const bySource = new Map<string, number>();
+  for (const row of rows) {
+    const key = row.source_type || 'unknown';
+    bySource.set(key, (bySource.get(key) || 0) + Number(row.amount_inc_vat_minor || 0));
+  }
+  return Array.from(bySource.entries())
+    .map(([key, minor]) => ({
+      key,
+      label: sourceLabel(key),
+      value: Math.round(minor / 100),
+      share_pct: totalMinor ? Math.round((minor / totalMinor) * 100) : 0,
+    }))
+    .sort((a, b) => b.value - a.value);
+}
+
+function buildMonthlySeries(params: {
+  months: Date[];
+  ledgerRows: Array<{ accounting_date: string; amount_inc_vat_minor: number | string | null }>;
+  checkinRows: Array<{ checked_in_at: string }>;
+  customerRows: Array<{ created_at?: string | null; first_seen_at?: string | null }>;
+}): PulseSeriesPoint[] {
+  const initial = new Map(params.months.map((month) => [monthKey(month), {
+    month: monthKey(month),
+    label: new Intl.DateTimeFormat('sv-SE', { month: 'short', timeZone: 'UTC' }).format(month),
+    revenue_sek: 0,
+    visits: 0,
+    new_customers: 0,
+  }]));
+
+  for (const row of params.ledgerRows) {
+    const key = bucketMonth(row.accounting_date);
+    const point = initial.get(key);
+    if (point) point.revenue_sek += Math.round(Number(row.amount_inc_vat_minor || 0) / 100);
+  }
+
+  for (const row of params.checkinRows) {
+    const key = bucketMonth(row.checked_in_at);
+    const point = initial.get(key);
+    if (point) point.visits += 1;
+  }
+
+  for (const row of params.customerRows) {
+    const key = bucketMonth(row.first_seen_at || row.created_at || '');
+    const point = initial.get(key);
+    if (point) point.new_customers += 1;
+  }
+
+  return Array.from(initial.values());
+}
+
+async function buildMetrics(admin: any, token: PulseToken, monthStart: Date, mode: RangeMode) {
   const now = new Date();
-  const monthEnd = addMonthsUtc(monthStart, 1);
-  const effectiveMonthEnd = monthEnd > now ? now : monthEnd;
-  const previousMonthStart = addMonthsUtc(monthStart, -1);
-  const previousMonthEnd = monthStart;
+  const period = resolvePeriod(monthStart, mode);
+  const seriesStart = mode === 'month' ? addMonthsUtc(monthStart, -(SERIES_MONTHS_FOR_MONTH_VIEW - 1)) : period.start;
+  const seriesEnd = period.end;
+  const seriesEffectiveEnd = seriesEnd > now ? now : seriesEnd;
+  const periodAccountingEnd = accountingEndDateExclusive(period.effectiveEnd, period.end);
+  const previousAccountingEnd = accountingEndDateExclusive(period.previousEffectiveEnd, period.previousEnd);
+  const seriesAccountingEnd = accountingEndDateExclusive(seriesEffectiveEnd, seriesEnd);
   const returnWindowStart = new Date(now.getTime() - 90 * DAY_MS);
   const previousReturnWindowStart = new Date(now.getTime() - 180 * DAY_MS);
   const previousReturnWindowEnd = returnWindowStart;
 
-  const [visitsCurrent, visitsPrevious, customersCurrent, customersPrevious, ledgerCurrentRows, ledgerPreviousRows, checkinRows] = await Promise.all([
-    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(monthStart)).lt('checked_in_at', iso(effectiveMonthEnd))),
-    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(previousMonthStart)).lt('checked_in_at', iso(previousMonthEnd))),
-    exactCount(admin, 'customers', { ...token, venue_id: null }, (query) => query.gte('created_at', iso(monthStart)).lt('created_at', iso(monthEnd))),
-    exactCount(admin, 'customers', { ...token, venue_id: null }, (query) => query.gte('created_at', iso(previousMonthStart)).lt('created_at', iso(previousMonthEnd))),
-    fetchAll(admin, 'ledger_entries', 'amount_inc_vat_minor,payment_status,accounting_date,venue_id', (query) =>
-      scoped(query.gte('accounting_date', dateOnly(monthStart)).lt('accounting_date', dateOnly(monthEnd)).eq('payment_status', 'paid'), token)
+  const customerCreatedColumn = token.venue_id ? 'first_seen_at' : 'created_at';
+  const customerSeriesSelect = token.venue_id ? 'first_seen_at,venue_id' : 'created_at,organization_id,status';
+
+  const [
+    visitsCurrent,
+    visitsPrevious,
+    customersCurrent,
+    customersPrevious,
+    totalCustomers,
+    ledgerCurrentRows,
+    ledgerPreviousRows,
+    ledgerSeriesRows,
+    checkinRows,
+    checkinSeriesRows,
+    customerSeriesRows,
+  ] = await Promise.all([
+    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(period.start)).lt('checked_in_at', iso(period.effectiveEnd))),
+    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(period.previousStart)).lt('checked_in_at', iso(period.previousEffectiveEnd))),
+    exactCustomerCount(admin, token, (query) => query.gte(customerCreatedColumn, iso(period.start)).lt(customerCreatedColumn, iso(period.effectiveEnd))),
+    exactCustomerCount(admin, token, (query) => query.gte(customerCreatedColumn, iso(period.previousStart)).lt(customerCreatedColumn, iso(period.previousEffectiveEnd))),
+    exactCustomerCount(admin, token, (query) => query),
+    fetchAll(admin, 'ledger_entries', 'amount_inc_vat_minor,payment_status,accounting_date,venue_id,source_type', (query) =>
+      scoped(query.gte('accounting_date', dateOnly(period.start)).lt('accounting_date', periodAccountingEnd).eq('payment_status', 'paid'), token)
     ),
-    fetchAll(admin, 'ledger_entries', 'amount_inc_vat_minor,payment_status,accounting_date,venue_id', (query) =>
-      scoped(query.gte('accounting_date', dateOnly(previousMonthStart)).lt('accounting_date', dateOnly(previousMonthEnd)).eq('payment_status', 'paid'), token)
+    fetchAll(admin, 'ledger_entries', 'amount_inc_vat_minor,payment_status,accounting_date,venue_id,source_type', (query) =>
+      scoped(query.gte('accounting_date', dateOnly(period.previousStart)).lt('accounting_date', previousAccountingEnd).eq('payment_status', 'paid'), token)
+    ),
+    fetchAll(admin, 'ledger_entries', 'amount_inc_vat_minor,accounting_date,venue_id', (query) =>
+      scoped(query.gte('accounting_date', dateOnly(seriesStart)).lt('accounting_date', seriesAccountingEnd).eq('payment_status', 'paid'), token)
     ),
     fetchAll(admin, 'venue_checkins', 'customer_id,user_id,checked_in_at,venue_id', (query) =>
       scoped(query.lt('checked_in_at', iso(now)).order('checked_in_at', { ascending: true }), token)
     ),
+    fetchAll(admin, 'venue_checkins', 'checked_in_at,venue_id', (query) =>
+      scoped(query.gte('checked_in_at', iso(seriesStart)).lt('checked_in_at', iso(seriesEffectiveEnd)), token)
+    ),
+    fetchAll(admin, token.venue_id ? 'customer_venue_profiles' : 'customers', customerSeriesSelect, (query) => {
+      if (token.venue_id) {
+        return query.eq('venue_id', token.venue_id).gte('first_seen_at', iso(seriesStart)).lt('first_seen_at', iso(seriesEffectiveEnd));
+      }
+      return orgScoped(query.eq('status', 'active').gte('created_at', iso(seriesStart)).lt('created_at', iso(seriesEffectiveEnd)), token);
+    }),
   ]);
 
-  const currentWeeklyAvg = weeklyAverage(visitsCurrent, monthStart, effectiveMonthEnd);
-  const previousWeeklyAvg = weeklyAverage(visitsPrevious, previousMonthStart, previousMonthEnd);
-  const currentRevenueSek = Math.round(ledgerCurrentRows.reduce((sum, row) => sum + Number(row.amount_inc_vat_minor || 0), 0) / 100);
-  const previousRevenueSek = Math.round(ledgerPreviousRows.reduce((sum, row) => sum + Number(row.amount_inc_vat_minor || 0), 0) / 100);
+  const currentWeeklyAvg = weeklyAverage(visitsCurrent, period.start, period.effectiveEnd);
+  const previousWeeklyAvg = weeklyAverage(visitsPrevious, period.previousStart, period.previousEffectiveEnd);
+  const currentRevenueSek = sumLedgerSek(ledgerCurrentRows);
+  const previousRevenueSek = sumLedgerSek(ledgerPreviousRows);
   const currentReturn = returnRate(checkinRows, returnWindowStart, now);
   const previousReturn = returnRate(checkinRows, previousReturnWindowStart, previousReturnWindowEnd);
   const activeMemberships = await exactCount(admin, 'memberships', token, (query) =>
@@ -222,25 +472,63 @@ async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
       .lte('starts_at', dateOnly(now))
       .or(`expires_at.is.null,expires_at.gte.${dateOnly(now)}`)
   );
+  const membershipShare = percent(activeMemberships, totalCustomers);
+  const series = buildMonthlySeries({
+    months: monthStartsBetween(seriesStart, seriesEnd),
+    ledgerRows: ledgerSeriesRows,
+    checkinRows: checkinSeriesRows,
+    customerRows: customerSeriesRows,
+  });
 
   const metrics: Metric[] = [
+    {
+      key: 'period_revenue',
+      label: 'Omsättning',
+      value: currentRevenueSek,
+      unit: 'kr',
+      trend_pct: pctTrend(currentRevenueSek, previousRevenueSek),
+      period: period.label,
+      footnote: 'Betalda intäktsrader i Revenue Ledger. Reversals finns inte i ledger v1.',
+    },
+    {
+      key: 'period_visits',
+      label: 'Besök',
+      value: visitsCurrent,
+      unit: 'count',
+      trend_pct: pctTrend(visitsCurrent, visitsPrevious),
+      period: period.label,
+      footnote: 'Incheckningar under vald period.',
+    },
     {
       key: 'weekly_visits',
       label: 'Besök per vecka',
       value: currentWeeklyAvg,
       unit: 'count',
       trend_pct: pctTrend(currentWeeklyAvg, previousWeeklyAvg),
-      period: monthLabel(monthStart),
-      footnote: `${visitsCurrent} incheckningar under ${monthLabel(monthStart)}.`,
+      period: period.label,
+      footnote: `${visitsCurrent} incheckningar motsvarar ${currentWeeklyAvg} per vecka under perioden.`,
     },
     {
-      key: 'monthly_new_customers',
+      key: 'new_customers',
       label: 'Nya kunder',
       value: customersCurrent,
       unit: 'count',
       trend_pct: pctTrend(customersCurrent, customersPrevious),
-      period: monthLabel(monthStart),
-      footnote: 'Nya Customer Master-profiler skapade under månaden.',
+      period: period.label,
+      footnote: token.venue_id
+        ? 'Nya kunder kopplade till anläggningen under perioden.'
+        : 'Nya Customer Master-profiler skapade under perioden.',
+    },
+    {
+      key: 'total_customers',
+      label: 'Totala kunder',
+      value: totalCustomers,
+      unit: 'count',
+      trend_pct: null,
+      period: 'just nu',
+      footnote: token.venue_id
+        ? 'Kunder med Customer Venue Profile för anläggningen.'
+        : 'Aktiva Customer Master-profiler i organisationen.',
     },
     {
       key: 'return_rate_90d',
@@ -254,15 +542,6 @@ async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
         : 'Inte tillräckligt med identifierade förstagångsbesök ännu.',
     },
     {
-      key: 'monthly_revenue',
-      label: 'Omsättning',
-      value: currentRevenueSek,
-      unit: 'kr',
-      trend_pct: pctTrend(currentRevenueSek, previousRevenueSek),
-      period: monthLabel(monthStart),
-      footnote: 'Betalda intäktsrader i Revenue Ledger. Reversals finns inte i ledger v1.',
-    },
-    {
       key: 'active_memberships',
       label: 'Aktiva medlemskap',
       value: activeMemberships,
@@ -271,9 +550,33 @@ async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
       period: 'just nu',
       footnote: 'Aktiva medlemskap kan räknas exakt; historisk 30-dagarsförändring kräver medlemskapshistorik.',
     },
+    {
+      key: 'membership_share',
+      label: 'Medlemsandel',
+      value: membershipShare,
+      unit: 'percent',
+      trend_pct: null,
+      period: 'just nu',
+      footnote: totalCustomers
+        ? `${activeMemberships} av ${totalCustomers} kunder har aktivt medlemskap.`
+        : 'Kräver kunder innan medlemsandel kan visas.',
+    },
   ];
 
-  return metrics;
+  return {
+    period,
+    metrics,
+    series,
+    revenue_sources: revenueSources(ledgerCurrentRows),
+    summary: {
+      revenue_sek: currentRevenueSek,
+      visits: visitsCurrent,
+      new_customers: customersCurrent,
+      total_customers: totalCustomers,
+      active_memberships: activeMemberships,
+      membership_share: membershipShare,
+    },
+  };
 }
 
 async function revenueFreshness(admin: any, token: PulseToken) {
@@ -323,7 +626,8 @@ Deno.serve(async (req) => {
       if (!token) return errorResponse('Not found', 404);
 
       const monthStart = resolveMonth(url.searchParams.get('month'));
-      const metrics = await buildMetrics(admin, token, monthStart);
+      const mode = resolveRangeMode(url.searchParams.get('range') || url.searchParams.get('mode'));
+      const report = await buildMetrics(admin, token, monthStart, mode);
       const zettleFreshness = await revenueFreshness(admin, token);
       await admin.from('pulse_tokens').update({ last_viewed_at: new Date().toISOString() }).eq('id', token.id);
       return privateJsonResponse({
@@ -332,6 +636,10 @@ Deno.serve(async (req) => {
         period: {
           month: monthKey(monthStart),
           label: monthLabel(monthStart),
+          mode: report.period.mode,
+          mode_label: report.period.label,
+          start_date: dateOnly(report.period.start),
+          end_date: displayEndDate(report.period),
         },
         scope: {
           venue_id: token.venue_id,
@@ -339,7 +647,12 @@ Deno.serve(async (req) => {
           label: token.label,
         },
         revenue_freshness: zettleFreshness,
-        metrics,
+        metrics: report.metrics,
+        summary: report.summary,
+        series: {
+          monthly: report.series,
+        },
+        revenue_sources: report.revenue_sources,
         omitted: [
           {
             key: 'event_revenue',
