@@ -91,6 +91,14 @@ function percent(numerator: number, denominator: number) {
   return Math.round((numerator / denominator) * 100);
 }
 
+function daysBetween(start: Date, end: Date) {
+  return Math.max(1, Math.round((end.getTime() - start.getTime()) / DAY_MS));
+}
+
+function weeklyAverage(count: number, start: Date, end: Date) {
+  return Math.round(count / (daysBetween(start, end) / 7));
+}
+
 async function isSuperAdmin(req: Request) {
   const { userId, error } = await getAuthenticatedClient(req);
   if (error || !userId) return { ok: false as const, userId: null };
@@ -179,18 +187,16 @@ function returnRate(rows: Array<{ customer_id: string | null; user_id: string | 
 async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
   const now = new Date();
   const monthEnd = addMonthsUtc(monthStart, 1);
+  const effectiveMonthEnd = monthEnd > now ? now : monthEnd;
   const previousMonthStart = addMonthsUtc(monthStart, -1);
   const previousMonthEnd = monthStart;
-  const last28Start = new Date(now.getTime() - 28 * DAY_MS);
-  const previous28Start = new Date(now.getTime() - 56 * DAY_MS);
-  const previous28End = last28Start;
   const returnWindowStart = new Date(now.getTime() - 90 * DAY_MS);
   const previousReturnWindowStart = new Date(now.getTime() - 180 * DAY_MS);
   const previousReturnWindowEnd = returnWindowStart;
 
   const [visitsCurrent, visitsPrevious, customersCurrent, customersPrevious, ledgerCurrentRows, ledgerPreviousRows, checkinRows] = await Promise.all([
-    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(last28Start)).lt('checked_in_at', iso(now))),
-    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(previous28Start)).lt('checked_in_at', iso(previous28End))),
+    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(monthStart)).lt('checked_in_at', iso(effectiveMonthEnd))),
+    exactCount(admin, 'venue_checkins', token, (query) => query.gte('checked_in_at', iso(previousMonthStart)).lt('checked_in_at', iso(previousMonthEnd))),
     exactCount(admin, 'customers', { ...token, venue_id: null }, (query) => query.gte('created_at', iso(monthStart)).lt('created_at', iso(monthEnd))),
     exactCount(admin, 'customers', { ...token, venue_id: null }, (query) => query.gte('created_at', iso(previousMonthStart)).lt('created_at', iso(previousMonthEnd))),
     fetchAll(admin, 'ledger_entries', 'amount_inc_vat_minor,payment_status,accounting_date,venue_id', (query) =>
@@ -204,8 +210,8 @@ async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
     ),
   ]);
 
-  const currentWeeklyAvg = Math.round(visitsCurrent / 4);
-  const previousWeeklyAvg = Math.round(visitsPrevious / 4);
+  const currentWeeklyAvg = weeklyAverage(visitsCurrent, monthStart, effectiveMonthEnd);
+  const previousWeeklyAvg = weeklyAverage(visitsPrevious, previousMonthStart, previousMonthEnd);
   const currentRevenueSek = Math.round(ledgerCurrentRows.reduce((sum, row) => sum + Number(row.amount_inc_vat_minor || 0), 0) / 100);
   const previousRevenueSek = Math.round(ledgerPreviousRows.reduce((sum, row) => sum + Number(row.amount_inc_vat_minor || 0), 0) / 100);
   const currentReturn = returnRate(checkinRows, returnWindowStart, now);
@@ -224,8 +230,8 @@ async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
       value: currentWeeklyAvg,
       unit: 'count',
       trend_pct: pctTrend(currentWeeklyAvg, previousWeeklyAvg),
-      period: 'senaste 4 veckorna',
-      footnote: `${visitsCurrent} incheckningar senaste 4 veckorna.`,
+      period: monthLabel(monthStart),
+      footnote: `${visitsCurrent} incheckningar under ${monthLabel(monthStart)}.`,
     },
     {
       key: 'monthly_new_customers',
