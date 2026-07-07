@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Clock,
   ExternalLink,
+  Eye,
   EyeOff,
   Loader2,
   Plus,
@@ -296,7 +297,7 @@ function TimelineItem({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <AxChip tone={tone.chipTone}>{tone.label}</AxChip>
-          {item.kind === "activity" && item.override_status === "hidden" && <AxChip tone="neutral">DOLD</AxChip>}
+          {item.kind === "activity" && item.override_status === "hidden" && <AxChip tone="neutral">DOLD IDAG</AxChip>}
           {item.kind === "activity" && item.override_status === "cancelled" && <AxChip tone="danger">AVBOKAD</AxChip>}
           {item.kind === "event" && item.visibility && <AxChip tone="neutral">{String(item.visibility).toUpperCase()}</AxChip>}
           {item.kind === "court_booking" && <AxChip tone={item.payment_status === "paid" || item.payment_status === "free" ? "lime" : "sun"}>{paymentStatus}</AxChip>}
@@ -629,7 +630,7 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   };
 
   const activityOverride = useMutation({
-    mutationFn: ({ item, status }: { item: AdminCalendarItem; status: "hidden" | "cancelled" }) =>
+    mutationFn: ({ item, status }: { item: AdminCalendarItem; status: "active" | "hidden" | "cancelled" }) =>
       apiPost("api-admin", "activity-session-overrides", {
         venueId,
         activity_session_id: item.activity_session_id || item.source_id,
@@ -639,7 +640,7 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
         confirm: true,
       }),
     onSuccess: (_, vars) => {
-      toast.success(vars.status === "hidden" ? "Aktivitet dold" : "Aktivitet avbokad");
+      toast.success(vars.status === "active" ? "Aktivitet visas igen" : vars.status === "hidden" ? "Aktivitet dold" : "Aktivitet avbokad");
       invalidateCalendar();
       setOpenItem(null);
       setConfirmCancel(null);
@@ -907,6 +908,7 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
               onOpenModule(id);
             }}
             onHide={() => activityOverride.mutate({ item: openItem, status: "hidden" })}
+            onRestore={() => activityOverride.mutate({ item: openItem, status: "active" })}
             onCancel={() => setConfirmCancel(openItem)}
             isPending={activityOverride.isPending}
           />
@@ -1158,17 +1160,21 @@ function ItemActions({
   item,
   onOpenModule,
   onHide,
+  onRestore,
   onCancel,
   isPending,
 }: {
   item: AdminCalendarItem;
   onOpenModule: (id: string) => void;
   onHide: () => void;
+  onRestore: () => void;
   onCancel: () => void;
   isPending: boolean;
 }) {
   const tone = KIND_TONE[item.kind] || KIND_TONE.activity;
-  const disabled = item.override_status === "hidden" || item.override_status === "cancelled";
+  const isHidden = item.override_status === "hidden";
+  const isCancelled = item.override_status === "cancelled";
+  const disabled = isHidden || isCancelled;
   const time = item.end_time ? `${item.time}–${item.end_time}` : item.time;
   const cap = item.capacity ?? null;
   const reg = item.registrations_count ?? null;
@@ -1191,6 +1197,8 @@ function ItemActions({
         />
         <div className="ml-3 flex flex-wrap items-center gap-1.5">
           <AxChip tone={tone.chipTone}>{tone.label}</AxChip>
+          {item.kind === "activity" && isHidden && <AxChip tone="neutral">DOLD IDAG</AxChip>}
+          {item.kind === "activity" && isCancelled && <AxChip tone="danger">AVBOKAD</AxChip>}
           <span className="font-mono text-[11px] font-bold" style={{ color: ax("electricSoft") }}>
             {time}
           </span>
@@ -1248,18 +1256,33 @@ function ItemActions({
         )}
         {item.kind === "activity" && (
           <div className="grid grid-cols-2 gap-2">
-            <button
-              disabled={disabled || isPending}
-              onClick={onHide}
-              className="flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold disabled:opacity-40"
-              style={{
-                background: ax("surfaceHi"),
-                border: `1px solid ${ax("border")}`,
-                color: "white",
-              }}
-            >
-              <EyeOff className="h-4 w-4" /> Dölj
-            </button>
+            {isHidden ? (
+              <button
+                disabled={isPending}
+                onClick={onRestore}
+                className="flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold disabled:opacity-40"
+                style={{
+                  background: ax("lime", 0.14),
+                  border: `1px solid ${ax("lime", 0.45)}`,
+                  color: ax("lime"),
+                }}
+              >
+                <Eye className="h-4 w-4" /> Visa igen
+              </button>
+            ) : (
+              <button
+                disabled={disabled || isPending}
+                onClick={onHide}
+                className="flex items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-bold disabled:opacity-40"
+                style={{
+                  background: ax("surfaceHi"),
+                  border: `1px solid ${ax("border")}`,
+                  color: "white",
+                }}
+              >
+                <EyeOff className="h-4 w-4" /> Dölj
+              </button>
+            )}
             <button
               disabled={disabled || isPending}
               onClick={onCancel}

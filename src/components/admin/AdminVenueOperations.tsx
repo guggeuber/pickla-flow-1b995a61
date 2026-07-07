@@ -160,7 +160,7 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
   });
 
   const activityOverride = useMutation({
-    mutationFn: ({ activity, status, confirm }: { activity: ImpactActivity; status: "hidden" | "cancelled"; confirm: boolean }) =>
+    mutationFn: ({ activity, status, confirm }: { activity: ImpactActivity; status: "active" | "hidden" | "cancelled"; confirm: boolean }) =>
       apiPost("api-admin", "activity-session-overrides", {
         venueId,
         activity_session_id: activity.activity_session_id || activity.id,
@@ -171,7 +171,7 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
         confirm,
       }),
     onSuccess: (_, variables) => {
-      toast.success(variables.status === "hidden" ? "Aktivitet dold" : "Aktivitet avbokad");
+      toast.success(variables.status === "active" ? "Aktivitet visas igen" : variables.status === "hidden" ? "Aktivitet dold" : "Aktivitet avbokad");
       setImpact((current) => current ? {
         ...current,
         activities: {
@@ -197,11 +197,11 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
 
   const canCreate = title.trim() && date && startTime && endTime && (affectsEntireVenue || selectedCourtIds.length > 0);
 
-  const applyActivityOverride = (activity: ImpactActivity, status: "hidden" | "cancelled") => {
+  const applyActivityOverride = (activity: ImpactActivity, status: "active" | "hidden" | "cancelled") => {
     const registrationsCount = Number(activity.registrations_count || 0);
-    const confirm = registrationsCount > 0
-      ? window.confirm(`${activity.name} har ${registrationsCount} anmälda. Vill du fortsätta?`)
-      : true;
+    const confirm = status === "active" || registrationsCount === 0
+      ? true
+      : window.confirm(`${activity.name} har ${registrationsCount} anmälda. Vill du fortsätta?`);
     if (!confirm) return;
     activityOverride.mutate({ activity, status, confirm });
   };
@@ -366,7 +366,7 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
                         </div>
                         {currentStatus && currentStatus !== "active" && (
                           <span className="rounded-full bg-primary/15 px-2 py-1 text-[10px] font-bold uppercase text-primary">
-                            {currentStatus === "hidden" ? "Dold" : "Avbokad"}
+                            {currentStatus === "hidden" ? "DOLD IDAG" : "Avbokad"}
                           </span>
                         )}
                       </div>
@@ -376,14 +376,25 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
                         </p>
                       )}
                       <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          disabled={activityOverride.isPending || currentStatus === "hidden"}
-                          onClick={() => applyActivityOverride(activity, "hidden")}
-                          className="rounded-xl bg-muted/60 px-3 py-2 text-xs font-black text-foreground disabled:opacity-50"
-                        >
-                          Dölj
-                        </button>
+                        {currentStatus === "hidden" ? (
+                          <button
+                            type="button"
+                            disabled={activityOverride.isPending}
+                            onClick={() => applyActivityOverride(activity, "active")}
+                            className="rounded-xl bg-primary/15 px-3 py-2 text-xs font-black text-primary disabled:opacity-50"
+                          >
+                            Visa igen
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={activityOverride.isPending || currentStatus === "cancelled"}
+                            onClick={() => applyActivityOverride(activity, "hidden")}
+                            className="rounded-xl bg-muted/60 px-3 py-2 text-xs font-black text-foreground disabled:opacity-50"
+                          >
+                            Dölj
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled={activityOverride.isPending || currentStatus === "cancelled"}
