@@ -1,12 +1,16 @@
 import { useMemo, useState } from "react";
+import { DateTime } from "luxon";
 import { AlertTriangle, CheckCircle2, Copy, Download, ExternalLink, Loader2, RefreshCw, Search, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import {
   useAdminFinancialMaintenance,
+  useAdminZettleBackfill,
   type AdminFinancialMaintenanceCustomer,
   type AdminFinancialMaintenanceReport,
+  type AdminZettleBackfillResult,
 } from "@/hooks/useAdmin";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 interface Props {
@@ -15,6 +19,21 @@ interface Props {
 
 function formatMinor(value?: number | null) {
   return `${Math.round(Number(value || 0) / 100).toLocaleString("sv-SE")} kr`;
+}
+
+function stockholmToday() {
+  return DateTime.now().setZone("Europe/Stockholm").toISODate()!;
+}
+
+function formatSek(value: number | undefined | null) {
+  return `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
+}
+
+function parseSekInput(value: string) {
+  const normalized = value.trim().replace(/\s/g, "").replace(",", ".");
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function statusLabel(status: string) {
@@ -173,9 +192,14 @@ function CustomerRow({
 
 export default function AdminFinancialMaintenance({ venueId }: Props) {
   const maintenance = useAdminFinancialMaintenance(venueId);
+  const zettleBackfill = useAdminZettleBackfill(venueId);
   const [latestDryRun, setLatestDryRun] = useState<AdminFinancialMaintenanceReport | null>(null);
   const [latestReport, setLatestReport] = useState<AdminFinancialMaintenanceReport | null>(null);
   const [runningMode, setRunningMode] = useState<"dry_run" | "execute" | null>(null);
+  const [backfillStartDate, setBackfillStartDate] = useState(DateTime.now().setZone("Europe/Stockholm").startOf("month").toISODate()!);
+  const [backfillEndDate, setBackfillEndDate] = useState(stockholmToday());
+  const [backfillExpectedTotal, setBackfillExpectedTotal] = useState("");
+  const [backfillResult, setBackfillResult] = useState<AdminZettleBackfillResult | null>(null);
   const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
 
   const executableInvoiceIds = useMemo(() => reportInvoiceIds(latestDryRun), [latestDryRun]);
@@ -197,6 +221,22 @@ export default function AdminFinancialMaintenance({ venueId }: Props) {
       toast.error(error instanceof Error ? error.message : "Financial maintenance failed");
     } finally {
       setRunningMode(null);
+    }
+  };
+
+  const runZettleBackfill = async (dryRun: boolean) => {
+    try {
+      const expectedTotalSek = parseSekInput(backfillExpectedTotal);
+      const result = await zettleBackfill.mutateAsync({
+        startDate: backfillStartDate,
+        endDate: backfillEndDate,
+        dryRun,
+        expectedTotalSek,
+      });
+      setBackfillResult(result);
+      toast.success(dryRun ? "Zettle dry run klar" : "Zettle backfill klar");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Zettle backfill failed");
     }
   };
 
@@ -224,6 +264,97 @@ export default function AdminFinancialMaintenance({ venueId }: Props) {
             </Button>
           </div>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card/70 p-4">
+        <div className="flex flex-col gap-1">
+          <p className="text-sm font-bold text-foreground">Zettle Historical Backfill</p>
+          <p className="text-xs text-muted-foreground">
+            Exceptional repair for historical POS revenue that exists in Zettle App but is missing from Pickla Ledger. Kör dry run först.
+          </p>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-[150px_150px_1fr_auto_auto] sm:items-end">
+          <label className="space-y-1">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-muted-foreground">Start</span>
+            <Input
+              type="date"
+              value={backfillStartDate}
+              onChange={(event) => setBackfillStartDate(event.target.value)}
+              className="h-9"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-muted-foreground">End</span>
+            <Input
+              type="date"
+              value={backfillEndDate}
+              onChange={(event) => setBackfillEndDate(event.target.value)}
+              className="h-9"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-muted-foreground">Expected total SEK</span>
+            <Input
+              inputMode="decimal"
+              value={backfillExpectedTotal}
+              onChange={(event) => setBackfillExpectedTotal(event.target.value)}
+              placeholder="105675,44"
+              className="h-9"
+            />
+          </label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => runZettleBackfill(true)}
+            disabled={zettleBackfill.isPending || !backfillStartDate || !backfillEndDate}
+          >
+            {zettleBackfill.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Search className="mr-2 h-3.5 w-3.5" />}
+            Dry Run
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => runZettleBackfill(false)}
+            disabled={zettleBackfill.isPending || !backfillStartDate || !backfillEndDate}
+          >
+            {zettleBackfill.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+            Execute
+          </Button>
+        </div>
+
+        {backfillResult && (
+          <div className="mt-3 rounded-md border border-border/70 bg-background/50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+                {backfillResult.dry_run ? "Dry run" : "Backfill result"} · {backfillResult.start_date}–{backfillResult.end_date}
+              </p>
+              <p className={backfillResult.failures.length ? "text-xs font-bold text-destructive" : "text-xs font-bold text-emerald-500"}>
+                {backfillResult.failures.length ? `${backfillResult.failures.length} failures` : "OK"}
+              </p>
+            </div>
+            <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+              <span>Days: {backfillResult.days_scanned}</span>
+              <span>Purchases found: {backfillResult.purchases_found}</span>
+              <span>Raw total: {formatSek(backfillResult.raw_total_sek)}</span>
+              <span>Purchases imported: {backfillResult.dry_run ? backfillResult.purchases_would_import || 0 : backfillResult.purchases_imported}</span>
+              <span>Already present: {backfillResult.purchases_already_present}</span>
+              <span>Ledger total: {formatSek(backfillResult.ledger_total_sek)}</span>
+              <span>Ledger rows created: {backfillResult.dry_run ? backfillResult.ledger_rows_would_create || 0 : backfillResult.ledger_rows_created}</span>
+              <span>Ledger already present: {backfillResult.ledger_rows_already_present}</span>
+              <span>
+                Expected diff: {backfillResult.expected_diff_sek == null ? "-" : formatSek(backfillResult.expected_diff_sek)}
+              </span>
+            </div>
+            {!!backfillResult.failures.length && (
+              <div className="mt-3 space-y-1 text-xs text-destructive">
+                {backfillResult.failures.slice(0, 5).map((failure) => (
+                  <p key={`${failure.date}-${failure.error}`}>{failure.date}: {failure.error}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {runningMode && <MaintenanceProgress mode={runningMode} />}

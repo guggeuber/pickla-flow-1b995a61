@@ -3,11 +3,9 @@ import { DateTime } from "luxon";
 import { ExternalLink, FileText, Loader2, ReceiptText, RefreshCw, Store } from "lucide-react";
 import {
   useAdminRevenueLedger,
-  useAdminZettleBackfill,
   useAdminZettleConnect,
   useAdminZettleImport,
   useAdminZettleStatus,
-  type AdminZettleBackfillResult,
   type AdminLedgerPeriodSummary,
 } from "@/hooks/useAdmin";
 import { Button } from "@/components/ui/button";
@@ -24,17 +22,6 @@ function stockholmToday() {
 
 function formatSekFromMinor(value: number | undefined | null) {
   return `${Math.round(Number(value || 0) / 100).toLocaleString("sv-SE")} kr`;
-}
-
-function formatSek(value: number | undefined | null) {
-  return `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
-}
-
-function parseSekInput(value: string) {
-  const normalized = value.trim().replace(/\s/g, "").replace(",", ".");
-  if (!normalized) return null;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatTime(value: string) {
@@ -90,15 +77,10 @@ function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerP
 export default function AdminRevenueLedger({ venueId }: Props) {
   const [date, setDate] = useState(stockholmToday());
   const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
-  const [backfillStartDate, setBackfillStartDate] = useState(DateTime.now().setZone("Europe/Stockholm").startOf("month").toISODate()!);
-  const [backfillEndDate, setBackfillEndDate] = useState(stockholmToday());
-  const [backfillExpectedTotal, setBackfillExpectedTotal] = useState("");
-  const [backfillResult, setBackfillResult] = useState<AdminZettleBackfillResult | null>(null);
   const ledgerQ = useAdminRevenueLedger(venueId, date);
   const zettleQ = useAdminZettleStatus(venueId);
   const zettleConnect = useAdminZettleConnect(venueId);
   const zettleImport = useAdminZettleImport(venueId, date);
-  const zettleBackfill = useAdminZettleBackfill(venueId);
   const data = ledgerQ.data;
   const zettleStatus = zettleSyncStatus(zettleQ.data);
 
@@ -113,17 +95,6 @@ export default function AdminRevenueLedger({ venueId }: Props) {
   const handleConnectZettle = async () => {
     const result = await zettleConnect.mutateAsync(window.location.href);
     window.location.assign(result.authorization_url);
-  };
-
-  const runBackfill = async (dryRun: boolean) => {
-    const expectedTotalSek = parseSekInput(backfillExpectedTotal);
-    const result = await zettleBackfill.mutateAsync({
-      startDate: backfillStartDate,
-      endDate: backfillEndDate,
-      dryRun,
-      expectedTotalSek,
-    });
-    setBackfillResult(result);
   };
 
   return (
@@ -245,98 +216,6 @@ export default function AdminRevenueLedger({ venueId }: Props) {
             )}
           </div>
         </div>
-        {zettleQ.data?.connected && (
-          <div className="mt-4 rounded-lg border border-border/70 bg-background/40 p-3">
-            <div className="flex flex-col gap-1">
-              <p className="text-sm font-bold text-foreground">Historical Zettle Backfill</p>
-              <p className="text-xs text-muted-foreground">
-                Använd när Zettle App visar historisk försäljning som saknas i Pickla Ledger. Kör dry run först.
-              </p>
-            </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-[150px_150px_1fr_auto_auto] sm:items-end">
-              <label className="space-y-1">
-                <span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-muted-foreground">Start</span>
-                <Input
-                  type="date"
-                  value={backfillStartDate}
-                  onChange={(event) => setBackfillStartDate(event.target.value)}
-                  className="h-9"
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-muted-foreground">End</span>
-                <Input
-                  type="date"
-                  value={backfillEndDate}
-                  onChange={(event) => setBackfillEndDate(event.target.value)}
-                  className="h-9"
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-muted-foreground">Expected total SEK</span>
-                <Input
-                  inputMode="decimal"
-                  value={backfillExpectedTotal}
-                  onChange={(event) => setBackfillExpectedTotal(event.target.value)}
-                  placeholder="105675,44"
-                  className="h-9"
-                />
-              </label>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => runBackfill(true)}
-                disabled={zettleBackfill.isPending || !backfillStartDate || !backfillEndDate}
-              >
-                {zettleBackfill.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
-                Dry Run
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => runBackfill(false)}
-                disabled={zettleBackfill.isPending || !backfillStartDate || !backfillEndDate}
-              >
-                {zettleBackfill.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
-                Run Backfill
-              </Button>
-            </div>
-
-            {backfillResult && (
-              <div className="mt-3 rounded-md border border-border/70 bg-card/70 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
-                    {backfillResult.dry_run ? "Dry run" : "Backfill result"} · {backfillResult.start_date}–{backfillResult.end_date}
-                  </p>
-                  <p className={backfillResult.failures.length ? "text-xs font-bold text-destructive" : "text-xs font-bold text-emerald-500"}>
-                    {backfillResult.failures.length ? `${backfillResult.failures.length} failures` : "OK"}
-                  </p>
-                </div>
-                <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
-                  <span>Days: {backfillResult.days_scanned}</span>
-                  <span>Purchases found: {backfillResult.purchases_found}</span>
-                  <span>Raw total: {formatSek(backfillResult.raw_total_sek)}</span>
-                  <span>Purchases imported: {backfillResult.dry_run ? backfillResult.purchases_would_import || 0 : backfillResult.purchases_imported}</span>
-                  <span>Already present: {backfillResult.purchases_already_present}</span>
-                  <span>Ledger total: {formatSek(backfillResult.ledger_total_sek)}</span>
-                  <span>Ledger rows created: {backfillResult.dry_run ? backfillResult.ledger_rows_would_create || 0 : backfillResult.ledger_rows_created}</span>
-                  <span>Ledger already present: {backfillResult.ledger_rows_already_present}</span>
-                  <span>
-                    Expected diff: {backfillResult.expected_diff_sek == null ? "-" : formatSek(backfillResult.expected_diff_sek)}
-                  </span>
-                </div>
-                {!!backfillResult.failures.length && (
-                  <div className="mt-3 space-y-1 text-xs text-destructive">
-                    {backfillResult.failures.slice(0, 5).map((failure) => (
-                      <p key={`${failure.date}-${failure.error}`}>{failure.date}: {failure.error}</p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="grid gap-2 sm:grid-cols-3">
