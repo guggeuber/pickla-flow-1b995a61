@@ -272,34 +272,32 @@ async function buildMetrics(admin: any, token: PulseToken, monthStart: Date) {
 
 async function revenueFreshness(admin: any, token: PulseToken) {
   let query = admin
-    .from('zettle_connections')
-    .select('venue_id,status,last_import_finished_at,last_import_error,updated_at')
-    .eq('status', 'connected');
+    .from('operations_integration_health')
+    .select('venue_id,status,last_successful_sync_at,last_failed_sync_at,message,updated_at')
+    .eq('integration_key', 'zettle');
   if (token.venue_id) query = query.eq('venue_id', token.venue_id);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
   const rows = data || [];
-  const successRows = rows.filter((row: any) => row.last_import_finished_at && !row.last_import_error);
-  const failureRows = rows.filter((row: any) => row.last_import_error);
+  const successRows = rows.filter((row: any) => row.last_successful_sync_at);
+  const failureRows = rows.filter((row: any) => row.status === 'FAILED' || row.last_failed_sync_at);
   const latestSuccess = successRows
-    .map((row: any) => new Date(row.last_import_finished_at))
+    .map((row: any) => new Date(row.last_successful_sync_at))
     .filter((date: Date) => !Number.isNaN(date.getTime()))
     .sort((a: Date, b: Date) => b.getTime() - a.getTime())[0] || null;
   const latestFailure = failureRows
-    .map((row: any) => new Date(row.last_import_finished_at || row.updated_at))
+    .map((row: any) => new Date(row.last_failed_sync_at || row.updated_at))
     .filter((date: Date) => !Number.isNaN(date.getTime()))
     .sort((a: Date, b: Date) => b.getTime() - a.getTime())[0] || null;
-  const staleCutoff = new Date(Date.now() - 3 * 60 * 60 * 1000);
-  const stale = !latestSuccess || latestSuccess < staleCutoff;
   const failed = latestFailure && (!latestSuccess || latestFailure >= latestSuccess);
 
   return {
     source: 'zettle',
     status: rows.length === 0 ? 'never_synced' : failed ? 'failed' : latestSuccess ? 'ok' : 'never_synced',
-    updated_at: latestSuccess ? latestSuccess.toISOString() : null,
+    last_successful_sync_at: latestSuccess ? latestSuccess.toISOString() : null,
     last_failure_at: latestFailure ? latestFailure.toISOString() : null,
-    stale,
+    message: failed ? rows.find((row: any) => row.status === 'FAILED')?.message || null : null,
   };
 }
 

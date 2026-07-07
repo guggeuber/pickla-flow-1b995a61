@@ -4,6 +4,8 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 type OpsMode = 'deploy' | 'opening' | 'closing' | 'weekly';
 type OpsColor = 'green' | 'yellow' | 'red';
 type SignalKey = 'payments' | 'bookings' | 'memberships' | 'checkin' | 'devices' | 'score' | 'mail' | 'deploy';
+type HealthStatus = 'OK' | 'FAILED' | 'NEVER_SYNCED';
+type HealthKey = 'stripe' | 'zettle' | 'bookings' | 'checkins' | 'pulse';
 type AutoSignal = {
   signal_key: SignalKey;
   status: OpsColor;
@@ -23,6 +25,7 @@ type ClientEventPayload = {
 };
 
 const SIGNAL_KEYS: SignalKey[] = ['payments', 'bookings', 'memberships', 'checkin', 'devices', 'score', 'mail', 'deploy'];
+const HEALTH_KEYS: HealthKey[] = ['stripe', 'zettle', 'bookings', 'checkins', 'pulse'];
 
 const CHECKLISTS: Record<OpsMode, string[]> = {
   deploy: [
@@ -91,6 +94,65 @@ function runStatus(results: AutoSignal[]) {
   if (results.some((result) => result.status === 'red')) return 'critical';
   if (results.some((result) => result.status === 'yellow')) return 'warning';
   return 'ok';
+}
+
+function defaultHealth(key: HealthKey) {
+  return {
+    key,
+    status: 'NEVER_SYNCED' as HealthStatus,
+    last_successful_sync_at: null,
+    last_failed_sync_at: null,
+    message: 'No health reporter registered yet.',
+  };
+}
+
+function healthFromRow(key: HealthKey, row: any) {
+  return {
+    key,
+    status: (row?.status || 'NEVER_SYNCED') as HealthStatus,
+    last_successful_sync_at: row?.last_successful_sync_at || null,
+    last_failed_sync_at: row?.last_failed_sync_at || null,
+    message: row?.message || null,
+  };
+}
+
+async function getOperationsHealth(venueId: string) {
+  const admin = getServiceClient();
+  const { data: rows, error } = await admin
+    .from('operations_integration_health')
+    .select('integration_key,status,last_successful_sync_at,last_failed_sync_at,message,updated_at')
+    .eq('venue_id', venueId);
+  if (error) throw error;
+
+  const byKey = new Map<string, any>((rows || []).map((row: any) => [row.integration_key, row]));
+
+  if (!byKey.has('zettle')) {
+    const { data: zettle } = await admin
+      .from('zettle_connections')
+      .select('last_sync_status,last_successful_sync_at,last_failed_sync_at,last_import_error')
+      .eq('venue_id', venueId)
+      .maybeSingle();
+    if (zettle) {
+      byKey.set('zettle', {
+        status: zettle.last_sync_status || 'NEVER_SYNCED',
+        last_successful_sync_at: zettle.last_successful_sync_at,
+        last_failed_sync_at: zettle.last_failed_sync_at,
+        message: zettle.last_import_error || null,
+      });
+    }
+  }
+
+  const systems = Object.fromEntries(HEALTH_KEYS.map((key) => {
+    const row = byKey.get(key);
+    return [key, row ? healthFromRow(key, row) : defaultHealth(key)];
+  }));
+
+  return {
+    generated_at: new Date().toISOString(),
+    venue_id: venueId,
+    systems,
+    items: HEALTH_KEYS.map((key) => systems[key]),
+  };
 }
 
 function overlaps(a: any, b: any) {
@@ -736,6 +798,11 @@ Deno.serve(async (req) => {
       await maybeRunAutoChecks(venueId, userId);
       const state = await getState(venueId, userId);
       return jsonResponse({ venueId, ...state }, 200, 5);
+    }
+
+    if (req.method === 'GET' && path === 'health') {
+      const health = await getOperationsHealth(venueId);
+      return jsonResponse(health, 200, 30);
     }
 
     if (req.method === 'POST' && path === 'run-checks') {

@@ -21,9 +21,9 @@ type PulseResponse = {
   revenue_freshness?: {
     source: "zettle";
     status: "ok" | "failed" | "never_synced" | string;
-    updated_at: string | null;
+    last_successful_sync_at: string | null;
     last_failure_at?: string | null;
-    stale: boolean;
+    message?: string | null;
   };
   metrics: PulseMetric[];
   omitted?: Array<{ key: string; label: string; reason: string }>;
@@ -85,18 +85,23 @@ function Trend({ value }: { value: number | null }) {
 
 function RevenueFreshness({ freshness }: { freshness?: PulseResponse["revenue_freshness"] }) {
   if (!freshness) return null;
-  const lastSync = freshness.updated_at ? formatGeneratedAt(freshness.updated_at) : "never";
-  if (freshness.stale || freshness.status === "failed" || freshness.status === "never_synced") {
+  const lastSuccessfulSync = freshness.last_successful_sync_at ? formatGeneratedAt(freshness.last_successful_sync_at) : "never";
+  const sourceLabel = `Zettle ${String(freshness.status || "never_synced").toUpperCase()}`;
+  if (freshness.status === "failed" || freshness.status === "never_synced") {
     return (
-      <p className="text-xs leading-relaxed text-amber-300/80">
-        Revenue may be delayed. Last Zettle sync: {lastSync}
-      </p>
+      <div className="mt-2 space-y-1 text-xs leading-relaxed text-amber-300/80">
+        <p>Revenue may be delayed</p>
+        <p>Last successful sync: {lastSuccessfulSync}</p>
+        <p className="text-neutral-600">Source {sourceLabel}</p>
+      </div>
     );
   }
   return (
-    <p className="text-xs leading-relaxed text-neutral-500">
-      Revenue data updated: {lastSync}
-    </p>
+    <div className="mt-2 space-y-1 text-xs leading-relaxed text-neutral-500">
+      <p>Revenue</p>
+      <p>Updated {lastSuccessfulSync}</p>
+      <p>Source {sourceLabel}</p>
+    </div>
   );
 }
 

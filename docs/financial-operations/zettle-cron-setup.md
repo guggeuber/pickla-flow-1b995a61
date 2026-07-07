@@ -222,10 +222,30 @@ select
   z.last_import_from,
   z.last_import_to,
   z.last_import_count,
-  z.last_import_error
+  z.last_import_error,
+  z.last_successful_sync_at,
+  z.last_failed_sync_at,
+  z.last_sync_status
 from public.zettle_connections z
 left join public.venues v on v.id = z.venue_id
 order by z.updated_at desc;
+```
+
+Check Operations Health status:
+
+```sql
+select
+  v.name as venue_name,
+  h.integration_key,
+  h.status,
+  h.last_successful_sync_at,
+  h.last_failed_sync_at,
+  h.message,
+  h.updated_at
+from public.operations_integration_health h
+left join public.venues v on v.id = h.venue_id
+where h.integration_key = 'zettle'
+order by h.updated_at desc;
 ```
 
 Check for duplicate Zettle ledger rows:
@@ -297,4 +317,4 @@ This stops automation only. It does not delete Zettle purchases, ledger entries,
 - Cron schedules run in UTC. The selected schedule is intentionally broad enough for Pickla Stockholm opening hours.
 - The nightly catch-up imports seven Stockholm days and is safe to repeat.
 - The manual Ledger/Admin `Sync now` button remains the fallback path.
-- Pulse should be considered stale if the latest successful Zettle sync is old or if `last_import_error` is populated.
+- Pulse reads integration freshness from Operations Health, not from Zettle import windows.

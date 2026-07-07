@@ -41,8 +41,11 @@ function formatDate(value: string) {
 
 function zettleSyncStatus(connection: ReturnType<typeof useAdminZettleStatus>["data"] | undefined) {
   if (!connection?.connected) return { label: "Never synced", tone: "muted" as const };
+  if (connection.connection?.last_sync_status === "FAILED") return { label: "Failed", tone: "failed" as const };
+  if (connection.connection?.last_sync_status === "OK") return { label: "OK", tone: "ok" as const };
+  if (connection.connection?.last_sync_status === "NEVER_SYNCED") return { label: "Never synced", tone: "muted" as const };
   if (connection.connection?.last_import_error) return { label: "Failed", tone: "failed" as const };
-  if (connection.connection?.last_import_finished_at) return { label: "OK", tone: "ok" as const };
+  if (connection.connection?.last_successful_sync_at) return { label: "OK", tone: "ok" as const };
   return { label: "Never synced", tone: "muted" as const };
 }
 
@@ -174,9 +177,14 @@ export default function AdminRevenueLedger({ venueId }: Props) {
                 API key-läge är aktivt. OAuth connect behövs inte.
               </p>
             )}
-            {zettleQ.data?.connection?.last_import_finished_at && (
+            {zettleQ.data?.connection?.last_successful_sync_at && (
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Last Zettle sync: {formatDateTime(zettleQ.data.connection.last_import_finished_at)} · {zettleQ.data.connection.last_import_count || 0} köp
+                Last successful Zettle sync: {formatDateTime(zettleQ.data.connection.last_successful_sync_at)} · {zettleQ.data.connection.last_import_count || 0} köp
+              </p>
+            )}
+            {zettleQ.data?.connection?.last_failed_sync_at && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Last failed Zettle sync: {formatDateTime(zettleQ.data.connection.last_failed_sync_at)}
               </p>
             )}
             {zettleQ.data?.connection?.last_import_error && (

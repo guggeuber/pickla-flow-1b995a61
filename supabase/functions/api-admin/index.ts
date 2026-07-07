@@ -554,6 +554,52 @@ async function ensureZettleImportConnection(admin: any, venueId: string, userId:
   return connection;
 }
 
+async function writeIntegrationHealth(admin: any, {
+  venueId,
+  integrationKey,
+  status,
+  lastSuccessfulSyncAt,
+  lastFailedSyncAt,
+  message,
+  metadata = {},
+}: {
+  venueId: string;
+  integrationKey: string;
+  status: 'OK' | 'FAILED' | 'NEVER_SYNCED';
+  lastSuccessfulSyncAt?: string | null;
+  lastFailedSyncAt?: string | null;
+  message?: string | null;
+  metadata?: Record<string, unknown>;
+}) {
+  const now = new Date().toISOString();
+  const { data: existing, error: existingErr } = await admin
+    .from('operations_integration_health')
+    .select('id,last_successful_sync_at,last_failed_sync_at')
+    .eq('venue_id', venueId)
+    .eq('integration_key', integrationKey)
+    .maybeSingle();
+  if (existingErr) {
+    console.warn('operations_integration_health lookup failed', existingErr.message);
+    return;
+  }
+
+  const row = {
+    venue_id: venueId,
+    integration_key: integrationKey,
+    status,
+    last_successful_sync_at: lastSuccessfulSyncAt ?? existing?.last_successful_sync_at ?? null,
+    last_failed_sync_at: lastFailedSyncAt ?? existing?.last_failed_sync_at ?? null,
+    message: message || null,
+    metadata,
+    updated_at: now,
+  };
+
+  const { error } = existing?.id
+    ? await admin.from('operations_integration_health').update(row).eq('id', existing.id)
+    : await admin.from('operations_integration_health').insert({ ...row, created_at: now });
+  if (error) console.warn('operations_integration_health write failed', error.message);
+}
+
 async function importZettleRange(admin: any, {
   venueId,
   connection,
@@ -610,18 +656,34 @@ async function importZettleRange(admin: any, {
       if (ledgerErr) throw new Error(ledgerErr.message);
     }
 
+    const syncedAt = new Date().toISOString();
     await admin
       .from('zettle_connections')
       .update({
         status: 'connected',
-        last_import_finished_at: new Date().toISOString(),
+        last_import_finished_at: syncedAt,
         last_import_from: startIso,
         last_import_to: endIso,
         last_import_count: validPurchases.length,
         last_import_error: null,
-        updated_at: new Date().toISOString(),
+        last_successful_sync_at: syncedAt,
+        last_sync_status: 'OK',
+        updated_at: syncedAt,
       })
       .eq('id', connection.id);
+
+    await writeIntegrationHealth(admin, {
+      venueId,
+      integrationKey: 'zettle',
+      status: 'OK',
+      lastSuccessfulSyncAt: syncedAt,
+      message: null,
+      metadata: {
+        last_import_from: startIso,
+        last_import_to: endIso,
+        last_import_count: validPurchases.length,
+      },
+    });
 
     return {
       ok: true,
@@ -631,14 +693,28 @@ async function importZettleRange(admin: any, {
     };
   } catch (importErr) {
     const message = importErr instanceof Error ? importErr.message : 'Zettle import failed';
+    const failedAt = new Date().toISOString();
     await admin
       .from('zettle_connections')
       .update({
-        last_import_finished_at: new Date().toISOString(),
+        last_import_finished_at: failedAt,
         last_import_error: message,
-        updated_at: new Date().toISOString(),
+        last_failed_sync_at: failedAt,
+        last_sync_status: 'FAILED',
+        updated_at: failedAt,
       })
       .eq('id', connection.id);
+    await writeIntegrationHealth(admin, {
+      venueId,
+      integrationKey: 'zettle',
+      status: 'FAILED',
+      lastFailedSyncAt: failedAt,
+      message,
+      metadata: {
+        last_import_from: startIso,
+        last_import_to: endIso,
+      },
+    });
     throw new Error(message);
   }
 }
@@ -2350,23 +2426,54 @@ Deno.serve(async (req) => {
 
       const results: any[] = [];
       for (const connection of connections || []) {
+        const connectionResults: any[] = [];
         for (const date of dates) {
           try {
             const result = await importZettleDay(admin, connection.venue_id, connection, date);
-            results.push({
+            const row = {
               venue_id: connection.venue_id,
               date,
               status: 'ok',
               imported_count: result.imported_count,
-            });
+            };
+            results.push(row);
+            connectionResults.push(row);
           } catch (error) {
-            results.push({
+            const row = {
               venue_id: connection.venue_id,
               date,
               status: 'failed',
               error: error instanceof Error ? error.message : 'Zettle sync failed',
-            });
+            };
+            results.push(row);
+            connectionResults.push(row);
           }
+        }
+
+        const failedConnectionRows = connectionResults.filter((row) => row.status === 'failed');
+        if (failedConnectionRows.length > 0) {
+          const failedAt = new Date().toISOString();
+          const message = failedConnectionRows.map((row) => `${row.date}: ${row.error}`).join('; ').slice(0, 1000);
+          await admin
+            .from('zettle_connections')
+            .update({
+              last_failed_sync_at: failedAt,
+              last_sync_status: 'FAILED',
+              last_import_error: message,
+              updated_at: failedAt,
+            })
+            .eq('id', connection.id);
+          await writeIntegrationHealth(admin, {
+            venueId: connection.venue_id,
+            integrationKey: 'zettle',
+            status: 'FAILED',
+            lastFailedSyncAt: failedAt,
+            message,
+            metadata: {
+              dates,
+              failed: failedConnectionRows,
+            },
+          });
         }
       }
 
@@ -2581,7 +2688,7 @@ Deno.serve(async (req) => {
     if (req.method === 'GET' && path === 'zettle-status') {
       const { data: connection, error: connectionErr } = await admin
         .from('zettle_connections')
-        .select('id, venue_id, status, organization_uuid, zettle_user_uuid, token_expires_at, scopes, last_import_started_at, last_import_finished_at, last_import_from, last_import_to, last_import_count, last_import_error, updated_at, created_at')
+        .select('id, venue_id, status, organization_uuid, zettle_user_uuid, token_expires_at, scopes, last_import_started_at, last_import_finished_at, last_import_from, last_import_to, last_import_count, last_import_error, last_successful_sync_at, last_failed_sync_at, last_sync_status, updated_at, created_at')
         .eq('venue_id', venueId)
         .maybeSingle();
       if (connectionErr) return errorResponse(connectionErr.message);

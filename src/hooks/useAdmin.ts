@@ -190,6 +190,9 @@ export type AdminZettleStatus = {
     last_import_to?: string | null;
     last_import_count?: number | null;
     last_import_error?: string | null;
+    last_successful_sync_at?: string | null;
+    last_failed_sync_at?: string | null;
+    last_sync_status?: "OK" | "FAILED" | "NEVER_SYNCED" | string;
     updated_at?: string | null;
     created_at?: string | null;
   } | null;
