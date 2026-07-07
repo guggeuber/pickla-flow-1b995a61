@@ -1,6 +1,8 @@
 import { resolveCustomerIdForUser } from './customers.ts';
 
 const DEFAULT_DAY_ACCESS_PRICE_SEK = 199;
+const PLAYING_HOST_ROLE = 'playing_host';
+const LEGACY_HOST_COMP = 'host_comp';
 
 function roundSek(value: number) {
   return Math.round(Number(value || 0) * 100) / 100;
@@ -35,6 +37,10 @@ function boolFromMetadata(value: unknown, fallback: boolean) {
   if (typeof value === 'boolean') return value;
   if (value == null) return fallback;
   return String(value) === 'true';
+}
+
+function isPlayingHostReason(value: unknown) {
+  return value === PLAYING_HOST_ROLE || value === LEGACY_HOST_COMP;
 }
 
 function normalizeChannel(value: unknown) {
@@ -205,19 +211,19 @@ export async function resolveActivityPricingDecision({
         .maybeSingle();
 
       if (hostError) {
-        console.error('host compensation lookup failed', hostError.message);
+        console.error('playing host lookup failed', hostError.message);
       }
 
       if (hostAssignment?.id) {
         finalAmountSek = 0;
         accessDecision = 'membership_included';
-        entitlementType = 'host_comp';
-        pricingReason = 'host_comp';
+        entitlementType = PLAYING_HOST_ROLE;
+        pricingReason = PLAYING_HOST_ROLE;
         sourceId = hostAssignment.id;
-        debug.host_comp = true;
+        debug.playing_host = true;
         debug.host_customer_id = customerId;
         debug.host_assignment_id = hostAssignment.id;
-        debug.pricing_source = 'host_comp';
+        debug.pricing_source = PLAYING_HOST_ROLE;
         debug.channel_prices = {
           ...(debug.channel_prices as Record<string, unknown>),
           host: 0,
@@ -227,7 +233,7 @@ export async function resolveActivityPricingDecision({
   }
 
   if (pricingMode === 'fixed_ticket' && purchaseKind === 'activity_ticket') {
-    if (pricingReason !== 'host_comp') pricingReason = 'session_fixed_ticket_price';
+    if (!isPlayingHostReason(pricingReason)) pricingReason = 'session_fixed_ticket_price';
   } else if (userId && finalAmountSek > 0) {
     const { data: dayAccess } = await client
       .from('access_entitlements')
@@ -349,7 +355,7 @@ export async function resolveActivityPricingDecision({
 
   finalAmountSek = roundSek(finalAmountSek);
   const checkoutLabel = finalAmountSek <= 0
-    ? pricingReason === 'host_comp'
+    ? isPlayingHostReason(pricingReason)
       ? 'Ingår — du är värd'
       : accessDecision === 'day_access_included'
       ? 'Ingår idag'

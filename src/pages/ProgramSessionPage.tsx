@@ -25,9 +25,15 @@ const BORDER = "rgba(15,23,42,0.10)";
 const NAVY = "#111827";
 const MENU_BORDER = "rgba(17,17,17,0.12)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
+const PLAYING_HOST_ROLE = "playing_host";
+const LEGACY_HOST_COMP = "host_comp";
 
 function safeLocalPath(path: string) {
   return path.startsWith("/") && !path.startsWith("//") ? path : "/today";
+}
+
+function isPlayingHostReason(value: unknown) {
+  return value === PLAYING_HOST_ROLE || value === LEGACY_HOST_COMP;
 }
 
 function publicProgramPath(sessionId: string, date: string | null | undefined, venueSlug: string) {
@@ -205,7 +211,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     queryFn: async () => {
       const { data: rows } = await supabase
         .from("session_registrations")
-        .select("id, user_id, customer_id, status")
+        .select("id, user_id, customer_id, status, source_type, source_id, metadata")
         .eq("activity_session_id", sessionId!)
         .eq("session_date", occurrenceDate);
       return (rows || []).filter((row: any) => row.status !== "cancelled");
@@ -221,10 +227,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const hostCustomerIds = useMemo(() => new Set(sessionHosts.map((host: any) => host.customer_id).filter(Boolean)), [sessionHosts]);
   const nonHostRegistrations = useMemo(
     () => registrations.filter((row: any) => !row.customer_id || !hostCustomerIds.has(row.customer_id)),
-    [hostCustomerIds, registrations],
-  );
-  const registeredHostCount = useMemo(
-    () => registrations.filter((row: any) => row.customer_id && hostCustomerIds.has(row.customer_id)).length,
     [hostCustomerIds, registrations],
   );
   const participantUserIds = useMemo(() => {
@@ -256,11 +258,21 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
   const capacity = Number(session?.capacity || 0);
   const registrationCount = Math.max(Number(data?.registrations?.count ?? 0), registrations.length);
-  const remainingParticipantCount = Math.max(registrationCount - registeredHostCount, 0);
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
   const currentRegistration = user?.id ? registrations.find((row: any) => row.user_id === user.id) : null;
   const isRegistered = !!currentRegistration;
+  const currentRegistrationMetadata = currentRegistration?.metadata && typeof currentRegistration.metadata === "object" ? currentRegistration.metadata : {};
+  const userIsPlayingHost = Boolean(
+    currentRegistration && (
+      isPlayingHostReason(currentRegistration.source_type) ||
+      isPlayingHostReason(currentRegistrationMetadata.role) ||
+      isPlayingHostReason(currentRegistrationMetadata.entitlement_type) ||
+      isPlayingHostReason(currentRegistrationMetadata.pricing_reason) ||
+      isPlayingHostReason(currentRegistrationMetadata.compensation_type) ||
+      (currentRegistration.customer_id && hostCustomerIds.has(currentRegistration.customer_id))
+    )
+  );
   const [localCheckedIn, setLocalCheckedIn] = useState(false);
   const [checkinLoading, setCheckinLoading] = useState(false);
   const isCheckedIn = localCheckedIn || currentRegistration?.status === "checked_in";
@@ -296,7 +308,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     ""
   );
   const includedLabel = pricingIsIncluded
-    ? backendPricing?.pricingReason === "host_comp" || backendPricing?.entitlementType === "host_comp"
+    ? isPlayingHostReason(backendPricing?.pricingReason) || isPlayingHostReason(backendPricing?.entitlementType)
       ? "Ingår — du är värd"
       : backendPricing?.accessDecision === "day_access_included"
       ? "Ingår idag"
@@ -338,7 +350,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     ? isCheckedIn
       ? "✓ Incheckad"
       : canCheckInNow
-        ? "Checka in"
+        ? userIsPlayingHost ? "Checka in som värd" : "Checka in"
         : "Biljett klar"
     : isFull
       ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
@@ -663,7 +675,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                             🎾 {reservedCourtLabel}
                           </p>
                         ) : null}
-                        <PeopleRow people={participantProfiles} participantCount={remainingParticipantCount} />
+                        <PeopleRow people={participantProfiles} participantCount={registrationCount} />
                       </div>
                     </div>
                     <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]">
@@ -707,7 +719,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   ) : null}
 
                   {pricingIsIncluded ? (
-                    backendPricing?.pricingReason === "host_comp" || backendPricing?.entitlementType === "host_comp" ? (
+                    isPlayingHostReason(backendPricing?.pricingReason) || isPlayingHostReason(backendPricing?.entitlementType) ? (
                       <div className="flex min-w-0 items-center justify-between gap-4 rounded-[22px] bg-emerald-50 px-4 py-3 text-emerald-900" style={{ border: "1px solid rgba(16,185,129,0.22)" }}>
                         <span className="inline-flex min-w-0 items-center gap-2 text-[15px] font-black" style={{ fontFamily: FONT_HEADING }}>
                           <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-emerald-600 text-white">

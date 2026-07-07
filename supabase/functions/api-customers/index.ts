@@ -457,7 +457,7 @@ Deno.serve(async (req) => {
           'id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, customer_id, user_id, booked_by, notes, start_time, end_time, status, total_price, currency, created_at, venue_courts(id, name, court_number, sport_type)',
           { venueId, customerIds, userIds, extra: (query) => query.neq('status', 'cancelled').gte('end_time', nowIso), orderColumn: 'start_time', ascending: true, limit: 25 }),
         fetchByCustomerOrUser(admin, 'session_registrations',
-          'id, venue_id, customer_id, activity_session_id, session_date, user_id, status, price_paid_sek, stripe_session_id, registered_at, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)',
+          'id, venue_id, customer_id, activity_session_id, session_date, user_id, status, price_paid_sek, source_type, source_id, metadata, stripe_session_id, registered_at, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)',
           { venueId, customerIds, userIds, extra: (query) => query.neq('status', 'cancelled').gte('session_date', today), orderColumn: 'session_date', ascending: true, limit: 30 }),
         fetchByCustomerOrUser(admin, 'day_passes',
           'id, venue_id, customer_id, user_id, valid_date, purchase_date, status, price, currency, stripe_session_id, created_at',

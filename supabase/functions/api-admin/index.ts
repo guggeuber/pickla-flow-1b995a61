@@ -170,6 +170,10 @@ function normalizeHostCustomerIds(value: unknown) {
   return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 10);
 }
 
+function isPlayingHostReason(value: unknown) {
+  return value === 'playing_host' || value === 'host_comp';
+}
+
 async function attachActivitySessionHosts(admin: any, sessions: any[]) {
   const rows = Array.isArray(sessions) ? sessions : [];
   const sessionIds = rows.map((session) => session.id).filter(Boolean);
@@ -177,19 +181,21 @@ async function attachActivitySessionHosts(admin: any, sessions: any[]) {
 
   const { data: hostRows, error } = await admin
     .from('activity_session_hosts')
-    .select('id, venue_id, activity_session_id, customer_id, status, sort_order, customers(id, display_name, first_name, last_name, primary_email)')
+    .select('id, venue_id, activity_session_id, customer_id, role, status, sort_order, customers(id, display_name, first_name, last_name, primary_email)')
     .in('activity_session_id', sessionIds)
     .eq('status', 'active')
     .order('sort_order', { ascending: true });
   if (error) throw new Error(error.message);
 
   const hostsBySession = new Map<string, any[]>();
+  const hostCustomerIdsBySession = new Map<string, Set<string>>();
   for (const host of hostRows || []) {
     const customer = Array.isArray(host.customers) ? host.customers[0] : host.customers;
     const list = hostsBySession.get(host.activity_session_id) || [];
     list.push({
       id: host.id,
       customer_id: host.customer_id,
+      role: host.role || 'playing_host',
       sort_order: host.sort_order || 0,
       display_name: customer?.display_name || [customer?.first_name, customer?.last_name].filter(Boolean).join(' ') || customer?.primary_email || 'Värd',
       first_name: customer?.first_name || null,
@@ -197,12 +203,43 @@ async function attachActivitySessionHosts(admin: any, sessions: any[]) {
       email: customer?.primary_email || null,
     });
     hostsBySession.set(host.activity_session_id, list);
+    const customerIds = hostCustomerIdsBySession.get(host.activity_session_id) || new Set<string>();
+    customerIds.add(host.customer_id);
+    hostCustomerIdsBySession.set(host.activity_session_id, customerIds);
+  }
+
+  const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
+  const playersBySession = new Map<string, number>();
+  const registeredHostsBySession = new Map<string, number>();
+  if (today) {
+    const { data: registrations, error: registrationsError } = await admin
+      .from('session_registrations')
+      .select('activity_session_id, customer_id, source_type, metadata, status')
+      .in('activity_session_id', sessionIds)
+      .eq('session_date', today)
+      .neq('status', 'cancelled');
+    if (registrationsError) throw new Error(registrationsError.message);
+
+    for (const registration of registrations || []) {
+      const metadata = registration.metadata && typeof registration.metadata === 'object' ? registration.metadata : {};
+      const assignedHost = registration.customer_id && hostCustomerIdsBySession.get(registration.activity_session_id)?.has(registration.customer_id);
+      const playingHost = assignedHost ||
+        isPlayingHostReason(registration.source_type) ||
+        isPlayingHostReason(metadata.role) ||
+        isPlayingHostReason(metadata.entitlement_type) ||
+        isPlayingHostReason(metadata.pricing_reason) ||
+        isPlayingHostReason(metadata.compensation_type);
+      const target = playingHost ? registeredHostsBySession : playersBySession;
+      target.set(registration.activity_session_id, (target.get(registration.activity_session_id) || 0) + 1);
+    }
   }
 
   return rows.map((session) => ({
     ...session,
     hosts: hostsBySession.get(session.id) || [],
     host_customer_ids: (hostsBySession.get(session.id) || []).map((host) => host.customer_id),
+    today_players_count: playersBySession.get(session.id) || 0,
+    today_playing_hosts_registered_count: registeredHostsBySession.get(session.id) || 0,
   }));
 }
 
@@ -269,6 +306,7 @@ async function syncActivitySessionHosts(admin: any, {
       status: 'active',
       sort_order: index,
       created_by: userId,
+      role: 'playing_host',
     };
     if (existingRow?.id) {
       const needsUpdate = existingRow.status !== 'active' || Number(existingRow.sort_order || 0) !== index;

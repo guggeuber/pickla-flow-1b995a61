@@ -58,6 +58,19 @@ function formatSessionTime(session?: any) {
   return `${String(session.start_time).slice(0, 5)}${session.end_time ? `-${String(session.end_time).slice(0, 5)}` : ""}`;
 }
 
+function isPlayingHostRegistration(registration: any) {
+  const metadata = registration?.metadata && typeof registration.metadata === "object" ? registration.metadata : {};
+  return Boolean(
+    registration?.source_type === "playing_host" ||
+      registration?.source_type === "host_comp" ||
+      metadata.role === "playing_host" ||
+      metadata.entitlement_type === "playing_host" ||
+      metadata.entitlement_type === "host_comp" ||
+      metadata.pricing_reason === "playing_host" ||
+      metadata.pricing_reason === "host_comp"
+  );
+}
+
 function formatMinor(value?: number | null) {
   return `${Math.round(Number(value || 0) / 100).toLocaleString("sv-SE")} kr`;
 }
@@ -370,8 +383,8 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                       <Row
                         key={registration.id}
                         title={registration.activity_sessions?.name || "Aktivitet"}
-                        meta={`${formatDate(registration.session_date)} ${formatSessionTime(registration.activity_sessions)}${registration.checked_in_at ? ` · Incheckad ${formatDateTime(registration.checked_in_at)}` : ""}`}
-                        aside={registration.checked_in || registration.consumed || registration.status === "checked_in" ? "Använd" : registration.status || undefined}
+                        meta={`${formatDate(registration.session_date)} ${formatSessionTime(registration.activity_sessions)}${isPlayingHostRegistration(registration) ? " · Värd" : ""}${registration.checked_in_at ? ` · Incheckad ${formatDateTime(registration.checked_in_at)}` : ""}`}
+                        aside={registration.checked_in || registration.consumed || registration.status === "checked_in" ? "Använd" : isPlayingHostRegistration(registration) ? "Värd" : registration.status || undefined}
                       />
                     )) : <Empty text="Inga kommande aktivitetsregistreringar." />}
                   </Section>

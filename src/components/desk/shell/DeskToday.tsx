@@ -19,6 +19,27 @@ function timeLabel(value: string) {
   return dt.isValid ? dt.toFormat("HH:mm") : "--:--";
 }
 
+function isPlayingHostParticipant(participant: any) {
+  const metadata = participant?.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
+  return Boolean(
+    participant?.is_playing_host ||
+      participant?.role === "playing_host" ||
+      participant?.source_type === "playing_host" ||
+      participant?.source_type === "host_comp" ||
+      metadata.role === "playing_host" ||
+      metadata.entitlement_type === "playing_host" ||
+      metadata.entitlement_type === "host_comp" ||
+      metadata.pricing_reason === "playing_host" ||
+      metadata.pricing_reason === "host_comp" ||
+      metadata.compensation_type === "playing_host" ||
+      metadata.compensation_type === "host_comp"
+  );
+}
+
+function participantName(participant: any) {
+  return participant?.customer_name || participant?.booked_by || participant?.player_name || "Deltagare";
+}
+
 export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const qc = useQueryClient();
   const [expandedActivityKey, setExpandedActivityKey] = useState<string | null>(null);
@@ -71,9 +92,11 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
         participants: [],
         registered_count: 0,
         checked_in_count: 0,
+        playing_host_count: 0,
       };
       current.participants.push(row);
       current.registered_count += 1;
+      if (isPlayingHostParticipant(row)) current.playing_host_count += 1;
       if (row.checked_in || row.consumed || row.status === "checked_in") current.checked_in_count += 1;
       map.set(key, current);
     }
@@ -335,6 +358,11 @@ function ActivityRow({
   onOpenCustomer: (participant: any) => void;
 }) {
   const name = activity.activity_session?.name || activity.notes || "Aktivitet";
+  const participants = Array.isArray(activity.participants) ? activity.participants : [];
+  const playingHosts = participants.filter(isPlayingHostParticipant);
+  const playerCount = Math.max(Number(activity.registered_count || 0) - playingHosts.length, 0);
+  const capacity = Number(activity.activity_session?.capacity || activity.capacity || 0);
+  const hostNames = playingHosts.map(participantName).filter(Boolean);
   return (
     <AxCard pad="row">
       <button type="button" onClick={onToggle} className="flex w-full items-center gap-3 text-left">
@@ -346,7 +374,15 @@ function ActivityRow({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-black text-white">{name}</p>
           <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
-            {activity.checked_in_count}/{activity.registered_count} incheckade
+            Players: {playerCount}/{capacity || Number(activity.registered_count || 0)}
+          </p>
+          {hostNames.length > 0 ? (
+            <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
+              Playing hosts: {hostNames.join(", ")}
+            </p>
+          ) : null}
+          <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
+            {activity.checked_in_count}/{activity.registered_count} incheckade totalt
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -384,8 +420,9 @@ function ActivityParticipantRow({
 }) {
   const eligibility = activityRegistrationCheckinEligibility(participant);
   const checkedIn = participant.checked_in || participant.consumed || participant.status === "checked_in";
+  const playingHost = isPlayingHostParticipant(participant);
   const paymentStatus = String(participant.payment_status || "").toLowerCase();
-  const paymentLabel = paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "confirmed" ? "Betald" : "Okänd";
+  const paymentLabel = playingHost ? "0 kr · playing_host" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "confirmed" ? "Betald" : "Okänd";
   const receiptRef = participant.receipt_number || participant.receipt?.receipt_number || null;
   const hasCustomer = Boolean(participant.customer_id || participant.user_id);
 
@@ -393,7 +430,7 @@ function ActivityParticipantRow({
     <div className="rounded-xl border p-3" style={{ background: ax("surfaceHi"), borderColor: ax("borderSoft") }}>
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
-          <p className="truncate text-sm font-black text-white">{participant.customer_name || participant.booked_by || "Deltagare"}</p>
+          <p className="truncate text-sm font-black text-white">{participantName(participant)}</p>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
             {participant.customer_email && (
               <span className="inline-flex items-center gap-1 text-[11px]" style={{ color: ax("muted") }}>
@@ -410,6 +447,7 @@ function ActivityParticipantRow({
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <AxChip tone={paymentStatus === "paid" || paymentStatus === "free" || paymentStatus === "confirmed" ? "lime" : "sun"}>{paymentLabel}</AxChip>
+            {playingHost && <AxChip tone="electric">Playing host</AxChip>}
             <AxChip tone={checkedIn ? "lime" : "sun"}>
               {checkedIn ? `Incheckad${participant.checked_in_at ? ` ${timeLabel(participant.checked_in_at)}` : ""}` : "Ej incheckad"}
             </AxChip>
@@ -424,7 +462,7 @@ function ActivityParticipantRow({
           ) : eligibility.ok ? (
             <button type="button" onClick={onCheckIn} disabled={checking} className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50" style={{ background: ax("lime"), color: ax("ink") }}>
               {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserCheck className="h-3.5 w-3.5" />}
-              Checka in
+              {playingHost ? "Checka in som värd" : "Checka in"}
             </button>
           ) : (
             <span className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("borderSoft"), color: ax("muted") }}>

@@ -1402,7 +1402,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         </p>
                         {(session.hosts || []).length > 0 ? (
                           <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
-                            Värdar: {(session.hosts || []).map((host: HostOption) => hostOptionName(host)).join(", ")}
+                            Playing hosts: {(session.hosts || []).map((host: HostOption) => hostOptionName(host)).join(", ")}
                           </p>
                         ) : null}
                       </div>
@@ -1420,8 +1420,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <span className="mt-1 block font-bold text-foreground">{SOLD_AS_OPTIONS.find((option) => option.key === activeDraftSoldAs)?.label}</span>
                       </div>
                       <div className="rounded-xl bg-muted/40 px-3 py-2">
-                        <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Kapacitet</span>
-                        <span className="mt-1 block font-bold text-foreground">{session.capacity ? `${session.capacity} platser` : "Saknas"}</span>
+                        <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Players</span>
+                        <span className="mt-1 block font-bold text-foreground">{session.capacity ? `${session.today_players_count ?? 0}/${session.capacity}` : "Saknas"}</span>
+                        {(session.today_playing_hosts_registered_count ?? 0) > 0 ? (
+                          <span className="mt-0.5 block text-[10px] font-semibold text-muted-foreground">
+                            {session.today_playing_hosts_registered_count} playing host{session.today_playing_hosts_registered_count === 1 ? "" : "s"} registered
+                          </span>
+                        ) : null}
                       </div>
                       <div className="rounded-xl bg-muted/40 px-3 py-2">
                         <span className="block text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Access</span>

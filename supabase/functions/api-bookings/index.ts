@@ -7,6 +7,13 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 
+const PLAYING_HOST_ROLE = 'playing_host';
+const LEGACY_HOST_COMP = 'host_comp';
+
+function isPlayingHostReason(value: unknown) {
+  return value === PLAYING_HOST_ROLE || value === LEGACY_HOST_COMP;
+}
+
 function safeLocalPath(path?: string | null) {
   if (!path || typeof path !== 'string') return '';
   if (!path.startsWith('/') || path.startsWith('//')) return '';
@@ -43,141 +50,6 @@ function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
     totalExVat: Math.round(Math.max(totalIncVat - vatAmount, 0) * 100) / 100,
     vatRate,
   };
-}
-
-async function createHostCompFinancialEvidence(admin: any, {
-  venueId,
-  userId,
-  customerId,
-  registrationId,
-  activitySessionId,
-  sessionDate,
-  meta,
-}: {
-  venueId: string;
-  userId: string;
-  customerId: string | null;
-  registrationId: string;
-  activitySessionId: string;
-  sessionDate: string;
-  meta: Record<string, any>;
-}) {
-  if (!registrationId) return;
-
-  const { data: existingLedger } = await admin
-    .from('ledger_entries')
-    .select('id')
-    .eq('source_type', 'host_comp')
-    .eq('source_id', registrationId)
-    .maybeSingle();
-  if (existingLedger?.id) return;
-
-  const productDescription = `Värdkomp: ${meta.session_name || 'Aktivitet'}`;
-  const { data: authResult } = await admin.auth.admin.getUserById(userId).catch(() => ({ data: null }));
-  const { data: customer } = customerId
-    ? await admin
-      .from('customers')
-      .select('display_name, first_name, last_name, primary_email, primary_phone')
-      .eq('id', customerId)
-      .maybeSingle()
-    : { data: null };
-  const customerName = meta.customer_name ||
-    customer?.display_name ||
-    [customer?.first_name, customer?.last_name].filter(Boolean).join(' ') ||
-    authResult?.user?.email ||
-    null;
-  const customerEmail = meta.customer_email || customer?.primary_email || authResult?.user?.email || null;
-  const customerPhone = meta.customer_phone || customer?.primary_phone || null;
-
-  let receipt: any = null;
-  const receiptPayload = {
-    booking_refs: [],
-    venue_id: venueId,
-    user_id: userId,
-    customer_id: customerId,
-    customer_name: customerName,
-    customer_email: customerEmail,
-    customer_phone: customerPhone,
-    purchase_type: 'activity_registration',
-    product_description: productDescription,
-    payment_method: 'Hostkomp',
-    payment_provider: 'pickla',
-    payment_status: 'paid',
-    total_inc_vat: 0,
-    total_ex_vat: 0,
-    vat_amount: 0,
-    total_inc_vat_sek: 0,
-    total_ex_vat_sek: 0,
-    vat_amount_sek: 0,
-    vat_rate: 6,
-    currency: 'SEK',
-    metadata: {
-      source_type: 'host_comp',
-      source_id: registrationId,
-      compensation_type: 'host_comp',
-      entitlement_type: 'host_comp',
-      activity_session_id: activitySessionId,
-      session_date: sessionDate,
-      session_type: meta.session_type || 'open_play',
-      host_assignment_id: meta.host_assignment_id || null,
-    },
-  };
-
-  const receiptResult = await admin
-    .from('booking_receipts')
-    .insert(receiptPayload)
-    .select('id, receipt_number, issued_at, customer_name')
-    .single();
-
-  if (receiptResult.error) {
-    if (receiptResult.error.code !== '23505') {
-      throw new Error(`Failed to create host comp receipt: ${receiptResult.error.message}`);
-    }
-    const { data: existingReceipt } = await admin
-      .from('booking_receipts')
-      .select('id, receipt_number, issued_at, customer_name')
-      .eq('metadata->>source_type', 'host_comp')
-      .eq('metadata->>source_id', registrationId)
-      .maybeSingle();
-    receipt = existingReceipt || null;
-  } else {
-    receipt = receiptResult.data;
-  }
-
-  const occurredAt = receipt?.issued_at || new Date().toISOString();
-  const accountingDate = DateTime
-    .fromISO(occurredAt, { zone: 'utc' })
-    .setZone('Europe/Stockholm')
-    .toISODate();
-  if (!accountingDate) throw new Error('Could not resolve host comp ledger date');
-
-  const { error: ledgerError } = await admin.from('ledger_entries').insert({
-    venue_id: venueId,
-    source_type: 'host_comp',
-    source_id: registrationId,
-    accounting_date: accountingDate,
-    occurred_at: occurredAt,
-    customer_id: customerId,
-    customer_name: receipt?.customer_name || customerName,
-    amount_inc_vat_minor: 0,
-    vat_amount_minor: 0,
-    payment_status: 'paid',
-    payment_method: 'Hostkomp',
-    receipt_number: receipt?.receipt_number || null,
-    booking_receipt_id: receipt?.id || null,
-    metadata: {
-      product_type: 'activity_ticket',
-      purchase_type: 'activity_registration',
-      compensation_type: 'host_comp',
-      activity_session_id: activitySessionId,
-      session_date: sessionDate,
-      session_type: meta.session_type || 'open_play',
-      host_assignment_id: meta.host_assignment_id || null,
-    },
-  });
-  if (ledgerError && ledgerError.code !== '23505') {
-    throw new Error(`Failed to create host comp ledger entry: ${ledgerError.message}`);
-  }
 }
 
 function normalizeCatalogResource(row: any) {
@@ -606,11 +478,11 @@ async function createFreeEntitlementBookingResponse({
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
   }
 
-  if (product_type === 'activity_ticket' && meta.entitlement_type === 'host_comp') {
+  if (product_type === 'activity_ticket' && isPlayingHostReason(meta.entitlement_type)) {
     const validDate = meta.date || DateTime.now().setZone('Europe/Stockholm').toISODate()!;
     const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
     if (activitySessionId) {
-      const { data: registration, error: registrationError } = await adminFree.from('session_registrations').upsert({
+      const { error: registrationError } = await adminFree.from('session_registrations').upsert({
         venue_id,
         activity_session_id: activitySessionId,
         session_date: validDate,
@@ -618,31 +490,19 @@ async function createFreeEntitlementBookingResponse({
         customer_id: entitlementCustomerId,
         status: 'confirmed',
         price_paid_sek: 0,
-        source_type: 'host_comp',
+        source_type: PLAYING_HOST_ROLE,
         source_id: meta.host_assignment_id || null,
         metadata: {
           session_type: meta.session_type || 'open_play',
           session_name: meta.session_name || null,
-          entitlement_type: 'host_comp',
-          pricing_reason: 'host_comp',
-          compensation_type: 'host_comp',
+          role: PLAYING_HOST_ROLE,
+          entitlement_type: PLAYING_HOST_ROLE,
+          pricing_reason: PLAYING_HOST_ROLE,
+          compensation_type: PLAYING_HOST_ROLE,
           host_assignment_id: meta.host_assignment_id || null,
         },
-      }, { onConflict: 'activity_session_id,session_date,user_id' })
-        .select('id')
-        .single();
+      }, { onConflict: 'activity_session_id,session_date,user_id' });
       if (registrationError) return errorResponse(registrationError.message, 500);
-      if (registration?.id) {
-        await createHostCompFinancialEvidence(adminFree, {
-          venueId: venue_id,
-          userId: entitlementUserId,
-          customerId: entitlementCustomerId,
-          registrationId: registration.id,
-          activitySessionId,
-          sessionDate: validDate,
-          meta,
-        });
-      }
     }
 
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });
@@ -931,7 +791,7 @@ Deno.serve(async (req) => {
       meta.entitlement_type = activityPricingDecision.entitlementType || '';
       meta.membership_id = activityPricingDecision.membershipId || '';
       meta.pricing_reason = activityPricingDecision.pricingReason || '';
-      meta.host_assignment_id = activityPricingDecision.entitlementType === 'host_comp'
+      meta.host_assignment_id = isPlayingHostReason(activityPricingDecision.entitlementType)
         ? activityPricingDecision.sourceId || ''
         : '';
       meta.pricing_mode = String(activityPricingDecision.debug?.pricing_mode || '');
@@ -2225,7 +2085,7 @@ Deno.serve(async (req) => {
       if (date) {
         const { data: registrations, error: regErr } = await client
           .from('session_registrations')
-          .select('id, venue_id, activity_session_id, session_date, customer_id, user_id, status, price_paid_sek, stripe_session_id, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
+          .select('id, venue_id, activity_session_id, session_date, customer_id, user_id, status, price_paid_sek, source_type, source_id, metadata, stripe_session_id, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
           .eq('venue_id', venueId)
           .eq('session_date', date)
           .neq('status', 'cancelled');
@@ -2307,7 +2167,13 @@ Deno.serve(async (req) => {
           const participantEmail = customer?.primary_email || receipt?.customer_email || null;
           const participantPhone = customer?.primary_phone || receipt?.customer_phone || profile?.phone || null;
           const checkin = checkinByRegistrationId.get(registration.id);
-          const paymentStatus = receipt?.payment_status || (Number(registration.price_paid_sek || 0) <= 0 ? 'free' : registration.stripe_session_id ? 'paid' : 'confirmed');
+          const registrationMetadata = registration.metadata && typeof registration.metadata === 'object' ? registration.metadata : {};
+          const playingHost = isPlayingHostReason(registration.source_type) ||
+            isPlayingHostReason(registrationMetadata.role) ||
+            isPlayingHostReason(registrationMetadata.entitlement_type) ||
+            isPlayingHostReason(registrationMetadata.pricing_reason) ||
+            isPlayingHostReason(registrationMetadata.compensation_type);
+          const paymentStatus = receipt?.payment_status || (playingHost ? 'free' : Number(registration.price_paid_sek || 0) <= 0 ? 'free' : registration.stripe_session_id ? 'paid' : 'confirmed');
 
           return {
             id: `session_registration:${registration.id}`,
@@ -2326,6 +2192,12 @@ Deno.serve(async (req) => {
             end_time: endTime,
             status: registration.status || 'confirmed',
             total_price: registration.price_paid_sek,
+            price_paid_sek: registration.price_paid_sek,
+            source_type: playingHost ? PLAYING_HOST_ROLE : registration.source_type || null,
+            source_id: registration.source_id || null,
+            metadata: registrationMetadata,
+            role: playingHost ? PLAYING_HOST_ROLE : null,
+            is_playing_host: playingHost,
             booked_by: participantName,
             customer_name: participantName,
             customer_email: participantEmail,
