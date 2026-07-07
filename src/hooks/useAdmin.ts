@@ -234,6 +234,44 @@ export function useAdminZettleImport(venueId: string | undefined, date: string |
   });
 }
 
+export type AdminZettleBackfillResult = {
+  ok: boolean;
+  dry_run: boolean;
+  start_date: string;
+  end_date: string;
+  days_scanned: number;
+  purchases_found: number;
+  purchases_imported: number;
+  purchases_would_import?: number;
+  purchases_already_present: number;
+  ledger_rows_created: number;
+  ledger_rows_would_create?: number;
+  ledger_rows_already_present: number;
+  failures: Array<{ date: string; error: string }>;
+  raw_total_sek: number;
+  ledger_total_sek: number;
+  expected_total_sek: number | null;
+  expected_diff_sek: number | null;
+};
+
+export function useAdminZettleBackfill(venueId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { startDate: string; endDate: string; dryRun: boolean; expectedTotalSek?: number | null }) =>
+      apiPost<AdminZettleBackfillResult>(
+        "api-admin",
+        `zettle-backfill?venueId=${venueId}`,
+        body
+      ),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["admin-zettle-status", venueId] });
+      if (!variables.dryRun) {
+        queryClient.invalidateQueries({ queryKey: ["admin-revenue-ledger", venueId] });
+      }
+    },
+  });
+}
+
 export type AdminFinancialMaintenanceInvoice = {
   invoice_id: string;
   subscription_id?: string | null;

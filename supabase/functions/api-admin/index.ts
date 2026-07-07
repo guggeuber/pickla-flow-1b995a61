@@ -8,7 +8,7 @@ const ZETTLE_OAUTH_BASE_URL = 'https://oauth.zettle.com';
 const ZETTLE_PURCHASE_BASE_URL = 'https://purchase.izettle.com';
 const ZETTLE_SCOPES = ['READ:PURCHASE'];
 
-const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact', 'stripe-invoice-maintenance']);
+const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact', 'stripe-invoice-maintenance', 'zettle-backfill']);
 const FINANCIAL_MAINTENANCE_TOKEN_TTL_MS = 10 * 60 * 1000;
 const SENSITIVE_AUDIT_KEYS = new Set([
   'access_token',
@@ -39,6 +39,7 @@ function adminEntityTableForPath(path: string) {
     'event-categories': 'venue_event_categories',
     'zettle-connect': 'zettle_connections',
     'zettle-import': 'zettle_purchases',
+    'zettle-backfill': 'zettle_purchases',
     'stripe-invoice-backfill': 'booking_receipts',
     'stripe-invoice-maintenance': 'booking_receipts',
   };
@@ -62,6 +63,7 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'links') return body.linkId || url.searchParams.get('linkId');
   if (path === 'event-categories') return body.id || body.categoryKey || url.searchParams.get('id');
   if (path === 'zettle-import') return body.date || null;
+  if (path === 'zettle-backfill') return `${body.startDate || body.start_date || ''}:${body.endDate || body.end_date || ''}`;
   if (path === 'stripe-invoice-backfill') return body.stripe_customer_id || body.customer_id || null;
   if (path === 'stripe-invoice-maintenance') return body.mode || null;
   return body.id || null;
@@ -462,6 +464,19 @@ async function validZettleAccessToken(admin: any, connection: any) {
   return token.access_token;
 }
 
+async function zettleAccessTokenForBackfill(admin: any, connection: any, dryRun: boolean) {
+  if (!dryRun) return await validZettleAccessToken(admin, connection);
+  if (zettleAuthMode() === 'api_key') return await zettleApiKeyAccessToken();
+
+  const expiresAt = connection.token_expires_at
+    ? DateTime.fromISO(connection.token_expires_at, { zone: 'utc' })
+    : null;
+  if (connection.access_token && expiresAt?.isValid && expiresAt > DateTime.utc().plus({ minutes: 5 })) {
+    return connection.access_token;
+  }
+  throw new Error('Dry run cannot refresh an expired Zettle OAuth token because dryRun must not write. Reconnect Zettle or run a safe non-dry sync first.');
+}
+
 async function fetchZettlePurchases(accessToken: string, startIso: string, endIso: string) {
   const purchases: any[] = [];
   let lastPurchaseHash: string | null = null;
@@ -726,6 +741,210 @@ async function importZettleDay(admin: any, venueId: string, connection: any, req
   const startIso = startDay.startOf('day').toUTC().toISO()!;
   const endIso = endDay.startOf('day').toUTC().toISO()!;
   return await importZettleRange(admin, { venueId, connection, startIso, endIso });
+}
+
+function zettleBackfillDates(startDate: string, endDate: string) {
+  const start = DateTime.fromISO(String(startDate || '').slice(0, 10), { zone: 'Europe/Stockholm' }).startOf('day');
+  const end = DateTime.fromISO(String(endDate || '').slice(0, 10), { zone: 'Europe/Stockholm' }).startOf('day');
+  if (!start.isValid || !end.isValid || end < start) throw new Error('Invalid backfill date range');
+
+  const dates: string[] = [];
+  let cursor = start;
+  while (cursor <= end) {
+    dates.push(cursor.toISODate()!);
+    cursor = cursor.plus({ days: 1 });
+  }
+  if (dates.length > 370) throw new Error('Zettle backfill range is too large. Use 370 days or less.');
+  return dates;
+}
+
+function sekFromMinor(minor: number) {
+  return Math.round(minor) / 100;
+}
+
+function roundSek(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+async function fetchExistingZettleSets(admin: any, venueId: string, purchaseUuids: string[]) {
+  const rawSet = new Set<string>();
+  const ledgerSet = new Set<string>();
+  const clean = Array.from(new Set(purchaseUuids.filter(Boolean)));
+
+  for (let index = 0; index < clean.length; index += 500) {
+    const chunk = clean.slice(index, index + 500);
+    const [{ data: rawRows, error: rawErr }, { data: ledgerRows, error: ledgerErr }] = await Promise.all([
+      admin
+        .from('zettle_purchases')
+        .select('purchase_uuid')
+        .eq('venue_id', venueId)
+        .in('purchase_uuid', chunk),
+      admin
+        .from('ledger_entries')
+        .select('source_id')
+        .eq('source_type', 'zettle')
+        .in('source_id', chunk),
+    ]);
+    if (rawErr) throw new Error(rawErr.message);
+    if (ledgerErr) throw new Error(ledgerErr.message);
+    (rawRows || []).forEach((row: any) => rawSet.add(row.purchase_uuid));
+    (ledgerRows || []).forEach((row: any) => ledgerSet.add(row.source_id));
+  }
+
+  return { rawSet, ledgerSet };
+}
+
+async function ledgerZettleTotalForRange(admin: any, venueId: string, startDate: string, endDate: string) {
+  const endExclusive = DateTime.fromISO(endDate, { zone: 'Europe/Stockholm' }).plus({ days: 1 }).toISODate()!;
+  let total = 0;
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin
+      .from('ledger_entries')
+      .select('amount_inc_vat_minor')
+      .eq('venue_id', venueId)
+      .eq('source_type', 'zettle')
+      .gte('accounting_date', startDate)
+      .lt('accounting_date', endExclusive)
+      .range(from, from + 999);
+    if (error) throw new Error(error.message);
+    total += (data || []).reduce((sum: number, row: any) => sum + Math.round(Number(row.amount_inc_vat_minor || 0)), 0);
+    if (!data || data.length < 1000) break;
+  }
+  return total;
+}
+
+async function runZettleBackfill(admin: any, {
+  venueId,
+  connection,
+  startDate,
+  endDate,
+  dryRun,
+  expectedTotalSek,
+}: {
+  venueId: string;
+  connection: any;
+  startDate: string;
+  endDate: string;
+  dryRun: boolean;
+  expectedTotalSek: number | null;
+}) {
+  const dates = zettleBackfillDates(startDate, endDate);
+  const accessToken = await zettleAccessTokenForBackfill(admin, connection, dryRun);
+  const failures: Array<{ date: string; error: string }> = [];
+  const purchasesByUuid = new Map<string, any>();
+
+  for (const date of dates) {
+    try {
+      const startDay = DateTime.fromISO(date, { zone: 'Europe/Stockholm' });
+      const startIso = startDay.startOf('day').toUTC().toISO()!;
+      const endIso = startDay.plus({ days: 1 }).startOf('day').toUTC().toISO()!;
+      const dayPurchases = await fetchZettlePurchases(accessToken, startIso, endIso);
+      for (const purchase of dayPurchases) {
+        const purchaseUuid = zettlePurchaseUuid(purchase);
+        if (purchaseUuid) purchasesByUuid.set(purchaseUuid, purchase);
+      }
+    } catch (error) {
+      failures.push({ date, error: error instanceof Error ? error.message : 'Zettle fetch failed' });
+    }
+  }
+
+  const purchases = Array.from(purchasesByUuid.values());
+  const purchaseUuids = purchases.map((purchase) => zettlePurchaseUuid(purchase)).filter(Boolean);
+  const { rawSet, ledgerSet } = await fetchExistingZettleSets(admin, venueId, purchaseUuids);
+  const missingRawPurchases = purchases.filter((purchase) => !rawSet.has(zettlePurchaseUuid(purchase)));
+  const missingLedgerPurchases = purchases.filter((purchase) => !ledgerSet.has(zettlePurchaseUuid(purchase)));
+  const rawTotalMinor = purchases.reduce((sum, purchase) =>
+    sum + Math.max(0, Math.round(Number(purchase.amount || purchase.totalAmount || 0))), 0);
+
+  if (!dryRun) {
+    const now = new Date().toISOString();
+    if (missingRawPurchases.length) {
+      const rawRows = missingRawPurchases.map((purchase) => {
+        const occurredAt = zettleOccurredAt(purchase);
+        return {
+          venue_id: venueId,
+          connection_id: connection.id,
+          purchase_uuid: zettlePurchaseUuid(purchase),
+          purchase_number: zettlePurchaseNumber(purchase),
+          occurred_at: occurredAt,
+          amount_inc_vat_minor: Math.max(0, Math.round(Number(purchase.amount || purchase.totalAmount || 0))),
+          vat_amount_minor: Math.max(0, Math.round(Number(purchase.vatAmount || purchase.totalVatAmount || 0))),
+          currency: purchase.currency || purchase.currencyId || null,
+          payment_method: zettlePaymentMethod(purchase),
+          payment_status: zettleStatusFromPurchase(purchase),
+          raw_payload: purchase,
+          imported_at: now,
+          updated_at: now,
+        };
+      });
+      const { error: rawErr } = await admin
+        .from('zettle_purchases')
+        .upsert(rawRows, { onConflict: 'venue_id,purchase_uuid', ignoreDuplicates: true });
+      if (rawErr) throw new Error(rawErr.message);
+    }
+
+    if (missingLedgerPurchases.length) {
+      const ledgerRows = missingLedgerPurchases.map((purchase) => zettleLedgerEntry(venueId, purchase));
+      const { error: ledgerErr } = await admin
+        .from('ledger_entries')
+        .upsert(ledgerRows, { onConflict: 'source_type,source_id', ignoreDuplicates: true });
+      if (ledgerErr) throw new Error(ledgerErr.message);
+    }
+
+    const startIso = DateTime.fromISO(startDate, { zone: 'Europe/Stockholm' }).startOf('day').toUTC().toISO()!;
+    const endIso = DateTime.fromISO(endDate, { zone: 'Europe/Stockholm' }).plus({ days: 1 }).startOf('day').toUTC().toISO()!;
+    await admin
+      .from('zettle_connections')
+      .update({
+        status: 'connected',
+        last_import_finished_at: now,
+        last_import_from: startIso,
+        last_import_to: endIso,
+        last_import_count: purchases.length,
+        last_import_error: failures.length ? `${failures.length} backfill day(s) failed` : null,
+        last_successful_sync_at: failures.length ? connection.last_successful_sync_at : now,
+        last_failed_sync_at: failures.length ? now : connection.last_failed_sync_at,
+        last_sync_status: failures.length ? 'FAILED' : 'OK',
+        updated_at: now,
+      })
+      .eq('id', connection.id);
+    await writeIntegrationHealth(admin, {
+      venueId,
+      integrationKey: 'zettle',
+      status: failures.length ? 'FAILED' : 'OK',
+      lastSuccessfulSyncAt: failures.length ? null : now,
+      lastFailedSyncAt: failures.length ? now : null,
+      message: failures.length ? `${failures.length} backfill day(s) failed` : null,
+      metadata: {
+        source: 'zettle_backfill',
+        start_date: startDate,
+        end_date: endDate,
+        dry_run: false,
+        failures,
+      },
+    });
+  }
+
+  const ledgerTotalMinor = dryRun
+    ? await ledgerZettleTotalForRange(admin, venueId, startDate, endDate)
+    : await ledgerZettleTotalForRange(admin, venueId, startDate, endDate);
+  const expectedDiffSek = expectedTotalSek == null ? null : roundSek(sekFromMinor(rawTotalMinor) - expectedTotalSek);
+
+  return {
+    days_scanned: dates.length,
+    purchases_found: purchases.length,
+    purchases_imported: dryRun ? 0 : missingRawPurchases.length,
+    purchases_would_import: dryRun ? missingRawPurchases.length : 0,
+    purchases_already_present: purchases.length - missingRawPurchases.length,
+    ledger_rows_created: dryRun ? 0 : missingLedgerPurchases.length,
+    ledger_rows_would_create: dryRun ? missingLedgerPurchases.length : 0,
+    ledger_rows_already_present: purchases.length - missingLedgerPurchases.length,
+    failures,
+    raw_total_sek: sekFromMinor(rawTotalMinor),
+    ledger_total_sek: sekFromMinor(ledgerTotalMinor),
+    expected_total_sek: expectedTotalSek,
+    expected_diff_sek: expectedDiffSek,
+  };
 }
 
 function vatMinorFromIncludedMinor(totalIncVatMinor: number, vatRate = 6) {
@@ -2767,6 +2986,60 @@ Deno.serve(async (req) => {
         }, 200, 10);
       } catch (importErr) {
         const message = importErr instanceof Error ? importErr.message : 'Zettle import failed';
+        return errorResponse(message, 500);
+      }
+    }
+
+    if (req.method === 'POST' && path === 'zettle-backfill') {
+      const body = await req.json().catch(() => ({}));
+      const startDate = String(body.startDate || body.start_date || '').slice(0, 10);
+      const endDate = String(body.endDate || body.end_date || '').slice(0, 10);
+      const dryRun = body.dryRun !== false && body.dry_run !== false;
+      const expectedTotalSek = body.expectedTotalSek === undefined && body.expected_total_sek === undefined
+        ? null
+        : Number(body.expectedTotalSek ?? body.expected_total_sek);
+      if (!startDate || !endDate) return errorResponse('Missing startDate or endDate', 400);
+      if (expectedTotalSek !== null && !Number.isFinite(expectedTotalSek)) return errorResponse('Invalid expectedTotalSek', 400);
+
+      try {
+        const importConnection = await ensureZettleImportConnection(admin, venueId!, userId);
+        const result = await runZettleBackfill(admin, {
+          venueId: venueId!,
+          connection: importConnection,
+          startDate,
+          endDate,
+          dryRun,
+          expectedTotalSek,
+        });
+
+        if (!dryRun) {
+          await writeAuditLog(admin, {
+            venue_id: venueId,
+            actor_user_id: userId,
+            actor_type: 'user',
+            action: 'api-admin.zettle-backfill.execute',
+            entity_table: 'zettle_purchases',
+            entity_id: `${startDate}:${endDate}`,
+            metadata: {
+              start_date: startDate,
+              end_date: endDate,
+              dry_run: dryRun,
+              expected_total_sek: expectedTotalSek,
+              summary: result,
+            },
+            user_agent: req.headers.get('user-agent') || null,
+          });
+        }
+
+        return jsonResponse({
+          ok: result.failures.length === 0,
+          dry_run: dryRun,
+          start_date: startDate,
+          end_date: endDate,
+          ...result,
+        }, result.failures.length === 0 ? 200 : 207, 0);
+      } catch (importErr) {
+        const message = importErr instanceof Error ? importErr.message : 'Zettle backfill failed';
         return errorResponse(message, 500);
       }
     }
