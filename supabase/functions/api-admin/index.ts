@@ -766,6 +766,14 @@ function roundSek(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+function parseOptionalSek(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = String(value).trim().replace(/\s/g, '').replace(',', '.');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
 async function fetchExistingZettleSets(admin: any, venueId: string, purchaseUuids: string[]) {
   const rawSet = new Set<string>();
   const ledgerSet = new Set<string>();
@@ -2997,7 +3005,7 @@ Deno.serve(async (req) => {
       const dryRun = body.dryRun !== false && body.dry_run !== false;
       const expectedTotalSek = body.expectedTotalSek === undefined && body.expected_total_sek === undefined
         ? null
-        : Number(body.expectedTotalSek ?? body.expected_total_sek);
+        : parseOptionalSek(body.expectedTotalSek ?? body.expected_total_sek);
       if (!startDate || !endDate) return errorResponse('Missing startDate or endDate', 400);
       if (expectedTotalSek !== null && !Number.isFinite(expectedTotalSek)) return errorResponse('Invalid expectedTotalSek', 400);
 
