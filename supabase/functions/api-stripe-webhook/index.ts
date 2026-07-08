@@ -11,6 +11,7 @@ import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
+const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 
 // Deno-native Stripe webhook signature verification.
 // Do not use the Stripe Node SDK in Supabase Edge Runtime here; it can trigger
@@ -184,6 +185,8 @@ Deno.serve(async (req) => {
       await handleDayPass(session, meta, serviceClient);
     } else if (product_type === 'activity_ticket') {
       await handleActivityTicket(session, meta, serviceClient);
+    } else if (product_type === BOOKING_PARTICIPANT_SOURCE_TYPE) {
+      await handleBookingParticipant(session, meta, serviceClient);
     } else if (product_type === 'membership') {
       await handleMembership(session, meta, serviceClient);
     }
@@ -221,6 +224,69 @@ function receiptPaymentMethod(session: any) {
   const types = Array.isArray(session.payment_method_types) ? session.payment_method_types : [];
   if (types.includes('card')) return 'Kort via Stripe';
   return types.length ? `${types.join(', ')} via Stripe` : 'Stripe';
+}
+
+function bookingGroupKey(row: any) {
+  if (row?.stripe_session_id) return `stripe:${row.stripe_session_id}`;
+  if (row?.access_code) return `code:${row.access_code}:${row.start_time}:${row.end_time}`;
+  return `booking:${row?.id || row?.booking_ref || crypto.randomUUID()}`;
+}
+
+function bookingContactFromNotes(notes?: string | null) {
+  const parts = String(notes || '').split(' | ').map((part) => part.trim());
+  return {
+    name: parts[0] || null,
+    phone: parts[1] || null,
+    email: parts[2] || null,
+  };
+}
+
+function isFounderBookingGroup(rows: any[]) {
+  return rows.some((row: any) =>
+    Number(row?.included_court_hours || 0) > 0 ||
+    row?.membership_usage_entitlement_type === 'court_hours_per_week'
+  );
+}
+
+async function ensureBookerParticipant(serviceClient: any, bookingRows: any[]) {
+  const booking = bookingRows[0];
+  if (!booking?.user_id) return null;
+  const groupKey = bookingGroupKey(booking);
+  const { data: existingRows } = await serviceClient
+    .from('booking_participants')
+    .select('id, user_id, role')
+    .eq('venue_id', booking.venue_id)
+    .eq('booking_group_key', groupKey)
+    .neq('payment_status', 'cancelled');
+  if ((existingRows || []).some((row: any) => row.role === 'booker' || row.user_id === booking.user_id)) return null;
+
+  const customerId = booking.customer_id || await resolveCustomerIdForUser(serviceClient, booking.user_id);
+  const contact = bookingContactFromNotes(booking.notes);
+  const paymentStatus = Number((bookingRows || []).reduce((sum: number, row: any) => sum + Number(row.total_price || 0), 0)) <= 0
+    ? 'free'
+    : booking.stripe_session_id
+    ? 'paid'
+    : 'pending';
+
+  const { error } = await serviceClient.from('booking_participants').insert({
+    venue_id: booking.venue_id,
+    booking_id: booking.id,
+    booking_group_key: groupKey,
+    customer_id: customerId,
+    user_id: booking.user_id,
+    display_name: contact.name || 'Bokare',
+    email: contact.email || null,
+    phone: contact.phone || null,
+    role: 'booker',
+    price_minor: 0,
+    payment_status: paymentStatus,
+    payment_method: booking.stripe_session_id ? 'stripe' : null,
+    metadata: {
+      source: 'booking_owner',
+      founder_booking: isFounderBookingGroup(bookingRows),
+    },
+  });
+  if (error && !String(error.message || '').includes('duplicate key')) throw new Error(error.message);
 }
 
 function stripeId(value: unknown): string | null {
@@ -338,7 +404,7 @@ async function createPurchaseReceipt({
   session: any;
   meta: Record<string, string>;
   serviceClient: any;
-  userId: string;
+  userId: string | null;
   bookingRefs?: string[];
   totalSek: number;
   purchaseType: string;
@@ -392,7 +458,7 @@ async function createPurchaseReceipt({
     stripe_subscription_id: session.subscription || null,
     venue_id: meta.venue_id || null,
     customer_id: customerId,
-    user_id: userId,
+    user_id: userId || null,
     customer_name: customerName,
     customer_email: customerEmail,
     customer_phone: customerPhone,
@@ -882,13 +948,19 @@ async function handleCourtBooking(
 
   const { data: sessionBookings, error: refsErr } = await serviceClient
     .from('bookings')
-    .select('id, booking_ref')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type')
     .eq('stripe_session_id', session.id)
     .neq('status', 'cancelled');
 
   if (refsErr) {
     console.error('Failed to fetch booking refs for receipt:', refsErr.message);
     return;
+  }
+
+  try {
+    await ensureBookerParticipant(serviceClient, sessionBookings || []);
+  } catch (participantErr) {
+    console.error('Failed to ensure booking participant for Stripe booking:', (participantErr as Error).message);
   }
 
   const bookingRefs = (sessionBookings || []).map((b: any) => b.booking_ref).filter(Boolean);
@@ -939,6 +1011,87 @@ async function handleCourtBooking(
       used_value: Number(usage?.used_value || 0) + includedCourtHours,
     }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
   }
+}
+
+async function handleBookingParticipant(
+  session: any,
+  meta: Record<string, string>,
+  serviceClient: any,
+): Promise<void> {
+  const participantId = String(meta.booking_participant_id || '').trim();
+  if (!participantId) throw new Error('Missing booking_participant_id');
+
+  const { data: participant, error: participantErr } = await serviceClient
+    .from('booking_participants')
+    .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, bookings(booking_ref, start_time, end_time)')
+    .eq('id', participantId)
+    .maybeSingle();
+  if (participantErr) throw new Error(participantErr.message);
+  if (!participant) throw new Error('Booking participant not found');
+
+  const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
+  const amountMinor = Number(session.amount_total || 0);
+  if (amountMinor <= 0) throw new Error('Booking participant payment amount must be positive');
+
+  const resolvedUserId = participant.user_id || meta.user_id || null;
+  const paidMeta = {
+    ...meta,
+    venue_id: participant.venue_id,
+    customer_name: participant.display_name || meta.customer_name || '',
+    customer_email: session.customer_details?.email || participant.email || meta.customer_email || '',
+    customer_phone: participant.phone || meta.customer_phone || '',
+    product_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
+  };
+
+  await serviceClient
+    .from('booking_participants')
+    .update({
+      payment_status: 'paid',
+      payment_method: receiptPaymentMethod(session),
+      payment_stripe_session_id: session.id,
+      email: session.customer_details?.email || participant.email || null,
+      user_id: resolvedUserId,
+      metadata: {
+        ...(participant.metadata || {}),
+        stripe_session_id: session.id,
+        stripe_payment_intent_id: session.payment_intent || null,
+      },
+    })
+    .eq('id', participant.id);
+
+  const receipt = await createPurchaseReceipt({
+    session,
+    meta: paidMeta,
+    serviceClient,
+    userId: resolvedUserId,
+    bookingRefs: booking?.booking_ref ? [booking.booking_ref] : [],
+    totalSek: Math.round((amountMinor / 100) * 100) / 100,
+    purchaseType: BOOKING_PARTICIPANT_SOURCE_TYPE,
+    productDescription: 'Medspelarplats · Banbokning',
+  });
+
+  if (receipt?.id) {
+    await serviceClient
+      .from('booking_participants')
+      .update({ booking_receipt_id: receipt.id })
+      .eq('id', participant.id);
+  }
+
+  await createLedgerEntryFromReceipt({
+    session,
+    meta: paidMeta,
+    serviceClient,
+    sourceType: BOOKING_PARTICIPANT_SOURCE_TYPE,
+    sourceId: participant.id,
+    receipt,
+    amountIncVatMinor: amountMinor,
+    metadata: {
+      booking_participant_id: participant.id,
+      booking_id: participant.booking_id,
+      booking_group_key: participant.booking_group_key,
+      booking_ref: booking?.booking_ref || null,
+    },
+  });
 }
 
 // ── Shared: resolve a real user from metadata + Stripe customer_details ──────

@@ -8,6 +8,7 @@ const STOCKHOLM_ZONE = 'Europe/Stockholm';
 
 const entitlementPriority: Record<string, number> = {
   booking: 1,
+  booking_participant: 1,
   session_ticket: 2,
   activity_registration: 2,
   membership: 3,
@@ -102,6 +103,37 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
       starts_at: booking.start_time,
       ends_at: booking.end_time,
       priority: entitlementPriority.booking,
+    });
+  }
+
+  const { data: bookingParticipant } = await serviceClient
+    .from('booking_participants')
+    .select('id, display_name, payment_status, checked_in_at, booking_id, bookings(start_time, end_time, booking_ref, venue_courts(name))')
+    .eq('user_id', targetUserId)
+    .eq('venue_id', venueId)
+    .in('payment_status', ['paid', 'free'])
+    .order('created_at', { ascending: false })
+    .limit(20);
+
+  const activeBookingParticipant = (bookingParticipant || []).find((row: any) => {
+    const bookingRow = Array.isArray(row.bookings) ? row.bookings[0] : row.bookings;
+    if (!bookingRow?.start_time || !bookingRow?.end_time) return false;
+    const start = DateTime.fromISO(bookingRow.start_time, { zone: 'utc' }).setZone(STOCKHOLM_ZONE);
+    const end = DateTime.fromISO(bookingRow.end_time, { zone: 'utc' }).setZone(STOCKHOLM_ZONE);
+    const now = DateTime.now().setZone(STOCKHOLM_ZONE);
+    return start.toISODate() === today && now >= start.minus({ minutes: 30 }) && now <= end;
+  });
+
+  if (activeBookingParticipant) {
+    const bookingRow = Array.isArray(activeBookingParticipant.bookings) ? activeBookingParticipant.bookings[0] : activeBookingParticipant.bookings;
+    entitlements.push({
+      type: 'booking_participant',
+      id: activeBookingParticipant.id,
+      label: `Medspelare: ${bookingRow?.venue_courts?.name || 'Bana'}`,
+      resource: bookingRow?.venue_courts?.name || null,
+      starts_at: bookingRow?.start_time || null,
+      ends_at: bookingRow?.end_time || null,
+      priority: entitlementPriority.booking_participant,
     });
   }
 
@@ -339,6 +371,15 @@ async function markSessionRegistrationCheckedIn(serviceClient: any, params: {
   entitlementId?: string | null;
 }) {
   if (!params.entitlementId) return;
+  if (String(params.entryType || '') === 'booking_participant') {
+    await serviceClient
+      .from('booking_participants')
+      .update({ checked_in_at: new Date().toISOString() })
+      .eq('id', params.entitlementId)
+      .eq('venue_id', params.venueId)
+      .is('checked_in_at', null);
+    return;
+  }
   if (!['session_ticket', 'activity_registration'].includes(String(params.entryType || ''))) return;
 
   await serviceClient

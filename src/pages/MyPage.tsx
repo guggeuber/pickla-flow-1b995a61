@@ -895,6 +895,7 @@ function BookingDetailsSheet({
   const queryClient = useQueryClient();
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [creatingInvite, setCreatingInvite] = useState(false);
 
   if (!booking) return null;
 
@@ -928,6 +929,25 @@ function BookingDetailsSheet({
       toast.error(error?.message || "Kunde inte avboka");
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleInvitePlayers = async () => {
+    const bookingRef = booking.primary_booking_ref || booking.booking_ref || booking.bookings?.[0]?.booking_ref;
+    if (!bookingRef) {
+      toast.error("Bokningsnummer saknas");
+      return;
+    }
+    setCreatingInvite(true);
+    try {
+      const result = await apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef });
+      if (!result.url) throw new Error("Ingen länk skapades");
+      await navigator.clipboard.writeText(result.url);
+      toast.success("Medspelarlänk kopierad");
+    } catch (error: any) {
+      toast.error(error?.message || "Kunde inte skapa medspelarlänk");
+    } finally {
+      setCreatingInvite(false);
     }
   };
 
@@ -968,6 +988,15 @@ function BookingDetailsSheet({
           )}
 
           <div className="flex flex-col gap-2 mt-5">
+            <button
+              onClick={handleInvitePlayers}
+              disabled={creatingInvite}
+              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-50"
+              style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
+            >
+              {creatingInvite ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+              Bjud in medspelare
+            </button>
             <button
               onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`); }}
               className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"

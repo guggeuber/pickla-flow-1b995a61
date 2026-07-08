@@ -18,7 +18,7 @@ type BookingBySessionResponse = {
   activity_session_id?: string;
   session_date?: string;
   venue_slug?: string;
-  type?: "booking" | "session_ticket";
+  type?: "booking" | "session_ticket" | "booking_participant";
 };
 
 export default function BookingConfirmed() {

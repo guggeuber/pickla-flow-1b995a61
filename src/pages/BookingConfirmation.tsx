@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Download, Loader2, CheckCircle2, Share2, CalendarPlus, Copy, Printer, X } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { apiPost } from "@/lib/api";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -57,8 +59,10 @@ export default function BookingConfirmation() {
   const booking = data?.booking;
   const venue = data?.venue;
   const courts: BookingCourtRow[] = data?.courts || [];
+  const participants = Array.isArray(data?.participants) ? data.participants : [];
   const totalPrice = data?.totalPrice || 0;
   const receipt = data?.receipt;
+  const [creatingInvite, setCreatingInvite] = useState(false);
 
   const handleShare = async () => {
     const url = window.location.href;
@@ -67,6 +71,21 @@ export default function BookingConfirmation() {
     } else {
       await navigator.clipboard.writeText(url);
       toast.success("Länk kopierad!");
+    }
+  };
+
+  const handleInvitePlayers = async () => {
+    if (!ref) return;
+    setCreatingInvite(true);
+    try {
+      const result = await apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef: ref });
+      if (!result.url) throw new Error("Ingen länk skapades");
+      await navigator.clipboard.writeText(result.url);
+      toast.success("Medspelarlänk kopierad");
+    } catch (err: any) {
+      toast.error(err?.message || "Kunde inte skapa medspelarlänk. Logga in som bokare och försök igen.");
+    } finally {
+      setCreatingInvite(false);
     }
   };
 
@@ -284,6 +303,46 @@ export default function BookingConfirmation() {
             <p className="text-[10px] text-amber-700" style={{ fontFamily: FONT_MONO }}>
               Slå in koden vid banorna
             </p>
+          </section>
+        )}
+
+        {!isCancelled && (
+          <section className="mt-4 rounded-[24px] bg-white border border-neutral-200 p-5 shadow-sm print:hidden">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>Medspelare</p>
+                <p className="mt-1 text-xs leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                  Skicka en länk så varje spelare får sin egen plats och betalstatus.
+                </p>
+              </div>
+              <span className="rounded-full bg-neutral-100 px-3 py-1 text-[11px] font-bold text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                {participants.length || 1}/4+
+              </span>
+            </div>
+            {participants.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {participants.map((participant: any) => (
+                  <div key={participant.id} className="flex items-center justify-between rounded-2xl border border-neutral-100 bg-neutral-50 px-3 py-2">
+                    <span className="text-sm font-bold text-neutral-700" style={{ fontFamily: FONT_GROTESK }}>
+                      {participant.display_name}
+                    </span>
+                    <span className="text-[11px] uppercase tracking-wider text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                      {participant.payment_status === "paid" ? "Betald" : participant.payment_status === "free" ? "Ingår" : "Obetald"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleInvitePlayers}
+              disabled={creatingInvite}
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-neutral-950 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
+              style={{ fontFamily: FONT_GROTESK }}
+            >
+              {creatingInvite ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
+              Bjud in medspelare
+            </button>
           </section>
         )}
       </main>

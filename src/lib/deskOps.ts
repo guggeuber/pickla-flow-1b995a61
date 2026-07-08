@@ -80,3 +80,29 @@ export function checkInActivityRegistration(registration: any) {
     player_phone: registration.customer_phone || registration.player_phone || null,
   });
 }
+
+export function bookingParticipantCheckinEligibility(participant: any, booking: any) {
+  if (!participant?.id || !booking?.venue_id) return { ok: false, reason: "Deltagardata saknas" };
+  if (participant.checked_in || participant.checked_in_at) return { ok: false, reason: "Redan inne" };
+  const paymentStatus = String(participant.payment_status || "").toLowerCase();
+  if (!["paid", "free"].includes(paymentStatus)) return { ok: false, reason: "Ej betald" };
+  return deskBookingCheckinEligibility({ ...booking, checked_in: false, payment_status: "free", total_price: 0 });
+}
+
+export function checkInBookingParticipant(participant: any, booking: any) {
+  return apiPost("api-checkins", "checkin", {
+    venue_id: booking.venue_id,
+    customer_id: participant.customer_id || null,
+    target_user_id: participant.user_id || null,
+    entry_type: "booking_participant",
+    entitlement_id: participant.id,
+    player_name: participant.display_name || null,
+    player_phone: participant.phone || null,
+  });
+}
+
+export function markBookingParticipantPaid(participant: any) {
+  return apiPost("api-bookings", "booking-participant-mark-paid", {
+    participantId: participant.id,
+  });
+}

@@ -7,7 +7,7 @@ import { useTodayBookings, useTodayRevenue, useVenueCourts } from "@/hooks/useDe
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
-import { activityRegistrationCheckinEligibility, checkInActivityRegistration, checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
+import { activityRegistrationCheckinEligibility, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility, markBookingParticipantPaid } from "@/lib/deskOps";
 
 interface Props {
   venueId: string | undefined;
@@ -195,6 +195,25 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
       qc.invalidateQueries({ queryKey: ["customer-360"] });
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte checka in biljetten"),
+  });
+  const participantCheckinMutation = useMutation({
+    mutationFn: ({ participant, booking }: { participant: any; booking: any }) => checkInBookingParticipant(participant, booking),
+    onSuccess: () => {
+      toast.success("Medspelaren är incheckad");
+      qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
+      qc.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
+      qc.invalidateQueries({ queryKey: ["customer-360"] });
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte checka in medspelare"),
+  });
+  const participantPaidMutation = useMutation({
+    mutationFn: (participant: any) => markBookingParticipantPaid(participant),
+    onSuccess: () => {
+      toast.success("Medspelaren är markerad betald");
+      qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
+      qc.invalidateQueries({ queryKey: ["revenue-ledger"] });
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte markera betald"),
   });
 
   const rows = (bookings as any[] | undefined) || [];
@@ -385,6 +404,12 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
                   onOpen={() => onOpenBooking(booking, courtRows)}
                   onCheckIn={() => checkinMutation.mutate(booking)}
                   checking={checkinMutation.isPending}
+                  onParticipantCheckIn={(participant) => participantCheckinMutation.mutate({ participant, booking })}
+                  participantCheckingId={(participantCheckinMutation.variables as any)?.participant?.id || null}
+                  participantChecking={participantCheckinMutation.isPending}
+                  onParticipantMarkPaid={(participant) => participantPaidMutation.mutate(participant)}
+                  participantPayingId={(participantPaidMutation.variables as any)?.id || null}
+                  participantPaying={participantPaidMutation.isPending}
                 />
               ))}
             </div>
@@ -469,12 +494,36 @@ function AttentionCard({ item, onOpenBooking, onOpenActivity, onCheckIn, checkin
   );
 }
 
-function BookingActionRow({ booking, onOpen, onCheckIn, checking }: { booking: any; rows: any[]; onOpen: () => void; onCheckIn: () => void; checking: boolean }) {
+function BookingActionRow({
+  booking,
+  onOpen,
+  onCheckIn,
+  checking,
+  onParticipantCheckIn,
+  participantCheckingId,
+  participantChecking,
+  onParticipantMarkPaid,
+  participantPayingId,
+  participantPaying,
+}: {
+  booking: any;
+  rows: any[];
+  onOpen: () => void;
+  onCheckIn: () => void;
+  checking: boolean;
+  onParticipantCheckIn: (participant: any) => void;
+  participantCheckingId: string | null;
+  participantChecking: boolean;
+  onParticipantMarkPaid: (participant: any) => void;
+  participantPayingId: string | null;
+  participantPaying: boolean;
+}) {
   const eligibility = deskBookingCheckinEligibility(booking);
   const isActivityBlock = booking.kind === "activity_court_block" || booking.is_grouped_activity_block;
   const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
   const paymentLabel = isActivityBlock ? "Aktivitetsblock" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
   const paymentTone = isActivityBlock ? "electric" : paymentStatus === "paid" || paymentStatus === "free" ? "lime" : paymentStatus === "pending" ? "sun" : "neutral";
+  const participants = Array.isArray(booking.participants) ? booking.participants : [];
   return (
     <AxCard pad="row">
       <div className="grid gap-3 md:grid-cols-[72px_1fr_auto] md:items-center">
@@ -513,6 +562,64 @@ function BookingActionRow({ booking, onOpen, onCheckIn, checking }: { booking: a
           </button>
         </div>
       </div>
+      {!isActivityBlock && participants.length > 0 && (
+        <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: ax("borderSoft") }}>
+          <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>Deltagare</p>
+          {participants.map((participant: any) => {
+            const participantEligibility = bookingParticipantCheckinEligibility(participant, booking);
+            const paid = participant.payment_status === "paid";
+            const free = participant.payment_status === "free";
+            const checkedIn = Boolean(participant.checked_in || participant.checked_in_at);
+            return (
+              <div key={participant.id} className="grid gap-2 rounded-xl border p-2 md:grid-cols-[1fr_auto]" style={{ borderColor: ax("borderSoft"), background: ax("panel") }}>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black text-white">{participant.display_name || "Medspelare"}</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    <AxChip tone={checkedIn ? "lime" : "sun"}>{checkedIn ? "Incheckad" : "Ej inne"}</AxChip>
+                    <AxChip tone={paid || free ? "lime" : "sun"}>
+                      {paid ? "Betald" : free ? "Ingår" : `${Number(participant.amount_sek || 0).toLocaleString("sv-SE")} kr obetalt`}
+                    </AxChip>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 md:justify-end">
+                  {!paid && !free && (
+                    <button
+                      type="button"
+                      onClick={() => onParticipantMarkPaid(participant)}
+                      disabled={participantPaying && participantPayingId === participant.id}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50"
+                      style={{ background: ax("sun", 0.18), color: ax("sun") }}
+                    >
+                      {participantPaying && participantPayingId === participant.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ReceiptText className="h-3.5 w-3.5" />}
+                      Betald på plats
+                    </button>
+                  )}
+                  {checkedIn ? (
+                    <span className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("lime", 0.16), color: ax("lime") }}>
+                      Inne
+                    </span>
+                  ) : participantEligibility.ok ? (
+                    <button
+                      type="button"
+                      onClick={() => onParticipantCheckIn(participant)}
+                      disabled={participantChecking && participantCheckingId === participant.id}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50"
+                      style={{ background: ax("lime"), color: ax("ink") }}
+                    >
+                      {participantChecking && participantCheckingId === participant.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserCheck className="h-3.5 w-3.5" />}
+                      Checka in
+                    </button>
+                  ) : (
+                    <span className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("borderSoft"), color: ax("muted") }}>
+                      {participantEligibility.reason}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </AxCard>
   );
 }
