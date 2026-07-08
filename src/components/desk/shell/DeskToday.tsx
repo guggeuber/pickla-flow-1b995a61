@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, AlertTriangle, CalendarCheck, CheckCircle2, ChevronDown, Inbox, Loader2, Mail, Phone, ReceiptText, Sparkles, UserCheck } from "lucide-react";
+import { Activity, AlertTriangle, CalendarCheck, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Inbox, Loader2, Mail, Phone, ReceiptText, Sparkles, UserCheck } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
@@ -14,9 +14,130 @@ interface Props {
   onOpenBooking: (booking: any, sortedRows: any[]) => void;
 }
 
+const STOCKHOLM_ZONE = "Europe/Stockholm";
+const DESK_LOOKAHEAD_DAYS = 7;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function todayStockholm() {
+  return DateTime.now().setZone(STOCKHOLM_ZONE).toISODate()!;
+}
+
+function toStockholmDate(value: string) {
+  return DateTime.fromISO(value, { zone: STOCKHOLM_ZONE }).startOf("day");
+}
+
+function dateDiffFromToday(date: string, today: string) {
+  return Math.round(toStockholmDate(date).diff(toStockholmDate(today), "days").days);
+}
+
+function clampDeskDate(date: string, today: string) {
+  const min = toStockholmDate(today);
+  const max = min.plus({ days: DESK_LOOKAHEAD_DAYS });
+  const selected = toStockholmDate(date);
+  if (!selected.isValid || selected < min) return today;
+  if (selected > max) return max.toISODate()!;
+  return selected.toISODate()!;
+}
+
+function dateHeading(date: string, today: string) {
+  const dt = toStockholmDate(date).setLocale("sv");
+  const diff = dateDiffFromToday(date, today);
+  if (diff === 0) return "Live operations";
+  if (diff === 1) return `Imorgon ${dt.toFormat("cccc d/M")}`;
+  return dt.toFormat("cccc d/M");
+}
+
+function dateNavLabel(date: string, today: string) {
+  const dt = toStockholmDate(date).setLocale("sv");
+  const diff = dateDiffFromToday(date, today);
+  if (diff === 0) return "Idag";
+  if (diff === 1) return "Imorgon";
+  return dt.toFormat("ccc d/M");
+}
+
 function timeLabel(value: string) {
-  const dt = DateTime.fromISO(value, { zone: "utc" }).setZone("Europe/Stockholm");
+  const dt = DateTime.fromISO(value, { zone: "utc" }).setZone(STOCKHOLM_ZONE);
   return dt.isValid ? dt.toFormat("HH:mm") : "--:--";
+}
+
+function safeDisplayName(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text || UUID_PATTERN.test(text)) return "";
+  return text;
+}
+
+function bookingCode(booking: any) {
+  return safeDisplayName(booking?.access_code) || safeDisplayName(booking?.booking_ref);
+}
+
+function bookingTitle(booking: any) {
+  if (booking?.kind === "activity_court_block" || booking?.is_grouped_activity_block) {
+    return safeDisplayName(booking?.activity_session?.name) || safeDisplayName(booking?.customer_name) || safeDisplayName(booking?.booked_by) || "Aktivitet";
+  }
+  const name =
+    safeDisplayName(booking?.customer_name) ||
+    safeDisplayName(booking?.customer_contact?.name) ||
+    safeDisplayName(booking?.booked_by) ||
+    safeDisplayName(booking?.guest_name) ||
+    safeDisplayName(booking?.player_name);
+  if (name) return name;
+  const code = bookingCode(booking);
+  return code ? `Gästbokning ${code}` : "Gästbokning";
+}
+
+function courtNameForRow(row: any) {
+  return safeDisplayName(row?.venue_courts?.name) || safeDisplayName(row?.court_name) || safeDisplayName(row?.venue_court_name) || "";
+}
+
+function shortCourtName(name: string) {
+  return name.replace(/^Bana\s+/i, "");
+}
+
+function groupedCourtLabel(courtNames: string[]) {
+  const unique = Array.from(new Set(courtNames.filter(Boolean)));
+  return unique.length ? `Banor: ${unique.map(shortCourtName).join(", ")}` : "Banor";
+}
+
+function groupActivityCourtBlocks(rows: any[]) {
+  const result: any[] = [];
+  const groups = new Map<string, any>();
+
+  for (const row of rows) {
+    if (row.kind !== "activity_court_block") {
+      result.push(row);
+      continue;
+    }
+
+    const sessionId = row.activity_session_id || row.activity_session?.id || row.id;
+    const key = `activity:${sessionId}:${row.session_date || ""}:${row.start_time}:${row.end_time}`;
+    const courtName = courtNameForRow(row);
+    const current = groups.get(key);
+    if (current) {
+      current.source_rows.push(row);
+      current.source_ids.push(row.id);
+      if (courtName) current.court_names.push(courtName);
+      current.activity_court_count += 1;
+      current.activity_court_label = groupedCourtLabel(current.court_names);
+      continue;
+    }
+
+    const grouped = {
+      ...row,
+      id: key,
+      booking_group_key: key,
+      is_grouped_activity_block: true,
+      source_rows: [row],
+      source_ids: [row.id].filter(Boolean),
+      court_names: courtName ? [courtName] : [],
+      activity_court_count: 1,
+      activity_court_label: groupedCourtLabel(courtName ? [courtName] : []),
+    };
+    groups.set(key, grouped);
+    result.push(grouped);
+  }
+
+  return result;
 }
 
 function isPlayingHostParticipant(participant: any) {
@@ -42,11 +163,20 @@ function participantName(participant: any) {
 
 export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const qc = useQueryClient();
+  const today = useMemo(() => todayStockholm(), []);
   const [expandedActivityKey, setExpandedActivityKey] = useState<string | null>(null);
   const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
-  const { data: bookings } = useTodayBookings(venueId);
+  const [selectedDate, setSelectedDate] = useState(today);
+  const selectedOffset = dateDiffFromToday(selectedDate, today);
+  const isToday = selectedOffset === 0;
+  const maxDate = toStockholmDate(today).plus({ days: DESK_LOOKAHEAD_DAYS }).toISODate()!;
+  const { data: bookings } = useTodayBookings(venueId, selectedDate);
   const { data: revenue } = useTodayRevenue(venueId);
   const { data: courts } = useVenueCourts(venueId);
+  const changeDateBy = (days: number) => {
+    const next = toStockholmDate(selectedDate).plus({ days }).toISODate()!;
+    setSelectedDate(clampDeskDate(next, today));
+  };
   const checkinMutation = useMutation({
     mutationFn: (booking: any) => checkInDeskBooking(booking),
     onSuccess: () => {
@@ -69,7 +199,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
 
   const rows = (bookings as any[] | undefined) || [];
   const courtRows = useMemo(
-    () => rows.filter((b: any) => b.kind !== "activity_registration" && b.status !== "cancelled"),
+    () => groupActivityCourtBlocks(rows.filter((b: any) => b.kind !== "activity_registration" && b.status !== "cancelled")),
     [rows]
   );
   const activityRows = useMemo(
@@ -104,16 +234,17 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
   }, [activityRows]);
 
   const suggestions = useMemo(() => {
-    const now = DateTime.now().setZone("Europe/Stockholm");
+    const now = DateTime.now().setZone(STOCKHOLM_ZONE);
     const items: Array<{ id: string; title: string; meta: string; action: string; tone: "sun" | "danger" | "electric" | "lime"; booking?: any; activityKey?: string }> = [];
 
     for (const booking of courtRows) {
-      const start = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+      if (booking.kind === "activity_court_block" || booking.is_grouped_activity_block) continue;
+      const start = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone(STOCKHOLM_ZONE);
       const minutes = start.diff(now, "minutes").minutes;
       if (!booking.checked_in && minutes >= 0 && minutes <= 15) {
         items.push({
           id: `soon:${booking.id}`,
-          title: `${booking.booked_by || "Kund"} börjar ${start.toFormat("HH:mm")}`,
+          title: `${bookingTitle(booking)} börjar ${start.toFormat("HH:mm")}`,
           meta: `${booking.venue_courts?.name || "Bana"} · ej incheckad`,
           action: "Checka in kund",
           tone: "sun",
@@ -123,7 +254,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
       if (String(booking.payment_status || "").toLowerCase() === "pending") {
         items.push({
           id: `payment:${booking.id}`,
-          title: `${booking.booked_by || "Kund"} har väntande betalning`,
+          title: `${bookingTitle(booking)} har väntande betalning`,
           meta: booking.booking_ref || "Bokning idag",
           action: "Öppna bokning",
           tone: "danger",
@@ -133,7 +264,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     }
 
     for (const activity of activityGroups) {
-      const start = DateTime.fromISO(activity.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+      const start = DateTime.fromISO(activity.start_time, { zone: "utc" }).setZone(STOCKHOLM_ZONE);
       const minutes = start.diff(now, "minutes").minutes;
       if (minutes >= 0 && minutes <= 30 && activity.registered_count > activity.checked_in_count) {
         items.push({
@@ -159,47 +290,91 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
         <div>
           <p className={AX_TYPE.micro} style={{ color: ax("muted") }}>Today</p>
           <h2 className={`${AX_TYPE.display} text-3xl md:text-4xl`} style={{ color: "white" }}>
-            Live operations
+            {dateHeading(selectedDate, today)}
           </h2>
         </div>
-        <div className="grid grid-cols-3 gap-2 text-center md:w-[420px]">
-          <MiniStat label="Intäkt" value={total} />
-          <MiniStat label="Bokningar" value={String(courtRows.length)} />
-          <MiniStat label="Banor" value={String(totalCourts)} />
+        <div className="flex flex-col gap-2 md:items-end">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => changeDateBy(-1)}
+              disabled={selectedOffset <= 0}
+              className="flex h-10 w-10 items-center justify-center rounded-xl disabled:opacity-35"
+              style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: ax("muted") }}
+              aria-label="Föregående dag"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <label
+              className="relative flex h-10 min-w-[150px] cursor-pointer items-center justify-center gap-2 overflow-hidden rounded-xl px-3 text-sm font-black"
+              style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: "white" }}
+            >
+              <CalendarDays className="h-4 w-4" style={{ color: ax("electric") }} />
+              {dateNavLabel(selectedDate, today)}
+              <input
+                type="date"
+                value={selectedDate}
+                min={today}
+                max={maxDate}
+                onChange={(event) => setSelectedDate(clampDeskDate(event.target.value, today))}
+                className="absolute inset-0 cursor-pointer opacity-0"
+                aria-label="Välj datum"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => changeDateBy(1)}
+              disabled={selectedOffset >= DESK_LOOKAHEAD_DAYS}
+              className="flex h-10 w-10 items-center justify-center rounded-xl disabled:opacity-35"
+              style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: ax("muted") }}
+              aria-label="Nästa dag"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+          {isToday ? (
+            <div className="grid grid-cols-3 gap-2 text-center md:w-[420px]">
+              <MiniStat label="Intäkt" value={total} />
+              <MiniStat label="Bokningar" value={String(courtRows.length)} />
+              <MiniStat label="Banor" value={String(totalCourts)} />
+            </div>
+          ) : null}
         </div>
       </div>
 
-      <section className="space-y-2">
-        <AxSectionLabel icon={AlertTriangle} accent={suggestions.length ? ax("sun") : ax("lime")}>
-          Needs attention
-        </AxSectionLabel>
-        {suggestions.length === 0 ? (
-          <AxEmpty icon={CheckCircle2} title="Inget akut just nu" hint="När något behöver ageras på hamnar det här." tint={ax("lime")} />
-        ) : (
-          <div className="grid gap-2 lg:grid-cols-2">
-            {suggestions.map((item) => (
-              <AttentionCard
-                key={item.id}
-                item={item}
-                onOpenBooking={() => item.booking && onOpenBooking(item.booking, courtRows)}
-                onOpenActivity={() => {
-                  if (item.activityKey) setExpandedActivityKey(item.activityKey);
-                }}
-                onCheckIn={() => item.booking && checkinMutation.mutate(item.booking)}
-                checking={checkinMutation.isPending}
-              />
-            ))}
-          </div>
-        )}
-      </section>
+      {isToday ? (
+        <section className="space-y-2">
+          <AxSectionLabel icon={AlertTriangle} accent={suggestions.length ? ax("sun") : ax("lime")}>
+            Needs attention
+          </AxSectionLabel>
+          {suggestions.length === 0 ? (
+            <AxEmpty icon={CheckCircle2} title="Inget akut just nu" hint="När något behöver ageras på hamnar det här." tint={ax("lime")} />
+          ) : (
+            <div className="grid gap-2 lg:grid-cols-2">
+              {suggestions.map((item) => (
+                <AttentionCard
+                  key={item.id}
+                  item={item}
+                  onOpenBooking={() => item.booking && onOpenBooking(item.booking, courtRows)}
+                  onOpenActivity={() => {
+                    if (item.activityKey) setExpandedActivityKey(item.activityKey);
+                  }}
+                  onCheckIn={() => item.booking && checkinMutation.mutate(item.booking)}
+                  checking={checkinMutation.isPending}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_0.9fr]">
         <section className="space-y-2">
           <AxSectionLabel icon={CalendarCheck} accent={ax("electric")}>
-            Bokningar idag
+            {isToday ? "Bokningar idag" : "Bokningar"}
           </AxSectionLabel>
           {sortedBookings.length === 0 ? (
-            <AxEmpty icon={Inbox} title="Inga bokningar idag" hint="När bokningar finns visas kund, bana, betalning och check-in direkt." tint={ax("electric")} />
+            <AxEmpty icon={Inbox} title={isToday ? "Inga bokningar idag" : "Inga bokningar denna dag"} hint="När bokningar finns visas kund, bana, betalning och check-in direkt." tint={ax("electric")} />
           ) : (
             <div className="space-y-1.5">
               {sortedBookings.map((booking: any) => (
@@ -221,7 +396,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
             Aktiviteter
           </AxSectionLabel>
           {activityGroups.length === 0 ? (
-            <AxEmpty icon={Activity} title="Inga aktiviteter idag" hint="Registrerade pass och check-in-status visas här." tint={ax("magenta")} />
+            <AxEmpty icon={Activity} title={isToday ? "Inga aktiviteter idag" : "Inga aktiviteter denna dag"} hint="Registrerade pass och check-in-status visas här." tint={ax("magenta")} />
           ) : (
             <div className="space-y-1.5">
               {activityGroups.map((activity: any) => (
@@ -296,9 +471,10 @@ function AttentionCard({ item, onOpenBooking, onOpenActivity, onCheckIn, checkin
 
 function BookingActionRow({ booking, onOpen, onCheckIn, checking }: { booking: any; rows: any[]; onOpen: () => void; onCheckIn: () => void; checking: boolean }) {
   const eligibility = deskBookingCheckinEligibility(booking);
+  const isActivityBlock = booking.kind === "activity_court_block" || booking.is_grouped_activity_block;
   const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
-  const paymentLabel = paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
-  const paymentTone = paymentStatus === "paid" || paymentStatus === "free" ? "lime" : paymentStatus === "pending" ? "sun" : "neutral";
+  const paymentLabel = isActivityBlock ? "Aktivitetsblock" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
+  const paymentTone = isActivityBlock ? "electric" : paymentStatus === "paid" || paymentStatus === "free" ? "lime" : paymentStatus === "pending" ? "sun" : "neutral";
   return (
     <AxCard pad="row">
       <div className="grid gap-3 md:grid-cols-[72px_1fr_auto] md:items-center">
@@ -307,9 +483,10 @@ function BookingActionRow({ booking, onOpen, onCheckIn, checking }: { booking: a
           <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>{timeLabel(booking.end_time)}</p>
         </button>
         <button type="button" onClick={onOpen} className="min-w-0 text-left">
-          <p className="truncate text-sm font-black text-white">{booking.booked_by || "Gäst"}</p>
+          <p className="truncate text-sm font-black text-white">{bookingTitle(booking)}</p>
           <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
-            {booking.venue_courts?.name || booking.court_name || "Bana"}{booking.booking_ref ? ` · ${booking.booking_ref}` : ""}
+            {isActivityBlock ? booking.activity_court_label : booking.venue_courts?.name || booking.court_name || "Bana"}
+            {!isActivityBlock && booking.booking_ref ? ` · ${booking.booking_ref}` : ""}
           </p>
           <div className="mt-1 flex flex-wrap gap-1.5">
             <AxChip tone={paymentTone as any}>{paymentLabel}</AxChip>

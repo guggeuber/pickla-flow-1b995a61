@@ -51,6 +51,8 @@ export type OperationsBookingDetail = {
   stripe_session_id?: string | null;
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function parseNotes(notes?: string | null) {
   const parts = String(notes || "").split(" | ").map((part) => part.trim());
   return {
@@ -60,10 +62,21 @@ function parseNotes(notes?: string | null) {
   };
 }
 
+function safeDisplayName(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text || UUID_PATTERN.test(text)) return "";
+  return text;
+}
+
+function guestBookingLabel(row: any) {
+  const code = safeDisplayName(row?.access_code) || safeDisplayName(row?.booking_ref);
+  return code ? `Gästbokning ${code}` : "Gästbokning";
+}
+
 function bookingGroupKey(row: any) {
   if (row.stripe_session_id) return `stripe:${row.stripe_session_id}`;
   if (row.access_code) return `code:${row.access_code}`;
-  const fallback = String(row.notes || row.booked_by || row.user_id || row.id).trim();
+  const fallback = safeDisplayName(row.notes) || safeDisplayName(row.booked_by) || safeDisplayName(row.customer_name);
   if (fallback && row.start_time && row.end_time) return `fallback:${row.start_time}:${row.end_time}:${fallback}`;
   return `booking:${row.id}`;
 }
@@ -82,7 +95,13 @@ export function buildOperationsBookingDetailFromRows(rows: any[]): OperationsBoo
   }));
   const amount = bookingRows.reduce((sum, row) => sum + Number(row.total_price || 0), 0);
   const checkedRows = bookingRows.filter((row) => row.checked_in);
-  const customerName = receipt?.customer_name || first.customer_contact?.name || note.name || first.booked_by || "Bokning";
+  const customerName =
+    safeDisplayName(receipt?.customer_name) ||
+    safeDisplayName(first.customer_contact?.name) ||
+    safeDisplayName(note.name) ||
+    safeDisplayName(first.customer_name) ||
+    safeDisplayName(first.booked_by) ||
+    guestBookingLabel(first);
 
   return {
     id: `booking-${bookingGroupKey(first)}`,

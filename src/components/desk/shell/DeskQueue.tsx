@@ -10,11 +10,26 @@ interface Props {
   onOpenBooking: (booking: any, rows: any[]) => void;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function safeDisplayName(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text || UUID_PATTERN.test(text)) return "";
+  return text;
+}
+
+function bookingTitle(row: any) {
+  const title = safeDisplayName(row.customer_name) || safeDisplayName(row.customer_contact?.name) || safeDisplayName(row.booked_by) || safeDisplayName(row.guest_name);
+  if (title) return title;
+  const code = safeDisplayName(row.access_code) || safeDisplayName(row.booking_ref);
+  return code ? `Gästbokning ${code}` : "Gästbokning";
+}
+
 export default function DeskQueue({ venueId, onOpenBooking }: Props) {
   const { data: bookings } = useTodayBookings(venueId);
 
   const courtRows = useMemo(
-    () => ((bookings as any[] | undefined) || []).filter((b: any) => b.kind !== "activity_registration"),
+    () => ((bookings as any[] | undefined) || []).filter((b: any) => b.kind !== "activity_registration" && b.kind !== "activity_court_block"),
     [bookings]
   );
 
@@ -77,7 +92,7 @@ export default function DeskQueue({ venueId, onOpenBooking }: Props) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold truncate" style={{ color: "white" }}>
-                      {b.booked_by || "Gäst"}
+                      {bookingTitle(b)}
                     </p>
                     <p className={`${AX_TYPE.meta}`} style={{ color: ax("muted") }}>
                       {b.venue_courts?.name || "—"}
@@ -108,7 +123,7 @@ export default function DeskQueue({ venueId, onOpenBooking }: Props) {
                 <Ban className="w-4 h-4" style={{ color: ax("danger") }} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold truncate" style={{ color: "white" }}>
-                    {b.booked_by || "Gäst"}
+                    {bookingTitle(b)}
                   </p>
                   <p className={`${AX_TYPE.meta}`} style={{ color: ax("muted") }}>
                     {b.venue_courts?.name || "—"} ·{" "}

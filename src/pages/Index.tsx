@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, Loader2, LogOut, Settings, RefreshCw, UserCheck, Gauge, Radio, AlertTriangle, ScanLine } from "lucide-react";
+import { AlertCircle, Loader2, LogOut, Settings, RefreshCw, UserCheck, Gauge, Radio, AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
@@ -13,7 +13,6 @@ import DeskToday from "@/components/desk/shell/DeskToday";
 import DeskLive from "@/components/desk/shell/DeskLive";
 import DeskQueue from "@/components/desk/shell/DeskQueue";
 import DeskCommandBar from "@/components/desk/shell/DeskCommandBar";
-import QrScanner from "@/components/desk/QrScanner";
 import {
   OperationsBookingDrawer,
   bookingRowsForGroup,
@@ -39,13 +38,12 @@ const Index = () => {
   const venueId = staffVenue?.venue_id;
 
   const [active, setActive] = useState<DeskSurfaceId>("arrivals");
-  const [showScanner, setShowScanner] = useState(false);
   const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
   const now = useClock();
 
   const { data: bookings } = useTodayBookings(venueId);
   const courtRows = useMemo(
-    () => ((bookings as any[] | undefined) || []).filter((b: any) => b.kind !== "activity_registration"),
+    () => ((bookings as any[] | undefined) || []).filter((b: any) => b.kind !== "activity_registration" && b.kind !== "activity_court_block"),
     [bookings]
   );
   const pendingCount = useMemo(
@@ -146,18 +144,6 @@ const Index = () => {
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
-              <button
-                onClick={() => setShowScanner(true)}
-                className="hidden sm:flex h-10 items-center gap-2 rounded-xl px-3 text-xs font-black uppercase tracking-wider"
-                style={{
-                  background: `linear-gradient(135deg, ${ax("lime")}, ${ax("electric")})`,
-                  color: ax("ink"),
-                  boxShadow: `0 6px 20px -8px ${ax("lime", 0.6)}`,
-                }}
-              >
-                <ScanLine className="w-4 h-4" />
-                Skanna
-              </button>
               <button onClick={() => navigate("/hub/admin")}
                 className="w-10 h-10 rounded-xl flex items-center justify-center"
                 style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: ax("muted") }}
@@ -203,25 +189,13 @@ const Index = () => {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.2 }}
           >
-            {active === "arrivals" && <DeskArrivals venueId={venueId} onScan={() => setShowScanner(true)} />}
+            {active === "arrivals" && <DeskArrivals venueId={venueId} />}
             {active === "today" && <DeskToday venueId={venueId} onOpenBooking={openBookingFromRow} />}
             {active === "live" && <DeskLive venueId={venueId} />}
             {active === "queue" && <DeskQueue venueId={venueId} onOpenBooking={openBookingFromRow} />}
           </motion.div>
         </AnimatePresence>
       </main>
-
-      <AnimatePresence>
-        {showScanner && venueId && (
-          <QrScanner
-            venueId={venueId}
-            onClose={() => setShowScanner(false)}
-            onCheckedIn={() => {
-              queryClient.invalidateQueries({ queryKey: ["desk-checkins-today", venueId] });
-            }}
-          />
-        )}
-      </AnimatePresence>
 
       <OperationsBookingDrawer
         open={!!openBooking}

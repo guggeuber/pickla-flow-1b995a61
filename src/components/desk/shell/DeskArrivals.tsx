@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, ScanLine, UserCheck, Sparkles } from "lucide-react";
+import { Check, UserCheck, Sparkles } from "lucide-react";
 import { DateTime } from "luxon";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet } from "@/lib/api";
@@ -34,10 +34,9 @@ interface TodayCheckin {
 
 interface Props {
   venueId: string | undefined;
-  onScan: () => void;
 }
 
-export default function DeskArrivals({ venueId, onScan }: Props) {
+export default function DeskArrivals({ venueId }: Props) {
   const queryClient = useQueryClient();
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
@@ -92,19 +91,6 @@ export default function DeskArrivals({ venueId, onScan }: Props) {
             {list.length} incheckade idag{newCount > 0 ? ` · ${newCount} nya` : ""}
           </p>
         </div>
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={onScan}
-          className="flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-black uppercase tracking-wider"
-          style={{
-            background: `linear-gradient(135deg, ${ax("lime")}, ${ax("electric")})`,
-            color: ax("ink"),
-            boxShadow: `0 10px 28px -14px ${ax("lime", 0.6)}`,
-          }}
-        >
-          <ScanLine className="w-4 h-4" />
-          Skanna
-        </motion.button>
       </div>
 
       <AxSectionLabel icon={Sparkles} accent={ax("lime")}>Senaste in</AxSectionLabel>

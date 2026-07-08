@@ -14,8 +14,16 @@ type Result =
   | { kind: "customer"; id: string; title: string; meta: string; row: any; score: number }
   | { kind: "booking"; id: string; title: string; meta: string; row: any; score: number };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function normalize(value: unknown) {
   return String(value || "").trim().toLowerCase();
+}
+
+function safeDisplayName(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text || UUID_PATTERN.test(text)) return "";
+  return text;
 }
 
 function bookingHaystack(row: any) {
@@ -34,6 +42,13 @@ function bookingHaystack(row: any) {
 
 function customerTitle(row: any) {
   return row.identity_title || row.display_name || row.full_name || row.email || "Kund utan namn";
+}
+
+function bookingTitle(row: any) {
+  const title = safeDisplayName(row.customer_name) || safeDisplayName(row.customer_contact?.name) || safeDisplayName(row.booked_by) || safeDisplayName(row.guest_name);
+  if (title) return title;
+  const code = safeDisplayName(row.access_code) || safeDisplayName(row.booking_ref);
+  return code ? `Gästbokning ${code}` : "Gästbokning";
 }
 
 function bookingTime(row: any) {
@@ -64,7 +79,7 @@ export default function DeskCommandBar({
     staleTime: 15_000,
   });
 
-  const courtRows = useMemo(() => bookings.filter((row) => row.kind !== "activity_registration"), [bookings]);
+  const courtRows = useMemo(() => bookings.filter((row) => row.kind !== "activity_registration" && row.kind !== "activity_court_block"), [bookings]);
 
   const results = useMemo<Result[]>(() => {
     if (q.length < 2) return [];
@@ -75,7 +90,7 @@ export default function DeskCommandBar({
       .map((row) => ({
         kind: "booking" as const,
         id: row.id,
-        title: row.booked_by || row.customer_name || "Bokning",
+        title: bookingTitle(row),
         meta: `${bookingTime(row)} · ${row.venue_courts?.name || row.court_name || "Bana"}${row.access_code ? ` · kod ${row.access_code}` : ""}${row.receipt_number ? ` · ${row.receipt_number}` : ""}`,
         row,
         score: normalize(row.access_code) === needle || normalize(row.booking_ref) === needle || normalize(row.receipt_number) === needle ? 100 : 40,

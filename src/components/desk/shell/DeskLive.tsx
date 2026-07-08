@@ -24,6 +24,21 @@ function fmtCountdown(ms: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function safeDisplayName(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text || UUID_PATTERN.test(text)) return "";
+  return text;
+}
+
+function liveBookingTitle(row: any) {
+  if (row.kind === "activity_court_block") {
+    return safeDisplayName(row.activity_session?.name) || safeDisplayName(row.booked_by) || "Aktivitet";
+  }
+  return safeDisplayName(row.customer_name) || safeDisplayName(row.customer_contact?.name) || safeDisplayName(row.booked_by) || safeDisplayName(row.guest_name) || "Gästbokning";
+}
+
 export default function DeskLive({ venueId }: Props) {
   const { data: courts } = useVenueCourts(venueId);
   const { data: bookings } = useTodayBookings(venueId);
@@ -63,7 +78,7 @@ export default function DeskLive({ venueId }: Props) {
           name: court.name,
           sport: court.sport_type,
           status: (isSoon ? "soon" : "active") as Status,
-          player: active.booked_by || "Gäst",
+          player: liveBookingTitle(active),
           countdown: fmtCountdown(remaining),
         };
       }

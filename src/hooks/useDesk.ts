@@ -35,14 +35,13 @@ export function useVenueCourts(venueId: string | undefined) {
   });
 }
 
-export function useTodayBookings(venueId: string | undefined) {
+export function useTodayBookings(venueId: string | undefined, date?: string) {
   return useQuery({
-    queryKey: ["today-bookings", venueId],
+    queryKey: ["today-bookings", venueId, date || "today"],
     enabled: !!venueId,
-    refetchInterval: 30000,
+    refetchInterval: !date || date === todayStockholm() ? 30000 : false,
     queryFn: () => {
-      const today = todayStockholm();
-      return apiGet("api-bookings", "venue", { venueId: venueId!, date: today });
+      return apiGet("api-bookings", "venue", { venueId: venueId!, date: date || todayStockholm() });
     },
   });
 }

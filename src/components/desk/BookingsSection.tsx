@@ -14,6 +14,56 @@ interface BookingsSectionProps {
   onOpenBooking?: (booking: any, bookings: any[]) => void;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function safeDisplayName(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text || UUID_PATTERN.test(text)) return "";
+  return text;
+}
+
+function bookingTitle(booking: any) {
+  const name = safeDisplayName(booking.customer_name) || safeDisplayName(booking.customer_contact?.name) || safeDisplayName(booking.booked_by) || safeDisplayName(booking.guest_name);
+  if (name) return name;
+  const code = safeDisplayName(booking.access_code) || safeDisplayName(booking.booking_ref);
+  return code ? `Gästbokning ${code}` : "Gästbokning";
+}
+
+function shortCourtName(name: string) {
+  return name.replace(/^Bana\s+/i, "");
+}
+
+function groupActivityCourtBlocks(rows: any[]) {
+  const result: any[] = [];
+  const groups = new Map<string, any>();
+
+  for (const row of rows) {
+    if (row.kind !== "activity_court_block") {
+      result.push(row);
+      continue;
+    }
+    const sessionId = row.activity_session_id || row.activity_session?.id || row.id;
+    const key = `activity:${sessionId}:${row.session_date || ""}:${row.start_time}:${row.end_time}`;
+    const courtName = safeDisplayName(row.venue_courts?.name) || safeDisplayName(row.court_name);
+    const current = groups.get(key);
+    if (current) {
+      if (courtName && !current.court_names.includes(courtName)) current.court_names.push(courtName);
+      current.activity_court_label = `Banor: ${current.court_names.map(shortCourtName).join(", ")}`;
+      continue;
+    }
+    const grouped = {
+      ...row,
+      id: key,
+      is_grouped_activity_block: true,
+      court_names: courtName ? [courtName] : [],
+      activity_court_label: courtName ? `Banor: ${shortCourtName(courtName)}` : "Banor",
+    };
+    groups.set(key, grouped);
+    result.push(grouped);
+  }
+  return result;
+}
+
 export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const queryClient = useQueryClient();
@@ -28,7 +78,7 @@ export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps
 
   const sortedBookings = useMemo(() => {
     if (!bookings) return [];
-    return [...bookings].sort((a: any, b: any) =>
+    return groupActivityCourtBlocks([...bookings]).sort((a: any, b: any) =>
       new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
     );
   }, [bookings]);
@@ -101,9 +151,9 @@ export function BookingsSection({ venueId, onOpenBooking }: BookingsSectionProps
             const courtName = isActivityRegistration
               ? booking.activity_session?.name || booking.notes || "Aktivitet"
               : isActivityBlock
-              ? (booking.venue_courts as any)?.name || "Bana"
+              ? booking.activity_court_label || (booking.venue_courts as any)?.name || "Banor"
               : (booking.venue_courts as any)?.name || "–";
-            const customer = booking.booked_by || booking.notes || "Gäst";
+            const customer = isActivityBlock ? booking.activity_session?.name || bookingTitle(booking) : bookingTitle(booking);
             const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
             const statusLabel = isActivityRegistration
               ? booking.checked_in || booking.consumed || booking.status === "checked_in"
