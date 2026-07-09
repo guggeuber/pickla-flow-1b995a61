@@ -626,22 +626,22 @@ function BookingActionRow({
                   value={manualName}
                   onChange={(event) => setManualName(event.target.value)}
                   placeholder="Namn"
-                  className="h-10 rounded-xl border px-3 text-sm font-bold outline-none"
-                  style={{ background: ax("panel"), borderColor: ax("borderSoft"), color: "white" }}
+                  className="h-10 rounded-xl border border-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
+                  style={{ background: "white" }}
                 />
                 <input
                   value={manualPhone}
                   onChange={(event) => setManualPhone(event.target.value)}
                   placeholder="Telefon valfritt"
-                  className="h-10 rounded-xl border px-3 text-sm font-bold outline-none"
-                  style={{ background: ax("panel"), borderColor: ax("borderSoft"), color: "white" }}
+                  className="h-10 rounded-xl border border-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
+                  style={{ background: "white" }}
                 />
                 <input
                   value={manualEmail}
                   onChange={(event) => setManualEmail(event.target.value)}
                   placeholder="E-post valfritt"
-                  className="h-10 rounded-xl border px-3 text-sm font-bold outline-none"
-                  style={{ background: ax("panel"), borderColor: ax("borderSoft"), color: "white" }}
+                  className="h-10 rounded-xl border border-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
+                  style={{ background: "white" }}
                 />
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">

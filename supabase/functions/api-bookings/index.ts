@@ -371,6 +371,135 @@ function findManualPlaceholderParticipant(participants: any[], inviteId: string 
   return null;
 }
 
+function customerDisplayName(row: any, fallback = 'Spelare') {
+  return String(
+    row?.display_name ||
+    [row?.first_name, row?.last_name].filter(Boolean).join(' ') ||
+    row?.primary_phone ||
+    row?.primary_email ||
+    fallback
+  ).trim();
+}
+
+async function resolveExistingCustomerByContact(admin: any, venueId: string, email: string, phone: string, displayName = '') {
+  const normalizedEmail = normalizeParticipantEmail(email);
+  const normalizedPhone = normalizeParticipantPhone(phone);
+  const normalizedName = normalizeParticipantName(displayName);
+  if (!normalizedEmail && !normalizedPhone && !normalizedName) return null;
+
+  const { data: venue, error: venueErr } = await admin
+    .from('venues')
+    .select('organization_id')
+    .eq('id', venueId)
+    .maybeSingle();
+  if (venueErr) throw new Error(venueErr.message);
+  const organizationId = venue?.organization_id;
+  if (!organizationId) return null;
+
+  const candidateIds = new Set<string>();
+
+  if (normalizedEmail) {
+    const { data: emailIdentities, error: emailIdentityErr } = await admin
+      .from('customer_identities')
+      .select('customer_id')
+      .eq('organization_id', organizationId)
+      .eq('provider', 'email')
+      .eq('provider_id', normalizedEmail);
+    if (emailIdentityErr) throw new Error(emailIdentityErr.message);
+    for (const row of emailIdentities || []) {
+      if (row.customer_id) candidateIds.add(row.customer_id);
+    }
+
+    const { data: emailCustomers, error: emailCustomerErr } = await admin
+      .from('customers')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('email_normalized', normalizedEmail)
+      .eq('status', 'active')
+      .is('merged_into_id', null);
+    if (emailCustomerErr) throw new Error(emailCustomerErr.message);
+    for (const row of emailCustomers || []) {
+      if (row.id) candidateIds.add(row.id);
+    }
+  }
+
+  if (normalizedPhone) {
+    const { data: phoneIdentities, error: phoneIdentityErr } = await admin
+      .from('customer_identities')
+      .select('customer_id')
+      .eq('organization_id', organizationId)
+      .eq('provider', 'phone')
+      .eq('provider_id', normalizedPhone);
+    if (phoneIdentityErr) throw new Error(phoneIdentityErr.message);
+    for (const row of phoneIdentities || []) {
+      if (row.customer_id) candidateIds.add(row.customer_id);
+    }
+
+    const { data: phoneCustomers, error: phoneCustomerErr } = await admin
+      .from('customers')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('phone_e164', normalizedPhone)
+      .eq('status', 'active')
+      .is('merged_into_id', null);
+    if (phoneCustomerErr) throw new Error(phoneCustomerErr.message);
+    for (const row of phoneCustomers || []) {
+      if (row.id) candidateIds.add(row.id);
+    }
+  }
+
+  if (!candidateIds.size && normalizedName) {
+    const { data: nameCustomers, error: nameCustomerErr } = await admin
+      .from('customers')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('status', 'active')
+      .is('merged_into_id', null)
+      .ilike('display_name', displayName.trim());
+    if (nameCustomerErr) throw new Error(nameCustomerErr.message);
+    for (const row of nameCustomers || []) {
+      if (row.id) candidateIds.add(row.id);
+    }
+
+    const parts = displayName.trim().split(/\s+/).filter(Boolean);
+    if (!candidateIds.size && parts.length >= 2) {
+      const firstName = parts[0];
+      const lastName = parts.slice(1).join(' ');
+      const { data: fullNameCustomers, error: fullNameCustomerErr } = await admin
+        .from('customers')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .eq('status', 'active')
+        .is('merged_into_id', null)
+        .ilike('first_name', firstName)
+        .ilike('last_name', lastName);
+      if (fullNameCustomerErr) throw new Error(fullNameCustomerErr.message);
+      for (const row of fullNameCustomers || []) {
+        if (row.id) candidateIds.add(row.id);
+      }
+    }
+  }
+
+  const ids = Array.from(candidateIds);
+  if (ids.length !== 1) return null;
+
+  const { data: customer, error: customerErr } = await admin
+    .from('customers')
+    .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, status, merged_into_id')
+    .eq('id', ids[0])
+    .maybeSingle();
+  if (customerErr) throw new Error(customerErr.message);
+  if (!customer || customer.status !== 'active' || customer.merged_into_id) return null;
+
+  return {
+    customer_id: customer.id,
+    user_id: customer.auth_user_id || null,
+    display_name: customerDisplayName(customer),
+    email: customer.primary_email || normalizedEmail || null,
+    phone: customer.primary_phone || phone || null,
+  };
+}
+
 async function ensureBookerParticipant(admin: any, bookingRows: any[]) {
   const booking = bookingRows[0];
   if (!booking?.user_id) return null;
@@ -2549,6 +2678,24 @@ Deno.serve(async (req) => {
       if (participants.length >= bookingParticipantCapacity(bookingRows)) {
         return errorResponse('Bokningen har redan fyra deltagare per bana', 409);
       }
+      const matchedCustomer = await resolveExistingCustomerByContact(admin, booking.venue_id, email, phone, displayName);
+      const existingMatchedParticipant = matchedCustomer
+        ? participants.find((row: any) =>
+            (matchedCustomer.user_id && row.user_id === matchedCustomer.user_id) ||
+            (matchedCustomer.customer_id && row.customer_id === matchedCustomer.customer_id)
+          )
+        : null;
+      if (existingMatchedParticipant) {
+        return jsonResponse({
+          ok: true,
+          already_exists: true,
+          participant: {
+            ...existingMatchedParticipant,
+            checked_in: Boolean(existingMatchedParticipant.checked_in_at),
+            amount_sek: minorToSek(existingMatchedParticipant.price_minor),
+          },
+        }, 200, 0);
+      }
 
       const { data: invite, error: inviteErr } = await admin.from('booking_participant_invites').insert({
         venue_id: booking.venue_id,
@@ -2567,24 +2714,42 @@ Deno.serve(async (req) => {
       if (inviteErr) return errorResponse(inviteErr.message, 500);
       if (!invite?.token) return errorResponse('Could not create invite', 500);
 
+      const durationHours = bookingDurationHours(booking);
+      const pricing = matchedCustomer
+        ? await resolveBookingParticipantPricing(
+            admin,
+            booking.venue_id,
+            matchedCustomer.user_id || null,
+            durationHours,
+            isFounderBookingGroup(bookingRows),
+          )
+        : null;
+
       const { data: participant, error: participantErr } = await admin.from('booking_participants').insert({
         venue_id: booking.venue_id,
         booking_id: booking.id,
         booking_group_key: groupKey,
         invite_id: invite.id,
-        customer_id: null,
-        user_id: null,
-        display_name: displayName,
-        email: email || null,
-        phone: phone || null,
+        customer_id: matchedCustomer?.customer_id || null,
+        user_id: matchedCustomer?.user_id || null,
+        display_name: matchedCustomer?.display_name || displayName,
+        email: matchedCustomer?.email || email || null,
+        phone: matchedCustomer?.phone || phone || null,
         role: 'player',
-        price_minor: 0,
-        payment_status: 'pending',
+        price_minor: pricing?.price_minor || 0,
+        payment_status: matchedCustomer
+          ? (pricing?.price_minor || 0) > 0 ? 'pending' : 'free'
+          : 'pending',
         metadata: {
-          source: 'manual_placeholder',
-          claim_status: 'needs_identity',
+          source: matchedCustomer ? 'manual_existing_customer' : 'manual_placeholder',
+          claim_status: matchedCustomer ? 'claimed' : 'needs_identity',
           created_by_user_id: userId,
           contact_present: Boolean(email || phone),
+          matched_existing_customer: Boolean(matchedCustomer),
+          pricing_label: pricing?.label || null,
+          pricing_reason: pricing?.reason || null,
+          duration_hours: durationHours,
+          price_minor_per_hour: matchedCustomer ? BOOKING_PARTICIPANT_GUEST_PRICE_MINOR_PER_HOUR : null,
           founder_booking: isFounderBookingGroup(bookingRows),
         },
       }).select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, checked_in_at, metadata, created_at').single();
@@ -2598,9 +2763,10 @@ Deno.serve(async (req) => {
         entityId: participant.id,
         venueId: booking.venue_id,
         after: {
-          display_name: displayName,
+          display_name: participant.display_name,
           has_contact: Boolean(email || phone),
-          claim_status: 'needs_identity',
+          claim_status: matchedCustomer ? 'claimed' : 'needs_identity',
+          matched_existing_customer: Boolean(matchedCustomer),
         },
         metadata: { booking_id: booking.id, booking_group_key: groupKey, invite_id: invite.id },
       });
@@ -2611,7 +2777,7 @@ Deno.serve(async (req) => {
         participant: {
           ...participant,
           checked_in: false,
-          amount_sek: 0,
+          amount_sek: minorToSek(participant.price_minor),
           claim_url: `${origin}/booking/invite/${encodeURIComponent(invite.token)}`,
         },
         token: invite.token,

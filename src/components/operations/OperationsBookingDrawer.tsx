@@ -378,19 +378,19 @@ export function OperationsBookingDrawer({
                         value={manualName}
                         onChange={(event) => setManualName(event.target.value)}
                         placeholder="Namn"
-                        className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-bold text-white outline-none"
+                        className="h-10 rounded-xl border border-white bg-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                       />
                       <input
                         value={manualPhone}
                         onChange={(event) => setManualPhone(event.target.value)}
                         placeholder="Telefon valfritt"
-                        className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-bold text-white outline-none"
+                        className="h-10 rounded-xl border border-white bg-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                       />
                       <input
                         value={manualEmail}
                         onChange={(event) => setManualEmail(event.target.value)}
                         placeholder="E-post valfritt"
-                        className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-bold text-white outline-none"
+                        className="h-10 rounded-xl border border-white bg-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                       />
                     </div>
                     <button
