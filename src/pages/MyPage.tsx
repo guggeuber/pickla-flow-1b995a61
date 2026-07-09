@@ -28,6 +28,7 @@ import { subscribeToPush } from "@/lib/push";
 import { ThreadRow } from "@/components/ui/ThreadRow";
 import { activityTimingLabel } from "@/lib/activityTiming";
 import { getDisplayName, getFirstName } from "@/lib/displayName";
+import { shareOrCopy } from "@/lib/share";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -942,8 +943,13 @@ function BookingDetailsSheet({
     try {
       const result = await apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef });
       if (!result.url) throw new Error("Ingen länk skapades");
-      await navigator.clipboard.writeText(result.url);
-      toast.success("Medspelarlänk kopierad");
+      const shareResult = await shareOrCopy({
+        title: "Spela på Pickla",
+        text: "Hämta din personliga Play Right och häng på.",
+        url: result.url,
+        copyText: result.url,
+      });
+      toast.success(shareResult === "copied" ? "Spelarlänk kopierad" : "Spelarlänk delad");
     } catch (error: any) {
       toast.error(error?.message || "Kunde inte skapa medspelarlänk");
     } finally {
@@ -956,9 +962,10 @@ function BookingDetailsSheet({
       <DrawerContent style={{ background: CARD_BG }}>
         <div className="px-5 pb-6 pt-2 max-w-md mx-auto w-full">
           <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-            Bokning
+            Din Play Right
           </p>
-          <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{courtName}</p>
+          <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Din plats</p>
+          <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{courtName}</p>
           {courtNames !== courtName && (
             <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>{courtNames}</p>
           )}
@@ -975,7 +982,7 @@ function BookingDetailsSheet({
                 Check-in
               </p>
               <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-                Visa koden i hallen
+                Checka in med din Play Right
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {accessCodes.map((code) => (
@@ -995,7 +1002,7 @@ function BookingDetailsSheet({
               style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
             >
               {creatingInvite ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-              Bjud in medspelare
+              Bjud in spelare
             </button>
             <button
               onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`); }}
@@ -1163,14 +1170,10 @@ function SessionRegistrationDetailsSheet({
     const title = session?.name || "Aktivitet på Pickla";
     const text = `Häng med på ${title} på Pickla`;
     try {
-      if (navigator.share) {
-        await navigator.share({ title, text, url });
-      } else {
-        await navigator.clipboard.writeText(url);
-        toast.success("Länk kopierad");
-      }
+      const result = await shareOrCopy({ title, text, url, copyText: url });
+      if (result === "copied") toast.success("Länk kopierad");
     } catch (error) {
-      if ((error as Error)?.name !== "AbortError") toast.error("Kunde inte dela länken");
+      toast.error("Kunde inte kopiera länken");
     }
   };
 
@@ -1346,24 +1349,21 @@ function DayPassSection() {
   };
 
   const copyGiftMessage = (token: string, name: string) => {
-    navigator.clipboard.writeText(buildGiftMessage(token, name));
-    toast.success("Meddelande kopierat!");
+    shareOrCopy({ copyText: buildGiftMessage(token, name) })
+      .then(() => toast.success("Meddelande kopierat!"))
+      .catch(() => toast.error("Kunde inte kopiera meddelandet"));
   };
 
   const shareGift = async (token: string, name: string) => {
     const url = buildLink(token);
     const text = buildGiftMessage(token, name);
 
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: `Dagspass till ${name}`, text, url });
-        return;
-      } catch {
-        return;
-      }
+    try {
+      const result = await shareOrCopy({ title: `Dagspass till ${name}`, text, url, copyText: text });
+      if (result === "copied") toast.success("Meddelande kopierat!");
+    } catch {
+      toast.error("Kunde inte kopiera meddelandet");
     }
-
-    copyGiftMessage(token, name);
   };
 
   if (isLoading) {

@@ -7,6 +7,7 @@ import { DateTime } from "luxon";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { apiPost } from "@/lib/api";
+import { shareOrCopy } from "@/lib/share";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -66,11 +67,11 @@ export default function BookingConfirmation() {
 
   const handleShare = async () => {
     const url = window.location.href;
-    if (navigator.share) {
-      await navigator.share({ title: `Bokning ${ref}`, url });
-    } else {
-      await navigator.clipboard.writeText(url);
-      toast.success("Länk kopierad!");
+    try {
+      const result = await shareOrCopy({ title: `Play Right ${ref}`, url });
+      if (result === "copied") toast.success("Länk kopierad!");
+    } catch {
+      toast.error("Kunde inte kopiera länken.");
     }
   };
 
@@ -80,8 +81,13 @@ export default function BookingConfirmation() {
     try {
       const result = await apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef: ref });
       if (!result.url) throw new Error("Ingen länk skapades");
-      await navigator.clipboard.writeText(result.url);
-      toast.success("Medspelarlänk kopierad");
+      const shareResult = await shareOrCopy({
+        title: "Spela på Pickla",
+        text: "Hämta din personliga Play Right och häng på.",
+        url: result.url,
+        copyText: result.url,
+      });
+      toast.success(shareResult === "copied" ? "Spelarlänk kopierad" : "Spelarlänk delad");
     } catch (err: any) {
       toast.error(err?.message || "Kunde inte skapa medspelarlänk. Logga in som bokare och försök igen.");
     } finally {
@@ -160,6 +166,17 @@ export default function BookingConfirmation() {
   const customerEmail = receipt?.customer_email || "";
   const productDescription = receipt?.product_description || (courts.length > 1 ? "Banbokning flera banor" : "Banbokning");
   const paymentMethod = receipt?.payment_method || (receipt?.payment_provider === "stripe" ? "Kort via Stripe" : "Pickla");
+  const personalParticipant = participants.find((participant: any) => participant.role === "booker") || participants[0] || null;
+  const personalName = personalParticipant?.display_name || customerName || "Din plats";
+  const personalPaymentStatus = personalParticipant?.checked_in_at
+    ? "Incheckad"
+    : personalParticipant?.payment_status === "paid"
+      ? "Betald"
+      : personalParticipant?.payment_status === "free"
+        ? "Ingår"
+        : personalParticipant?.payment_status === "pending"
+          ? "Väntar på betalning"
+          : paymentStatus;
   const formatMoney = (amount: number) => `${Number(amount || 0).toLocaleString("sv-SE", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })} kr`;
   const Row = ({ label, value, strong = false }: { label: string; value: ReactNode; strong?: boolean }) => (
     <div className="flex items-start justify-between gap-4 py-3 border-b border-neutral-100 last:border-0">
@@ -205,7 +222,7 @@ export default function BookingConfirmation() {
           className="text-[34px] leading-none font-bold tracking-tight"
           style={{ fontFamily: FONT_GROTESK }}
         >
-          {isCancelled ? "Avbokad" : totalIncVat > 0 ? "Kvitto" : "Bokad"}
+          {isCancelled ? "Avbokad" : "Din Play Right"}
         </h1>
         <button
           onClick={handleCopyRef}
@@ -219,11 +236,52 @@ export default function BookingConfirmation() {
       </div>
 
       <main className="mx-auto w-full max-w-md flex-1 px-5 pb-28">
+        {!isCancelled && (
+          <section className="mb-4 rounded-[28px] bg-white border border-neutral-200 p-5 shadow-sm print:hidden">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-widest text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                  Personlig Play Right
+                </p>
+                <p className="mt-1 break-words text-2xl font-black leading-tight text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+                  {personalName}
+                </p>
+                <p className="mt-2 text-sm text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                  {startDT.setLocale("sv").toFormat("EEE d MMM")} · {startDT.toFormat("HH:mm")}–{endDT.toFormat("HH:mm")}
+                </p>
+                <p className="mt-1 text-sm text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                  {courtNames || "Bana"}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-bold text-emerald-600" style={{ fontFamily: FONT_MONO }}>
+                {personalPaymentStatus}
+              </span>
+            </div>
+
+            {booking.access_code && (
+              <div className="mt-5 rounded-[24px] bg-amber-50 border-2 border-amber-200 px-5 py-4 text-center">
+                <p className="text-[9px] font-bold text-amber-700 uppercase tracking-widest" style={{ fontFamily: FONT_MONO }}>
+                  check-in
+                </p>
+                <p
+                  className="mt-1 font-bold text-amber-900 tracking-[0.25em] leading-none"
+                  style={{ fontFamily: FONT_MONO, fontSize: "clamp(2rem, 10vw, 3rem)" }}
+                >
+                  {booking.access_code}
+                </p>
+                <p className="mt-2 text-[10px] text-amber-700" style={{ fontFamily: FONT_MONO }}>
+                  Checka in med din Play Right när du kommer.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+
         <section className="rounded-[28px] bg-white border border-neutral-200 p-5 shadow-sm print:rounded-none print:shadow-none print:border-neutral-300">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[10px] uppercase tracking-widest text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                Säljare
+                Reservation / kvitto
               </p>
               <p className="mt-1 text-lg font-bold text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
                 {PICKLA_COMPANY.name}
@@ -288,23 +346,6 @@ export default function BookingConfirmation() {
             Skapa friskvårdsunderlag
           </Link>
         </section>
-
-        {!isCancelled && booking.access_code && (
-          <section className="mt-4 rounded-[24px] bg-amber-50 border-2 border-amber-200 px-5 py-4 flex flex-col items-center gap-1 text-center">
-            <p className="text-[9px] font-bold text-amber-700 uppercase tracking-widest" style={{ fontFamily: FONT_MONO }}>
-              incheckningskod
-            </p>
-            <p
-              className="font-bold text-amber-900 tracking-[0.25em] leading-none"
-              style={{ fontFamily: FONT_MONO, fontSize: "clamp(2rem, 10vw, 3rem)" }}
-            >
-              {booking.access_code}
-            </p>
-            <p className="text-[10px] text-amber-700" style={{ fontFamily: FONT_MONO }}>
-              Slå in koden vid banorna
-            </p>
-          </section>
-        )}
 
         {!isCancelled && (
           <section className="mt-4 rounded-[24px] bg-white border border-neutral-200 p-5 shadow-sm print:hidden">
