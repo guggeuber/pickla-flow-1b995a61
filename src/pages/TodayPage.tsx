@@ -35,6 +35,7 @@ const FONT_MONO = "'Space Mono', monospace";
 const DAYS_AHEAD = 7;
 const HORIZON_SECTION_MAX_ROWS = 3;
 const WEEKEND_SECTION_TRIGGER_WEEKDAYS = [4, 5];
+const TOMORROW_SECTION_COLLAPSES_INTO_WEEKEND_WEEKDAYS = [5];
 
 type FeedItem = {
   id: string;
@@ -726,19 +727,30 @@ export default function TodayPage() {
   );
 
   const todayListItems = todayActivities.filter((item) => item.id !== featuredItem?.id);
-  const weekendMode = WEEKEND_SECTION_TRIGGER_WEEKDAYS.includes(now.weekday);
+  const showWeekendSection = WEEKEND_SECTION_TRIGGER_WEEKDAYS.includes(now.weekday);
+  const showTomorrowSection = !TOMORROW_SECTION_COLLAPSES_INTO_WEEKEND_WEEKDAYS.includes(now.weekday);
   const daysUntilSaturday = (6 - now.weekday + 7) % 7 || 7;
   const saturdayKey = now.plus({ days: daysUntilSaturday }).toISODate();
   const sundayKey = now.plus({ days: daysUntilSaturday + 1 }).toISODate();
-  const horizonCandidates = weekendMode
-    ? activityItems.filter((item) => item.date === saturdayKey || item.date === sundayKey)
-    : tomorrowActivities;
-  const horizonItems = sortBySoonestThenPeople(
-    horizonCandidates
-      .filter((item) => item.id !== featuredItem?.id)
-      .filter((item) => isJoinableItem(item, now))
-  ).slice(0, HORIZON_SECTION_MAX_ROWS);
-  const horizonHeading = weekendMode ? "I helgen" : "Imorgon";
+  const tomorrowItems = showTomorrowSection
+    ? sortBySoonestThenPeople(
+      tomorrowActivities
+        .filter((item) => item.id !== featuredItem?.id)
+        .filter((item) => isJoinableItem(item, now))
+    )
+    : [];
+  const weekendItems = showWeekendSection
+    ? sortBySoonestThenPeople(
+      activityItems
+        .filter((item) => item.date === saturdayKey || item.date === sundayKey)
+        .filter((item) => item.id !== featuredItem?.id)
+        .filter((item) => isJoinableItem(item, now))
+    ).slice(0, HORIZON_SECTION_MAX_ROWS)
+    : [];
+  const horizonSections = [
+    { heading: "Imorgon", items: tomorrowItems },
+    { heading: "I helgen", items: weekendItems },
+  ].filter((section) => section.items.length > 0);
   const { data: featuredPreview } = useQuery({
     queryKey: ["today-featured-preview", user?.id || "anon", featuredItem?.id],
     enabled: !!featuredItem?.activitySession?.id,
@@ -815,13 +827,13 @@ export default function TodayPage() {
                 </section>
               )}
 
-              {horizonItems.length > 0 && (
-                <section>
+              {horizonSections.map((section) => (
+                <section key={section.heading}>
                   <h2 className="mb-4 text-[24px] leading-none tracking-[-0.03em]" style={{ fontFamily: FONT_HEADING }}>
-                    {horizonHeading}
+                    {section.heading}
                   </h2>
                   <div className="space-y-2">
-                    {horizonItems.map((item) => (
+                    {section.items.map((item) => (
                       <FeedRow
                         key={item.id}
                         item={item}
@@ -834,7 +846,7 @@ export default function TodayPage() {
                     ))}
                   </div>
                 </section>
-              )}
+              ))}
 
               <button
                 type="button"
