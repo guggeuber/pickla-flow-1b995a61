@@ -1,5 +1,6 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { auditMutation } from '../_shared/authorization.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const cleanString = (value: unknown) => {
@@ -61,6 +62,80 @@ function identityTitleFrom(row: {
     || cleanString(row.full_name)
     || cleanString(row.receipt_name)
     || 'Kund utan namn';
+}
+
+function maskEmail(email: string | null) {
+  if (!email || !email.includes('@')) return null;
+  const [local, domain] = email.split('@');
+  return `${local.slice(0, 2)}***@${domain}`;
+}
+
+function authRedirectOrigin(req: Request) {
+  const origin = req.headers.get('origin');
+  if (origin?.startsWith('http://') || origin?.startsWith('https://')) return origin;
+  return 'https://www.playpickla.com';
+}
+
+async function resolveCustomerAuthTarget(admin: ReturnType<typeof getServiceClient>, input: {
+  customerId?: string | null;
+  userId?: string | null;
+}) {
+  let customer: any = null;
+  let profile: any = null;
+  let targetCustomerId = cleanString(input.customerId);
+  let targetUserId = cleanString(input.userId);
+
+  if (targetCustomerId) {
+    const { data, error } = await admin
+      .from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, status')
+      .eq('id', targetCustomerId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    customer = data || null;
+    targetUserId = targetUserId || cleanString(customer?.auth_user_id);
+
+    if (!targetUserId) {
+      const { data: identity, error: identityErr } = await admin
+        .from('customer_identities')
+        .select('provider_id')
+        .eq('customer_id', targetCustomerId)
+        .eq('provider', 'auth')
+        .maybeSingle();
+      if (identityErr) throw new Error(identityErr.message);
+      targetUserId = cleanString(identity?.provider_id);
+    }
+  }
+
+  if (targetUserId) {
+    const { data, error } = await admin
+      .from('player_profiles')
+      .select('auth_user_id, customer_id, display_name, first_name, last_name, phone')
+      .eq('auth_user_id', targetUserId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    profile = data || null;
+    targetCustomerId = targetCustomerId || cleanString(profile?.customer_id);
+  }
+
+  if (!customer && targetCustomerId) {
+    const { data, error } = await admin
+      .from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, status')
+      .eq('id', targetCustomerId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    customer = data || null;
+    targetUserId = targetUserId || cleanString(customer?.auth_user_id);
+  }
+
+  if (!targetUserId) return { customer, profile, authUser: null, customerId: targetCustomerId, userId: null, email: null };
+
+  const { data: authResult, error: authErr } = await admin.auth.admin.getUserById(targetUserId);
+  if (authErr) throw new Error(authErr.message);
+  const authUser = authResult?.user || null;
+  const email = cleanString(authUser?.email) || cleanString(customer?.primary_email);
+  return { customer, profile, authUser, customerId: targetCustomerId, userId: targetUserId, email };
 }
 
 async function fetchByCustomerOrUser(admin: ReturnType<typeof getServiceClient>, table: string, select: string, params: {
@@ -694,6 +769,79 @@ Deno.serve(async (req) => {
           'open_booking',
         ],
       }, 200, 10);
+    }
+
+    // POST /api-customers/auth-help — staff sends a safe login/reset email for an existing customer account.
+    if (req.method === 'POST' && path === 'auth-help') {
+      const body = await req.json();
+      const venueId = cleanString(body.venueId);
+      const requestedCustomerId = cleanString(body.customerId) || cleanString(body.customer_id);
+      const requestedUserId = cleanString(body.userId) || cleanString(body.user_id);
+      const kind = cleanString(body.kind) || cleanString(body.action);
+      if (!venueId || (!requestedCustomerId && !requestedUserId)) {
+        return errorResponse('Missing venueId and customerId or userId', 400);
+      }
+      if (!['magic_link', 'login_link', 'password_reset'].includes(kind || '')) {
+        return errorResponse('Invalid auth help action', 400);
+      }
+
+      const admin = getServiceClient();
+      const canList = await assertCanListCustomers(admin, userId, venueId);
+      if (!canList) return errorResponse('Forbidden', 403);
+
+      const target = await resolveCustomerAuthTarget(admin, {
+        customerId: requestedCustomerId,
+        userId: requestedUserId,
+      });
+      if (!target.authUser || !target.userId) {
+        return errorResponse('Kunden saknar inloggningskonto. Skapa eller koppla konto innan länk kan skickas.', 400);
+      }
+      if (!target.email) {
+        return errorResponse('Kunden saknar verifierad e-post för inloggning.', 400);
+      }
+
+      const origin = authRedirectOrigin(req);
+      const isReset = kind === 'password_reset';
+      const actionLabel = isReset ? 'password_reset' : 'magic_link';
+      const redirectTo = isReset ? `${origin}/auth/reset` : `${origin}/auth/callback`;
+
+      const result = isReset
+        ? await admin.auth.resetPasswordForEmail(target.email, { redirectTo })
+        : await admin.auth.signInWithOtp({
+          email: target.email,
+          options: {
+            emailRedirectTo: redirectTo,
+            shouldCreateUser: false,
+          },
+        });
+
+      if (result.error) return errorResponse(result.error.message, 400);
+
+      await auditMutation(admin, {
+        req,
+        userId,
+        action: `customer_auth.${actionLabel}.send`,
+        entityTable: 'customers',
+        entityId: target.customerId || null,
+        venueId,
+        after: {
+          customer_id: target.customerId || null,
+          user_id: target.userId,
+          email_masked: maskEmail(target.email),
+          kind: actionLabel,
+        },
+        metadata: {
+          redirect_to: redirectTo,
+          delivery: 'supabase_email',
+        },
+      });
+
+      return jsonResponse({
+        ok: true,
+        kind: actionLabel,
+        email_masked: maskEmail(target.email),
+        message: isReset ? 'Återställningslänk skickad' : 'Inloggningslänk skickad',
+      });
     }
 
     // PATCH /api-customers/update

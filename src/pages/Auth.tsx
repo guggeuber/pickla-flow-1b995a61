@@ -79,7 +79,7 @@ const Auth = () => {
     e.preventDefault();
     setSubmitting(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: "https://playpickla.com/auth/reset",
+      redirectTo: `${window.location.origin}/auth/reset`,
     });
     setSubmitting(false);
     if (error) {

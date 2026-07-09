@@ -10,18 +10,107 @@ import { consumePreservedIntendedRoute, resolveEntryDestination } from "@/lib/en
 const FONT_MONO = "'Space Mono', monospace";
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 
+function urlParam(searchParams: URLSearchParams, hashParams: URLSearchParams, key: string) {
+  return searchParams.get(key) || hashParams.get(key);
+}
+
 const AuthReset = () => {
   const navigate = useNavigate();
   const [ready, setReady] = useState(false);
+  const [checkingLink, setCheckingLink] = useState(true);
+  const [linkError, setLinkError] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") setReady(true);
+    let cancelled = false;
+    let resolved = false;
+
+    const markReady = () => {
+      resolved = true;
+      if (cancelled) return;
+      setReady(true);
+      setCheckingLink(false);
+      setLinkError("");
+      window.history.replaceState(null, "", "/auth/reset");
+    };
+
+    const failLink = (message: string) => {
+      resolved = true;
+      if (cancelled) return;
+      setReady(false);
+      setCheckingLink(false);
+      setLinkError(message);
+    };
+
+    const recoverSession = async () => {
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const authError = urlParam(searchParams, hashParams, "error_description")
+        || urlParam(searchParams, hashParams, "error");
+
+      if (authError) {
+        failLink(authError);
+        return;
+      }
+
+      const code = urlParam(searchParams, hashParams, "code");
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+        if (error) {
+          failLink(error.message);
+          return;
+        }
+        markReady();
+        return;
+      }
+
+      const tokenHash = urlParam(searchParams, hashParams, "token_hash");
+      if (tokenHash) {
+        const { error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: "recovery",
+        });
+        if (error) {
+          failLink(error.message);
+          return;
+        }
+        markReady();
+        return;
+      }
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        markReady();
+        return;
+      }
+
+      if (!cancelled && !resolved) {
+        setCheckingLink(false);
+      }
+    };
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if ((event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") && session) markReady();
     });
-    return () => subscription.unsubscribe();
+
+    recoverSession().catch((error) => {
+      failLink(error instanceof Error ? error.message : "Länken kunde inte öppnas.");
+    });
+
+    const timeout = window.setTimeout(async () => {
+      if (cancelled || resolved) return;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) markReady();
+      else setCheckingLink(false);
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -68,10 +157,29 @@ const AuthReset = () => {
           </div>
         </div>
 
-        {!ready ? (
+        {checkingLink ? (
           <p className="text-center text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
             Väntar på återställningslänk…
           </p>
+        ) : !ready ? (
+          <div className="space-y-4 text-center">
+            <div>
+              <h2 className="text-[18px] font-bold text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
+                Länken kunde inte öppnas
+              </h2>
+              <p className="text-[12px] text-neutral-500 mt-2 leading-relaxed" style={{ fontFamily: FONT_MONO }}>
+                {linkError || "Be om en ny återställningslänk och öppna den i samma webbläsare."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/auth", { replace: true })}
+              className="w-full py-3.5 rounded-2xl bg-neutral-900 text-white text-[13px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform"
+              style={{ fontFamily: FONT_MONO }}
+            >
+              Skicka ny länk
+            </button>
+          </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3">
             <div className="relative">

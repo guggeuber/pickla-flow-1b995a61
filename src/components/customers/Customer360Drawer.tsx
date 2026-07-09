@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarClock, CheckCircle2, CreditCard, Crown, FileText, Loader2, Mail, Phone, ReceiptText, ShieldCheck, Ticket, UserRound, X } from "lucide-react";
+import { CalendarClock, CheckCircle2, CreditCard, Crown, FileText, KeyRound, Loader2, Mail, Phone, ReceiptText, ShieldCheck, Ticket, UserRound, X } from "lucide-react";
 import { DateTime } from "luxon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -184,6 +184,19 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte checka in"),
   });
+  const authHelpMutation = useMutation({
+    mutationFn: (kind: "magic_link" | "password_reset") => apiPost<{ message?: string; email_masked?: string }>("api-customers", "auth-help", {
+      venueId,
+      customerId: customer?.customer_id || customerId || null,
+      userId: resolvedUserId,
+      kind,
+    }),
+    onSuccess: (result) => {
+      toast.success(`${result.message || "Länk skickad"}${result.email_masked ? ` till ${result.email_masked}` : ""}`);
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte skicka länk"),
+  });
+  const canSendAuthHelp = Boolean(venueId && customer?.email && (customer.customer_id || resolvedUserId));
 
   return (
     <AnimatePresence>
@@ -281,6 +294,35 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                       <Ticket className="h-4 w-4" />
                       Dagspass
                     </a>
+                  </div>
+
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Inloggningshjälp</p>
+                        <p className="mt-1 text-xs text-white/50">
+                          Skicka en säker länk till kundens e-post. Staff ser aldrig lösenord eller token.
+                        </p>
+                      </div>
+                      <KeyRound className="h-5 w-5 shrink-0 text-white/45" />
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <CommandButton
+                        icon={authHelpMutation.isPending ? Loader2 : Mail}
+                        label="Skicka inloggningslänk"
+                        onClick={canSendAuthHelp && !authHelpMutation.isPending ? () => authHelpMutation.mutate("magic_link") : undefined}
+                      />
+                      <CommandButton
+                        icon={authHelpMutation.isPending ? Loader2 : KeyRound}
+                        label="Återställ lösenord"
+                        onClick={canSendAuthHelp && !authHelpMutation.isPending ? () => authHelpMutation.mutate("password_reset") : undefined}
+                      />
+                    </div>
+                    {!canSendAuthHelp && (
+                      <p className="mt-2 text-xs text-amber-200/80">
+                        Kunden behöver ett kopplat konto och e-post innan länk kan skickas.
+                      </p>
+                    )}
                   </div>
 
                   {data.active_membership && (
