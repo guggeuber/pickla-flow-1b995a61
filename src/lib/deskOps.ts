@@ -108,10 +108,11 @@ export function markBookingParticipantPaid(participant: any) {
   });
 }
 
-export function addManualBookingParticipant(booking: any, input: { displayName: string; email?: string; phone?: string }) {
+export function addManualBookingParticipant(booking: any, input: { displayName: string; email?: string; phone?: string; customerId?: string | null }) {
   return apiPost("api-bookings", "booking-participant-manual", {
     bookingId: booking?.source_ids?.[0] || booking?.id || null,
     bookingRef: booking?.booking_ref || null,
+    customerId: input.customerId || null,
     displayName: input.displayName,
     email: input.email || "",
     phone: input.phone || "",

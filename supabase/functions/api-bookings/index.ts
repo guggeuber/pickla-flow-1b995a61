@@ -500,6 +500,36 @@ async function resolveExistingCustomerByContact(admin: any, venueId: string, ema
   };
 }
 
+async function resolveExistingCustomerById(admin: any, venueId: string, customerId: string) {
+  const cleanCustomerId = String(customerId || '').trim();
+  if (!cleanCustomerId) return null;
+
+  const { data: venue, error: venueErr } = await admin
+    .from('venues')
+    .select('organization_id')
+    .eq('id', venueId)
+    .maybeSingle();
+  if (venueErr) throw new Error(venueErr.message);
+  if (!venue?.organization_id) return null;
+
+  const { data: customer, error: customerErr } = await admin
+    .from('customers')
+    .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, status, merged_into_id, organization_id')
+    .eq('id', cleanCustomerId)
+    .eq('organization_id', venue.organization_id)
+    .maybeSingle();
+  if (customerErr) throw new Error(customerErr.message);
+  if (!customer || customer.status !== 'active' || customer.merged_into_id) return null;
+
+  return {
+    customer_id: customer.id,
+    user_id: customer.auth_user_id || null,
+    display_name: customerDisplayName(customer),
+    email: customer.primary_email || null,
+    phone: customer.primary_phone || null,
+  };
+}
+
 async function ensureBookerParticipant(admin: any, bookingRows: any[]) {
   const booking = bookingRows[0];
   if (!booking?.user_id) return null;
@@ -2651,6 +2681,7 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const bookingRef = String(body.bookingRef || body.booking_ref || '').trim();
       const bookingId = String(body.bookingId || body.booking_id || '').trim();
+      const requestedCustomerId = String(body.customerId || body.customer_id || '').trim();
       const displayName = String(body.displayName || body.display_name || '').trim().slice(0, 120);
       const email = normalizeParticipantEmail(body.email).slice(0, 200);
       const phone = String(body.phone || '').trim().slice(0, 50);
@@ -2668,8 +2699,10 @@ Deno.serve(async (req) => {
       if (bookingErr) return errorResponse(bookingErr.message, 500);
       if (!booking) return errorResponse('Booking not found', 404);
 
-      const canManage = booking.user_id === userId || await canOperateVenue(admin, userId, booking.venue_id);
+      const canOperate = await canOperateVenue(admin, userId, booking.venue_id);
+      const canManage = booking.user_id === userId || canOperate;
       if (!canManage) return errorResponse('Forbidden', 403);
+      if (requestedCustomerId && !canOperate) return errorResponse('Endast personal kan koppla en befintlig kund', 403);
 
       const bookingRows = await getBookingGroupRows(admin, booking);
       await ensureBookerParticipant(admin, bookingRows);
@@ -2678,7 +2711,10 @@ Deno.serve(async (req) => {
       if (participants.length >= bookingParticipantCapacity(bookingRows)) {
         return errorResponse('Bokningen har redan fyra deltagare per bana', 409);
       }
-      const matchedCustomer = await resolveExistingCustomerByContact(admin, booking.venue_id, email, phone, displayName);
+      const matchedCustomer = requestedCustomerId
+        ? await resolveExistingCustomerById(admin, booking.venue_id, requestedCustomerId)
+        : await resolveExistingCustomerByContact(admin, booking.venue_id, email, phone, displayName);
+      if (requestedCustomerId && !matchedCustomer) return errorResponse('Kunden kunde inte kopplas till den här anläggningen', 404);
       const existingMatchedParticipant = matchedCustomer
         ? participants.find((row: any) =>
             (matchedCustomer.user_id && row.user_id === matchedCustomer.user_id) ||

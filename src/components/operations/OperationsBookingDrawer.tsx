@@ -2,8 +2,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import { CalendarClock, CheckCircle2, Copy, CreditCard, FileText, Loader2, Mail, MapPin, Phone, ReceiptText, UserPlus, UserRound, X } from "lucide-react";
 import { DateTime } from "luxon";
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { apiGet } from "@/lib/api";
 import { addManualBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
 import { shareOrCopy } from "@/lib/share";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
@@ -176,6 +177,14 @@ function paymentLabel(status?: string | null) {
   return "Okänd";
 }
 
+function customerSuggestionTitle(row: any) {
+  return row?.identity_title || row?.display_name || row?.full_name || row?.email || "Kund utan namn";
+}
+
+function customerSuggestionMeta(row: any) {
+  return [row?.phone, row?.email, row?.active_membership_tier?.name].filter(Boolean).join(" · ") || "Kund";
+}
+
 function statusTone(status?: string | null) {
   if (status === "paid" || status === "free") return "bg-emerald-500/15 text-emerald-300 border-emerald-500/25";
   if (status === "pending") return "bg-amber-500/15 text-amber-300 border-amber-500/25";
@@ -210,6 +219,7 @@ export function OperationsBookingDrawer({
   const [manualName, setManualName] = useState("");
   const [manualPhone, setManualPhone] = useState("");
   const [manualEmail, setManualEmail] = useState("");
+  const [selectedManualCustomer, setSelectedManualCustomer] = useState<any | null>(null);
   const queryClient = useQueryClient();
   const effectiveCheckedIn = Boolean(booking?.checked_in || localCheckedInAt);
   const checkedAt = formatCheckedInAt(localCheckedInAt || booking?.checked_in_at);
@@ -220,6 +230,22 @@ export function OperationsBookingDrawer({
   const canOpenCustomer = Boolean(booking?.venue_id && (bookingCustomerId || bookingCustomerUserId));
   const canCheckIn = !effectiveCheckedIn && deskBookingCheckinEligibility(booking).ok;
   const participants = Array.isArray(booking?.participants) ? booking.participants : [];
+  const manualSearch = (manualEmail.trim() || manualPhone.trim() || manualName.trim()).trim();
+  const customerSuggestions = useQuery<any[]>({
+    queryKey: ["booking-drawer-manual-customer-search", booking?.venue_id, manualSearch],
+    enabled: open && manualOpen && !!booking?.venue_id && manualSearch.length >= 2,
+    queryFn: () => apiGet("api-customers", "list", { venueId: booking!.venue_id!, search: manualSearch, limit: "5" }),
+    staleTime: 15_000,
+  });
+  const selectManualCustomer = (customer: any) => {
+    setSelectedManualCustomer(customer);
+    setManualName(customerSuggestionTitle(customer));
+    setManualPhone(customer.phone || "");
+    setManualEmail(customer.email || "");
+  };
+  const clearSelectedManualCustomer = () => {
+    if (selectedManualCustomer) setSelectedManualCustomer(null);
+  };
 
   useEffect(() => {
     setLocalCheckedInAt(null);
@@ -227,6 +253,7 @@ export function OperationsBookingDrawer({
     setManualName("");
     setManualPhone("");
     setManualEmail("");
+    setSelectedManualCustomer(null);
   }, [booking?.id]);
 
   const checkInMutation = useMutation({
@@ -259,6 +286,7 @@ export function OperationsBookingDrawer({
         displayName,
         phone: manualPhone.trim(),
         email: manualEmail.trim(),
+        customerId: selectedManualCustomer?.customer_id || null,
       });
     },
     onSuccess: () => {
@@ -266,6 +294,7 @@ export function OperationsBookingDrawer({
       setManualName("");
       setManualPhone("");
       setManualEmail("");
+      setSelectedManualCustomer(null);
       setManualOpen(false);
       if (booking?.venue_id) {
         queryClient.invalidateQueries({ queryKey: ["today-bookings", booking.venue_id] });
@@ -376,23 +405,67 @@ export function OperationsBookingDrawer({
                     <div className="mt-3 grid gap-2 md:grid-cols-3">
                       <input
                         value={manualName}
-                        onChange={(event) => setManualName(event.target.value)}
-                        placeholder="Namn"
+                        onChange={(event) => {
+                          setManualName(event.target.value);
+                          clearSelectedManualCustomer();
+                        }}
+                        placeholder="Sök namn eller skriv nytt namn"
                         className="h-10 rounded-xl border border-white bg-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                       />
                       <input
                         value={manualPhone}
-                        onChange={(event) => setManualPhone(event.target.value)}
-                        placeholder="Telefon valfritt"
+                        onChange={(event) => {
+                          setManualPhone(event.target.value);
+                          clearSelectedManualCustomer();
+                        }}
+                        placeholder="Telefon / sök"
                         className="h-10 rounded-xl border border-white bg-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                       />
                       <input
                         value={manualEmail}
-                        onChange={(event) => setManualEmail(event.target.value)}
-                        placeholder="E-post valfritt"
+                        onChange={(event) => {
+                          setManualEmail(event.target.value);
+                          clearSelectedManualCustomer();
+                        }}
+                        placeholder="E-post / sök"
                         className="h-10 rounded-xl border border-white bg-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                       />
                     </div>
+                    {selectedManualCustomer ? (
+                      <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs font-black text-emerald-300">
+                        Vald kund: {customerSuggestionTitle(selectedManualCustomer)}
+                      </div>
+                    ) : manualSearch.length >= 2 ? (
+                      <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-2">
+                        {customerSuggestions.isFetching ? (
+                          <div className="flex items-center gap-2 px-2 py-2 text-xs font-bold text-white/50">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Söker kunder...
+                          </div>
+                        ) : customerSuggestions.data?.length ? (
+                          <div className="space-y-1">
+                            {customerSuggestions.data.map((customer) => (
+                              <button
+                                key={customer.customer_id || customer.id || customer.auth_user_id}
+                                type="button"
+                                onClick={() => selectManualCustomer(customer)}
+                                className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/5"
+                              >
+                                <span className="min-w-0">
+                                  <span className="block truncate text-sm font-black text-white">{customerSuggestionTitle(customer)}</span>
+                                  <span className="block truncate text-xs font-bold text-white/45">{customerSuggestionMeta(customer)}</span>
+                                </span>
+                                <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.16em] text-blue-300">Välj</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="px-2 py-2 text-xs font-bold text-white/45">
+                            Ingen kundträff. Du kan ändå lägga till som väntande Play Right.
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => manualParticipantMutation.mutate()}

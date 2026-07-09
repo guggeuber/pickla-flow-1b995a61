@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { Activity, AlertTriangle, CalendarCheck, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, Mail, Phone, ReceiptText, Sparkles, UserCheck, UserPlus } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { useTodayBookings, useTodayRevenue, useVenueCourts } from "@/hooks/useDesk";
+import { apiGet } from "@/lib/api";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
@@ -160,6 +161,14 @@ function isPlayingHostParticipant(participant: any) {
 
 function participantName(participant: any) {
   return participant?.customer_name || participant?.booked_by || participant?.player_name || "Deltagare";
+}
+
+function customerSuggestionTitle(row: any) {
+  return row?.identity_title || row?.display_name || row?.full_name || row?.email || "Kund utan namn";
+}
+
+function customerSuggestionMeta(row: any) {
+  return [row?.phone, row?.email, row?.active_membership_tier?.name].filter(Boolean).join(" · ") || "Kund";
 }
 
 export default function DeskToday({ venueId, onOpenBooking }: Props) {
@@ -530,19 +539,36 @@ function BookingActionRow({
   onParticipantMarkPaid: (participant: any) => void;
   participantPayingId: string | null;
   participantPaying: boolean;
-  onParticipantManualAdd: (input: { displayName: string; email?: string; phone?: string }) => Promise<any>;
+  onParticipantManualAdd: (input: { displayName: string; email?: string; phone?: string; customerId?: string | null }) => Promise<any>;
   participantManualAdding: boolean;
 }) {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualName, setManualName] = useState("");
   const [manualEmail, setManualEmail] = useState("");
   const [manualPhone, setManualPhone] = useState("");
+  const [selectedManualCustomer, setSelectedManualCustomer] = useState<any | null>(null);
   const eligibility = deskBookingCheckinEligibility(booking);
   const isActivityBlock = booking.kind === "activity_court_block" || booking.is_grouped_activity_block;
   const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
   const paymentLabel = isActivityBlock ? "Aktivitetsblock" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
   const paymentTone = isActivityBlock ? "electric" : paymentStatus === "paid" || paymentStatus === "free" ? "lime" : paymentStatus === "pending" ? "sun" : "neutral";
   const participants = Array.isArray(booking.participants) ? booking.participants : [];
+  const manualSearch = (manualEmail.trim() || manualPhone.trim() || manualName.trim()).trim();
+  const customerSuggestions = useQuery<any[]>({
+    queryKey: ["booking-participant-manual-customer-search", booking?.venue_id, manualSearch],
+    enabled: manualOpen && !!booking?.venue_id && manualSearch.length >= 2,
+    queryFn: () => apiGet("api-customers", "list", { venueId: booking.venue_id, search: manualSearch, limit: "5" }),
+    staleTime: 15_000,
+  });
+  const selectManualCustomer = (customer: any) => {
+    setSelectedManualCustomer(customer);
+    setManualName(customerSuggestionTitle(customer));
+    setManualPhone(customer.phone || "");
+    setManualEmail(customer.email || "");
+  };
+  const clearSelectedManualCustomer = () => {
+    if (selectedManualCustomer) setSelectedManualCustomer(null);
+  };
   const handleManualSubmit = async () => {
     const displayName = manualName.trim();
     if (!displayName) {
@@ -554,10 +580,12 @@ function BookingActionRow({
         displayName,
         email: manualEmail.trim(),
         phone: manualPhone.trim(),
+        customerId: selectedManualCustomer?.customer_id || null,
       });
       setManualName("");
       setManualEmail("");
       setManualPhone("");
+      setSelectedManualCustomer(null);
       setManualOpen(false);
     } catch {
       // Mutation toast handles the visible error.
@@ -624,26 +652,70 @@ function BookingActionRow({
               <div className="grid gap-2 md:grid-cols-3">
                 <input
                   value={manualName}
-                  onChange={(event) => setManualName(event.target.value)}
-                  placeholder="Namn"
+                  onChange={(event) => {
+                    setManualName(event.target.value);
+                    clearSelectedManualCustomer();
+                  }}
+                  placeholder="Sök namn eller skriv nytt namn"
                   className="h-10 rounded-xl border border-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                   style={{ background: "white" }}
                 />
                 <input
                   value={manualPhone}
-                  onChange={(event) => setManualPhone(event.target.value)}
-                  placeholder="Telefon valfritt"
+                  onChange={(event) => {
+                    setManualPhone(event.target.value);
+                    clearSelectedManualCustomer();
+                  }}
+                  placeholder="Telefon / sök"
                   className="h-10 rounded-xl border border-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                   style={{ background: "white" }}
                 />
                 <input
                   value={manualEmail}
-                  onChange={(event) => setManualEmail(event.target.value)}
-                  placeholder="E-post valfritt"
+                  onChange={(event) => {
+                    setManualEmail(event.target.value);
+                    clearSelectedManualCustomer();
+                  }}
+                  placeholder="E-post / sök"
                   className="h-10 rounded-xl border border-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
                   style={{ background: "white" }}
                 />
               </div>
+              {selectedManualCustomer ? (
+                <div className="rounded-xl border px-3 py-2 text-xs font-black" style={{ borderColor: ax("lime", 0.35), background: ax("lime", 0.12), color: ax("lime") }}>
+                  Vald kund: {customerSuggestionTitle(selectedManualCustomer)}
+                </div>
+              ) : manualSearch.length >= 2 ? (
+                <div className="rounded-xl border p-2" style={{ borderColor: ax("borderSoft"), background: ax("panel") }}>
+                  {customerSuggestions.isFetching ? (
+                    <div className="flex items-center gap-2 px-2 py-2 text-xs font-bold" style={{ color: ax("muted") }}>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Söker kunder...
+                    </div>
+                  ) : customerSuggestions.data?.length ? (
+                    <div className="space-y-1">
+                      {customerSuggestions.data.map((customer) => (
+                        <button
+                          key={customer.customer_id || customer.id || customer.auth_user_id}
+                          type="button"
+                          onClick={() => selectManualCustomer(customer)}
+                          className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/5"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-black text-white">{customerSuggestionTitle(customer)}</span>
+                            <span className="block truncate text-xs font-bold" style={{ color: ax("muted") }}>{customerSuggestionMeta(customer)}</span>
+                          </span>
+                          <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: ax("electric") }}>Välj</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="px-2 py-2 text-xs font-bold" style={{ color: ax("muted") }}>
+                      Ingen kundträff. Du kan ändå lägga till som väntande Play Right.
+                    </p>
+                  )}
+                </div>
+              ) : null}
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                 <button
                   type="button"
