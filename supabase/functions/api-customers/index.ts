@@ -451,6 +451,7 @@ Deno.serve(async (req) => {
         membershipsResult,
         checkinsResult,
         receiptsResult,
+        bookingParticipantsResult,
       ] = await Promise.all([
         targetUserId ? admin.auth.admin.getUserById(targetUserId) : Promise.resolve({ data: { user: null }, error: null }),
         fetchByCustomerOrUser(admin, 'bookings',
@@ -471,6 +472,9 @@ Deno.serve(async (req) => {
         fetchByCustomerOrUser(admin, 'booking_receipts',
           'id, receipt_number, booking_refs, stripe_session_id, stripe_invoice_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, issued_at, created_at',
           { venueId, customerIds, userIds, orderColumn: 'issued_at', ascending: false, limit: 50 }),
+        fetchByCustomerOrUser(admin, 'booking_participants',
+          'id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, role, price_minor, currency, payment_status, payment_method, checked_in_at, created_at, bookings(id, booking_ref, start_time, end_time, status, venue_court_id, venue_courts(id, name, court_number, sport_type))',
+          { venueId, customerIds, userIds, extra: (query) => query.neq('payment_status', 'cancelled'), orderColumn: 'created_at', ascending: false, limit: 50 }),
       ]);
 
       const firstError = [
@@ -480,6 +484,7 @@ Deno.serve(async (req) => {
         membershipsResult.error,
         checkinsResult.error,
         receiptsResult.error,
+        bookingParticipantsResult.error,
       ].find(Boolean);
       if (firstError) return errorResponse(firstError.message, 500);
 
@@ -663,6 +668,7 @@ Deno.serve(async (req) => {
         membership_badge: activeMembership?.membership_tiers || null,
         active_membership: activeMembership,
         upcoming_bookings: bookingsResult.data || [],
+        booking_participants: bookingParticipantsResult.data || [],
         activity_registrations: registrations.map((registration: any) => {
           const checkin = checkinByRegistrationId.get(registration.id);
           return {

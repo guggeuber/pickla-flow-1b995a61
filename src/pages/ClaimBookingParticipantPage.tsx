@@ -6,6 +6,7 @@ import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
+import { preserveIntendedRoute } from "@/lib/entryResolver";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
@@ -28,7 +29,8 @@ type InviteInfo = {
     price_sek: number;
     label: string;
     requires_payment: boolean;
-  };
+  } | null;
+  identity_required?: boolean;
 };
 
 export default function ClaimBookingParticipantPage() {
@@ -66,10 +68,20 @@ export default function ClaimBookingParticipantPage() {
     .join(", ");
 
   const formatMoney = (value: number) => `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
+  const currentPath = `${window.location.pathname}${window.location.search}`;
+
+  const goToIdentity = () => {
+    preserveIntendedRoute(currentPath);
+    navigate(`/auth?redirect=${encodeURIComponent(currentPath)}`);
+  };
 
   const handleClaim = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!token || !data?.booking?.venue_id) return;
+    if (!user) {
+      goToIdentity();
+      return;
+    }
     if (!displayName.trim()) {
       toast.error("Skriv ditt namn först.");
       return;
@@ -103,7 +115,7 @@ export default function ClaimBookingParticipantPage() {
         metadata: {
           booking_participant_id: claim.participant_id,
           customer_name: displayName.trim(),
-          customer_email: email.trim(),
+          customer_email: email.trim() || user.email || "",
           customer_phone: phone.trim(),
           success_path: "/booking/confirmed?type=booking_participant",
         },
@@ -175,53 +187,80 @@ export default function ClaimBookingParticipantPage() {
             <p>{data.booking.claimed_count}/{data.booking.capacity} spelare klara</p>
           </div>
 
-          <div className="mt-6 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>Ditt pris</p>
-            <div className="mt-2 flex items-end justify-between gap-4">
-              <p className="text-lg font-bold text-neutral-700" style={{ fontFamily: FONT_GROTESK }}>
-                {data.pricing?.label || "Din del av banan"}
+          {!user ? (
+            <div className="mt-6 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                Personlig Play Right
               </p>
-              <p className="text-[34px] leading-none font-black" style={{ fontFamily: FONT_GROTESK }}>
-                {formatMoney(data.pricing?.price_sek || 0)}
+              <p className="mt-2 text-lg font-black text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
+                Identifiera dig för att få din personliga Play Right.
               </p>
+              <p className="mt-2 text-sm leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                Priset visas först efter login, eftersom Founder, Play, Play+ och drop-in kan ha olika rätt.
+              </p>
+              <button
+                type="button"
+                onClick={goToIdentity}
+                className="mt-4 inline-flex w-full items-center justify-center gap-3 rounded-full bg-neutral-950 px-5 py-4 text-base font-black text-white"
+                style={{ fontFamily: FONT_GROTESK }}
+              >
+                <Ticket className="h-5 w-5" />
+                Identifiera mig
+              </button>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className="mt-6 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
+                <p className="text-[11px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                  Din Play Right
+                </p>
+                <div className="mt-2 flex items-end justify-between gap-4">
+                  <p className="text-lg font-bold text-neutral-700" style={{ fontFamily: FONT_GROTESK }}>
+                    {data.pricing?.label || "Din del av banan"}
+                  </p>
+                  <p className="text-[34px] leading-none font-black" style={{ fontFamily: FONT_GROTESK }}>
+                    {formatMoney(data.pricing?.price_sek || 0)}
+                  </p>
+                </div>
+              </div>
 
-          <form onSubmit={handleClaim} className="mt-6 space-y-3">
-            <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              placeholder="Ditt namn"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
-              style={{ fontFamily: FONT_MONO }}
-              required
-            />
-            <input
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="E-post för kvitto"
-              type="email"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
-              style={{ fontFamily: FONT_MONO }}
-              required={Boolean(data.pricing?.requires_payment)}
-            />
-            <input
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="Telefon (valfritt)"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
-              style={{ fontFamily: FONT_MONO }}
-            />
-            <button
-              type="submit"
-              disabled={submitting}
-              className="mt-2 inline-flex w-full items-center justify-center gap-3 rounded-full bg-neutral-950 px-5 py-4 text-base font-black text-white disabled:opacity-50"
-              style={{ fontFamily: FONT_GROTESK }}
-            >
-              {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Ticket className="h-5 w-5" />}
-              {data.pricing?.requires_payment ? "Betala och hämta plats" : "Hämta plats"}
-            </button>
-          </form>
+              <form onSubmit={handleClaim} className="mt-6 space-y-3">
+                <input
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  placeholder="Ditt namn"
+                  className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
+                  style={{ fontFamily: FONT_MONO }}
+                  required
+                />
+                <input
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="E-post för kvitto"
+                  type="email"
+                  className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
+                  style={{ fontFamily: FONT_MONO }}
+                  required={Boolean(data.pricing?.requires_payment)}
+                />
+                <input
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="Telefon (valfritt)"
+                  className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
+                  style={{ fontFamily: FONT_MONO }}
+                />
+                <button
+                  type="submit"
+                  disabled={submitting || !data.pricing}
+                  className="mt-2 inline-flex w-full items-center justify-center gap-3 rounded-full bg-neutral-950 px-5 py-4 text-base font-black text-white disabled:opacity-50"
+                  style={{ fontFamily: FONT_GROTESK }}
+                >
+                  {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Ticket className="h-5 w-5" />}
+                  {data.pricing?.requires_payment ? "Betala och hämta Play Right" : "Hämta Play Right"}
+                </button>
+              </form>
+            </>
+          )}
         </section>
       </main>
     </div>

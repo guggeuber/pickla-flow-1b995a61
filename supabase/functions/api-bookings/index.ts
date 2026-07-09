@@ -1,7 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId, stockholmDateRangeUtc } from '../_shared/bookings.ts';
-import { resolveCustomerIdForUser } from '../_shared/customers.ts';
+import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
@@ -332,7 +332,8 @@ async function ensureBookerParticipant(admin: any, bookingRows: any[]) {
   const existing = await listBookingParticipants(admin, booking.venue_id, groupKey);
   if (existing.some((row: any) => row.role === 'booker' || row.user_id === booking.user_id)) return existing[0] || null;
 
-  const customerId = booking.customer_id || await resolveCustomerIdForUser(admin, booking.user_id);
+  const customerId = booking.customer_id || await resolveOrCreateCustomerIdForUser(admin, booking.user_id, booking.venue_id, 'booking_owner_play_right');
+  if (!customerId) return null;
   const contact = bookingContactFromNotes(booking.notes);
   const displayName = contact.name || booking.booked_by || 'Bokare';
   const paymentStatus = Number((bookingRows || []).reduce((sum: number, row: any) => sum + Number(row.total_price || 0), 0)) <= 0
@@ -872,13 +873,15 @@ Deno.serve(async (req) => {
     const participants = await listBookingParticipants(admin, invite.venue_id, groupKey);
     const userId = await getOptionalAuthUserId(req, admin);
     const durationHours = bookingDurationHours(representative);
-    const pricing = await resolveBookingParticipantPricing(
-      admin,
-      invite.venue_id,
-      userId || null,
-      durationHours,
-      isFounderBookingGroup(bookingRows),
-    );
+    const pricing = userId
+      ? await resolveBookingParticipantPricing(
+        admin,
+        invite.venue_id,
+        userId,
+        durationHours,
+        isFounderBookingGroup(bookingRows),
+      )
+      : null;
 
     return jsonResponse({
       invite: {
@@ -903,27 +906,29 @@ Deno.serve(async (req) => {
         claimed_count: participants.length,
         founder_booking: isFounderBookingGroup(bookingRows),
       },
-      pricing: {
+      identity_required: !userId,
+      pricing: pricing ? {
         price_minor: pricing.price_minor,
         price_sek: minorToSek(pricing.price_minor),
         label: pricing.label,
         reason: pricing.reason,
         requires_payment: pricing.price_minor > 0,
-      },
-    }, 200, 15);
+      } : null,
+    }, 200, userId ? 0 : 15);
   }
 
   // ── POST /booking-participant-claim — claim a co-player spot from invite ──
   if (req.method === 'POST' && path === 'booking-participant-claim') {
     const body = await req.json();
     const token = String(body.token || '').trim();
-    const displayName = String(body.displayName || body.display_name || '').trim().slice(0, 120);
+    let displayName = String(body.displayName || body.display_name || '').trim().slice(0, 120);
     const email = String(body.email || '').trim().toLowerCase().slice(0, 200);
     const phone = String(body.phone || '').trim().slice(0, 50);
     if (!token) return errorResponse('Missing token', 400);
-    if (!displayName) return errorResponse('Namn krävs', 400);
 
     const admin = getServiceClient();
+    const userId = await getOptionalAuthUserId(req, admin);
+    if (!userId) return errorResponse('Logga in för att hämta din personliga Play Right', 401);
     const { data: invite, error: inviteErr } = await admin
       .from('booking_participant_invites')
       .select('id, venue_id, booking_id, booking_group_key, token, status, expires_at, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, venue_courts(name, court_number, sport_type)), venues(slug)')
@@ -945,11 +950,28 @@ Deno.serve(async (req) => {
       return errorResponse('Bokningen har redan fyra deltagare per bana', 409);
     }
 
-    const userId = await getOptionalAuthUserId(req, admin);
-    const customerId = userId ? await resolveCustomerIdForUser(admin, userId) : null;
-    const existing = userId
-      ? participants.find((row: any) => row.user_id === userId)
-      : null;
+    const customerId = await resolveOrCreateCustomerIdForUser(admin, userId, invite.venue_id, 'booking_participant_claim');
+    if (!customerId) return errorResponse('Kundprofil saknas. Logga in igen och försök på nytt.', 409);
+    const { data: authResult } = await admin.auth.admin.getUserById(userId);
+    const authUser = authResult?.user;
+    if (!displayName) {
+      const { data: customerRow } = await admin
+        .from('customers')
+        .select('display_name, first_name, last_name, primary_email')
+        .eq('id', customerId)
+        .maybeSingle();
+      displayName = String(
+        customerRow?.display_name ||
+        [customerRow?.first_name, customerRow?.last_name].filter(Boolean).join(' ') ||
+        authUser?.user_metadata?.display_name ||
+        authUser?.user_metadata?.full_name ||
+        authUser?.email ||
+        'Spelare'
+      ).trim().slice(0, 120);
+    }
+    const participantEmail = email || String(authUser?.email || '').trim().toLowerCase().slice(0, 200);
+    if (!displayName) return errorResponse('Namn krävs', 400);
+    const existing = participants.find((row: any) => row.user_id === userId || row.customer_id === customerId);
     if (existing) {
       return jsonResponse({
         success: true,
@@ -978,7 +1000,7 @@ Deno.serve(async (req) => {
       customer_id: customerId,
       user_id: userId || null,
       display_name: displayName,
-      email: email || null,
+      email: participantEmail || null,
       phone: phone || null,
       role: 'player',
       price_minor: pricing.price_minor,

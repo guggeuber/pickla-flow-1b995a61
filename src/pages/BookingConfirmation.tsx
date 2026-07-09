@@ -310,9 +310,9 @@ export default function BookingConfirmation() {
           <section className="mt-4 rounded-[24px] bg-white border border-neutral-200 p-5 shadow-sm print:hidden">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-sm font-bold text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>Medspelare</p>
+                <p className="text-sm font-bold text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>Play Rights</p>
                 <p className="mt-1 text-xs leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                  Skicka en länk så varje spelare får sin egen plats och betalstatus.
+                  Varje spelare har egen plats, betalstatus och check-in.
                 </p>
               </div>
               <span className="rounded-full bg-neutral-100 px-3 py-1 text-[11px] font-bold text-neutral-500" style={{ fontFamily: FONT_MONO }}>
@@ -341,7 +341,7 @@ export default function BookingConfirmation() {
               style={{ fontFamily: FONT_GROTESK }}
             >
               {creatingInvite ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
-              Bjud in medspelare
+              Bjud in spelare
             </button>
           </section>
         )}
