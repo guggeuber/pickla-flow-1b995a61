@@ -946,6 +946,23 @@ Deno.serve(async (req) => {
         }
       }
 
+      if (String(entry_type || '') === 'booking_participant' && entitlement_id) {
+        const { data: participant, error: participantErr } = await serviceClient
+          .from('booking_participants')
+          .select('id, venue_id, customer_id, user_id, payment_status')
+          .eq('id', entitlement_id)
+          .eq('venue_id', venue_id)
+          .maybeSingle();
+        if (participantErr) return errorResponse(participantErr.message, 500);
+        if (!participant) return errorResponse('Play Right saknas', 404);
+        if (!participant.customer_id && !participant.user_id) {
+          return errorResponse('Spelaren behöver identifiera sig innan check-in', 409);
+        }
+        if (!['paid', 'free'].includes(String(participant.payment_status || '').toLowerCase())) {
+          return errorResponse('Play Right är inte betald', 409);
+        }
+      }
+
       if (entitlement_id || target_user_id || player_phone || player_name) {
         const existingCheckin = await findActiveCheckin(serviceClient, {
           venueId: venue_id,

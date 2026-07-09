@@ -84,6 +84,7 @@ export function checkInActivityRegistration(registration: any) {
 export function bookingParticipantCheckinEligibility(participant: any, booking: any) {
   if (!participant?.id || !booking?.venue_id) return { ok: false, reason: "Deltagardata saknas" };
   if (participant.checked_in || participant.checked_in_at) return { ok: false, reason: "Redan inne" };
+  if (!participant.customer_id && !participant.user_id) return { ok: false, reason: "Behöver identitet" };
   const paymentStatus = String(participant.payment_status || "").toLowerCase();
   if (!["paid", "free"].includes(paymentStatus)) return { ok: false, reason: "Ej betald" };
   return deskBookingCheckinEligibility({ ...booking, checked_in: false, payment_status: "free", total_price: 0 });
@@ -104,5 +105,15 @@ export function checkInBookingParticipant(participant: any, booking: any) {
 export function markBookingParticipantPaid(participant: any) {
   return apiPost("api-bookings", "booking-participant-mark-paid", {
     participantId: participant.id,
+  });
+}
+
+export function addManualBookingParticipant(booking: any, input: { displayName: string; email?: string; phone?: string }) {
+  return apiPost("api-bookings", "booking-participant-manual", {
+    bookingId: booking?.source_ids?.[0] || booking?.id || null,
+    bookingRef: booking?.booking_ref || null,
+    displayName: input.displayName,
+    email: input.email || "",
+    phone: input.phone || "",
   });
 }

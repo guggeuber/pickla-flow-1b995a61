@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, AlertTriangle, CalendarCheck, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Inbox, Loader2, Mail, Phone, ReceiptText, Sparkles, UserCheck } from "lucide-react";
+import { Activity, AlertTriangle, CalendarCheck, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, Mail, Phone, ReceiptText, Sparkles, UserCheck, UserPlus } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
@@ -7,7 +7,8 @@ import { useTodayBookings, useTodayRevenue, useVenueCourts } from "@/hooks/useDe
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
-import { activityRegistrationCheckinEligibility, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility, markBookingParticipantPaid } from "@/lib/deskOps";
+import { activityRegistrationCheckinEligibility, addManualBookingParticipant, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility, markBookingParticipantPaid } from "@/lib/deskOps";
+import { shareOrCopy } from "@/lib/share";
 
 interface Props {
   venueId: string | undefined;
@@ -215,6 +216,14 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte markera betald"),
   });
+  const participantManualMutation = useMutation({
+    mutationFn: ({ booking, input }: { booking: any; input: { displayName: string; email?: string; phone?: string } }) => addManualBookingParticipant(booking, input),
+    onSuccess: () => {
+      toast.success("Spelaren är tillagd");
+      qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
+  });
 
   const rows = (bookings as any[] | undefined) || [];
   const courtRows = useMemo(
@@ -410,6 +419,8 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
                   onParticipantMarkPaid={(participant) => participantPaidMutation.mutate(participant)}
                   participantPayingId={(participantPaidMutation.variables as any)?.id || null}
                   participantPaying={participantPaidMutation.isPending}
+                  onParticipantManualAdd={(input) => participantManualMutation.mutateAsync({ booking, input })}
+                  participantManualAdding={participantManualMutation.isPending}
                 />
               ))}
             </div>
@@ -505,6 +516,8 @@ function BookingActionRow({
   onParticipantMarkPaid,
   participantPayingId,
   participantPaying,
+  onParticipantManualAdd,
+  participantManualAdding,
 }: {
   booking: any;
   rows: any[];
@@ -517,13 +530,40 @@ function BookingActionRow({
   onParticipantMarkPaid: (participant: any) => void;
   participantPayingId: string | null;
   participantPaying: boolean;
+  onParticipantManualAdd: (input: { displayName: string; email?: string; phone?: string }) => Promise<any>;
+  participantManualAdding: boolean;
 }) {
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [manualEmail, setManualEmail] = useState("");
+  const [manualPhone, setManualPhone] = useState("");
   const eligibility = deskBookingCheckinEligibility(booking);
   const isActivityBlock = booking.kind === "activity_court_block" || booking.is_grouped_activity_block;
   const paymentStatus = booking.payment_status || (Number(booking.total_price || 0) <= 0 ? "free" : "unknown");
   const paymentLabel = isActivityBlock ? "Aktivitetsblock" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
   const paymentTone = isActivityBlock ? "electric" : paymentStatus === "paid" || paymentStatus === "free" ? "lime" : paymentStatus === "pending" ? "sun" : "neutral";
   const participants = Array.isArray(booking.participants) ? booking.participants : [];
+  const handleManualSubmit = async () => {
+    const displayName = manualName.trim();
+    if (!displayName) {
+      toast.error("Skriv spelarens namn");
+      return;
+    }
+    try {
+      await onParticipantManualAdd({
+        displayName,
+        email: manualEmail.trim(),
+        phone: manualPhone.trim(),
+      });
+      setManualName("");
+      setManualEmail("");
+      setManualPhone("");
+      setManualOpen(false);
+    } catch {
+      // Mutation toast handles the visible error.
+    }
+  };
+
   return (
     <AxCard pad="row">
       <div className="grid gap-3 md:grid-cols-[72px_1fr_auto] md:items-center">
@@ -562,27 +602,122 @@ function BookingActionRow({
           </button>
         </div>
       </div>
-      {!isActivityBlock && participants.length > 0 && (
+      {!isActivityBlock && (
         <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: ax("borderSoft") }}>
-          <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>Deltagare</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>Deltagare</p>
+            <button
+              type="button"
+              onClick={() => setManualOpen((current) => !current)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black"
+              style={{ background: ax("electric", 0.16), color: ax("electricSoft") }}
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Lägg till spelare manuellt
+            </button>
+          </div>
+          {manualOpen ? (
+            <div className="grid gap-2 rounded-xl border p-3" style={{ borderColor: ax("borderSoft"), background: ax("surfaceHi") }}>
+              <p className="text-xs font-bold" style={{ color: ax("muted") }}>
+                Skapar en väntande Play Right. Ingen kundprofil skapas förrän spelaren identifierar sig.
+              </p>
+              <div className="grid gap-2 md:grid-cols-3">
+                <input
+                  value={manualName}
+                  onChange={(event) => setManualName(event.target.value)}
+                  placeholder="Namn"
+                  className="h-10 rounded-xl border px-3 text-sm font-bold outline-none"
+                  style={{ background: ax("panel"), borderColor: ax("borderSoft"), color: "white" }}
+                />
+                <input
+                  value={manualPhone}
+                  onChange={(event) => setManualPhone(event.target.value)}
+                  placeholder="Telefon valfritt"
+                  className="h-10 rounded-xl border px-3 text-sm font-bold outline-none"
+                  style={{ background: ax("panel"), borderColor: ax("borderSoft"), color: "white" }}
+                />
+                <input
+                  value={manualEmail}
+                  onChange={(event) => setManualEmail(event.target.value)}
+                  placeholder="E-post valfritt"
+                  className="h-10 rounded-xl border px-3 text-sm font-bold outline-none"
+                  style={{ background: ax("panel"), borderColor: ax("borderSoft"), color: "white" }}
+                />
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setManualOpen(false)}
+                  className="rounded-xl px-3 py-2 text-xs font-black"
+                  style={{ background: ax("borderSoft"), color: ax("muted") }}
+                >
+                  Avbryt
+                </button>
+                <button
+                  type="button"
+                  onClick={handleManualSubmit}
+                  disabled={participantManualAdding || !manualName.trim()}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50"
+                  style={{ background: ax("lime"), color: ax("ink") }}
+                >
+                  {participantManualAdding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+                  Lägg till
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {participants.length === 0 ? (
+            <p className="rounded-xl border p-3 text-sm font-bold" style={{ borderColor: ax("borderSoft"), color: ax("muted") }}>
+              Inga Play Rights är kopplade än.
+            </p>
+          ) : null}
           {participants.map((participant: any) => {
             const participantEligibility = bookingParticipantCheckinEligibility(participant, booking);
             const paid = participant.payment_status === "paid";
             const free = participant.payment_status === "free";
             const checkedIn = Boolean(participant.checked_in || participant.checked_in_at);
+            const claimed = Boolean(participant.customer_id || participant.user_id);
+            const metadata = participant.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
+            const manualPlaceholder = !claimed && metadata.source === "manual_placeholder";
+            const claimUrl = participant.invite_token ? `${window.location.origin}/booking/invite/${encodeURIComponent(participant.invite_token)}` : "";
+            const amountSek = Number(participant.amount_sek || 0);
             return (
               <div key={participant.id} className="grid gap-2 rounded-xl border p-2 md:grid-cols-[1fr_auto]" style={{ borderColor: ax("borderSoft"), background: ax("panel") }}>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-black text-white">{participant.display_name || "Medspelare"}</p>
+                  {(participant.phone || participant.email) && (
+                    <p className="mt-0.5 truncate text-xs font-bold" style={{ color: ax("muted") }}>
+                      {[participant.phone, participant.email].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
                   <div className="mt-1 flex flex-wrap gap-1.5">
+                    <AxChip tone={claimed ? "lime" : "sun"}>{claimed ? "Claimad" : "Behöver identitet"}</AxChip>
                     <AxChip tone={checkedIn ? "lime" : "sun"}>{checkedIn ? "Incheckad" : "Ej inne"}</AxChip>
                     <AxChip tone={paid || free ? "lime" : "sun"}>
-                      {paid ? "Betald" : free ? "Ingår" : `${Number(participant.amount_sek || 0).toLocaleString("sv-SE")} kr obetalt`}
+                      {manualPlaceholder ? "Pris efter identitet" : paid ? "Betald" : free ? "Ingår" : `${amountSek.toLocaleString("sv-SE")} kr obetalt`}
                     </AxChip>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 md:justify-end">
-                  {!paid && !free && (
+                  {!claimed && claimUrl ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await shareOrCopy({ copyText: claimUrl });
+                          toast.success("Claim-länk kopierad");
+                        } catch {
+                          toast.error("Kunde inte kopiera länken");
+                        }
+                      }}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black"
+                      style={{ background: ax("electric", 0.16), color: ax("electricSoft") }}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      Kopiera länk
+                    </button>
+                  ) : null}
+                  {claimed && !paid && !free && (
                     <button
                       type="button"
                       onClick={() => onParticipantMarkPaid(participant)}

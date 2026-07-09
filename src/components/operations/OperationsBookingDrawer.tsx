@@ -1,10 +1,11 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarClock, CheckCircle2, CreditCard, FileText, Loader2, Mail, MapPin, Phone, ReceiptText, UserRound, X } from "lucide-react";
+import { CalendarClock, CheckCircle2, Copy, CreditCard, FileText, Loader2, Mail, MapPin, Phone, ReceiptText, UserPlus, UserRound, X } from "lucide-react";
 import { DateTime } from "luxon";
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
+import { addManualBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
+import { shareOrCopy } from "@/lib/share";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
 
 export type OperationsCourt = {
@@ -49,6 +50,7 @@ export type OperationsBookingDetail = {
   status?: string | null;
   access_code?: string | null;
   stripe_session_id?: string | null;
+  participants?: any[];
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -137,6 +139,7 @@ export function buildOperationsBookingDetailFromRows(rows: any[]): OperationsBoo
     status: bookingRows.every((row) => row.status === first.status) ? first.status : "mixed",
     access_code: first.access_code || null,
     stripe_session_id: first.stripe_session_id || null,
+    participants: Array.isArray(first.participants) ? first.participants : [],
   };
 }
 
@@ -203,6 +206,10 @@ export function OperationsBookingDrawer({
 }) {
   const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const [localCheckedInAt, setLocalCheckedInAt] = useState<string | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [manualPhone, setManualPhone] = useState("");
+  const [manualEmail, setManualEmail] = useState("");
   const queryClient = useQueryClient();
   const effectiveCheckedIn = Boolean(booking?.checked_in || localCheckedInAt);
   const checkedAt = formatCheckedInAt(localCheckedInAt || booking?.checked_in_at);
@@ -212,9 +219,14 @@ export function OperationsBookingDrawer({
   const bookingCustomerId = booking?.customer_id || null;
   const canOpenCustomer = Boolean(booking?.venue_id && (bookingCustomerId || bookingCustomerUserId));
   const canCheckIn = !effectiveCheckedIn && deskBookingCheckinEligibility(booking).ok;
+  const participants = Array.isArray(booking?.participants) ? booking.participants : [];
 
   useEffect(() => {
     setLocalCheckedInAt(null);
+    setManualOpen(false);
+    setManualName("");
+    setManualPhone("");
+    setManualEmail("");
   }, [booking?.id]);
 
   const checkInMutation = useMutation({
@@ -236,6 +248,32 @@ export function OperationsBookingDrawer({
     onError: (error: any) => {
       toast.error(error?.message || "Kunde inte checka in kunden");
     },
+  });
+
+  const manualParticipantMutation = useMutation({
+    mutationFn: async () => {
+      if (!booking) throw new Error("Bokningsdata saknas");
+      const displayName = manualName.trim();
+      if (!displayName) throw new Error("Skriv spelarens namn");
+      return addManualBookingParticipant(booking, {
+        displayName,
+        phone: manualPhone.trim(),
+        email: manualEmail.trim(),
+      });
+    },
+    onSuccess: () => {
+      toast.success("Spelaren är tillagd");
+      setManualName("");
+      setManualPhone("");
+      setManualEmail("");
+      setManualOpen(false);
+      if (booking?.venue_id) {
+        queryClient.invalidateQueries({ queryKey: ["today-bookings", booking.venue_id] });
+        queryClient.invalidateQueries({ queryKey: ["admin-calendar"] });
+        queryClient.invalidateQueries({ queryKey: ["admin-todays-plan"] });
+      }
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
   });
 
   return (
@@ -313,6 +351,116 @@ export function OperationsBookingDrawer({
                 <Field icon={CreditCard} label="Belopp" value={`${Math.round(amount).toLocaleString("sv-SE")} kr`} />
                 <Field icon={ReceiptText} label="Kvitto" value={booking.receipt_number} />
                 <Field icon={CheckCircle2} label="Check-in" value={effectiveCheckedIn ? `Ja${checkedAt ? `, ${checkedAt}` : ""}` : "Nej"} />
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
+                    <UserRound className="h-3.5 w-3.5" />
+                    Play Rights
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setManualOpen((current) => !current)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-black text-white"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Lägg till spelare manuellt
+                  </button>
+                </div>
+                {manualOpen ? (
+                  <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-3">
+                    <p className="text-xs font-semibold text-white/55">
+                      Namnet blir en väntande Play Right. Kundprofil skapas först när spelaren identifierar sig.
+                    </p>
+                    <div className="mt-3 grid gap-2 md:grid-cols-3">
+                      <input
+                        value={manualName}
+                        onChange={(event) => setManualName(event.target.value)}
+                        placeholder="Namn"
+                        className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-bold text-white outline-none"
+                      />
+                      <input
+                        value={manualPhone}
+                        onChange={(event) => setManualPhone(event.target.value)}
+                        placeholder="Telefon valfritt"
+                        className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-bold text-white outline-none"
+                      />
+                      <input
+                        value={manualEmail}
+                        onChange={(event) => setManualEmail(event.target.value)}
+                        placeholder="E-post valfritt"
+                        className="h-10 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-bold text-white outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => manualParticipantMutation.mutate()}
+                      disabled={manualParticipantMutation.isPending || !manualName.trim()}
+                      className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-neutral-950 disabled:opacity-60"
+                    >
+                      {manualParticipantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+                      Lägg till
+                    </button>
+                  </div>
+                ) : null}
+                {participants.length ? (
+                  <div className="mt-3 space-y-2">
+                    {participants.map((participant) => {
+                      const claimed = Boolean(participant.customer_id || participant.user_id);
+                      const paid = participant.payment_status === "paid";
+                      const free = participant.payment_status === "free";
+                      const checkedIn = Boolean(participant.checked_in || participant.checked_in_at);
+                      const metadata = participant.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
+                      const manualPlaceholder = !claimed && metadata.source === "manual_placeholder";
+                      const claimUrl = participant.invite_token ? `${window.location.origin}/booking/invite/${encodeURIComponent(participant.invite_token)}` : "";
+                      return (
+                        <div key={participant.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-black text-white">{participant.display_name || "Medspelare"}</p>
+                              {(participant.phone || participant.email) && (
+                                <p className="mt-0.5 text-xs font-semibold text-white/45">
+                                  {[participant.phone, participant.email].filter(Boolean).join(" · ")}
+                                </p>
+                              )}
+                            </div>
+                            {!claimed && claimUrl ? (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await shareOrCopy({ copyText: claimUrl });
+                                    toast.success("Claim-länk kopierad");
+                                  } catch {
+                                    toast.error("Kunde inte kopiera länken");
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-2.5 py-1.5 text-[11px] font-black text-white"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Kopiera länk
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-black uppercase tracking-wider">
+                            <span className={`rounded-full border px-2.5 py-1 ${claimed ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
+                              {claimed ? "Claimad" : "Behöver identitet"}
+                            </span>
+                            <span className={`rounded-full border px-2.5 py-1 ${checkedIn ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
+                              {checkedIn ? "Incheckad" : "Ej inne"}
+                            </span>
+                            <span className={`rounded-full border px-2.5 py-1 ${paid || free ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
+                              {manualPlaceholder ? "Pris efter identitet" : paid ? "Betald" : free ? "Ingår" : "Obetald"}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm font-semibold text-white/45">Inga personliga Play Rights är kopplade än.</p>
+                )}
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">

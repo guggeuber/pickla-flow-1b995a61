@@ -316,13 +316,59 @@ async function getBookingGroupRows(admin: any, booking: any) {
 async function listBookingParticipants(admin: any, venueId: string, groupKey: string) {
   const { data, error } = await admin
     .from('booking_participants')
-    .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
+    .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
     .eq('venue_id', venueId)
     .eq('booking_group_key', groupKey)
     .neq('payment_status', 'cancelled')
     .order('created_at', { ascending: true });
   if (error) throw new Error(error.message);
   return data || [];
+}
+
+function normalizeParticipantEmail(value: unknown) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeParticipantPhone(value: unknown) {
+  return String(value || '').replace(/[^\d+]/g, '');
+}
+
+function normalizeParticipantName(value: unknown) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isManualPlaceholderParticipant(row: any) {
+  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  return !row?.user_id && !row?.customer_id && metadata.source === 'manual_placeholder';
+}
+
+function findManualPlaceholderParticipant(participants: any[], inviteId: string | null | undefined, email: string, phone: string, displayName: string) {
+  const placeholders = participants.filter(isManualPlaceholderParticipant);
+  if (inviteId) {
+    const byInvite = placeholders.find((row: any) => row.invite_id === inviteId);
+    if (byInvite) return byInvite;
+  }
+
+  const normalizedEmail = normalizeParticipantEmail(email);
+  const normalizedPhone = normalizeParticipantPhone(phone);
+  const normalizedName = normalizeParticipantName(displayName);
+
+  if (normalizedEmail) {
+    const byEmail = placeholders.find((row: any) => normalizeParticipantEmail(row.email) === normalizedEmail);
+    if (byEmail) return byEmail;
+  }
+
+  if (normalizedPhone) {
+    const byPhone = placeholders.find((row: any) => normalizeParticipantPhone(row.phone) === normalizedPhone);
+    if (byPhone) return byPhone;
+  }
+
+  if (normalizedName) {
+    const nameMatches = placeholders.filter((row: any) => normalizeParticipantName(row.display_name) === normalizedName);
+    if (nameMatches.length === 1) return nameMatches[0];
+  }
+
+  return null;
 }
 
 async function ensureBookerParticipant(admin: any, bookingRows: any[]) {
@@ -946,9 +992,6 @@ Deno.serve(async (req) => {
     const groupKey = invite.booking_group_key || bookingGroupKey(representative);
     await ensureBookerParticipant(admin, bookingRows);
     const participants = await listBookingParticipants(admin, invite.venue_id, groupKey);
-    if (participants.length >= bookingParticipantCapacity(bookingRows)) {
-      return errorResponse('Bokningen har redan fyra deltagare per bana', 409);
-    }
 
     const customerId = await resolveOrCreateCustomerIdForUser(admin, userId, invite.venue_id, 'booking_participant_claim');
     if (!customerId) return errorResponse('Kundprofil saknas. Logga in igen och försök på nytt.', 409);
@@ -982,6 +1025,10 @@ Deno.serve(async (req) => {
         amount_sek: minorToSek(existing.price_minor),
       }, 200, 0);
     }
+    const placeholder = findManualPlaceholderParticipant(participants, invite.id, participantEmail, phone, displayName);
+    if (!placeholder && participants.length >= bookingParticipantCapacity(bookingRows)) {
+      return errorResponse('Bokningen har redan fyra deltagare per bana', 409);
+    }
 
     const durationHours = bookingDurationHours(representative);
     const pricing = await resolveBookingParticipantPricing(
@@ -991,6 +1038,62 @@ Deno.serve(async (req) => {
       durationHours,
       isFounderBookingGroup(bookingRows),
     );
+
+    if (placeholder) {
+      const nextMetadata = {
+        ...(placeholder.metadata || {}),
+        claim_status: 'claimed',
+        claimed_at: new Date().toISOString(),
+        pricing_label: pricing.label,
+        pricing_reason: pricing.reason,
+        duration_hours: durationHours,
+        price_minor_per_hour: BOOKING_PARTICIPANT_GUEST_PRICE_MINOR_PER_HOUR,
+        founder_booking: isFounderBookingGroup(bookingRows),
+      };
+      const { data: participant, error: participantErr } = await admin
+        .from('booking_participants')
+        .update({
+          invite_id: invite.id,
+          customer_id: customerId,
+          user_id: userId || null,
+          display_name: displayName,
+          email: participantEmail || placeholder.email || null,
+          phone: phone || placeholder.phone || null,
+          price_minor: pricing.price_minor,
+          payment_status: pricing.price_minor > 0 ? 'pending' : 'free',
+          metadata: nextMetadata,
+        })
+        .eq('id', placeholder.id)
+        .is('customer_id', null)
+        .is('user_id', null)
+        .select('id, price_minor, payment_status')
+        .maybeSingle();
+      if (participantErr) return errorResponse(participantErr.message, 500);
+      if (!participant) return errorResponse('Den manuella platsen har redan hämtats. Uppdatera och försök igen.', 409);
+
+      await auditMutation(admin, {
+        req,
+        userId,
+        action: 'booking_participant.claim_manual_placeholder',
+        entityTable: 'booking_participants',
+        entityId: participant.id,
+        venueId: invite.venue_id,
+        before: { claim_status: 'needs_identity', payment_status: placeholder.payment_status },
+        after: { payment_status: participant.payment_status, price_minor: participant.price_minor },
+        metadata: { booking_id: representative.id, booking_group_key: groupKey, invite_id: invite.id },
+      });
+
+      return jsonResponse({
+        success: true,
+        participant_id: participant.id,
+        booking_ref: representative.booking_ref,
+        venue_slug: (Array.isArray(invite.venues) ? invite.venues[0] : invite.venues)?.slug || '',
+        free: Number(participant.price_minor || 0) <= 0,
+        payment_status: participant.payment_status,
+        amount_sek: minorToSek(participant.price_minor),
+        pricing_label: pricing.label,
+      }, 200, 0);
+    }
 
     const { data: participant, error: participantErr } = await admin.from('booking_participants').insert({
       venue_id: invite.venue_id,
@@ -2414,6 +2517,108 @@ Deno.serve(async (req) => {
       }, 200, 0);
     }
 
+    // POST /api-bookings/booking-participant-manual — staff/booker placeholder Play Right from SMS names
+    if (req.method === 'POST' && path === 'booking-participant-manual') {
+      const body = await req.json();
+      const bookingRef = String(body.bookingRef || body.booking_ref || '').trim();
+      const bookingId = String(body.bookingId || body.booking_id || '').trim();
+      const displayName = String(body.displayName || body.display_name || '').trim().slice(0, 120);
+      const email = normalizeParticipantEmail(body.email).slice(0, 200);
+      const phone = String(body.phone || '').trim().slice(0, 50);
+      if (!bookingRef && !bookingId) return errorResponse('Missing booking', 400);
+      if (!displayName) return errorResponse('Namn krävs', 400);
+
+      const admin = getServiceClient();
+      let bookingQuery = admin
+        .from('bookings')
+        .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, venue_courts(name, court_number, sport_type)')
+        .neq('status', 'cancelled')
+        .limit(1);
+      bookingQuery = bookingId ? bookingQuery.eq('id', bookingId) : bookingQuery.eq('booking_ref', bookingRef);
+      const { data: booking, error: bookingErr } = await bookingQuery.maybeSingle();
+      if (bookingErr) return errorResponse(bookingErr.message, 500);
+      if (!booking) return errorResponse('Booking not found', 404);
+
+      const canManage = booking.user_id === userId || await canOperateVenue(admin, userId, booking.venue_id);
+      if (!canManage) return errorResponse('Forbidden', 403);
+
+      const bookingRows = await getBookingGroupRows(admin, booking);
+      await ensureBookerParticipant(admin, bookingRows);
+      const groupKey = bookingGroupKey(booking);
+      const participants = await listBookingParticipants(admin, booking.venue_id, groupKey);
+      if (participants.length >= bookingParticipantCapacity(bookingRows)) {
+        return errorResponse('Bokningen har redan fyra deltagare per bana', 409);
+      }
+
+      const { data: invite, error: inviteErr } = await admin.from('booking_participant_invites').insert({
+        venue_id: booking.venue_id,
+        booking_id: booking.id,
+        booking_group_key: groupKey,
+        token: crypto.randomUUID(),
+        created_by_user_id: userId,
+        metadata: {
+          source: 'manual_placeholder',
+          intended_display_name: displayName,
+          intended_email: email || null,
+          intended_phone: phone || null,
+          founder_booking: isFounderBookingGroup(bookingRows),
+        },
+      }).select('id, token').single();
+      if (inviteErr) return errorResponse(inviteErr.message, 500);
+      if (!invite?.token) return errorResponse('Could not create invite', 500);
+
+      const { data: participant, error: participantErr } = await admin.from('booking_participants').insert({
+        venue_id: booking.venue_id,
+        booking_id: booking.id,
+        booking_group_key: groupKey,
+        invite_id: invite.id,
+        customer_id: null,
+        user_id: null,
+        display_name: displayName,
+        email: email || null,
+        phone: phone || null,
+        role: 'player',
+        price_minor: 0,
+        payment_status: 'pending',
+        metadata: {
+          source: 'manual_placeholder',
+          claim_status: 'needs_identity',
+          created_by_user_id: userId,
+          contact_present: Boolean(email || phone),
+          founder_booking: isFounderBookingGroup(bookingRows),
+        },
+      }).select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, checked_in_at, metadata, created_at').single();
+      if (participantErr) return errorResponse(participantErr.message, 500);
+
+      await auditMutation(admin, {
+        req,
+        userId,
+        action: 'booking_participant.manual_create',
+        entityTable: 'booking_participants',
+        entityId: participant.id,
+        venueId: booking.venue_id,
+        after: {
+          display_name: displayName,
+          has_contact: Boolean(email || phone),
+          claim_status: 'needs_identity',
+        },
+        metadata: { booking_id: booking.id, booking_group_key: groupKey, invite_id: invite.id },
+      });
+
+      const origin = req.headers.get('origin') || 'http://localhost:8080';
+      return jsonResponse({
+        ok: true,
+        participant: {
+          ...participant,
+          checked_in: false,
+          amount_sek: 0,
+          claim_url: `${origin}/booking/invite/${encodeURIComponent(invite.token)}`,
+        },
+        token: invite.token,
+        url: `${origin}/booking/invite/${encodeURIComponent(invite.token)}`,
+      }, 201, 0);
+    }
+
     // POST /api-bookings/booking-participant-mark-paid — desk/manual payment for co-player
     if (req.method === 'POST' && path === 'booking-participant-mark-paid') {
       const body = await req.json();
@@ -2430,6 +2635,7 @@ Deno.serve(async (req) => {
       if (!participant) return errorResponse('Participant not found', 404);
       if (!await canOperateVenue(admin, userId, participant.venue_id)) return errorResponse('Forbidden', 403);
       if (participant.payment_status === 'paid') return jsonResponse({ ok: true, already_paid: true }, 200, 0);
+      if (!participant.customer_id && !participant.user_id) return errorResponse('Spelaren behöver identifiera sig innan betalning markeras', 409);
       if (Number(participant.price_minor || 0) <= 0) return errorResponse('No payment required', 400);
 
       const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
@@ -2641,18 +2847,32 @@ Deno.serve(async (req) => {
       if (groupKeys.length > 0) {
         const { data: participantRows, error: participantRowsErr } = await lookupClient
           .from('booking_participants')
-          .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, checked_in_at, metadata, created_at')
+          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, checked_in_at, metadata, created_at')
           .eq('venue_id', venueId)
           .in('booking_group_key', groupKeys)
           .neq('payment_status', 'cancelled')
           .order('created_at', { ascending: true });
         if (participantRowsErr) return errorResponse(participantRowsErr.message);
+        const inviteIds = Array.from(new Set((participantRows || []).map((row: any) => row.invite_id).filter(Boolean)));
+        const inviteTokenById = new Map<string, string>();
+        if (inviteIds.length > 0) {
+          const { data: inviteRows, error: inviteRowsErr } = await lookupClient
+            .from('booking_participant_invites')
+            .select('id, token')
+            .eq('venue_id', venueId)
+            .in('id', inviteIds);
+          if (inviteRowsErr) return errorResponse(inviteRowsErr.message);
+          for (const invite of inviteRows || []) {
+            inviteTokenById.set(invite.id, invite.token);
+          }
+        }
         for (const participant of participantRows || []) {
           const rows = participantsByGroupKey.get(participant.booking_group_key) || [];
           rows.push({
             ...participant,
             checked_in: Boolean(participant.checked_in_at),
             amount_sek: minorToSek(participant.price_minor),
+            invite_token: participant.invite_id ? inviteTokenById.get(participant.invite_id) || null : null,
           });
           participantsByGroupKey.set(participant.booking_group_key, rows);
         }
