@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
@@ -6,12 +6,10 @@ import { VitePWA } from "vite-plugin-pwa";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
-  const isStage = env.VITE_SUPABASE_PROJECT_ID === "nuqozynzdamyuzeusroe";
-  const appName = isStage ? "Pickla Stage" : "Pickla";
-  const icon192 = isStage ? "/pwa-stage-192x192.png" : "/pwa-192x192.png";
-  const icon512 = isStage ? "/pwa-stage-512x512.png" : "/pwa-512x512.png";
-  const themeColor = isStage ? "#D9F99D" : "#F8FAFC";
+  const appName = "Pickla";
+  const icon192 = "/pwa-192x192.png";
+  const icon512 = "/pwa-512x512.png";
+  const themeColor = "#F8FAFC";
 
   return {
   server: {
@@ -37,8 +35,6 @@ export default defineConfig(({ mode }) => {
         "favicon.ico",
         "pwa-192x192.png",
         "pwa-512x512.png",
-        "pwa-stage-192x192.png",
-        "pwa-stage-512x512.png",
       ],
       manifest: {
         name: appName,
