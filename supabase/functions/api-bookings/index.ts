@@ -13,6 +13,8 @@ const LEGACY_HOST_COMP = 'host_comp';
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
 const BOOKING_PARTICIPANT_GUEST_PRICE_MINOR_PER_HOUR = 9900;
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
+const PARTICIPANT_TICKET_INVITE_SOURCE = 'booking_participant_ticket';
+const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
 
 function isPlayingHostReason(value: unknown) {
   return value === PLAYING_HOST_ROLE || value === LEGACY_HOST_COMP;
@@ -222,6 +224,15 @@ function bookingGroupKey(row: any) {
   return `booking:${row?.id || row?.booking_ref || crypto.randomUUID()}`;
 }
 
+function bookingChatResourceId(row: any) {
+  if (row?.stripe_session_id) return `stripe:${row.stripe_session_id}`;
+  if (row?.start_time && row?.end_time && (row?.notes || row?.access_code)) {
+    const groupToken = row.notes || `code:${row.access_code}`;
+    return `direct:${encodeURIComponent(row.start_time)}:${encodeURIComponent(row.end_time)}:${encodeURIComponent(groupToken)}`;
+  }
+  return row?.booking_ref || row?.id || '';
+}
+
 function bookingParticipantCapacity(rows: any[]) {
   return Math.max(rows.length, 1) * BOOKING_PARTICIPANT_MAX_PER_COURT;
 }
@@ -323,6 +334,185 @@ async function listBookingParticipants(admin: any, venueId: string, groupKey: st
     .order('created_at', { ascending: true });
   if (error) throw new Error(error.message);
   return data || [];
+}
+
+async function ensureParticipantTicketInvite(admin: any, participant: any, booking: any, actorUserId?: string | null) {
+  const { data: existing, error: existingErr } = await admin
+    .from('booking_participant_invites')
+    .select('id, token')
+    .eq('venue_id', participant.venue_id)
+    .eq('booking_group_key', participant.booking_group_key)
+    .eq('status', 'active')
+    .contains('metadata', {
+      source: PARTICIPANT_TICKET_INVITE_SOURCE,
+      booking_participant_id: participant.id,
+    })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingErr) throw new Error(existingErr.message);
+  if (existing?.token) return existing;
+
+  const { data, error } = await admin.from('booking_participant_invites').insert({
+    venue_id: participant.venue_id,
+    booking_id: participant.booking_id || booking?.id || null,
+    booking_group_key: participant.booking_group_key,
+    token: crypto.randomUUID(),
+    created_by_user_id: actorUserId || participant.user_id || null,
+    metadata: {
+      source: PARTICIPANT_TICKET_INVITE_SOURCE,
+      booking_participant_id: participant.id,
+      scope: 'participant_ticket',
+    },
+  }).select('id, token').single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+async function ensureBookingChatMembership(
+  admin: any,
+  bookingRows: any[],
+  participant: any,
+  options: { postClaimMessage?: boolean } = {},
+) {
+  const userId = participant?.user_id;
+  if (!userId || !bookingRows.length) return null;
+
+  const representative = bookingRows[0];
+  const resourceId = bookingChatResourceId(representative);
+  if (!resourceId) return null;
+  const courtLabel = bookingRows
+    .map((row: any) => row?.venue_courts?.name)
+    .filter(Boolean)
+    .join(', ');
+  const start = DateTime.fromISO(representative.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+  const end = DateTime.fromISO(representative.end_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+  const subtitle = `${start.setLocale('sv').toFormat('ccc d MMM')} · ${start.toFormat('HH:mm')}–${end.toFormat('HH:mm')}${courtLabel ? ` · ${courtLabel}` : ''}`;
+
+  const { data: existingRoom, error: roomLookupErr } = await admin
+    .from('chat_rooms')
+    .select('id')
+    .eq('resource_id', resourceId)
+    .maybeSingle();
+  if (roomLookupErr) throw new Error(roomLookupErr.message);
+
+  let room = existingRoom;
+  if (!room) {
+    const { data: insertedRoom, error: roomErr } = await admin.from('chat_rooms').insert({
+      venue_id: representative.venue_id,
+      resource_id: resourceId,
+      room_type: 'booking',
+      title: 'Bokningschatt',
+      subtitle,
+      emoji: '🎾',
+      is_public: false,
+    }).select('id').single();
+    if (roomErr) throw new Error(roomErr.message);
+    room = insertedRoom;
+  }
+  if (!room?.id) return null;
+
+  await admin.from('chat_participants').upsert({
+    room_id: room.id,
+    user_id: userId,
+  }, { onConflict: 'room_id,user_id' });
+
+  if (options.postClaimMessage) {
+    const firstName = String(participant.display_name || 'Någon').trim().split(/\s+/)[0] || 'Någon';
+    const { data: recentMessages } = await admin
+      .from('chat_messages')
+      .select('id')
+      .eq('room_id', room.id)
+      .eq('message_type', 'bot')
+      .eq('content', `${firstName} är med ✓`)
+      .gte('created_at', DateTime.now().minus({ minutes: 5 }).toISO())
+      .limit(1);
+    if (!recentMessages?.length) {
+      await admin.from('chat_messages').insert({
+        room_id: room.id,
+        user_id: null,
+        message_type: 'bot',
+        content: `${firstName} är med ✓`,
+        metadata: {
+          source: 'booking_participant_claim',
+          booking_participant_id: participant.id,
+        },
+      });
+    }
+  }
+
+  return room;
+}
+
+async function removeBookingChatMembership(admin: any, booking: any, participant: any) {
+  if (!participant?.user_id || !booking) return;
+  const resourceId = bookingChatResourceId(booking);
+  if (!resourceId) return;
+  const { data: room } = await admin
+    .from('chat_rooms')
+    .select('id')
+    .eq('resource_id', resourceId)
+    .maybeSingle();
+  if (!room?.id) return;
+  await admin
+    .from('chat_participants')
+    .delete()
+    .eq('room_id', room.id)
+    .eq('user_id', participant.user_id);
+}
+
+async function sendParticipantTicketEmail(to: string, ticketUrl: string, booking: any) {
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  if (!resendKey || !to) return;
+  const start = DateTime.fromISO(booking.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+  const end = DateTime.fromISO(booking.end_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+  const subject = `Din plats på ${start.setLocale('sv').toFormat('ccc d MMM')} ${start.toFormat('HH:mm')} — spara det här mejlet`;
+  const text = [
+    `Din plats på Pickla är klar.`,
+    `${start.setLocale('sv').toFormat('cccc d MMMM')} ${start.toFormat('HH:mm')}–${end.toFormat('HH:mm')}`,
+    ``,
+    `Öppna biljetten här:`,
+    ticketUrl,
+  ].join('\n');
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to,
+        subject,
+        text,
+      }),
+    });
+    if (!res.ok) {
+      console.error('booking participant ticket email failed', await res.text());
+    }
+  } catch (err) {
+    console.error('booking participant ticket email failed', err);
+  }
+}
+
+async function completeBookingParticipantClaim(
+  admin: any,
+  req: Request,
+  participant: any,
+  bookingRows: any[],
+  actorUserId: string,
+  options: { postClaimMessage?: boolean; sendEmail?: boolean } = {},
+) {
+  const representative = bookingRows[0];
+  const ticketInvite = await ensureParticipantTicketInvite(admin, participant, representative, actorUserId);
+  await ensureBookingChatMembership(admin, bookingRows, participant, { postClaimMessage: options.postClaimMessage });
+  const origin = req.headers.get('origin') || 'http://localhost:8080';
+  const ticketUrl = `${origin}/booking/ticket/${encodeURIComponent(ticketInvite.token)}`;
+  if (options.sendEmail && participant.email) {
+    await sendParticipantTicketEmail(participant.email, ticketUrl, representative);
+  }
+  return { ticketInvite, ticketUrl };
 }
 
 function normalizeParticipantEmail(value: unknown) {
@@ -1054,6 +1244,73 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const path = url.pathname.split('/').pop() || '';
 
+  // ── GET /booking-participant-ticket?token=xxx — minimal personal ticket view ──
+  if (req.method === 'GET' && path === 'booking-participant-ticket') {
+    const token = url.searchParams.get('token') || '';
+    if (!token) return errorResponse('Missing token', 400);
+
+    const admin = getServiceClient();
+    const { data: invite, error: inviteErr } = await admin
+      .from('booking_participant_invites')
+      .select('id, venue_id, booking_id, booking_group_key, token, status, expires_at, metadata, venues(id, name, slug)')
+      .eq('token', token)
+      .maybeSingle();
+    if (inviteErr) return errorResponse(inviteErr.message, 500);
+    const metadata = invite?.metadata && typeof invite.metadata === 'object' ? invite.metadata : {};
+    if (!invite || invite.status !== 'active' || metadata.source !== PARTICIPANT_TICKET_INVITE_SOURCE) {
+      return errorResponse('Ticket not found', 404);
+    }
+    if (invite.expires_at && new Date(invite.expires_at).getTime() < Date.now()) {
+      return errorResponse('Ticket expired', 410);
+    }
+    const participantId = String(metadata.booking_participant_id || '');
+    if (!participantId) return errorResponse('Ticket not found', 404);
+
+    const { data: participant, error: participantErr } = await admin
+      .from('booking_participants')
+      .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, venue_courts(name, court_number, sport_type))')
+      .eq('id', participantId)
+      .maybeSingle();
+    if (participantErr) return errorResponse(participantErr.message, 500);
+    if (!participant || participant.venue_id !== invite.venue_id) return errorResponse('Ticket not found', 404);
+
+    const representative = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
+    if (!representative) return errorResponse('Booking not found', 404);
+    const bookingRows = await getBookingGroupRows(admin, representative);
+    const userId = await getOptionalAuthUserId(req, admin);
+    const canMutate = Boolean(userId && participant.user_id === userId);
+    const venue = Array.isArray(invite.venues) ? invite.venues[0] : invite.venues;
+
+    return jsonResponse({
+      ticket: {
+        token,
+        can_cancel: canMutate,
+        can_check_in: canMutate,
+      },
+      venue,
+      booking: {
+        booking_ref: representative.booking_ref,
+        chat_resource_id: bookingChatResourceId(representative),
+        start_time: representative.start_time,
+        end_time: representative.end_time,
+        courts: bookingRows.map((row: any) => ({
+          id: row.venue_court_id,
+          name: row.venue_courts?.name || null,
+          court_number: row.venue_courts?.court_number || null,
+        })),
+      },
+      participant: {
+        id: participant.id,
+        display_name: participant.display_name,
+        role: participant.role,
+        price_minor: participant.price_minor,
+        currency: participant.currency || 'SEK',
+        payment_status: participant.payment_status,
+        checked_in_at: participant.checked_in_at,
+      },
+    }, 200, userId ? 0 : 30);
+  }
+
   // ── GET /booking-participant-invite?token=xxx — public co-player invite preview ──
   if (req.method === 'GET' && path === 'booking-participant-invite') {
     const token = url.searchParams.get('token') || '';
@@ -1133,7 +1390,7 @@ Deno.serve(async (req) => {
 
     const admin = getServiceClient();
     const userId = await getOptionalAuthUserId(req, admin);
-    if (!userId) return errorResponse('Logga in för att hämta din personliga Play Right', 401);
+    if (!userId) return errorResponse('Logga in för att hämta din plats', 401);
     const { data: invite, error: inviteErr } = await admin
       .from('booking_participant_invites')
       .select('id, venue_id, booking_id, booking_group_key, token, status, expires_at, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, venue_courts(name, court_number, sport_type)), venues(slug)')
@@ -1175,10 +1432,20 @@ Deno.serve(async (req) => {
     if (!displayName) return errorResponse('Namn krävs', 400);
     const existing = participants.find((row: any) => row.user_id === userId || row.customer_id === customerId);
     if (existing) {
+      const { ticketInvite, ticketUrl } = await completeBookingParticipantClaim(
+        admin,
+        req,
+        existing,
+        bookingRows,
+        userId,
+        { postClaimMessage: false, sendEmail: false },
+      );
       return jsonResponse({
         success: true,
         participant_id: existing.id,
         booking_ref: representative.booking_ref,
+        ticket_token: ticketInvite.token,
+        ticket_url: ticketUrl,
         free: existing.payment_status === 'free' || Number(existing.price_minor || 0) <= 0,
         payment_status: existing.payment_status,
         amount_sek: minorToSek(existing.price_minor),
@@ -1225,7 +1492,7 @@ Deno.serve(async (req) => {
         .eq('id', placeholder.id)
         .is('customer_id', null)
         .is('user_id', null)
-        .select('id, price_minor, payment_status')
+        .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
         .maybeSingle();
       if (participantErr) return errorResponse(participantErr.message, 500);
       if (!participant) return errorResponse('Den manuella platsen har redan hämtats. Uppdatera och försök igen.', 409);
@@ -1242,11 +1509,22 @@ Deno.serve(async (req) => {
         metadata: { booking_id: representative.id, booking_group_key: groupKey, invite_id: invite.id },
       });
 
+      const { ticketInvite, ticketUrl } = await completeBookingParticipantClaim(
+        admin,
+        req,
+        participant,
+        bookingRows,
+        userId,
+        { postClaimMessage: true, sendEmail: true },
+      );
+
       return jsonResponse({
         success: true,
         participant_id: participant.id,
         booking_ref: representative.booking_ref,
         venue_slug: (Array.isArray(invite.venues) ? invite.venues[0] : invite.venues)?.slug || '',
+        ticket_token: ticketInvite.token,
+        ticket_url: ticketUrl,
         free: Number(participant.price_minor || 0) <= 0,
         payment_status: participant.payment_status,
         amount_sek: minorToSek(participant.price_minor),
@@ -1274,7 +1552,7 @@ Deno.serve(async (req) => {
         price_minor_per_hour: BOOKING_PARTICIPANT_GUEST_PRICE_MINOR_PER_HOUR,
         founder_booking: isFounderBookingGroup(bookingRows),
       },
-    }).select('id, price_minor, payment_status').single();
+    }).select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at').single();
     if (participantErr) return errorResponse(participantErr.message, 500);
 
     const forwardedFor = req.headers.get('x-forwarded-for');
@@ -1301,11 +1579,22 @@ Deno.serve(async (req) => {
     });
     if (auditErr) console.error('booking_participant.claim audit failed', auditErr.message);
 
+    const { ticketInvite, ticketUrl } = await completeBookingParticipantClaim(
+      admin,
+      req,
+      participant,
+      bookingRows,
+      userId,
+      { postClaimMessage: true, sendEmail: true },
+    );
+
     return jsonResponse({
       success: true,
       participant_id: participant.id,
       booking_ref: representative.booking_ref,
       venue_slug: (Array.isArray(invite.venues) ? invite.venues[0] : invite.venues)?.slug || '',
+      ticket_token: ticketInvite.token,
+      ticket_url: ticketUrl,
       free: Number(participant.price_minor || 0) <= 0,
       payment_status: participant.payment_status,
       amount_sek: minorToSek(participant.price_minor),
@@ -1955,7 +2244,7 @@ Deno.serve(async (req) => {
       if (!registration) {
         const { data: participant } = await serviceClient
           .from('booking_participants')
-          .select('id, venue_id, booking_id, booking_group_key, bookings(booking_ref)')
+          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id)')
           .eq('payment_stripe_session_id', sessionId)
           .limit(1)
           .maybeSingle();
@@ -1963,6 +2252,8 @@ Deno.serve(async (req) => {
         if (!participant) return jsonResponse({ pending: true }, 200, 0);
 
         const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
+        const ticketInvite = await ensureParticipantTicketInvite(serviceClient, participant, booking, participant.user_id || null);
+        const origin = req.headers.get('origin') || 'http://localhost:8080';
         const { data: venue } = await serviceClient
           .from('venues')
           .select('slug')
@@ -1974,6 +2265,8 @@ Deno.serve(async (req) => {
           type: BOOKING_PARTICIPANT_SOURCE_TYPE,
           participant_id: participant.id,
           booking_ref: booking?.booking_ref || '',
+          ticket_token: ticketInvite?.token || '',
+          ticket_url: ticketInvite?.token ? `${origin}/booking/ticket/${encodeURIComponent(ticketInvite.token)}` : '',
           venue_slug: venue?.slug || '',
         }, 200, 0);
       }
@@ -2618,6 +2911,55 @@ Deno.serve(async (req) => {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
+    // GET /api-bookings/my-bookings — owned bookings plus claimed participant places for My Page.
+    if (req.method === 'GET' && path === 'my-bookings') {
+      const admin = getServiceClient();
+      const { data: ownedRows, error: ownedErr } = await admin
+        .from('bookings')
+        .select('*, venue_courts(name)')
+        .eq('user_id', userId)
+        .order('start_time', { ascending: false })
+        .limit(80);
+      if (ownedErr) return errorResponse(ownedErr.message, 500);
+
+      const owned = ownedRows || [];
+      const ownedKeys = new Set(owned.map((row: any) => bookingChatResourceId(row)).filter(Boolean));
+      const { data: participantRows, error: participantErr } = await admin
+        .from('booking_participants')
+        .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
+        .eq('user_id', userId)
+        .neq('payment_status', 'cancelled')
+        .order('created_at', { ascending: false })
+        .limit(80);
+      if (participantErr) return errorResponse(participantErr.message, 500);
+
+      const participantRowsOut: any[] = [];
+      for (const participant of participantRows || []) {
+        const { data: representative, error: bookingErr } = await admin
+          .from('bookings')
+          .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, venue_courts(name)')
+          .eq('id', participant.booking_id)
+          .maybeSingle();
+        if (bookingErr) return errorResponse(bookingErr.message, 500);
+        if (!representative) continue;
+        const chatKey = bookingChatResourceId(representative);
+        if (ownedKeys.has(chatKey)) continue;
+        const groupRows = await getBookingGroupRows(admin, representative);
+        for (const row of groupRows) {
+          participantRowsOut.push({
+            ...row,
+            participant,
+            is_participant_place: participant.role !== 'booker' || row.user_id !== userId,
+            participant_id: participant.id,
+            participant_payment_status: participant.payment_status,
+            participant_checked_in_at: participant.checked_in_at,
+          });
+        }
+      }
+
+      return jsonResponse({ items: [...owned, ...participantRowsOut] }, 200, 0);
+    }
+
     // POST /api-bookings/booking-participant-invite — create/reuse co-player invite for a booking group
     if (req.method === 'POST' && path === 'booking-participant-invite') {
       const body = await req.json();
@@ -2683,7 +3025,7 @@ Deno.serve(async (req) => {
       }, 200, 0);
     }
 
-    // POST /api-bookings/booking-participant-manual — staff/booker placeholder Play Right from SMS names
+    // POST /api-bookings/booking-participant-manual — staff/booker placeholder participant place from SMS names
     if (req.method === 'POST' && path === 'booking-participant-manual') {
       const body = await req.json();
       const bookingRef = String(body.bookingRef || body.booking_ref || '').trim();
@@ -2861,6 +3203,85 @@ Deno.serve(async (req) => {
         metadata: { booking_id: participant.booking_id, price_minor: participant.price_minor },
       });
       return jsonResponse({ ok: true, receipt_id: receipt?.id || null }, 200, 0);
+    }
+
+    // POST /api-bookings/booking-participant-cancel — participant cancels only their own place
+    if (req.method === 'POST' && path === 'booking-participant-cancel') {
+      const body = await req.json();
+      const participantId = String(body.participantId || body.participant_id || '').trim();
+      const token = String(body.token || '').trim();
+      if (!participantId && !token) return errorResponse('Missing participant', 400);
+
+      const admin = getServiceClient();
+      let resolvedParticipantId = participantId;
+      if (!resolvedParticipantId && token) {
+        const { data: invite, error: inviteErr } = await admin
+          .from('booking_participant_invites')
+          .select('metadata, status')
+          .eq('token', token)
+          .maybeSingle();
+        if (inviteErr) return errorResponse(inviteErr.message, 500);
+        const metadata = invite?.metadata && typeof invite.metadata === 'object' ? invite.metadata : {};
+        if (!invite || invite.status !== 'active' || metadata.source !== PARTICIPANT_TICKET_INVITE_SOURCE) {
+          return errorResponse('Ticket not found', 404);
+        }
+        resolvedParticipantId = String(metadata.booking_participant_id || '');
+      }
+      if (!resolvedParticipantId) return errorResponse('Missing participant', 400);
+
+      const { data: participant, error: participantErr } = await admin
+        .from('booking_participants')
+        .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, price_minor, payment_status, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id)')
+        .eq('id', resolvedParticipantId)
+        .maybeSingle();
+      if (participantErr) return errorResponse(participantErr.message, 500);
+      if (!participant) return errorResponse('Participant not found', 404);
+      const canCancelOwn = participant.user_id === userId;
+      const canOperate = await canOperateVenue(admin, userId, participant.venue_id);
+      if (!canCancelOwn && !canOperate) return errorResponse('Forbidden', 403);
+      if (participant.role === 'booker' && !canOperate) {
+        return errorResponse('Bokaren kan inte avboka hela bokningen här.', 403);
+      }
+      if (participant.payment_status === 'cancelled') {
+        return jsonResponse({ ok: true, already_cancelled: true }, 200, 0);
+      }
+
+      const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
+      const before = { payment_status: participant.payment_status, checked_in_at: participant.checked_in_at || null };
+      const nextMetadata = {
+        ...(participant.metadata || {}),
+        cancelled_at: new Date().toISOString(),
+        cancelled_by_user_id: userId,
+        cancellation_scope: 'participant_place',
+      };
+      const { error: updateErr } = await admin
+        .from('booking_participants')
+        .update({
+          payment_status: 'cancelled',
+          metadata: nextMetadata,
+        })
+        .eq('id', participant.id);
+      if (updateErr) return errorResponse(updateErr.message, 500);
+
+      await removeBookingChatMembership(admin, booking, participant);
+      await auditMutation(admin, {
+        req,
+        userId,
+        action: 'booking_participant.cancel',
+        entityTable: 'booking_participants',
+        entityId: participant.id,
+        venueId: participant.venue_id,
+        before,
+        after: { payment_status: 'cancelled' },
+        metadata: { booking_id: participant.booking_id, booking_group_key: participant.booking_group_key },
+      });
+
+      return jsonResponse({
+        ok: true,
+        refund_note: Number(participant.price_minor || 0) > 0 && participant.payment_status === 'paid'
+          ? 'Kontakta oss för återbetalning'
+          : null,
+      }, 200, 0);
     }
 
     // GET /api-bookings/receipt?ref=PICKLA-2026-000001 — authenticated receipt snapshot

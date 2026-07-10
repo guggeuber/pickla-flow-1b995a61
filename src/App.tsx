@@ -51,6 +51,7 @@ import ReceiptPage from "./pages/ReceiptPage";
 import WellnessCertificatePage from "./pages/WellnessCertificatePage";
 import ClaimPassPage from "./pages/ClaimPassPage";
 import ClaimBookingParticipantPage from "./pages/ClaimBookingParticipantPage";
+import BookingParticipantTicketPage from "./pages/BookingParticipantTicketPage";
 import LegalPage from "./pages/LegalPage";
 import CorporateJoinPage from "./pages/CorporateJoinPage";
 import CorporateDashboard from "./pages/CorporateDashboard";
@@ -161,6 +162,7 @@ function AppRoutes() {
             <Route path="/b/:ref" element={<BookingConfirmation />} />
             <Route path="/booking/confirmed" element={<BookingConfirmed />} />
             <Route path="/booking/invite/:token" element={<ClaimBookingParticipantPage />} />
+            <Route path="/booking/ticket/:token" element={<BookingParticipantTicketPage />} />
             <Route path="/booking-chat/:bookingRef" element={<HubPage />} />
             <Route path="/chat/:roomId" element={<HubPage />} />
             <Route path="/pass/:token" element={<ClaimPassPage />} />

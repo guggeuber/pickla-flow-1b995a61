@@ -26,7 +26,7 @@ import {
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
 import { ThreadRow } from "@/components/ui/ThreadRow";
-import { activityTimingLabel } from "@/lib/activityTiming";
+import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
 import { getDisplayName, getFirstName } from "@/lib/displayName";
 import { shareOrCopy } from "@/lib/share";
 
@@ -150,14 +150,8 @@ function useMyBookings() {
     queryKey: ["my-bookings", user?.id],
     enabled: !!user,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bookings")
-        .select("*, venue_courts(name)")
-        .eq("user_id", user!.id)
-        .order("start_time", { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      return data;
+      const response = await apiGet<{ items: any[] }>("api-bookings", "my-bookings");
+      return response.items || [];
     },
   });
 }
@@ -897,9 +891,12 @@ function BookingDetailsSheet({
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [creatingInvite, setCreatingInvite] = useState(false);
+  const [checkingIn, setCheckingIn] = useState(false);
 
   if (!booking) return null;
 
+  const isParticipantPlace = Boolean((booking as any).is_participant_place || (booking as any).participant);
+  const participant = (booking as any).participant || null;
   const courtName = getBookingCourtLabel(booking);
   const courtNames = getBookingCourtNamesLabel(booking);
   const accessCodes = getBookingAccessCodes(booking);
@@ -914,7 +911,22 @@ function BookingDetailsSheet({
     sessionDate: startSthlm.toISODate(),
     startTime: startSthlm.toFormat("HH:mm"),
     endTime: endSthlm.toFormat("HH:mm"),
+    checkedIn: Boolean(participant?.checked_in_at),
+    checkInAvailable: isParticipantPlace ? activityCheckInAvailable({
+      sessionDate: startSthlm.toISODate(),
+      startTime: startSthlm.toFormat("HH:mm"),
+      endTime: endSthlm.toFormat("HH:mm"),
+    }) : false,
   });
+  const participantCanCheckIn = isParticipantPlace
+    && participant?.id
+    && ["paid", "free"].includes(String(participant?.payment_status || "").toLowerCase())
+    && !participant?.checked_in_at
+    && activityCheckInAvailable({
+      sessionDate: startSthlm.toISODate(),
+      startTime: startSthlm.toFormat("HH:mm"),
+      endTime: endSthlm.toFormat("HH:mm"),
+    });
 
   const handleCancel = async () => {
     if (!bookingIds.length) return;
@@ -933,6 +945,44 @@ function BookingDetailsSheet({
     }
   };
 
+  const handleParticipantCheckIn = async () => {
+    if (!participant?.id || !booking.venue_id || checkingIn) return;
+    setCheckingIn(true);
+    try {
+      await apiPost("api-checkins", "self", {
+        venue_id: booking.venue_id,
+        entry_type: "booking_participant",
+        entitlement_id: participant.id,
+      });
+      toast.success("Du är incheckad");
+      await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
+    } catch (error: any) {
+      toast.error(error?.message || "Kunde inte checka in");
+    } finally {
+      setCheckingIn(false);
+    }
+  };
+
+  const handleCancelParticipant = async () => {
+    if (!participant?.id) return;
+    setCancelling(true);
+    try {
+      const result = await apiPost<{ refund_note?: string | null }>("api-bookings", "booking-participant-cancel", {
+        participantId: participant.id,
+      });
+      toast.success(result.refund_note || "Din plats är avbokad");
+      await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
+      onOpenChange(false);
+      setConfirmCancel(false);
+    } catch (error: any) {
+      toast.error(error?.message || "Kunde inte avboka platsen");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const handleInvitePlayers = async () => {
     const bookingRef = booking.primary_booking_ref || booking.booking_ref || booking.bookings?.[0]?.booking_ref;
     if (!bookingRef) {
@@ -945,7 +995,7 @@ function BookingDetailsSheet({
       if (!result.url) throw new Error("Ingen länk skapades");
       const shareResult = await shareOrCopy({
         title: "Spela på Pickla",
-        text: "Hämta din personliga Play Right och häng på.",
+        text: "Hämta din personliga plats och häng på.",
         url: result.url,
         copyText: result.url,
       });
@@ -962,7 +1012,7 @@ function BookingDetailsSheet({
       <DrawerContent style={{ background: CARD_BG }}>
         <div className="px-5 pb-6 pt-2 max-w-md mx-auto w-full">
           <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-            Din Play Right
+            {isParticipantPlace ? "Din plats" : "Bokning"}
           </p>
           <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Din plats</p>
           <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{courtName}</p>
@@ -976,13 +1026,31 @@ function BookingDetailsSheet({
               {bookingTimingLabel}
             </p>
           )}
-          {accessCodes.length > 0 && (
+          {isParticipantPlace && participant && (
+            <div className="mt-4 rounded-2xl p-4" style={{ background: PAGE_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                Biljett
+              </p>
+              <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                {participant.display_name || "Din plats"}
+              </p>
+              <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
+                {participant.payment_status === "free"
+                  ? "Ingår"
+                  : participant.payment_status === "paid"
+                  ? "Betald"
+                  : "Väntar på betalning"}
+              </p>
+            </div>
+          )}
+
+          {!isParticipantPlace && accessCodes.length > 0 && (
             <div className="mt-4 rounded-2xl p-4" style={{ background: BLUE_LIGHT, border: `1.5px solid ${BLUE_BORDER}` }}>
               <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
                 Check-in
               </p>
               <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-                Checka in med din Play Right
+                Checka in med din biljett
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {accessCodes.map((code) => (
@@ -995,15 +1063,27 @@ function BookingDetailsSheet({
           )}
 
           <div className="flex flex-col gap-2 mt-5">
-            <button
-              onClick={handleInvitePlayers}
-              disabled={creatingInvite}
-              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-50"
-              style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
-            >
-              {creatingInvite ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-              Bjud in spelare
-            </button>
+            {isParticipantPlace ? (
+              <button
+                onClick={handleParticipantCheckIn}
+                disabled={!participantCanCheckIn || checkingIn}
+                className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-50"
+                style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
+              >
+                {checkingIn ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                {participant?.checked_in_at ? "Incheckad" : "Checka in"}
+              </button>
+            ) : (
+              <button
+                onClick={handleInvitePlayers}
+                disabled={creatingInvite}
+                className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-50"
+                style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
+              >
+                {creatingInvite ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+                Bjud in spelare
+              </button>
+            )}
             <button
               onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`); }}
               className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
@@ -1012,17 +1092,26 @@ function BookingDetailsSheet({
               <MessageCircle className="w-4 h-4" />
               Gå till chatt
             </button>
-            <button
-              onClick={() => { onOpenChange(false); navigate(`/b/${booking.primary_booking_ref || booking.booking_ref || booking.id}`); }}
-              className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
-              style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
-            >
-              <FileText className="w-4 h-4" />
-              Visa kvitto
-            </button>
+            {!isParticipantPlace && (
+              <button
+                onClick={() => { onOpenChange(false); navigate(`/b/${booking.primary_booking_ref || booking.booking_ref || booking.id}`); }}
+                className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+                style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+              >
+                <FileText className="w-4 h-4" />
+                Visa kvitto
+              </button>
+            )}
             {confirmCancel ? (
               <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                <p className="text-xs text-center" style={{ color: TEXT_SECONDARY }}>Säker på att du vill avboka?</p>
+                <p className="text-xs text-center" style={{ color: TEXT_SECONDARY }}>
+                  {isParticipantPlace ? "Säker på att du vill avboka din plats?" : "Säker på att du vill avboka?"}
+                </p>
+                {isParticipantPlace && participant?.payment_status === "paid" && (
+                  <p className="text-[11px] text-center" style={{ color: TEXT_MUTED }}>
+                    Kontakta oss för återbetalning.
+                  </p>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={() => setConfirmCancel(false)}
@@ -1032,7 +1121,7 @@ function BookingDetailsSheet({
                     Behåll
                   </button>
                   <button
-                    onClick={handleCancel}
+                    onClick={isParticipantPlace ? handleCancelParticipant : handleCancel}
                     disabled={cancelling}
                     className="flex-1 py-2.5 rounded-lg text-xs font-bold text-white disabled:opacity-50 flex items-center justify-center"
                     style={{ background: "#EF4444", fontFamily: FONT_HEADING }}
@@ -1047,7 +1136,7 @@ function BookingDetailsSheet({
                 className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
                 style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.16)", color: "#EF4444", fontFamily: FONT_HEADING }}
               >
-                Avboka
+                {isParticipantPlace ? "Avboka min plats" : "Avboka"}
               </button>
             )}
           </div>

@@ -647,7 +647,7 @@ function BookingActionRow({
           {manualOpen ? (
             <div className="grid gap-2 rounded-xl border p-3" style={{ borderColor: ax("borderSoft"), background: ax("surfaceHi") }}>
               <p className="text-xs font-bold" style={{ color: ax("muted") }}>
-                Skapar en väntande Play Right. Ingen kundprofil skapas förrän spelaren identifierar sig.
+                Skapar en väntande plats. Ingen kundprofil skapas förrän spelaren identifierar sig.
               </p>
               <div className="grid gap-2 md:grid-cols-3">
                 <input
@@ -711,7 +711,7 @@ function BookingActionRow({
                     </div>
                   ) : (
                     <p className="px-2 py-2 text-xs font-bold" style={{ color: ax("muted") }}>
-                      Ingen kundträff. Du kan ändå lägga till som väntande Play Right.
+                      Ingen kundträff. Du kan ändå lägga till som väntande plats.
                     </p>
                   )}
                 </div>
@@ -740,7 +740,7 @@ function BookingActionRow({
           ) : null}
           {participants.length === 0 ? (
             <p className="rounded-xl border p-3 text-sm font-bold" style={{ borderColor: ax("borderSoft"), color: ax("muted") }}>
-              Inga Play Rights är kopplade än.
+              Inga personliga platser är kopplade än.
             </p>
           ) : null}
           {participants.map((participant: any) => {

@@ -68,7 +68,7 @@ export default function BookingConfirmation() {
   const handleShare = async () => {
     const url = window.location.href;
     try {
-      const result = await shareOrCopy({ title: `Play Right ${ref}`, url });
+      const result = await shareOrCopy({ title: `Pickla-biljett ${ref}`, url });
       if (result === "copied") toast.success("Länk kopierad!");
     } catch {
       toast.error("Kunde inte kopiera länken.");
@@ -83,7 +83,7 @@ export default function BookingConfirmation() {
       if (!result.url) throw new Error("Ingen länk skapades");
       const shareResult = await shareOrCopy({
         title: "Spela på Pickla",
-        text: "Hämta din personliga Play Right och häng på.",
+        text: "Hämta din personliga plats och häng på.",
         url: result.url,
         copyText: result.url,
       });
@@ -222,7 +222,7 @@ export default function BookingConfirmation() {
           className="text-[34px] leading-none font-bold tracking-tight"
           style={{ fontFamily: FONT_GROTESK }}
         >
-          {isCancelled ? "Avbokad" : "Din Play Right"}
+          {isCancelled ? "Avbokad" : "Din biljett"}
         </h1>
         <button
           onClick={handleCopyRef}
@@ -241,7 +241,7 @@ export default function BookingConfirmation() {
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-[10px] uppercase tracking-widest text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                  Personlig Play Right
+                  Personlig plats
                 </p>
                 <p className="mt-1 break-words text-2xl font-black leading-tight text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
                   {personalName}
@@ -270,7 +270,7 @@ export default function BookingConfirmation() {
                   {booking.access_code}
                 </p>
                 <p className="mt-2 text-[10px] text-amber-700" style={{ fontFamily: FONT_MONO }}>
-                  Checka in med din Play Right när du kommer.
+                  Checka in med din biljett när du kommer.
                 </p>
               </div>
             )}
@@ -351,7 +351,7 @@ export default function BookingConfirmation() {
           <section className="mt-4 rounded-[24px] bg-white border border-neutral-200 p-5 shadow-sm print:hidden">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-sm font-bold text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>Play Rights</p>
+                <p className="text-sm font-bold text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>Spelare</p>
                 <p className="mt-1 text-xs leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
                   Varje spelare har egen plats, betalstatus och check-in.
                 </p>

@@ -22,7 +22,6 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import {
-  getBookingAccessCodes,
   getBookingChatResourceId,
   getBookingCourtLabel,
   getBookingCourtNamesLabel,
@@ -1458,7 +1457,6 @@ function BookingSmartPanel({
   const [publishedNow, setPublishedNow] = useState(false);
   const { data: hasPublishedInvite = false } = useBookingPublishedState(room.id, room.room_type === "booking");
 
-  const accessCodes = getBookingAccessCodes(booking);
   const isOwner = !!booking && booking.bookings?.some((b: any) => b.user_id === userId);
   const isPublished = publishedNow || hasPublishedInvite;
   const courtName = booking ? getBookingCourtLabel(booking) : room.title.split(" · ")[0] || "Bana";
@@ -1567,24 +1565,6 @@ function BookingSmartPanel({
         >
           {statusLabel}
         </span>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-        {isOwner && accessCodes.map((code) => (
-          <div key={code} style={{ borderRadius: 14, background: "#eff6ff", border: "1px solid rgba(37,99,235,0.14)", padding: "8px 10px" }}>
-            <span style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 800, color: HUB_MUTED, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-              Kod
-            </span>
-            <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 16, fontWeight: 800, color: "#2563eb", marginLeft: 7 }}>
-              {code}
-            </span>
-          </div>
-        ))}
-        {!isOwner && (
-          <div style={{ borderRadius: 14, background: HUB_BG, border: `1px solid ${HUB_BORDER}`, padding: "8px 10px", color: HUB_MUTED, fontSize: 12 }}>
-            Bokningskod och actions visas för bokaren.
-          </div>
-        )}
       </div>
 
       {isOwner && !isCancelled && (

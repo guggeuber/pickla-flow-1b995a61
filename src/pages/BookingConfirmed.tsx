@@ -19,6 +19,8 @@ type BookingBySessionResponse = {
   session_date?: string;
   venue_slug?: string;
   type?: "booking" | "session_ticket" | "booking_participant";
+  ticket_url?: string;
+  ticket_token?: string;
 };
 
 export default function BookingConfirmed() {
@@ -87,6 +89,16 @@ export default function BookingConfirmed() {
       }
       navigate(resolveEntryDestination({ intendedRoute: programPath || next, venueSlug }), { replace: true });
       return;
+    }
+    if (data?.type === "booking_participant" && !authLoading) {
+      if (data.ticket_url) {
+        navigate(new URL(data.ticket_url, window.location.origin).pathname, { replace: true });
+        return;
+      }
+      if (data.ticket_token) {
+        navigate(`/booking/ticket/${encodeURIComponent(data.ticket_token)}`, { replace: true });
+        return;
+      }
     }
     if (bookingRef && !authLoading) {
       navigate(`/b/${encodeURIComponent(bookingRef)}`, { replace: true });

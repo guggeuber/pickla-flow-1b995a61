@@ -98,7 +98,7 @@ export default function ClaimBookingParticipantPage() {
 
       if (claim.free || Number(claim.amount_sek || 0) <= 0) {
         toast.success("Din plats är klar.");
-        navigate(claim.booking_ref ? `/b/${claim.booking_ref}` : "/my");
+        navigate(claim.ticket_url ? new URL(claim.ticket_url, window.location.origin).pathname : (claim.booking_ref ? `/b/${claim.booking_ref}` : "/my"));
         return;
       }
 
@@ -190,10 +190,10 @@ export default function ClaimBookingParticipantPage() {
           {!user ? (
             <div className="mt-6 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
               <p className="text-[11px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                Personlig Play Right
+                Personlig plats
               </p>
               <p className="mt-2 text-lg font-black text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                Identifiera dig för att få din personliga Play Right.
+                Identifiera dig för att få din personliga plats.
               </p>
               <p className="mt-2 text-sm leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
                 Priset visas först efter login, eftersom Founder, Play, Play+ och drop-in kan ha olika rätt.
@@ -212,7 +212,7 @@ export default function ClaimBookingParticipantPage() {
             <>
               <div className="mt-6 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
                 <p className="text-[11px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                  Din Play Right
+                  Din plats
                 </p>
                 <div className="mt-2 flex items-end justify-between gap-4">
                   <p className="text-lg font-bold text-neutral-700" style={{ fontFamily: FONT_GROTESK }}>
@@ -256,7 +256,7 @@ export default function ClaimBookingParticipantPage() {
                   style={{ fontFamily: FONT_GROTESK }}
                 >
                   {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Ticket className="h-5 w-5" />}
-                  {data.pricing?.requires_payment ? "Betala och hämta Play Right" : "Hämta Play Right"}
+                  {data.pricing?.requires_payment ? "Betala och hämta plats" : "Hämta plats"}
                 </button>
               </form>
             </>

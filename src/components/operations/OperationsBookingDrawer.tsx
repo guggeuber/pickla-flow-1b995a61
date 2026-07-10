@@ -386,7 +386,7 @@ export function OperationsBookingDrawer({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
                     <UserRound className="h-3.5 w-3.5" />
-                    Play Rights
+                    Spelare
                   </div>
                   <button
                     type="button"
@@ -400,7 +400,7 @@ export function OperationsBookingDrawer({
                 {manualOpen ? (
                   <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-3">
                     <p className="text-xs font-semibold text-white/55">
-                      Namnet blir en väntande Play Right. Kundprofil skapas först när spelaren identifierar sig.
+                      Namnet blir en väntande plats. Kundprofil skapas först när spelaren identifierar sig.
                     </p>
                     <div className="mt-3 grid gap-2 md:grid-cols-3">
                       <input
@@ -461,7 +461,7 @@ export function OperationsBookingDrawer({
                           </div>
                         ) : (
                           <p className="px-2 py-2 text-xs font-bold text-white/45">
-                            Ingen kundträff. Du kan ändå lägga till som väntande Play Right.
+                            Ingen kundträff. Du kan ändå lägga till som väntande plats.
                           </p>
                         )}
                       </div>
@@ -532,7 +532,7 @@ export function OperationsBookingDrawer({
                     })}
                   </div>
                 ) : (
-                  <p className="mt-3 text-sm font-semibold text-white/45">Inga personliga Play Rights är kopplade än.</p>
+                  <p className="mt-3 text-sm font-semibold text-white/45">Inga personliga platser är kopplade än.</p>
                 )}
               </div>
 

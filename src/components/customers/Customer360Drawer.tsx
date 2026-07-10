@@ -421,7 +421,7 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                     )) : <Empty text="Inga kommande banbokningar." />}
                   </Section>
 
-                  <Section title="Play Rights" icon={Ticket}>
+                  <Section title="Personliga platser" icon={Ticket}>
                     {data.booking_participants?.length ? data.booking_participants.map((participant) => {
                       const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
                       return (
@@ -432,7 +432,7 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                           aside={participant.checked_in_at ? "Incheckad" : participant.payment_status === "free" ? "Ingår" : participant.payment_status || undefined}
                         />
                       );
-                    }) : <Empty text="Inga personliga Play Rights för banbokningar hittades." />}
+                    }) : <Empty text="Inga personliga platser för banbokningar hittades." />}
                   </Section>
 
                   <Section title="Aktiviteter" icon={Ticket}>

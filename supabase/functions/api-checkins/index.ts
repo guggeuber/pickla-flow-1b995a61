@@ -954,12 +954,12 @@ Deno.serve(async (req) => {
           .eq('venue_id', venue_id)
           .maybeSingle();
         if (participantErr) return errorResponse(participantErr.message, 500);
-        if (!participant) return errorResponse('Play Right saknas', 404);
+        if (!participant) return errorResponse('Biljetten saknas', 404);
         if (!participant.customer_id && !participant.user_id) {
           return errorResponse('Spelaren behöver identifiera sig innan check-in', 409);
         }
         if (!['paid', 'free'].includes(String(participant.payment_status || '').toLowerCase())) {
-          return errorResponse('Play Right är inte betald', 409);
+          return errorResponse('Biljetten är inte betald', 409);
         }
       }
 
