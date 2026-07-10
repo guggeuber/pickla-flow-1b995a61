@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LogIn, UserPlus, Loader2, Mail, Lock, User, ArrowLeft } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { authRedirectOrigin, useAuth } from "@/hooks/useAuth";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,8 +18,12 @@ import {
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
+function looksLikeExistingUnconfirmedAccount(message: string) {
+  return /already|registered|exists|rate limit|security|429/i.test(message);
+}
+
 const Auth = () => {
-  const { user, loading, signIn, signUp } = useAuth();
+  const { user, loading, signIn, signUp, resendConfirmation } = useAuth();
   const [searchParams] = useSearchParams();
   const redirectTo = safeLocalPath(searchParams.get("redirect"));
   const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
@@ -28,6 +32,8 @@ const Auth = () => {
   const [displayName, setDisplayName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [confirmationEmail, setConfirmationEmail] = useState("");
+  const [resendingConfirmation, setResendingConfirmation] = useState(false);
 
   if (loading) {
     return (
@@ -62,10 +68,17 @@ const Auth = () => {
       }
       const { error } = await signUp(email, password, displayName);
       if (error) {
-        toast.error(error.message);
+        if (looksLikeExistingUnconfirmedAccount(error.message)) {
+          setConfirmationEmail(email);
+          setMode("login");
+          toast.message("Kontot finns redan. Skicka en ny bekräftelselänk om mejlet inte kom fram.");
+        } else {
+          toast.error(error.message);
+        }
       } else {
         if (!getPreservedIntendedRoute() && !fullRedirect) markFirstRunWelcome();
         if (fullRedirect) preserveIntendedRoute(fullRedirect);
+        setConfirmationEmail(email);
         toast.success("Konto skapat! Kolla din e-post för att verifiera.");
         setMode("login");
       }
@@ -79,13 +92,30 @@ const Auth = () => {
     e.preventDefault();
     setSubmitting(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/reset`,
+      redirectTo: `${authRedirectOrigin()}/auth/reset`,
     });
     setSubmitting(false);
     if (error) {
       toast.error(error.message);
     } else {
       setResetSent(true);
+    }
+  };
+
+  const handleResendConfirmation = async () => {
+    const targetEmail = confirmationEmail || email;
+    if (!targetEmail) {
+      toast.error("Ange e-post först");
+      return;
+    }
+    setResendingConfirmation(true);
+    const { error } = await resendConfirmation(targetEmail);
+    setResendingConfirmation(false);
+    if (error) {
+      toast.error(error.message);
+    } else {
+      setConfirmationEmail(targetEmail);
+      toast.success("Ny bekräftelselänk skickad.");
     }
   };
 
@@ -133,6 +163,24 @@ const Auth = () => {
             </button>
           ))}
         </div>}
+
+        {confirmationEmail && mode !== "forgot" && (
+          <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-center space-y-3">
+            <p className="text-[12px] leading-relaxed text-neutral-600" style={{ fontFamily: FONT_MONO }}>
+              Kontot behöver bekräftas innan du kan logga in.
+            </p>
+            <button
+              type="button"
+              onClick={handleResendConfirmation}
+              disabled={resendingConfirmation}
+              className="w-full py-3 rounded-xl bg-neutral-900 text-white text-[11px] font-bold uppercase tracking-wider active:scale-[0.98] transition-transform disabled:opacity-40 flex items-center justify-center gap-2"
+              style={{ fontFamily: FONT_MONO }}
+            >
+              {resendingConfirmation ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+              Skicka ny bekräftelselänk
+            </button>
+          </div>
+        )}
 
         {/* Form */}
         {mode !== "forgot" && <AnimatePresence mode="wait">

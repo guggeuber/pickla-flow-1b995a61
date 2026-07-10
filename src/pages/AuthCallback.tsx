@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -19,6 +19,8 @@ const FONT_MONO = "'Space Mono', monospace";
 
 const OTP_TYPES = new Set(["signup", "invite", "magiclink", "recovery", "email_change", "email"]);
 const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
+const CONFIRMATION_ERROR_MESSAGE = "Länken kunde inte bekräftas. Skicka en ny bekräftelselänk.";
+const CONFIRMATION_ERROR_HELP = "We could not confirm this link. Please request a new confirmation email.";
 
 function callbackParam(searchParams: URLSearchParams, hashParams: URLSearchParams, key: string) {
   return searchParams.get(key) || hashParams.get(key);
@@ -38,19 +40,45 @@ function postAuthTarget(isFirstRunCandidate = false) {
 
 export default function AuthCallback() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [successText, setSuccessText] = useState("Du är inloggad");
 
   useEffect(() => {
+    let cancelled = false;
+    let resolved = false;
+    let redirectTimer: number | undefined;
+    let timeoutTimer: number | undefined;
+
+    const logCallbackError = (error: unknown) => {
+      const name = error instanceof Error ? error.name : "AuthCallbackError";
+      const message = error instanceof Error ? error.message : String(error || "Unknown auth callback error");
+      console.error("[auth-callback] Confirmation failed", { name, message });
+    };
+
+    const failLink = (error?: unknown) => {
+      resolved = true;
+      if (error) logCallbackError(error);
+      if (cancelled) return;
+      setErrorMsg(CONFIRMATION_ERROR_MESSAGE);
+      setStatus("error");
+    };
+
+    const markSuccess = (text: string, isFirstRunCandidate: boolean) => {
+      resolved = true;
+      if (cancelled) return;
+      setSuccessText(text);
+      setStatus("success");
+      redirectTimer = window.setTimeout(() => navigate(postAuthTarget(isFirstRunCandidate), { replace: true }), 1200);
+    };
+
     const exchange = async () => {
+      const searchParams = new URLSearchParams(window.location.search);
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
       const authError = callbackParam(searchParams, hashParams, "error_description")
         || callbackParam(searchParams, hashParams, "error");
       if (authError) {
-        setErrorMsg(authError);
-        setStatus("error");
+        failLink(new Error(authError));
         return;
       }
 
@@ -62,13 +90,10 @@ export default function AuthCallback() {
       if (code) {
         const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
         if (error) {
-          setErrorMsg(error.message);
-          setStatus("error");
+          failLink(error);
           return;
         }
-        setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
-        setStatus("success");
-        setTimeout(() => navigate(postAuthTarget(isSignup), { replace: true }), 1200);
+        markSuccess(isSignup ? "Din e-post är bekräftad" : "Du är inloggad", isSignup);
         return;
       }
 
@@ -80,30 +105,41 @@ export default function AuthCallback() {
           type: normalizeOtpType(type),
         });
         if (error) {
-          setErrorMsg(error.message);
-          setStatus("error");
+          failLink(error);
           return;
         }
-        setSuccessText(isSignup ? "Din e-post är bekräftad" : "Du är inloggad");
-        setStatus("success");
-        setTimeout(() => navigate(postAuthTarget(isSignup), { replace: true }), 1200);
+        markSuccess(isSignup ? "Din e-post är bekräftad" : "Du är inloggad", isSignup);
         return;
       }
 
       // Implicit flow fallback: #access_token may already be handled by Supabase client on load
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        setSuccessText("Du är inloggad");
-        setStatus("success");
-        setTimeout(() => navigate(postAuthTarget(false), { replace: true }), 1200);
+        markSuccess("Du är inloggad", false);
         return;
       }
 
-      setErrorMsg("Länken saknar verifieringskod. Testa att be om ett nytt bekräftelsemail.");
-      setStatus("error");
+      failLink(new Error("Auth callback missing verification code and session."));
     };
-    exchange();
-  }, [navigate, searchParams]);
+    exchange().catch(failLink);
+
+    timeoutTimer = window.setTimeout(async () => {
+      if (cancelled || resolved) return;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) markSuccess("Du är inloggad", false);
+        else failLink(new Error("Auth callback timed out without a session."));
+      } catch (error) {
+        failLink(error);
+      }
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      if (redirectTimer) window.clearTimeout(redirectTimer);
+      if (timeoutTimer) window.clearTimeout(timeoutTimer);
+    };
+  }, [navigate]);
 
   return (
     <div
@@ -133,6 +169,9 @@ export default function AuthCallback() {
               </h1>
               <p className="text-[12px] mt-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
                 {errorMsg}
+              </p>
+              <p className="text-[11px] mt-2" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                {CONFIRMATION_ERROR_HELP}
               </p>
             </div>
             <button

@@ -11,6 +11,7 @@ interface AuthContextType {
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: Error | null }>;
+  resendConfirmation: (email: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -18,7 +19,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
 
-function authRedirectOrigin() {
+export function authRedirectOrigin() {
   if (window.location.hostname === "www.playpickla.com") return "https://playpickla.com";
   return window.location.origin;
 }
@@ -81,6 +82,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return { error: error ? new Error(error.message) : null };
   };
 
+  const resendConfirmation = async (email: string) => {
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: {
+          emailRedirectTo: `${authRedirectOrigin()}/auth/callback`,
+        },
+      });
+      return { error: error ? new Error(error.message) : null };
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error("Kunde inte skicka bekräftelselänk.") };
+    }
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
     queryClient.clear();
@@ -88,7 +104,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, signIn, signUp, resendConfirmation, signOut }}>
       {children}
     </AuthContext.Provider>
   );
