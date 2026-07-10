@@ -1501,6 +1501,7 @@ Deno.serve(async (req) => {
 
     if ((product_type === 'day_pass' || product_type === 'activity_ticket') && venue_id && (meta.activity_session_id || meta.open_play_session_id)) {
       const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+      // TODO(E1.1): add an atomic early-bird slot claim before Stripe Checkout so simultaneous buyers cannot over-consume the last early-bird slot.
       activityPricingDecision = await resolveActivityPricingDecision({
         client: getServiceClient(),
         venueId: venue_id,
@@ -1531,6 +1532,12 @@ Deno.serve(async (req) => {
       meta.desk_price_sek = String(activityPricingDecision.debug?.desk_price_sek || '');
       meta.pricing_channel_mode = String(activityPricingDecision.debug?.pricing_channel_mode || '');
       meta.pricing_channel = String(activityPricingDecision.debug?.sales_channel || 'online');
+      const scarcity = activityPricingDecision.debug?.scarcity as Record<string, any> | undefined;
+      const earlyBird = scarcity?.early_bird as Record<string, any> | undefined;
+      meta.scarcity_mode = String(scarcity?.mode || '');
+      meta.early_bird_price_minor = earlyBird?.price_minor != null ? String(earlyBird.price_minor) : '';
+      meta.early_bird_slots = earlyBird?.slots != null ? String(earlyBird.slots) : '';
+      meta.early_bird_remaining_at_checkout = earlyBird?.remaining != null ? String(earlyBird.remaining) : '';
       meta.access_entitlement_id = activityPricingDecision.entitlementType === 'day_access'
         ? activityPricingDecision.sourceId || ''
         : '';

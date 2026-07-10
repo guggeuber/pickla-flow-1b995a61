@@ -164,6 +164,35 @@ const sessionDeskPrice = (session: any) => {
   return numericPrice(metadata.desk_price_sek ?? online, online);
 };
 
+const sessionEarlyBirdPriceSek = (session: any) => {
+  const metadata = sessionMetadata(session);
+  const minor = Number(session?.early_bird_price_minor ?? metadata.early_bird_price_minor ?? 0);
+  return minor > 0 ? numericPrice(minor / 100) : "";
+};
+
+const sessionEarlyBirdSlots = (session: any) => {
+  const metadata = sessionMetadata(session);
+  return session?.early_bird_slots ?? metadata.early_bird_slots ?? "";
+};
+
+const sessionScarcityMode = (session: any) => {
+  const metadata = sessionMetadata(session);
+  const mode = String(session?.scarcity_mode ?? metadata.scarcity_mode ?? "none");
+  return mode === "early_bird" || mode === "capacity" ? mode : "none";
+};
+
+const priceSekToMinor = (value: number | string | null | undefined) => {
+  if (value === "" || value == null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) : null;
+};
+
+const positiveSlots = (value: number | string | null | undefined) => {
+  if (value === "" || value == null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
+};
+
 const buildPricingMetadata = ({
   existingMetadata = {},
   onlinePrice,
@@ -418,6 +447,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [deskPrice, setDeskPrice] = useState("");
   const [corporatePrice, setCorporatePrice] = useState("");
   const [promoPrice, setPromoPrice] = useState("");
+  const [scarcityMode, setScarcityMode] = useState("none");
+  const [earlyBirdPrice, setEarlyBirdPrice] = useState("");
+  const [earlyBirdSlots, setEarlyBirdSlots] = useState("");
   const [capacity, setCapacity] = useState("");
   const [sessionCourtIds, setSessionCourtIds] = useState<string[]>([]);
 
@@ -643,10 +675,16 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         corporatePrice,
         promoPrice,
       }),
+      scarcity_mode: scarcityMode,
+      early_bird_price_minor: scarcityMode === "early_bird" ? priceSekToMinor(earlyBirdPrice) : null,
+      early_bird_slots: scarcityMode === "early_bird" ? positiveSlots(earlyBirdSlots) : null,
       is_active: true,
     }, {
       onSuccess: () => {
         setSessionCourtIds([]);
+        setScarcityMode("none");
+        setEarlyBirdPrice("");
+        setEarlyBirdSlots("");
       },
     });
   };
@@ -712,6 +750,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         desk_price_sek: desk,
         corporate_price_sek: metadata.corporate_price_sek ?? "",
         promo_price_sek: metadata.promo_price_sek ?? "",
+        scarcity_mode: sessionScarcityMode(session),
+        early_bird_price_sek: sessionEarlyBirdPriceSek(session),
+        early_bird_slots: sessionEarlyBirdSlots(session),
         capacity: session.capacity ?? "",
         court_ids: session.court_ids || [],
         is_active: Boolean(session.is_active),
@@ -773,6 +814,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         corporatePrice: draft.corporate_price_sek,
         promoPrice: draft.promo_price_sek,
       }),
+      scarcity_mode: draft.scarcity_mode || "none",
+      early_bird_price_minor: draft.scarcity_mode === "early_bird" ? priceSekToMinor(draft.early_bird_price_sek) : null,
+      early_bird_slots: draft.scarcity_mode === "early_bird" ? positiveSlots(draft.early_bird_slots) : null,
       host_customer_ids: Array.isArray(draft.host_customer_ids) ? draft.host_customer_ids : [],
     }, {
       onSuccess: () => setEditingSessionId(null),
@@ -1008,6 +1052,24 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
               <input type="number" placeholder="Valfritt" value={promoPrice} onChange={(e) => setPromoPrice(e.target.value)} className={baseInputClass + " w-full"} style={inputStyle} />
             </label>
           </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Tryckläge
+              <select value={scarcityMode} onChange={(e) => setScarcityMode(e.target.value)} className={baseInputClass + " w-full"} style={inputStyle}>
+                <option value="none">Av</option>
+                <option value="early_bird">Tidigt pris</option>
+                <option value="capacity">Kapacitet</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Tidigt pris
+              <input type="number" placeholder="129" value={earlyBirdPrice} onChange={(e) => setEarlyBirdPrice(e.target.value)} disabled={scarcityMode !== "early_bird"} className={baseInputClass + " w-full disabled:opacity-50"} style={inputStyle} />
+            </label>
+            <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Tidiga platser
+              <input type="number" placeholder="4" value={earlyBirdSlots} onChange={(e) => setEarlyBirdSlots(e.target.value)} disabled={scarcityMode !== "early_bird"} className={baseInputClass + " w-full disabled:opacity-50"} style={inputStyle} />
+            </label>
+          </div>
           <div className="grid grid-cols-2 gap-1.5 text-[11px]">
             {createPreview.map(([label, value]) => (
               <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
@@ -1115,6 +1177,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           });
           const online = sessionOnlinePrice(session);
           const desk = sessionDeskPrice(session);
+          const savedScarcityMode = sessionScarcityMode(session);
+          const savedEarlyBirdPrice = sessionEarlyBirdPriceSek(session);
+          const savedEarlyBirdSlots = sessionEarlyBirdSlots(session);
           const memberAccess = memberPriceForProduct({
             productKey: activeDraftConfig.product_key,
             basePrice: online,
@@ -1307,6 +1372,24 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <input type="number" placeholder="Valfritt" value={draft.promo_price_sek ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, promo_price_sek: e.target.value } }))} className={baseInputClass + " w-full"} style={inputStyle} />
                       </label>
                     </div>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Tryckläge
+                        <select value={draft.scarcity_mode || "none"} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, scarcity_mode: e.target.value } }))} className={baseInputClass + " w-full"} style={inputStyle}>
+                          <option value="none">Av</option>
+                          <option value="early_bird">Tidigt pris</option>
+                          <option value="capacity">Kapacitet</option>
+                        </select>
+                      </label>
+                      <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Tidigt pris
+                        <input type="number" placeholder="129" value={draft.early_bird_price_sek ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, early_bird_price_sek: e.target.value } }))} disabled={(draft.scarcity_mode || "none") !== "early_bird"} className={baseInputClass + " w-full disabled:opacity-50"} style={inputStyle} />
+                      </label>
+                      <label className="space-y-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        Tidiga platser
+                        <input type="number" placeholder="4" value={draft.early_bird_slots ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, early_bird_slots: e.target.value } }))} disabled={(draft.scarcity_mode || "none") !== "early_bird"} className={baseInputClass + " w-full disabled:opacity-50"} style={inputStyle} />
+                      </label>
+                    </div>
                     <div className="grid grid-cols-2 gap-1.5 text-[11px]">
                       {activePreview.map(([label, value]) => (
                         <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
@@ -1453,6 +1536,16 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <span className="mt-1 block font-bold text-foreground">{activeDraftIncludedInUnlimited ? "Play+ ingår" : memberAccess}</span>
                       </div>
                     </div>
+                    {savedScarcityMode !== "none" ? (
+                      <div className="mt-2 rounded-xl bg-badge-vip/10 px-3 py-2 text-[11px] text-badge-vip">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest">Tryckläge</span>
+                        <span className="mt-1 block font-bold">
+                          {savedScarcityMode === "early_bird"
+                            ? `Tidigt pris ${savedEarlyBirdPrice ? formatSek(Number(savedEarlyBirdPrice)) : ""} · ${savedEarlyBirdSlots || 0} platser`
+                            : "Kapacitet visas när passet börjar fyllas"}
+                        </span>
+                      </div>
+                    ) : null}
                     {product && <p className="mt-2 text-[10px] text-muted-foreground">Produkt: {product.name}</p>}
                     {activeWarnings.length > 0 && (
                       <div className="mt-2 space-y-1">

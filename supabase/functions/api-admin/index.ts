@@ -145,6 +145,36 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
   const productKey = next.product_key || null;
   const price = Number(next.price_sek || 0);
   const capacity = next.capacity == null || next.capacity === '' ? null : Number(next.capacity);
+  const hasScarcityFields = Object.prototype.hasOwnProperty.call(next, 'scarcity_mode') ||
+    Object.prototype.hasOwnProperty.call(next, 'early_bird_price_minor') ||
+    Object.prototype.hasOwnProperty.call(next, 'early_bird_slots');
+  if (hasScarcityFields) {
+    const scarcityMode = String(next.scarcity_mode || 'none');
+    if (!['none', 'early_bird', 'capacity'].includes(scarcityMode)) {
+      throw new Error('Invalid scarcity_mode');
+    }
+    next.scarcity_mode = scarcityMode;
+    if (next.early_bird_price_minor === '' || next.early_bird_price_minor == null || scarcityMode !== 'early_bird') {
+      if (scarcityMode === 'early_bird') throw new Error('Tidigt pris behöver ett pris');
+      next.early_bird_price_minor = null;
+    } else {
+      const earlyBirdPriceMinor = Math.round(Number(next.early_bird_price_minor || 0));
+      if (!Number.isFinite(earlyBirdPriceMinor) || earlyBirdPriceMinor <= 0) {
+        throw new Error('Invalid early_bird_price_minor');
+      }
+      next.early_bird_price_minor = earlyBirdPriceMinor;
+    }
+    if (next.early_bird_slots === '' || next.early_bird_slots == null || scarcityMode !== 'early_bird') {
+      if (scarcityMode === 'early_bird') throw new Error('Tidigt pris behöver antal platser');
+      next.early_bird_slots = null;
+    } else {
+      const earlyBirdSlots = Math.round(Number(next.early_bird_slots || 0));
+      if (!Number.isFinite(earlyBirdSlots) || earlyBirdSlots <= 0) {
+        throw new Error('Invalid early_bird_slots');
+      }
+      next.early_bird_slots = earlyBirdSlots;
+    }
+  }
 
   if (productKey && !['open_play_slot', 'group_training', 'day_access', 'event_fee'].includes(String(productKey))) {
     throw new Error(`Unknown product_key for schedule session: ${productKey}`);
@@ -4748,6 +4778,9 @@ Deno.serve(async (req) => {
         publish_status: normalized.publish_status || 'published',
         sort_order: normalized.sort_order ?? 0,
         metadata: normalized.metadata || {},
+        early_bird_price_minor: normalized.early_bird_price_minor ?? null,
+        early_bird_slots: normalized.early_bird_slots ?? null,
+        scarcity_mode: normalized.scarcity_mode || 'none',
       }).select().single();
       if (e) return errorResponse(e.message);
       try {

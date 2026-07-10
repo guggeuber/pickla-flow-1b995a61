@@ -117,7 +117,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     queryFn: async () => {
       const { data: row, error: sessionError } = await supabase
         .from("activity_sessions")
-        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, court_ids, access_policy, metadata")
+        .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, court_ids, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode")
         .eq("id", sessionId!)
         .maybeSingle();
       if (sessionError) throw sessionError;
@@ -279,6 +279,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const backendPricing = data?.activityTicketPricing || data?.pricing || null;
   const pricingDebug = backendPricing?.debug || {};
+  const pricingScarcity = (pricingDebug.scarcity || data?.scarcity || {}) as any;
+  const earlyBird = (pricingScarcity.early_bird || {}) as any;
+  const earlyBirdActive = Boolean(earlyBird.active) && Number(earlyBird.remaining || 0) > 0 && Number(earlyBird.price_sek || 0) > 0;
+  const earlyBirdLine = earlyBirdActive
+    ? `Tidigt pris ${formatSek(Number(earlyBird.price_sek || 0))} — ${Number(earlyBird.remaining || 0)} kvar just nu`
+    : null;
+  const capacityScarcityLine = !earlyBirdLine && pricingScarcity.mode === "capacity" && pricingScarcity.capacity_active
+    ? `${Number(pricingScarcity.registrations_count || registrationCount || 0)} anmälda · ${Number(pricingScarcity.capacity_remaining || spotsLeft || 0)} platser kvar`
+    : null;
   const pricingMode = String(pricingDebug.pricing_mode || session?.metadata?.pricing_mode || "standard");
   const onlinePrice = Number(pricingDebug.online_price_sek ?? session?.metadata?.online_price_sek ?? backendPricing?.baseAmountSek ?? session?.price_sek ?? 0);
   const deskPrice = Number(pricingDebug.desk_price_sek ?? session?.metadata?.desk_price_sek ?? onlinePrice);
@@ -800,6 +809,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 style={{ borderTop: `1px solid ${BORDER}`, boxShadow: "0 -16px 32px rgba(15,23,42,0.08)" }}
               >
               <div className="mx-auto grid max-w-md gap-2">
+                {!isRegistered && !pricingPending && (earlyBirdLine || capacityScarcityLine) ? (
+                  <p className="rounded-2xl bg-[#fff7ed] px-4 py-3 text-center text-[13px] font-black text-[#9a3412]" style={{ fontFamily: FONT_HEADING }}>
+                    {earlyBirdLine || capacityScarcityLine}
+                  </p>
+                ) : null}
                 <button
                   type="button"
                   onClick={isRegistered ? checkInTicket : startSignup}

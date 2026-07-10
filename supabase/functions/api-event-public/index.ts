@@ -264,7 +264,22 @@ function ogTitleForActivity(session: any, occurrenceDate: string) {
   return `${session?.name || 'Pickla'} · ${dayTime}`;
 }
 
-function ogDescriptionForActivity(registrationsCount: number, hosts: any[] = []) {
+function formatSek(amount: number) {
+  const rounded = Math.round(Number(amount || 0) * 100) / 100;
+  return `${rounded.toLocaleString('sv-SE', {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })} kr`;
+}
+
+function ogDescriptionForActivity(registrationsCount: number, hosts: any[] = [], scarcity?: any) {
+  const earlyBird = scarcity?.early_bird || {};
+  if (earlyBird.active && Number(earlyBird.remaining || 0) > 0 && Number(earlyBird.price_sek || 0) > 0) {
+    return `Tidigt pris ${formatSek(Number(earlyBird.price_sek || 0))} · ${Number(earlyBird.remaining || 0)} kvar just nu — häng på!`;
+  }
+  if (scarcity?.mode === 'capacity' && scarcity?.capacity_active) {
+    return `${Number(scarcity.registrations_count || registrationsCount || 0)} anmälda · ${Number(scarcity.capacity_remaining || 0)} platser kvar — häng på!`;
+  }
   const hostFirstName = String(hosts?.[0]?.first_name || '').trim();
   if (hostFirstName) {
     return `${hostFirstName}s pass — boka plats!`;
@@ -384,7 +399,7 @@ async function buildActivityPreview(client: any, {
 
   const sessionStartedAt = performance.now();
   const sessionQuery = client.from('activity_sessions')
-    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, is_active, publish_status, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, is_active, publish_status, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
     .eq('id', resolvedSessionId)
     .maybeSingle();
   const { data: session, error: sessionErr } = await sessionQuery;
@@ -446,6 +461,9 @@ async function buildActivityPreview(client: any, {
       product_key: session.product_key,
       access_policy: session.access_policy,
       metadata: session.metadata,
+      early_bird_price_minor: session.early_bird_price_minor,
+      early_bird_slots: session.early_bird_slots,
+      scarcity_mode: session.scarcity_mode,
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
       venue_slug: session.venues?.slug || null,
@@ -473,7 +491,7 @@ async function activityRegistrationCount(client: any, activitySessionId: string,
     .select('id', { count: 'exact', head: true })
     .eq('activity_session_id', activitySessionId)
     .eq('session_date', sessionDate)
-    .neq('status', 'cancelled');
+    .not('status', 'in', '("cancelled","refunded")');
   return count || 0;
 }
 
@@ -596,7 +614,7 @@ async function activitySocialProof(client: any, {
   };
 
   for (const row of registrationsResult.data || []) {
-    if (row.status === 'cancelled') continue;
+    if (row.status === 'cancelled' || row.status === 'refunded') continue;
     getRow(row.activity_session_id, row.session_date).registrations_count += 1;
   }
 
@@ -1012,13 +1030,25 @@ Deno.serve(async (req) => {
           preview.activity_session.id,
           preview.activity_session.occurrence_date,
         );
+        const activityTicketPricing = await resolveActivityPricingDecision({
+          client,
+          venueId: preview.activity_session.venue_id,
+          userId: null,
+          activitySessionId: preview.activity_session.id,
+          sessionDate: preview.activity_session.occurrence_date,
+          requestedProductKey: preview.activity_session.product_key,
+          requestedAmountSek: preview.activity_session.price_sek,
+          purchaseKind: 'activity_ticket',
+          session: preview.activity_session,
+        });
+        const scarcity = activityTicketPricing.debug?.scarcity || null;
         const origin = publicSiteOrigin(req);
         const canonicalPath = publicPassPath(preview.activity_session.id, preview.activity_session.occurrence_date, preview.activity_session.venue_slug || venueSlug);
         const canonicalUrl = `${origin}${canonicalPath}`;
         const imageUrl = `${origin}/og-pickla.jpg`;
         const html = activityOgHtml({
           title: ogTitleForActivity(preview.activity_session, preview.activity_session.occurrence_date),
-          description: ogDescriptionForActivity(registrationCount, preview.activity_session.hosts || []),
+          description: ogDescriptionForActivity(registrationCount, preview.activity_session.hosts || [], scarcity),
           canonicalUrl,
           imageUrl,
         });
@@ -1026,7 +1056,7 @@ Deno.serve(async (req) => {
           status: 200,
           headers: {
             'content-type': 'text/html; charset=utf-8',
-            'Cache-Control': 'public, max-age=300, s-maxage=600, stale-while-revalidate=300',
+            'Cache-Control': 'public, max-age=300, s-maxage=300, stale-while-revalidate=120',
           },
         });
       } catch (err) {
@@ -1124,6 +1154,7 @@ Deno.serve(async (req) => {
         preview.registrations = { count: registrationCount };
         preview.activityTicketPricing = activityTicketPricing;
         preview.dayPassPricing = dayPassPricing;
+        preview.scarcity = activityTicketPricing.debug?.scarcity || null;
         preview.recommendedOption = recommendedOption;
         preview.upgradeDeltaSek = upgradeDeltaSek;
         preview.pricing = activityTicketPricing;

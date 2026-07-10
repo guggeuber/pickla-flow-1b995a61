@@ -1212,6 +1212,11 @@ async function handleDayPass(
       metadata: {
         session_type: kind,
         session_name: meta.session_name || null,
+        pricing_reason: meta.pricing_reason || null,
+        scarcity_mode: meta.scarcity_mode || null,
+        early_bird_price_minor: meta.early_bird_price_minor || null,
+        early_bird_slots: meta.early_bird_slots || null,
+        early_bird_remaining_at_checkout: meta.early_bird_remaining_at_checkout || null,
       },
     }, { onConflict: 'activity_session_id,session_date,user_id' });
   }
@@ -1330,12 +1335,14 @@ async function handleActivityTicket(
     sourceId: session.id,
     receipt,
     amountIncVatMinor: Number(session.amount_total || 0),
-    metadata: {
-      session_registration_id: registration?.id || null,
-      activity_session_id: activitySessionId,
-      session_date: date,
-      session_type: kind,
-    },
+      metadata: {
+        session_registration_id: registration?.id || null,
+        activity_session_id: activitySessionId,
+        session_date: date,
+        session_type: kind,
+        pricing_reason: meta.pricing_reason || null,
+        scarcity_mode: meta.scarcity_mode || null,
+      },
   });
 
   if (registration?.id) {

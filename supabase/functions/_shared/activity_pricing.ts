@@ -3,9 +3,16 @@ import { resolveCustomerIdForUser } from './customers.ts';
 const DEFAULT_DAY_ACCESS_PRICE_SEK = 199;
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
+const PEOPLE_ROW_THRESHOLD = 3;
+const CAPACITY_SCARCITY_CUTOFF = 0.3;
 
 function roundSek(value: number) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function minorToSek(value: unknown) {
+  const minor = Math.round(Number(value || 0));
+  return minor > 0 ? roundSek(minor / 100) : null;
 }
 
 function applyPercentDiscount(baseAmount: number, percent: number) {
@@ -14,6 +21,11 @@ function applyPercentDiscount(baseAmount: number, percent: number) {
 
 function clampPercent(value: unknown) {
   return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
+}
+
+function positiveInt(value: unknown) {
+  const parsed = Math.round(Number(value || 0));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function defaultProductKeyForSession(sessionType?: string | null) {
@@ -39,6 +51,11 @@ function boolFromMetadata(value: unknown, fallback: boolean) {
   return String(value) === 'true';
 }
 
+function scarcityModeFrom(value: unknown) {
+  const mode = String(value || 'none');
+  return mode === 'early_bird' || mode === 'capacity' ? mode : 'none';
+}
+
 function isPlayingHostReason(value: unknown) {
   return value === PLAYING_HOST_ROLE || value === LEGACY_HOST_COMP;
 }
@@ -48,6 +65,20 @@ function normalizeChannel(value: unknown) {
   return ['online', 'desk', 'member', 'guest', 'corporate', 'affiliate', 'host', 'ambassador', 'promo'].includes(channel)
     ? channel
     : 'online';
+}
+
+async function countActivityRegistrations(client: any, activitySessionId: string, sessionDate: string) {
+  const { count, error } = await client
+    .from('session_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('activity_session_id', activitySessionId)
+    .eq('session_date', sessionDate)
+    .not('status', 'in', '("cancelled","refunded")');
+  if (error) {
+    console.error('activity registration count failed', error.message);
+    return 0;
+  }
+  return count || 0;
 }
 
 export type ActivityPricingDecision = {
@@ -98,7 +129,7 @@ export async function resolveActivityPricingDecision({
     ? providedSession
     : (await client
       .from('activity_sessions')
-      .select('id, venue_id, name, session_type, price_sek, product_key, access_policy, metadata')
+      .select('id, venue_id, name, session_type, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode')
       .eq('id', activitySessionId)
       .maybeSingle()).data;
 
@@ -118,7 +149,7 @@ export async function resolveActivityPricingDecision({
   const productCacheKey = `${venueId}:${productKey}`;
   const productPromise = productCache?.get(productCacheKey) || client
     .from('access_products')
-    .select('product_key, product_kind, base_price_sek, session_type')
+    .select('product_key, product_kind, base_price_sek, session_type, early_bird_price_minor, early_bird_slots, scarcity_mode')
     .eq('venue_id', venueId)
     .eq('product_key', productKey)
     .eq('is_active', true)
@@ -134,6 +165,45 @@ export async function resolveActivityPricingDecision({
     ? DEFAULT_DAY_ACCESS_PRICE_SEK
     : Number(requestedAmountSek || 0);
   const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
+  const earlyBirdPriceMinor = positiveInt(
+    session.early_bird_price_minor ??
+    sessionMetadata.early_bird_price_minor ??
+    product?.early_bird_price_minor,
+  );
+  const earlyBirdSlots = positiveInt(
+    session.early_bird_slots ??
+    sessionMetadata.early_bird_slots ??
+    product?.early_bird_slots,
+  );
+  const configuredScarcityMode = scarcityModeFrom(
+    session.scarcity_mode ??
+    sessionMetadata.scarcity_mode ??
+    product?.scarcity_mode,
+  );
+  const scarcityMode = configuredScarcityMode === 'capacity'
+    ? 'capacity'
+    : earlyBirdPriceMinor && earlyBirdSlots
+      ? 'early_bird'
+      : 'none';
+  const shouldCountRegistrations = purchaseKind === 'activity_ticket' && scarcityMode !== 'none';
+  const registrationsCount = shouldCountRegistrations
+    ? await countActivityRegistrations(client, activitySessionId, sessionDate)
+    : 0;
+  const earlyBirdPriceSek = minorToSek(earlyBirdPriceMinor);
+  const earlyBirdRemaining = earlyBirdSlots ? Math.max(earlyBirdSlots - registrationsCount, 0) : 0;
+  const earlyBirdActive = purchaseKind === 'activity_ticket' &&
+    scarcityMode === 'early_bird' &&
+    earlyBirdPriceSek != null &&
+    Boolean(earlyBirdSlots) &&
+    earlyBirdRemaining > 0;
+  const capacity = positiveInt(session.capacity);
+  const capacityRemaining = capacity ? Math.max(capacity - registrationsCount, 0) : null;
+  const capacityScarcityActive = purchaseKind === 'activity_ticket' &&
+    scarcityMode === 'capacity' &&
+    Boolean(capacity) &&
+    registrationsCount >= PEOPLE_ROW_THRESHOLD &&
+    capacityRemaining != null &&
+    capacityRemaining <= Math.ceil((capacity || 0) * CAPACITY_SCARCITY_CUTOFF);
   const onlinePriceSek = Number(sessionMetadata.online_price_sek ?? session.price_sek ?? 0);
   const deskPriceSek = Number(sessionMetadata.desk_price_sek ?? onlinePriceSek);
   const channel = normalizeChannel(salesChannel || sessionMetadata.default_sales_channel);
@@ -196,6 +266,20 @@ export async function resolveActivityPricingDecision({
     member_discount_percent: memberDiscountPercent,
     day_pass_included: dayPassIncluded,
     membership_included: membershipIncluded,
+    scarcity: {
+      mode: scarcityMode,
+      registrations_count: registrationsCount,
+      capacity,
+      capacity_remaining: capacityRemaining,
+      capacity_active: capacityScarcityActive,
+      early_bird: {
+        active: earlyBirdActive,
+        price_minor: earlyBirdPriceMinor,
+        price_sek: earlyBirdPriceSek,
+        slots: earlyBirdSlots,
+        remaining: earlyBirdRemaining,
+      },
+    },
   };
 
   if (purchaseKind === 'activity_ticket' && userId) {
@@ -350,6 +434,17 @@ export async function resolveActivityPricingDecision({
           }
         }
       }
+    }
+  }
+
+  if (earlyBirdActive && earlyBirdPriceSek != null && finalAmountSek > 0) {
+    if (earlyBirdPriceSek < finalAmountSek) {
+      debug.before_early_bird_amount_sek = finalAmountSek;
+      finalAmountSek = earlyBirdPriceSek;
+      pricingReason = 'early_bird';
+      debug.pricing_source = 'early_bird';
+    } else {
+      debug.early_bird_not_applied_reason = 'member_or_channel_price_lower';
     }
   }
 

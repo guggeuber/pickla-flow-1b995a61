@@ -71,6 +71,9 @@ type FeedItem = {
     occurrence_date?: string;
     access_policy?: Record<string, unknown> | null;
     metadata?: Record<string, unknown> | null;
+    early_bird_price_minor?: number | null;
+    early_bird_slots?: number | null;
+    scarcity_mode?: string | null;
   };
   capacity?: number | null;
   href: string;
@@ -97,6 +100,9 @@ type SessionRow = {
   venue_id: string;
   access_policy: Record<string, unknown> | null;
   metadata: Record<string, unknown> | null;
+  early_bird_price_minor?: number | null;
+  early_bird_slots?: number | null;
+  scarcity_mode?: string | null;
 };
 
 type SessionOccurrence = SessionRow & {
@@ -185,7 +191,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const [sessionsRes, eventsRes, bookingsRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")
@@ -270,7 +276,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const registrationsByKey = new Map<string, RegistrationRow[]>();
       const userRegistrationStatusByKey = new Map<string, string | null>();
       for (const row of registrationsRes.data || []) {
-        if (row.status === "cancelled") continue;
+        if (row.status === "cancelled" || row.status === "refunded") continue;
         const key = `${row.activity_session_id}:${row.session_date}`;
         registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
         if (userId && row.user_id === userId) {
@@ -331,6 +337,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         const onlinePrice = Number(metadata.online_price_sek ?? session.price_sek ?? 0);
         const deskPrice = Number(metadata.desk_price_sek ?? onlinePrice);
         const spotsLeft = capacity ? Math.max(capacity - count, 0) : null;
+        const earlyPrice = earlyBirdPriceSek(session, count);
         const userRegistrationStatus = userRegistrationStatusByKey.get(occurrenceKey) || null;
         return {
           id: `session:${session.id}:${session.occurrence_date}`,
@@ -347,7 +354,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           userIsRegistered: Boolean(userRegistrationStatus),
           userIsCheckedIn: userRegistrationStatus === "checked_in",
           userRegistrationStatus,
-          priceSek: onlinePrice || Number(session.price_sek || 0),
+          priceSek: earlyPrice ?? (onlinePrice || Number(session.price_sek || 0)),
           isSpecialPass,
           onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
           participants: (participantUserIdsByKey.get(occurrenceKey) || [])
@@ -589,6 +596,15 @@ function sortBySoonestThenPeople(items: FeedItem[]) {
     if (timeCompare !== 0) return timeCompare;
     return Number(b.registrationsCount || 0) - Number(a.registrationsCount || 0);
   });
+}
+
+function earlyBirdPriceSek(session: SessionOccurrence, registrationsCount: number) {
+  const metadata = session.metadata || {};
+  const priceMinor = Number(session.early_bird_price_minor ?? metadata.early_bird_price_minor ?? 0);
+  const slots = Number(session.early_bird_slots ?? metadata.early_bird_slots ?? 0);
+  const mode = String(session.scarcity_mode ?? metadata.scarcity_mode ?? (priceMinor > 0 && slots > 0 ? "early_bird" : "none"));
+  if (mode !== "early_bird" || priceMinor <= 0 || slots <= 0) return null;
+  return registrationsCount < slots ? Math.round(priceMinor) / 100 : null;
 }
 
 function FeaturedTonightHero({
