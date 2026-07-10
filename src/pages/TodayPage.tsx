@@ -602,7 +602,7 @@ function earlyBirdPriceSek(session: SessionOccurrence, registrationsCount: numbe
   const metadata = session.metadata || {};
   const priceMinor = Number(session.early_bird_price_minor ?? metadata.early_bird_price_minor ?? 0);
   const slots = Number(session.early_bird_slots ?? metadata.early_bird_slots ?? 0);
-  const mode = String(session.scarcity_mode ?? metadata.scarcity_mode ?? (priceMinor > 0 && slots > 0 ? "early_bird" : "none"));
+  const mode = String(session.scarcity_mode ?? metadata.scarcity_mode ?? "none");
   if (mode !== "early_bird" || priceMinor <= 0 || slots <= 0) return null;
   return registrationsCount < slots ? Math.round(priceMinor) / 100 : null;
 }

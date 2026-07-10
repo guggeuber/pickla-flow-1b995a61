@@ -177,14 +177,9 @@ export async function resolveActivityPricingDecision({
   );
   const configuredScarcityMode = scarcityModeFrom(
     session.scarcity_mode ??
-    sessionMetadata.scarcity_mode ??
-    product?.scarcity_mode,
+    sessionMetadata.scarcity_mode,
   );
-  const scarcityMode = configuredScarcityMode === 'capacity'
-    ? 'capacity'
-    : earlyBirdPriceMinor && earlyBirdSlots
-      ? 'early_bird'
-      : 'none';
+  const scarcityMode = configuredScarcityMode;
   const shouldCountRegistrations = purchaseKind === 'activity_ticket' && scarcityMode !== 'none';
   const registrationsCount = shouldCountRegistrations
     ? await countActivityRegistrations(client, activitySessionId, sessionDate)
