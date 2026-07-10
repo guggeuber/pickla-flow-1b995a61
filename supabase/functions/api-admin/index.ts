@@ -200,6 +200,202 @@ function normalizeHostCustomerIds(value: unknown) {
   return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 10);
 }
 
+function normalizeCourtIds(value: unknown) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))]
+    : [];
+}
+
+function effectiveActivitySessionDraft(existing: Record<string, any> | null, next: Record<string, any>, venueId: string) {
+  return {
+    ...(existing || {}),
+    ...next,
+    venue_id: venueId,
+    court_ids: Object.prototype.hasOwnProperty.call(next, 'court_ids')
+      ? normalizeCourtIds(next.court_ids)
+      : normalizeCourtIds(existing?.court_ids),
+    recurrence_days: Object.prototype.hasOwnProperty.call(next, 'recurrence_days')
+      ? Array.isArray(next.recurrence_days) ? next.recurrence_days : null
+      : existing?.recurrence_days ?? null,
+    session_date: Object.prototype.hasOwnProperty.call(next, 'session_date')
+      ? next.session_date || null
+      : existing?.session_date ?? null,
+    start_time: Object.prototype.hasOwnProperty.call(next, 'start_time')
+      ? next.start_time
+      : existing?.start_time,
+    end_time: Object.prototype.hasOwnProperty.call(next, 'end_time')
+      ? next.end_time
+      : existing?.end_time,
+    is_active: Object.prototype.hasOwnProperty.call(next, 'is_active')
+      ? next.is_active
+      : existing?.is_active ?? true,
+    publish_status: Object.prototype.hasOwnProperty.call(next, 'publish_status')
+      ? next.publish_status || 'published'
+      : existing?.publish_status || 'published',
+  };
+}
+
+function activitySessionOccursOnDate(session: Record<string, any>, date: string) {
+  if (session.session_date) return String(session.session_date).slice(0, 10) === date;
+  const recurrenceDays = Array.isArray(session.recurrence_days) ? session.recurrence_days : [];
+  const weekday = DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7;
+  return recurrenceDays.includes(weekday);
+}
+
+function activitySessionOccurrenceRangeUtc(session: Record<string, any>, date: string) {
+  const startTime = cleanTime(session.start_time);
+  const endTime = cleanTime(session.end_time);
+  if (!startTime || !endTime) return null;
+  const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' });
+  const end = DateTime.fromISO(`${date}T${endTime}:00`, { zone: 'Europe/Stockholm' });
+  if (!start.isValid || !end.isValid || end <= start) return null;
+  return {
+    start,
+    end,
+    startISO: start.toUTC().toISO()!,
+    endISO: end.toUTC().toISO()!,
+  };
+}
+
+function rangesOverlap(startA: DateTime, endA: DateTime, startB: DateTime, endB: DateTime) {
+  return startA.toMillis() < endB.toMillis() && endA.toMillis() > startB.toMillis();
+}
+
+function formatStockholmRange(startIso: string, endIso: string) {
+  const start = DateTime.fromISO(startIso, { zone: 'utc' }).setZone('Europe/Stockholm');
+  const end = DateTime.fromISO(endIso, { zone: 'utc' }).setZone('Europe/Stockholm');
+  if (!start.isValid || !end.isValid) return '';
+  return `${start.toISODate()} ${start.toFormat('HH:mm')}–${end.toFormat('HH:mm')}`;
+}
+
+function conflictSearchWindow(session: Record<string, any>) {
+  if (session.session_date) {
+    const range = stockholmDayRangeUtc(String(session.session_date).slice(0, 10));
+    return { start: range.start!, end: range.end! };
+  }
+  return { start: stockholmDayRangeUtc(stockholmToday()).start!, end: null as string | null };
+}
+
+async function validateActivitySessionCourtAvailability(
+  admin: any,
+  venueId: string,
+  session: Record<string, any>,
+  selfSessionId?: string | null,
+) {
+  const isPublished = String(session.publish_status || 'published') === 'published';
+  if (session.is_active === false || !isPublished) return { ok: true as const };
+
+  const courtIds = normalizeCourtIds(session.court_ids);
+  if (!courtIds.length) return { ok: true as const };
+
+  const { data: courts, error: courtsError } = await admin
+    .from('venue_courts')
+    .select('id, name, court_number')
+    .eq('venue_id', venueId)
+    .in('id', courtIds);
+  if (courtsError) return { ok: false as const, status: 400, message: courtsError.message };
+  if ((courts || []).length !== courtIds.length) {
+    return { ok: false as const, status: 400, message: 'En eller flera valda banor tillhör inte anläggningen.' };
+  }
+
+  const courtById = new Map((courts || []).map((court: any) => [court.id, court]));
+  const window = conflictSearchWindow(session);
+
+  let bookingsQuery = admin
+    .from('bookings')
+    .select('id, booking_ref, venue_court_id, start_time, end_time, status')
+    .eq('venue_id', venueId)
+    .in('venue_court_id', courtIds)
+    .neq('status', 'cancelled')
+    .gte('end_time', window.start)
+    .order('start_time', { ascending: true })
+    .limit(1000);
+  if (window.end) bookingsQuery = bookingsQuery.lt('start_time', window.end);
+  const { data: bookings, error: bookingsError } = await bookingsQuery;
+  if (bookingsError) return { ok: false as const, status: 400, message: bookingsError.message };
+
+  for (const booking of bookings || []) {
+    const bookingStart = DateTime.fromISO(booking.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+    const bookingEnd = DateTime.fromISO(booking.end_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+    if (!bookingStart.isValid || !bookingEnd.isValid) continue;
+    const bookingDate = bookingStart.toISODate();
+    if (!bookingDate || !activitySessionOccursOnDate(session, bookingDate)) continue;
+    const occurrence = activitySessionOccurrenceRangeUtc(session, bookingDate);
+    if (!occurrence) continue;
+    if (rangesOverlap(occurrence.start, occurrence.end, bookingStart, bookingEnd)) {
+      const court = courtById.get(booking.venue_court_id);
+      const courtName = court?.name || `Bana ${court?.court_number || ''}`.trim() || 'Banan';
+      return {
+        ok: false as const,
+        status: 409,
+        message: `${courtName} är redan bokad ${formatStockholmRange(booking.start_time, booking.end_time)}.`,
+      };
+    }
+  }
+
+  let blocksQuery = admin
+    .from('event_resource_blocks')
+    .select('id, title, reason, status, starts_at, ends_at, metadata, resource_catalog_id, event_resource_catalog(id, name, resource_type, venue_court_id)')
+    .eq('venue_id', venueId)
+    .eq('blocks_public_booking', true)
+    .in('status', ['hold', 'confirmed'])
+    .gte('ends_at', window.start)
+    .order('starts_at', { ascending: true })
+    .limit(1000);
+  if (window.end) blocksQuery = blocksQuery.lt('starts_at', window.end);
+  const { data: blocks, error: blocksError } = await blocksQuery;
+  if (blocksError) return { ok: false as const, status: 400, message: blocksError.message };
+
+  const courtSet = new Set(courtIds);
+  for (const block of blocks || []) {
+    const metadata = cleanBlockMetadata(block.metadata);
+    if (selfSessionId && metadata.activity_session_id === selfSessionId) continue;
+    const resource = resourceForBlockRow(block);
+    const resourceType = String(resource?.resource_type || '').toLowerCase();
+    const blockCourtId = resource?.venue_court_id || metadata.venue_court_id;
+    const targetsSelectedCourt = metadata.scope === 'venue' ||
+      resourceType === 'venue' ||
+      resourceType === 'whole_venue' ||
+      (blockCourtId && courtSet.has(String(blockCourtId)));
+    if (!targetsSelectedCourt) continue;
+
+    const blockStart = DateTime.fromISO(block.starts_at, { zone: 'utc' });
+    const blockEnd = DateTime.fromISO(block.ends_at, { zone: 'utc' });
+    if (!blockStart.isValid || !blockEnd.isValid) continue;
+    for (const date of localDatesBetween(block.starts_at, block.ends_at)) {
+      if (!activitySessionOccursOnDate(session, date)) continue;
+      const occurrence = activitySessionOccurrenceRangeUtc(session, date);
+      if (!occurrence) continue;
+      if (rangesOverlap(DateTime.fromISO(occurrence.startISO, { zone: 'utc' }), DateTime.fromISO(occurrence.endISO, { zone: 'utc' }), blockStart, blockEnd)) {
+        const court = blockCourtId ? courtById.get(String(blockCourtId)) : null;
+        const courtName = court?.name || resource?.name || 'Vald bana';
+        return {
+          ok: false as const,
+          status: 409,
+          message: `${courtName} är blockerad ${formatStockholmRange(block.starts_at, block.ends_at)}.`,
+        };
+      }
+    }
+  }
+
+  return { ok: true as const };
+}
+
+async function validateActivitySessionHostCustomers(admin: any, hostCustomerIds: string[] | null) {
+  if (!hostCustomerIds || !hostCustomerIds.length) return { ok: true as const };
+  const { data, error } = await admin
+    .from('customers')
+    .select('id')
+    .in('id', hostCustomerIds)
+    .eq('status', 'active');
+  if (error) return { ok: false as const, status: 400, message: error.message };
+  const validSet = new Set((data || []).map((customer: any) => customer.id));
+  if (hostCustomerIds.some((id) => !validSet.has(id))) {
+    return { ok: false as const, status: 400, message: 'One or more selected hosts could not be found' };
+  }
+  return { ok: true as const };
+}
+
 function isPlayingHostReason(value: unknown) {
   return value === 'playing_host' || value === 'host_comp';
 }
@@ -4759,6 +4955,14 @@ Deno.serve(async (req) => {
       const hostCustomerIds = normalizeHostCustomerIds(body.host_customer_ids);
       const normalized = normalizeActivitySessionPayload(body);
       const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days : null;
+      const hostValidation = await validateActivitySessionHostCustomers(admin, hostCustomerIds);
+      if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
+      const courtValidation = await validateActivitySessionCourtAvailability(
+        admin,
+        venueId,
+        effectiveActivitySessionDraft(null, { ...normalized, recurrence_days: recurrenceDays }, venueId),
+      );
+      if (!courtValidation.ok) return errorResponse(courtValidation.message, courtValidation.status);
       const { data, error: e } = await admin.from('activity_sessions').insert({
         venue_id: venueId,
         series_id: normalized.series_id || null,
@@ -4788,7 +4992,7 @@ Deno.serve(async (req) => {
         const [sessionWithHosts] = await attachActivitySessionHosts(admin, [data]);
         return jsonResponse(sessionWithHosts || data, 201);
       } catch (err) {
-        return errorResponse(err instanceof Error ? err.message : 'Could not assign hosts', 400);
+        return errorResponse(err instanceof Error ? err.message : 'Could not assign hosts', 500);
       }
     }
 
@@ -4797,6 +5001,23 @@ Deno.serve(async (req) => {
       if (!sessionId) return errorResponse('Missing sessionId');
       const hostCustomerIds = normalizeHostCustomerIds(updates.host_customer_ids);
       const normalized = normalizeActivitySessionPayload(updates);
+      const hostValidation = await validateActivitySessionHostCustomers(admin, hostCustomerIds);
+      if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
+      const { data: existingSession, error: existingError } = await admin
+        .from('activity_sessions')
+        .select('id, venue_id, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+        .eq('id', sessionId)
+        .eq('venue_id', venueId)
+        .maybeSingle();
+      if (existingError) return errorResponse(existingError.message);
+      if (!existingSession?.id) return errorResponse('Activity session not found', 404);
+      const courtValidation = await validateActivitySessionCourtAvailability(
+        admin,
+        venueId,
+        effectiveActivitySessionDraft(existingSession, normalized, venueId),
+        sessionId,
+      );
+      if (!courtValidation.ok) return errorResponse(courtValidation.message, courtValidation.status);
       const { data, error: e } = await admin.from('activity_sessions')
         .update(normalized).eq('id', sessionId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
@@ -4805,7 +5026,7 @@ Deno.serve(async (req) => {
         const [sessionWithHosts] = await attachActivitySessionHosts(admin, [data]);
         return jsonResponse(sessionWithHosts || data);
       } catch (err) {
-        return errorResponse(err instanceof Error ? err.message : 'Could not assign hosts', 400);
+        return errorResponse(err instanceof Error ? err.message : 'Could not assign hosts', 500);
       }
     }
 
