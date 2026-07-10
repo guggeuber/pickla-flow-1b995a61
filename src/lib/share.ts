@@ -3,9 +3,10 @@ type ShareOrCopyInput = {
   text?: string;
   url?: string;
   copyText?: string;
+  preferNativeShare?: boolean;
 };
 
-function copyWithFallback(value: string) {
+export function copyWithFallback(value: string) {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(value);
   }
@@ -22,15 +23,32 @@ function copyWithFallback(value: string) {
   return Promise.resolve();
 }
 
-export async function shareOrCopy({ title, text, url, copyText }: ShareOrCopyInput) {
+export async function shareOrCopy({
+  title,
+  text,
+  url,
+  copyText,
+  preferNativeShare = true,
+}: ShareOrCopyInput): Promise<"shared" | "copied" | "cancelled"> {
   const fallbackText = copyText || [text, url].filter(Boolean).join("\n") || url || "";
+  const shareData = { title, text, url };
 
   try {
-    if (navigator.share && (title || text || url)) {
-      await navigator.share({ title, text, url });
+    if (preferNativeShare && navigator.share && (title || text || url)) {
+      if (navigator.canShare && !navigator.canShare(shareData)) {
+        throw new Error("navigator.canShare returned false");
+      }
+      await navigator.share(shareData);
       return "shared";
     }
-  } catch {
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      return "cancelled";
+    }
+    console.warn("[share] Native share failed, falling back to copy", {
+      name: error?.name,
+      message: error?.message,
+    });
     // Safari/iOS can throw platform-specific share errors. We always fall back
     // to copying so users never see raw platform errors.
   }

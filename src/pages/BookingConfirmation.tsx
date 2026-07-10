@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Download, Loader2, CheckCircle2, Share2, CalendarPlus, Copy, Printer, X } from "lucide-react";
@@ -64,6 +64,48 @@ export default function BookingConfirmation() {
   const totalPrice = data?.totalPrice || 0;
   const receipt = data?.receipt;
   const [creatingInvite, setCreatingInvite] = useState(false);
+  const [invitePreparing, setInvitePreparing] = useState(false);
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const inviteUrlRef = useRef<string | null>(null);
+  const inviteRequestRef = useRef<Promise<string> | null>(null);
+
+  useEffect(() => {
+    inviteUrlRef.current = null;
+    inviteRequestRef.current = null;
+    setInviteUrl(null);
+  }, [ref]);
+
+  const requestInviteUrl = useCallback(async () => {
+    if (inviteUrlRef.current) return inviteUrlRef.current;
+    if (!ref) throw new Error("Bokningsnummer saknas");
+    if (inviteRequestRef.current) return inviteRequestRef.current;
+
+    setInvitePreparing(true);
+    const request = apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef: ref })
+      .then((result) => {
+        if (!result.url) throw new Error("Ingen länk skapades");
+        inviteUrlRef.current = result.url;
+        setInviteUrl(result.url);
+        return result.url;
+      })
+      .finally(() => {
+        inviteRequestRef.current = null;
+        setInvitePreparing(false);
+      });
+
+    inviteRequestRef.current = request;
+    return request;
+  }, [ref]);
+
+  useEffect(() => {
+    if (!ref || !booking || booking.status === "cancelled") return;
+    requestInviteUrl().catch((error) => {
+      console.warn("[booking-share] Could not prepare invite link", {
+        name: error?.name,
+        message: error?.message,
+      });
+    });
+  }, [booking, ref, requestInviteUrl]);
 
   const handleShare = async () => {
     const url = window.location.href;
@@ -79,14 +121,16 @@ export default function BookingConfirmation() {
     if (!ref) return;
     setCreatingInvite(true);
     try {
-      const result = await apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef: ref });
-      if (!result.url) throw new Error("Ingen länk skapades");
+      const preparedUrl = inviteUrlRef.current || inviteUrl;
+      const url = preparedUrl || await requestInviteUrl();
       const shareResult = await shareOrCopy({
         title: "Spela på Pickla",
         text: "Hämta din personliga plats och häng på.",
-        url: result.url,
-        copyText: result.url,
+        url,
+        copyText: url,
+        preferNativeShare: Boolean(preparedUrl),
       });
+      if (shareResult === "cancelled") return;
       toast.success(shareResult === "copied" ? "Spelarlänk kopierad" : "Spelarlänk delad");
     } catch (err: any) {
       toast.error(err?.message || "Kunde inte skapa medspelarlänk. Logga in som bokare och försök igen.");
@@ -377,11 +421,11 @@ export default function BookingConfirmation() {
             <button
               type="button"
               onClick={handleInvitePlayers}
-              disabled={creatingInvite}
+              disabled={creatingInvite || invitePreparing}
               className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-neutral-950 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
               style={{ fontFamily: FONT_GROTESK }}
             >
-              {creatingInvite ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
+              {creatingInvite || invitePreparing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
               Bjud in spelare
             </button>
           </section>

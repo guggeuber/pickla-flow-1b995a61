@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
@@ -891,11 +891,54 @@ function BookingDetailsSheet({
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [creatingInvite, setCreatingInvite] = useState(false);
+  const [invitePreparing, setInvitePreparing] = useState(false);
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [checkingIn, setCheckingIn] = useState(false);
+  const inviteUrlRef = useRef<string | null>(null);
+  const inviteRequestRef = useRef<Promise<string> | null>(null);
+  const bookingRef = booking?.primary_booking_ref || booking?.booking_ref || booking?.bookings?.[0]?.booking_ref || null;
+  const isParticipantPlace = Boolean((booking as any)?.is_participant_place || (booking as any)?.participant);
+
+  useEffect(() => {
+    inviteUrlRef.current = null;
+    inviteRequestRef.current = null;
+    setInviteUrl(null);
+  }, [bookingRef]);
+
+  const requestInviteUrl = useCallback(async () => {
+    if (inviteUrlRef.current) return inviteUrlRef.current;
+    if (!bookingRef) throw new Error("Bokningsnummer saknas");
+    if (inviteRequestRef.current) return inviteRequestRef.current;
+
+    setInvitePreparing(true);
+    const request = apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef })
+      .then((result) => {
+        if (!result.url) throw new Error("Ingen länk skapades");
+        inviteUrlRef.current = result.url;
+        setInviteUrl(result.url);
+        return result.url;
+      })
+      .finally(() => {
+        inviteRequestRef.current = null;
+        setInvitePreparing(false);
+      });
+
+    inviteRequestRef.current = request;
+    return request;
+  }, [bookingRef]);
+
+  useEffect(() => {
+    if (!open || isParticipantPlace || !bookingRef) return;
+    requestInviteUrl().catch((error) => {
+      console.warn("[booking-share] Could not prepare invite link", {
+        name: error?.name,
+        message: error?.message,
+      });
+    });
+  }, [bookingRef, isParticipantPlace, open, requestInviteUrl]);
 
   if (!booking) return null;
 
-  const isParticipantPlace = Boolean((booking as any).is_participant_place || (booking as any).participant);
   const participant = (booking as any).participant || null;
   const courtName = getBookingCourtLabel(booking);
   const courtNames = getBookingCourtNamesLabel(booking);
@@ -984,21 +1027,22 @@ function BookingDetailsSheet({
   };
 
   const handleInvitePlayers = async () => {
-    const bookingRef = booking.primary_booking_ref || booking.booking_ref || booking.bookings?.[0]?.booking_ref;
     if (!bookingRef) {
       toast.error("Bokningsnummer saknas");
       return;
     }
     setCreatingInvite(true);
     try {
-      const result = await apiPost<{ url?: string }>("api-bookings", "booking-participant-invite", { bookingRef });
-      if (!result.url) throw new Error("Ingen länk skapades");
+      const preparedUrl = inviteUrlRef.current || inviteUrl;
+      const url = preparedUrl || await requestInviteUrl();
       const shareResult = await shareOrCopy({
         title: "Spela på Pickla",
         text: "Hämta din personliga plats och häng på.",
-        url: result.url,
-        copyText: result.url,
+        url,
+        copyText: url,
+        preferNativeShare: Boolean(preparedUrl),
       });
+      if (shareResult === "cancelled") return;
       toast.success(shareResult === "copied" ? "Spelarlänk kopierad" : "Spelarlänk delad");
     } catch (error: any) {
       toast.error(error?.message || "Kunde inte skapa medspelarlänk");
@@ -1076,11 +1120,11 @@ function BookingDetailsSheet({
             ) : (
               <button
                 onClick={handleInvitePlayers}
-                disabled={creatingInvite}
+                disabled={creatingInvite || invitePreparing}
                 className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-50"
                 style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
               >
-                {creatingInvite ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+                {creatingInvite || invitePreparing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
                 Bjud in spelare
               </button>
             )}
