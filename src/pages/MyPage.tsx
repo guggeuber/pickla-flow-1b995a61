@@ -344,6 +344,17 @@ function getOwnedBookingThreadKeys(bookings: any[]) {
   return keys;
 }
 
+function getBookingDrawerKey(booking: any) {
+  return (
+    getBookingChatResourceId(booking) ||
+    booking?.primary_booking_ref ||
+    booking?.booking_ref ||
+    booking?.bookings?.[0]?.booking_ref ||
+    booking?.id ||
+    null
+  );
+}
+
 function useMyEventRegistrations(profile?: PlayerProfileContact | null) {
   const { user } = useAuth();
   return useQuery<MyEventRegistration[]>({
@@ -882,10 +893,12 @@ function BookingDetailsSheet({
   booking,
   open,
   onOpenChange,
+  venueSlug,
 }: {
   booking: any | null;
   open: boolean;
   onOpenChange: (o: boolean) => void;
+  venueSlug: string;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -899,6 +912,7 @@ function BookingDetailsSheet({
   const inviteUrlRef = useRef<string | null>(null);
   const inviteRequestRef = useRef<Promise<string> | null>(null);
   const bookingRef = booking?.primary_booking_ref || booking?.booking_ref || booking?.bookings?.[0]?.booking_ref || null;
+  const bookingDrawerKey = booking ? getBookingDrawerKey(booking) : null;
   const isParticipantPlace = Boolean((booking as any)?.is_participant_place || (booking as any)?.participant);
 
   useEffect(() => {
@@ -1143,7 +1157,13 @@ function BookingDetailsSheet({
               </button>
             )}
             <button
-              onClick={() => { onOpenChange(false); navigate(`/booking-chat/${encodeURIComponent(getBookingChatResourceId(booking))}`); }}
+              onClick={() => {
+                const chatResourceId = getBookingChatResourceId(booking);
+                const returnTo = bookingDrawerKey
+                  ? `/my?booking=${encodeURIComponent(String(bookingDrawerKey))}&v=${encodeURIComponent(venueSlug)}`
+                  : `/my?v=${encodeURIComponent(venueSlug)}`;
+                navigate(`/booking-chat/${encodeURIComponent(chatResourceId)}?v=${encodeURIComponent(venueSlug)}&returnTo=${encodeURIComponent(returnTo)}`);
+              }}
               className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
               style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
             >
@@ -2255,6 +2275,16 @@ const MyPage = () => {
   ];
   const membershipTier = (activeMembership as any)?.membership_tiers || (membershipBenefits as any)?.membership?.tier;
   const membershipSummary = getMembershipShortSummary(membershipTier, membershipBenefits);
+  const openBookingDetails = (booking: Record<string, unknown>, options: { replace?: boolean } = {}) => {
+    setSelectedBooking(booking);
+    const bookingKey = getBookingDrawerKey(booking);
+    if (!bookingKey) return;
+    if (searchParams.get("booking") === String(bookingKey) && searchParams.get("v") === venueSlug) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("booking", String(bookingKey));
+    nextParams.set("v", venueSlug);
+    setSearchParams(nextParams, { replace: Boolean(options.replace) });
+  };
   const closeBookingDetails = (open: boolean) => {
     if (open) return;
     setSelectedBooking(null);
@@ -2372,7 +2402,7 @@ const MyPage = () => {
                 {activeBookings.slice(0, 5).map((b: any) => (
                   <button
                     key={getBookingChatResourceId(b)}
-                    onClick={() => setSelectedBooking(b)}
+                    onClick={() => openBookingDetails(b)}
                     className="rounded-xl p-3 flex items-center justify-between text-left active:scale-[0.98] transition-transform"
                     style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                   >
@@ -2401,13 +2431,13 @@ const MyPage = () => {
                         tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSelectedBooking(b);
+                          openBookingDetails(b);
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
                             e.stopPropagation();
-                            setSelectedBooking(b);
+                            openBookingDetails(b);
                           }
                         }}
                         className="px-2 py-1 rounded-full text-[10px] font-bold"
@@ -2542,7 +2572,7 @@ const MyPage = () => {
                         {pastBookings.map((b: any) => (
                           <button
                             key={b.id}
-                            onClick={() => setSelectedBooking(b)}
+                            onClick={() => openBookingDetails(b)}
                             className="rounded-xl p-3 flex items-center justify-between text-left opacity-70 active:scale-[0.98] transition-transform"
                             style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                           >
@@ -2676,6 +2706,7 @@ const MyPage = () => {
         booking={selectedBooking}
         open={!!selectedBooking}
         onOpenChange={closeBookingDetails}
+        venueSlug={venueSlug}
       />
 
       <SessionRegistrationDetailsSheet

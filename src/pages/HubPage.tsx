@@ -182,6 +182,12 @@ function programChatResourceId(sessionId: string, occurrenceDate?: string | null
   return `activity_session:${sessionId}:${occurrenceDate || "next"}`;
 }
 
+function safeRelativeReturnPath(value?: string | null) {
+  if (!value) return null;
+  if (!value.startsWith("/") || value.startsWith("//")) return null;
+  return value;
+}
+
 function eventRoomResourceId(event: any) {
   const isProgramSession = !!event.occurrence_date || !!event.recurrence_days || !!event.activity_series;
   return isProgramSession ? programChatResourceId(event.id, event.occurrence_date) : event.id;
@@ -815,9 +821,10 @@ interface ChatRoomProps {
   venueSlug?: string;
   onBack: () => void;
   publicActivityPreview?: PublicActivityPreview | null;
+  bookingReturnTo?: string | null;
 }
 
-function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: ChatRoomProps) {
+function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview, bookingReturnTo }: ChatRoomProps) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -1234,7 +1241,10 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
         {room.room_type === "booking" && (
           <button
             type="button"
-            onClick={() => navigate(`/my?booking=${encodeURIComponent(room.resource_id || "")}`)}
+            onClick={() => {
+              const fallback = `/my?booking=${encodeURIComponent(room.resource_id || "")}&v=${encodeURIComponent(venueSlug || "pickla-arena-sthlm")}`;
+              navigate(bookingReturnTo || fallback);
+            }}
             style={{
               border: "none",
               background: "transparent",
@@ -3195,6 +3205,7 @@ const HubPage = () => {
   const bookingRoomRef = bookingRef || searchParams.get("booking") || searchParams.get("room");
   const isDirectChatRoute = !!bookingRef || !!directRoomId;
   const directChatMode = !!bookingRoomRef;
+  const safeReturnTo = safeRelativeReturnPath(searchParams.get("returnTo"));
   const { user, loading: authLoading } = useAuth();
 
   const { data: venue } = useVenue(slug);
@@ -3231,6 +3242,18 @@ const HubPage = () => {
     dismissingRef.current = true;
     setRoomOpen(false);
   }, []);
+
+  const returnFromDirectChat = useCallback(() => {
+    if (safeReturnTo) {
+      navigate(safeReturnTo);
+      return;
+    }
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    navigate(directChatMode ? `/my?v=${encodeURIComponent(slug)}` : `/today?v=${encodeURIComponent(slug)}`);
+  }, [directChatMode, navigate, safeReturnTo, slug]);
 
   useEffect(() => {
     if (!joinRoomId || !user?.id || activeRoom) return;
@@ -3280,7 +3303,8 @@ const HubPage = () => {
             venueId={directPublicPreview.room.venue_id || venueId}
             venueSlug={slug}
             publicActivityPreview={directPublicPreview}
-            onBack={() => navigate(`/today?v=${slug}`)}
+            bookingReturnTo={safeReturnTo}
+            onBack={returnFromDirectChat}
           />
         </div>
       );
@@ -3310,7 +3334,8 @@ const HubPage = () => {
           room={activeRoom}
           venueId={activeRoom.venue_id || venueId}
           venueSlug={slug}
-          onBack={() => navigate(`/activity?v=${slug}`)}
+          bookingReturnTo={safeReturnTo}
+          onBack={returnFromDirectChat}
         />
       </div>
     );
@@ -3364,7 +3389,8 @@ const HubPage = () => {
             room={activeRoom}
             venueId={activeRoom.venue_id || venueId}
             venueSlug={slug}
-            onBack={isDirectChatRoute ? () => navigate(`/activity?v=${slug}`) : closeRoom}
+            bookingReturnTo={safeReturnTo}
+            onBack={isDirectChatRoute ? returnFromDirectChat : closeRoom}
           />
         </motion.div>
       )}
