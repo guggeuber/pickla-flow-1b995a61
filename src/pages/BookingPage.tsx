@@ -104,6 +104,20 @@ interface ExistingBooking {
   end: string;
 }
 
+type OpenBookingItem = {
+  id: string;
+  title: string;
+  start_time: string;
+  end_time: string;
+  open_spots: number;
+  total_players: number;
+  pace_label: string;
+  note?: string | null;
+  booker_first_name: string;
+  claim_url: string;
+  courts?: Array<{ name?: string | null; court_number?: number | null }>;
+};
+
 interface DayAvailability {
   openingHours: {
     open_time: string | null;
@@ -295,6 +309,15 @@ export default function BookingPage() {
       return res.json();
     },
   });
+  const { data: openBookingsData } = useQuery<{ items: OpenBookingItem[] }>({
+    queryKey: ["public-open-bookings", slug, availabilityStartStr],
+    staleTime: 60000,
+    queryFn: () => apiGet("api-bookings", "public-open-bookings", {
+      slug,
+      date: availabilityStartStr,
+      days: "7",
+    }),
+  });
 
   const courts = useMemo<CourtData[]>(() => data?.courts || [], [data?.courts]);
   const dayAvailability = (data?.availabilityByDate?.[dateStr] || {
@@ -306,6 +329,11 @@ export default function BookingPage() {
     () => dayAvailability.bookings || [],
     [dayAvailability.bookings]
   );
+  const openBookingsForDate = useMemo(() => (
+    (openBookingsData?.items || []).filter((item) =>
+      DateTime.fromISO(item.start_time, { zone: "utc" }).setZone("Europe/Stockholm").toISODate() === dateStr
+    )
+  ), [dateStr, openBookingsData?.items]);
   const venueName = data?.venue?.name || "";
   const pricingRules = useMemo<PricingRule[]>(() => data?.pricingRules || [], [data?.pricingRules]);
 
@@ -916,6 +944,59 @@ export default function BookingPage() {
               >
                 Till idag
               </button>
+            )}
+
+            {openBookingsForDate.length > 0 && (
+              <section className="rounded-[28px] border border-neutral-200 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.05)]">
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                  Öppna banor
+                </p>
+                <div className="mt-4 space-y-3">
+                  {openBookingsForDate.map((item) => {
+                    const start = DateTime.fromISO(item.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+                    const end = DateTime.fromISO(item.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
+                    const courtLabel = (item.courts || [])
+                      .map((court) => court.name || (court.court_number ? `Bana ${court.court_number}` : null))
+                      .filter(Boolean)
+                      .join(", ");
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          try {
+                            const url = new URL(item.claim_url);
+                            navigate(`${url.pathname}${url.search}`);
+                          } catch {
+                            window.location.href = item.claim_url;
+                          }
+                        }}
+                        className="w-full rounded-2xl border border-neutral-100 bg-neutral-50 p-4 text-left transition-transform active:scale-[0.98]"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[20px] leading-none text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+                              Öppen bana
+                            </p>
+                            <p className="mt-1 text-[13px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                              {start.toFormat("HH:mm")}–{end.toFormat("HH:mm")} · {courtLabel}
+                            </p>
+                            <p className="mt-2 text-[13px] text-neutral-600">
+                              {item.open_spots} platser kvar · {item.pace_label} · Bokad av {item.booker_first_name}
+                            </p>
+                            {item.note && (
+                              <p className="mt-1 text-[12px] text-neutral-400">{item.note}</p>
+                            )}
+                          </div>
+                          <span className="rounded-full bg-neutral-950 px-3 py-2 text-[11px] font-bold text-white" style={{ fontFamily: FONT_MONO }}>
+                            Häng på
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
             )}
 
             <div className="min-h-[520px] rounded-[32px] border border-neutral-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">

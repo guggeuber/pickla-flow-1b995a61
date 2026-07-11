@@ -237,6 +237,20 @@ function bookingParticipantCapacity(rows: any[]) {
   return Math.max(rows.length, 1) * BOOKING_PARTICIPANT_MAX_PER_COURT;
 }
 
+function openBookingCapacity(rows: any[]) {
+  const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
+  const total = Number(representative?.open_for_more_total_players || 0);
+  return total === 2 || total === 4 ? total : bookingParticipantCapacity(rows);
+}
+
+function bookingGroupIsOpenForMore(rows: any[]) {
+  return rows.some((row: any) => row?.open_for_more_status === 'open');
+}
+
+function bookingParticipantCapacityLimit(rows: any[]) {
+  return bookingGroupIsOpenForMore(rows) ? openBookingCapacity(rows) : bookingParticipantCapacity(rows);
+}
+
 function bookingSessionDate(row: any) {
   const iso = row?.start_time;
   if (!iso) return DateTime.now().setZone('Europe/Stockholm').toISODate()!;
@@ -372,7 +386,7 @@ function isFounderBookingGroup(rows: any[]) {
 async function getBookingGroupRows(serviceClient: any, booking: any) {
   let query = serviceClient
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
     .eq('venue_id', booking.venue_id)
     .neq('status', 'cancelled');
 
@@ -1093,7 +1107,7 @@ async function handleCourtBooking(
 
   const { data: sessionBookings, error: refsErr } = await serviceClient
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
     .eq('stripe_session_id', session.id)
     .neq('status', 'cancelled');
 
@@ -1168,7 +1182,7 @@ async function handleBookingParticipant(
 
   const { data: participant, error: participantErr } = await serviceClient
     .from('booking_participants')
-    .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, bookings(booking_ref, start_time, end_time)')
+    .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, metadata, bookings(booking_ref, venue_id, start_time, end_time, access_code, stripe_session_id, notes, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
     .eq('id', participantId)
     .maybeSingle();
   if (participantErr) throw new Error(participantErr.message);
@@ -1201,17 +1215,18 @@ async function handleBookingParticipant(
 
   const { data: representativeBooking } = await serviceClient
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
     .eq('id', participant.booking_id)
     .maybeSingle();
   const bookingForCapacity = representativeBooking || booking;
   const groupedRows = bookingForCapacity ? await getBookingGroupRows(serviceClient, bookingForCapacity) : [];
+  const capacity = bookingParticipantCapacityLimit(groupedRows);
   const commit = await commitBookingParticipantCapacity(serviceClient, {
     p_venue_id: participant.venue_id,
     p_booking_id: participant.booking_id,
     p_booking_group_key: participant.booking_group_key,
     p_session_date: bookingSessionDate(bookingForCapacity),
-    p_capacity: bookingParticipantCapacity(groupedRows),
+    p_capacity: capacity,
     p_customer_id: participant.customer_id || receipt?.customer_id || null,
     p_user_id: resolvedUserId,
     p_display_name: participant.display_name || paidMeta.customer_name || 'Spelare',

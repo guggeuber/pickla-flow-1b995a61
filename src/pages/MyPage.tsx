@@ -50,6 +50,13 @@ const CARD_BG = "#FFFFFF";
 const CARD_BORDER = "#E5E7EB";
 const PAGE_BG = "#F8FAFC";
 
+const OPEN_BOOKING_PACE_OPTIONS = [
+  { value: "all_levels", label: "Alla nivåer" },
+  { value: "newer_players", label: "Nyare spelare" },
+  { value: "experienced_players", label: "Van spelare" },
+  { value: "high_tempo", label: "Högt tempo" },
+];
+
 type PlayerProfileContact = {
   phone?: string | null;
 };
@@ -909,17 +916,37 @@ function BookingDetailsSheet({
   const [invitePreparing, setInvitePreparing] = useState(false);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [checkingIn, setCheckingIn] = useState(false);
+  const [openForMoreEditing, setOpenForMoreEditing] = useState(false);
+  const [openForMoreSaving, setOpenForMoreSaving] = useState(false);
+  const [openForMoreTotal, setOpenForMoreTotal] = useState<2 | 4>(4);
+  const [openForMorePace, setOpenForMorePace] = useState("all_levels");
+  const [openForMoreNote, setOpenForMoreNote] = useState("");
   const inviteUrlRef = useRef<string | null>(null);
   const inviteRequestRef = useRef<Promise<string> | null>(null);
   const bookingRef = booking?.primary_booking_ref || booking?.booking_ref || booking?.bookings?.[0]?.booking_ref || null;
   const bookingDrawerKey = booking ? getBookingDrawerKey(booking) : null;
   const isParticipantPlace = Boolean((booking as any)?.is_participant_place || (booking as any)?.participant);
+  const bookingRowsForOpen = Array.isArray((booking as any)?.bookings) ? (booking as any).bookings : booking ? [booking] : [];
+  const openBookingSource = bookingRowsForOpen.find((row: any) => row?.open_for_more_status === "open") || bookingRowsForOpen[0] || {};
+  const openForMoreActive = openBookingSource?.open_for_more_status === "open";
 
   useEffect(() => {
     inviteUrlRef.current = null;
     inviteRequestRef.current = null;
     setInviteUrl(null);
+    setOpenForMoreEditing(false);
   }, [bookingRef]);
+
+  useEffect(() => {
+    const total = Number(openBookingSource?.open_for_more_total_players || 4);
+    setOpenForMoreTotal(total === 2 ? 2 : 4);
+    setOpenForMorePace(String(openBookingSource?.open_for_more_pace || "all_levels"));
+    setOpenForMoreNote(String(openBookingSource?.open_for_more_note || ""));
+  }, [
+    openBookingSource?.open_for_more_total_players,
+    openBookingSource?.open_for_more_pace,
+    openBookingSource?.open_for_more_note,
+  ]);
 
   const requestInviteUrl = useCallback(async () => {
     if (inviteUrlRef.current) return inviteUrlRef.current;
@@ -961,6 +988,9 @@ function BookingDetailsSheet({
     (booking as any).bookings?.find((row: any) => row?.participant_summary)?.participant_summary ||
     null
   ) as BookingParticipantSummaryData | null;
+  const committedParticipants = Number(participantSummary?.committed_count || 0);
+  const openForMoreTotalEffective = Number(openBookingSource?.open_for_more_total_players || openForMoreTotal || 4);
+  const openForMoreSpots = Math.max(0, openForMoreTotalEffective - committedParticipants);
   const participants = Array.isArray((booking as any).participants)
     ? (booking as any).participants
     : Array.isArray((booking as any).bookings)
@@ -1090,6 +1120,51 @@ function BookingDetailsSheet({
     }
   };
 
+  const handleSaveOpenForMore = async () => {
+    if (!bookingRef || isParticipantPlace || openForMoreSaving) return;
+    setOpenForMoreSaving(true);
+    try {
+      const result = await apiPost<{ url?: string; open_spots?: number }>("api-bookings", "open-for-more", {
+        bookingRef,
+        action: "open",
+        totalPlayers: openForMoreTotal,
+        pace: openForMorePace,
+        note: openForMoreNote,
+      });
+      if (result.url) {
+        inviteUrlRef.current = result.url;
+        setInviteUrl(result.url);
+      }
+      toast.success(`${result.open_spots ?? Math.max(0, openForMoreTotal - committedParticipants)} platser öppna`);
+      setOpenForMoreEditing(false);
+      await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
+    } catch (error: any) {
+      toast.error(error?.message || "Kunde inte öppna platser");
+    } finally {
+      setOpenForMoreSaving(false);
+    }
+  };
+
+  const handleCloseOpenForMore = async () => {
+    if (!bookingRef || isParticipantPlace || openForMoreSaving) return;
+    setOpenForMoreSaving(true);
+    try {
+      await apiPost("api-bookings", "open-for-more", {
+        bookingRef,
+        action: "close",
+      });
+      toast.success("Öppna platser är stängda");
+      setOpenForMoreEditing(false);
+      await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
+    } catch (error: any) {
+      toast.error(error?.message || "Kunde inte stänga platser");
+    } finally {
+      setOpenForMoreSaving(false);
+    }
+  };
+
   return (
     <Drawer open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setConfirmCancel(false); }}>
       <DrawerContent style={{ background: CARD_BG }}>
@@ -1130,6 +1205,116 @@ function BookingDetailsSheet({
           {participantSummary && (
             <div className="mt-4">
               <BookingParticipantSummary summary={participantSummary} compact viewerIsBooker={!isParticipantPlace} />
+            </div>
+          )}
+
+          {!isParticipantPlace && participantSummary && (
+            <div className="mt-4 rounded-2xl p-4" style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}` }}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                    Öppna för fler
+                  </p>
+                  <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                    {openForMoreActive ? `${openForMoreSpots} platser öppna` : "Fyll bokningen med fler spelare"}
+                  </p>
+                  <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
+                    Du behåller din bokning. Öppna platser bokas och betalas direkt till Pickla.
+                  </p>
+                </div>
+                {openForMoreActive && (
+                  <span className="rounded-full px-2.5 py-1 text-[10px] font-black" style={{ background: GREEN_LIGHT, color: GREEN, fontFamily: FONT_MONO }}>
+                    ÖPPEN
+                  </span>
+                )}
+              </div>
+
+              {openForMoreEditing ? (
+                <div className="mt-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    {[2, 4].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setOpenForMoreTotal(value as 2 | 4)}
+                        className="rounded-xl px-3 py-3 text-sm font-bold"
+                        style={{
+                          background: openForMoreTotal === value ? TEXT_PRIMARY : CARD_BG,
+                          color: openForMoreTotal === value ? CARD_BG : TEXT_PRIMARY,
+                          border: `1px solid ${CARD_BORDER}`,
+                          fontFamily: FONT_HEADING,
+                        }}
+                      >
+                        Totalt {value}
+                      </button>
+                    ))}
+                  </div>
+                  <select
+                    value={openForMorePace}
+                    onChange={(event) => setOpenForMorePace(event.target.value)}
+                    className="w-full rounded-xl px-3 py-3 text-sm font-bold"
+                    style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+                  >
+                    {OPEN_BOOKING_PACE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <textarea
+                    value={openForMoreNote}
+                    maxLength={120}
+                    onChange={(event) => setOpenForMoreNote(event.target.value)}
+                    placeholder="Kort text, t.ex. Gärna matchvana spelare."
+                    className="w-full min-h-[78px] rounded-xl px-3 py-3 text-sm"
+                    style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setOpenForMoreEditing(false)}
+                      className="flex-1 rounded-xl py-3 text-sm font-bold"
+                      style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+                    >
+                      Avbryt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveOpenForMore}
+                      disabled={openForMoreSaving || committedParticipants >= openForMoreTotal}
+                      className="flex-1 rounded-xl py-3 text-sm font-bold disabled:opacity-50"
+                      style={{ background: GREEN, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+                    >
+                      {openForMoreSaving ? "Sparar..." : "Öppna"}
+                    </button>
+                  </div>
+                  {committedParticipants >= openForMoreTotal && (
+                    <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                      Välj fler spelare än de {committedParticipants} som redan är klara.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-4 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpenForMoreEditing(true)}
+                    className="flex-1 rounded-xl py-3 text-sm font-bold"
+                    style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
+                  >
+                    {openForMoreActive ? "Ändra" : "Öppna för fler"}
+                  </button>
+                  {openForMoreActive && (
+                    <button
+                      type="button"
+                      onClick={handleCloseOpenForMore}
+                      disabled={openForMoreSaving}
+                      className="rounded-xl px-4 py-3 text-sm font-bold disabled:opacity-50"
+                      style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
+                    >
+                      Stäng
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
