@@ -833,7 +833,11 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
   const actionResourceId = room.resource_id?.startsWith("activity_session:")
     ? room.resource_id
     : fallbackActivitySession?.id || room.resource_id;
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const messagesContentRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const shouldAutoFollowRef = useRef(true);
+  const initialBottomSettledRef = useRef(false);
   const reactions = useRoomReactions(room.id);
   const [contextMsg, setContextMsg] = useState<ChatMessage | null>(null);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -852,6 +856,26 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
     room.room_type === "event" &&
     !!inquiryEvent &&
     (inquiryEvent.planning_status === "inquiry" || inquiryEvent.visibility === "internal" || inquiryEvent.is_public === false);
+
+  const isNearMessagesBottom = useCallback((thresholdPx = 120) => {
+    const scrollEl = messagesScrollRef.current;
+    if (!scrollEl) return true;
+    return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight <= thresholdPx;
+  }, []);
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
+  }, []);
+
+  const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    requestAnimationFrame(() => {
+      scrollMessagesToBottom(behavior);
+    });
+  }, [scrollMessagesToBottom]);
+
+  const handleMessagesScroll = useCallback(() => {
+    shouldAutoFollowRef.current = isNearMessagesBottom();
+  }, [isNearMessagesBottom]);
 
   // #3 — push input above keyboard on iOS
   const [keyboardOffset, setKeyboardOffset] = useState(0);
@@ -891,9 +915,33 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
     return () => clearTimeout(timer);
   }, [showGifPicker, gifQuery]);
 
+  useEffect(() => {
+    setLocalMessages([]);
+    shouldAutoFollowRef.current = true;
+    initialBottomSettledRef.current = false;
+  }, [room.id]);
+
+  useEffect(() => {
+    const contentEl = messagesContentRef.current;
+    if (!contentEl || typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      if (!initialBottomSettledRef.current || shouldAutoFollowRef.current || isNearMessagesBottom(48)) {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => scrollMessagesToBottom("auto"));
+      }
+    });
+    observer.observe(contentEl);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [isNearMessagesBottom, room.id, scrollMessagesToBottom]);
+
   const sendGif = async (gif: { url: string; thumb: string }) => {
     if (!user?.id) return;
     setShowGifPicker(false);
+    shouldAutoFollowRef.current = true;
     await supabase.from("chat_messages").insert({
       room_id: room.id,
       user_id: user.id,
@@ -902,11 +950,13 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
       metadata: { type: "gif", thumb: gif.thumb },
     });
     qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+    scheduleScrollToBottom("auto");
   };
 
   const uploadImage = async (file: File) => {
     if (!user?.id || uploading) return;
     setUploading(true);
+    shouldAutoFollowRef.current = true;
     const ext = file.name.split(".").pop();
     const path = `${user.id}/${Date.now()}.${ext}`;
     const { error } = await supabase.storage.from("chat-images").upload(path, file);
@@ -920,6 +970,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
         metadata: { type: "image" },
       });
       qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+      scheduleScrollToBottom("auto");
     }
     setUploading(false);
   };
@@ -932,14 +983,32 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
     );
   }, [publicActivityPreview, room.id, user?.id]);
 
-  // Scroll to bottom on mount (instant) then on new messages / keyboard
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
-  }, []);
+    if (msgsLoading && !publicActivityPreview) return;
+    const latestMessage = visibleMessages[visibleMessages.length - 1] || null;
+    const latestIsOwn = !!latestMessage && latestMessage.user_id === user?.id;
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [visibleMessages, botData, keyboardOffset]);
+    if (!initialBottomSettledRef.current) {
+      initialBottomSettledRef.current = true;
+      shouldAutoFollowRef.current = true;
+      scheduleScrollToBottom("auto");
+      window.setTimeout(() => scheduleScrollToBottom("auto"), 80);
+      return;
+    }
+
+    if (latestIsOwn || shouldAutoFollowRef.current || isNearMessagesBottom()) {
+      scheduleScrollToBottom(latestIsOwn ? "auto" : "smooth");
+    }
+  }, [
+    botData,
+    isNearMessagesBottom,
+    keyboardOffset,
+    msgsLoading,
+    publicActivityPreview,
+    scheduleScrollToBottom,
+    user?.id,
+    visibleMessages,
+  ]);
 
   const sendMessage = async (retryMessage?: ChatMessage) => {
     const pendingContent = retryMessage?.content || input.trim();
@@ -955,6 +1024,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
     }
     const replyRef = retryMessage?.reply_to_id ?? replyTo?.id ?? null;
     setReplyTo(null);
+    shouldAutoFollowRef.current = true;
     const localId = retryMessage?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const localMessage: ChatMessage = {
       id: localId,
@@ -1113,6 +1183,8 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
 
       {/* Messages — #1 scroll feel */}
       <div
+        ref={messagesScrollRef}
+        onScroll={handleMessagesScroll}
         style={{
           flex: 1,
           overflowY: "auto",
@@ -1121,71 +1193,78 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
           touchAction: "pan-y",
           padding: "16px",
           paddingBottom: 8,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
         }}
       >
-        {/* Daily room: synthetic bot messages */}
-        {room.room_type === "daily" && botData && (
-          <>
-            <BotMessage
-              content={
-                botData.freeCount > 0
-                  ? `${botData.freeCount} av ${botData.totalCount} banor är lediga just nu 🎾`
-                  : `Alla ${botData.totalCount} banor är bokade just nu 🔥`
-              }
-              time="nu"
-            />
-          </>
-        )}
-
-        {/* Event room: public event card or internal inquiry customer panel */}
-        {room.room_type === "event" && room.resource_id && isInquiryEvent && inquiryEvent && (
-            <InquiryCustomerPanel event={inquiryEvent} />
-        )}
-
-        {/* #8 — message skeletons while loading */}
-        {msgsLoading && (
-          <>
-            <MessageSkeleton align="start" />
-            <MessageSkeleton align="end" wide />
-            <MessageSkeleton align="start" wide />
-            <MessageSkeleton align="end" />
-          </>
-        )}
-
-        {/* User messages — grouped with time separators */}
-        {visibleMessages.map((msg, index) => {
-          const prev = index > 0 ? visibleMessages[index - 1] : null;
-          const next = visibleMessages[index + 1];
-          const gapMinutes = prev
-            ? DateTime.fromISO(msg.created_at).diff(DateTime.fromISO(prev.created_at), "minutes").minutes
-            : Infinity;
-          const showSeparator = gapMinutes > 5;
-          const nextGap = next
-            ? DateTime.fromISO(next.created_at).diff(DateTime.fromISO(msg.created_at), "minutes").minutes
-            : Infinity;
-          const isLastInGroup = !next; // only the very last message in conversation
-          const replyToMsg = msg.reply_to_id ? visibleMessages.find((m) => m.id === msg.reply_to_id) : undefined;
-          return (
-            <span key={msg.id}>
-              {showSeparator && <TimeSeparator label={groupTimestampLabel(msg.created_at)} />}
-              <MessageBubble
-                message={msg}
-                currentUserId={user?.id}
-                replyToMessage={replyToMsg}
-                reactions={reactions[msg.id] ?? []}
-                showTimestamp={isLastInGroup}
-                onLongPress={() => setContextMsg(msg)}
-                onReactionToggle={(emoji) => handleReact(msg.id, emoji)}
-                onRetry={() => sendMessage(msg)}
+        <div
+          ref={messagesContentRef}
+          style={{
+            minHeight: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          {/* Daily room: synthetic bot messages */}
+          {room.room_type === "daily" && botData && (
+            <>
+              <BotMessage
+                content={
+                  botData.freeCount > 0
+                    ? `${botData.freeCount} av ${botData.totalCount} banor är lediga just nu 🎾`
+                    : `Alla ${botData.totalCount} banor är bokade just nu 🔥`
+                }
+                time="nu"
               />
-            </span>
-          );
-        })}
+            </>
+          )}
 
-        <div ref={messagesEndRef} />
+          {/* Event room: public event card or internal inquiry customer panel */}
+          {room.room_type === "event" && room.resource_id && isInquiryEvent && inquiryEvent && (
+              <InquiryCustomerPanel event={inquiryEvent} />
+          )}
+
+          {/* #8 — message skeletons while loading */}
+          {msgsLoading && (
+            <>
+              <MessageSkeleton align="start" />
+              <MessageSkeleton align="end" wide />
+              <MessageSkeleton align="start" wide />
+              <MessageSkeleton align="end" />
+            </>
+          )}
+
+          {/* User messages — grouped with time separators */}
+          {visibleMessages.map((msg, index) => {
+            const prev = index > 0 ? visibleMessages[index - 1] : null;
+            const next = visibleMessages[index + 1];
+            const gapMinutes = prev
+              ? DateTime.fromISO(msg.created_at).diff(DateTime.fromISO(prev.created_at), "minutes").minutes
+              : Infinity;
+            const showSeparator = gapMinutes > 5;
+            const nextGap = next
+              ? DateTime.fromISO(next.created_at).diff(DateTime.fromISO(msg.created_at), "minutes").minutes
+              : Infinity;
+            const isLastInGroup = !next; // only the very last message in conversation
+            const replyToMsg = msg.reply_to_id ? visibleMessages.find((m) => m.id === msg.reply_to_id) : undefined;
+            return (
+              <span key={msg.id}>
+                {showSeparator && <TimeSeparator label={groupTimestampLabel(msg.created_at)} />}
+                <MessageBubble
+                  message={msg}
+                  currentUserId={user?.id}
+                  replyToMessage={replyToMsg}
+                  reactions={reactions[msg.id] ?? []}
+                  showTimestamp={isLastInGroup}
+                  onLongPress={() => setContextMsg(msg)}
+                  onReactionToggle={(emoji) => handleReact(msg.id, emoji)}
+                  onRetry={() => sendMessage(msg)}
+                />
+              </span>
+            );
+          })}
+
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {/* Activity action — pinned above the real chat input */}
