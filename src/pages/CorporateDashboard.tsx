@@ -11,6 +11,7 @@ import { Loader2, Building2, Users, Clock, Copy, ArrowLeft, Calendar, ShoppingCa
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -156,7 +157,7 @@ export default function CorporateDashboard() {
   const activePackage = packages?.find((p: any) => p.status === "active");
   const remainingHours = activePackage ? activePackage.total_hours - activePackage.used_hours : 0;
   const usagePercent = activePackage ? Math.round((activePackage.used_hours / activePackage.total_hours) * 100) : 0;
-  const inviteUrl = `${window.location.origin}/corp/join?token=${account?.invite_token}`;
+  const inviteUrl = canonicalAppUrl(`/corp/join?token=${account?.invite_token}`);
 
   const statusLabel: Record<string, string> = {
     pending: "Väntar", invoiced: "Fakturerad", paid: "Betald", fulfilled: "Levererad", cancelled: "Avbruten",

@@ -8,6 +8,7 @@ import { CalendarDays, MapPin, Users, ArrowLeft, CheckCircle2, Loader2, MessageC
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -174,8 +175,8 @@ export default function EventPage() {
   const whatsappLabel = event.display_name || event.name || catConfig?.display_name || WHATSAPP_GROUPS[event.category]?.label || "WhatsApp-grupp";
 
   const shareUrl = event.slug
-    ? `${window.location.origin}/e/${event.slug}`
-    : `${window.location.origin}/event/${event.id}`;
+    ? canonicalAppUrl(`/e/${event.slug}`)
+    : canonicalAppUrl(`/event/${event.id}`);
 
   const handleShare = async () => {
     const shareData = {

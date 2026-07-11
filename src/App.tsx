@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -74,6 +75,7 @@ import AdminInvestorPage from "./pages/AdminInvestorPage";
 import PulsePage from "./pages/PulsePage";
 import { Loader2 } from "lucide-react";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import { enforceCanonicalHost } from "@/lib/canonicalOrigin";
 
 const queryClient = new QueryClient();
 
@@ -189,12 +191,20 @@ function AppRoutes() {
   );
 }
 
+function CanonicalHostGuard() {
+  useEffect(() => {
+    enforceCanonicalHost();
+  }, []);
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner />
       <BrowserRouter>
+        <CanonicalHostGuard />
         <AuthProvider>
           <AppRoutes />
         </AuthProvider>

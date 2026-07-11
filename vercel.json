@@ -60,6 +60,19 @@
       ]
     }
   ],
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.playpickla.com"
+        }
+      ],
+      "destination": "https://playpickla.com/$1",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/p/:sessionId",

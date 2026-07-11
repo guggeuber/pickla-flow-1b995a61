@@ -17,6 +17,7 @@ import {
   createEventOperationsRecommendationActivity,
   logAgentRecommendationDecision,
 } from '../_shared/event_operations_agent.ts';
+import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
@@ -30,11 +31,7 @@ function eventReplyAddress(eventId: string) {
 }
 
 function safeOrigin(req: Request) {
-  const origin = req.headers.get('origin') || Deno.env.get('PUBLIC_SITE_URL') || 'https://www.playpickla.com';
-  if (!/^https:\/\/([a-z0-9-]+\.)?playpickla\.com$/i.test(origin) && !/^http:\/\/localhost:\d+$/i.test(origin)) {
-    return 'https://www.playpickla.com';
-  }
-  return origin;
+  return canonicalPublicOrigin(req);
 }
 
 function normalizeTime(value?: string | null) {

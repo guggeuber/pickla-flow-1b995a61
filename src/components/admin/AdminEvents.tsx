@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 interface EventRow {
   id: string;
@@ -622,8 +623,8 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
   };
 
   const eventUrl = slug
-    ? `${window.location.origin}/e/${slug}`
-    : `${window.location.origin}/event/${event.id}`;
+    ? canonicalAppUrl(`/e/${slug}`)
+    : canonicalAppUrl(`/event/${event.id}`);
   const publicLinkReady = isPublic && visibility === "public";
 
   const copyLink = () => {
@@ -650,7 +651,7 @@ function EventDetail({ event, venueId, onBack, categories }: { event: EventRow; 
       setVisibility("public");
       setPlanningStatus("published");
       setSlug(nextSlug);
-      const nextUrl = `${window.location.origin}/e/${nextSlug}`;
+      const nextUrl = canonicalAppUrl(`/e/${nextSlug}`);
       await navigator.clipboard.writeText(nextUrl);
       toast.success("Publik anmälningslänk skapad och kopierad");
       qc.invalidateQueries({ queryKey: ["admin-events", venueId] });
@@ -1189,7 +1190,7 @@ const AdminEvents = ({ venueId }: { venueId: string }) => {
     setCreatingShareLink(true);
     try {
       const result = await apiPost("api-events", "meeting-link", { venueId });
-      const url = `${window.location.origin}/event-plan/${venueId}?token=${encodeURIComponent(result.token)}`;
+      const url = canonicalAppUrl(`/event-plan/${venueId}?token=${encodeURIComponent(result.token)}`);
       setMeetingShareUrl(url);
 
       try {

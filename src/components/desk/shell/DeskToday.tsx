@@ -10,6 +10,7 @@ import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
 import { activityRegistrationCheckinEligibility, addManualBookingParticipant, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility, markBookingParticipantPaid } from "@/lib/deskOps";
 import { shareOrCopy } from "@/lib/share";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 interface Props {
   venueId: string | undefined;
@@ -751,7 +752,7 @@ function BookingActionRow({
             const claimed = Boolean(participant.customer_id || participant.user_id);
             const metadata = participant.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
             const manualPlaceholder = !claimed && metadata.source === "manual_placeholder";
-            const claimUrl = participant.invite_token ? `${window.location.origin}/booking/invite/${encodeURIComponent(participant.invite_token)}` : "";
+            const claimUrl = participant.invite_token ? canonicalAppUrl(`/booking/invite/${encodeURIComponent(participant.invite_token)}`) : "";
             const amountSek = Number(participant.amount_sek || 0);
             return (
               <div key={participant.id} className="grid gap-2 rounded-xl border p-2 md:grid-cols-[1fr_auto]" style={{ borderColor: ax("borderSoft"), background: ax("panel") }}>

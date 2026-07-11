@@ -3,10 +3,11 @@ import { Link } from "react-router-dom";
 import { ArrowRight, MapPin, Building2, Users, Trophy, Briefcase, Dumbbell, Heart, Navigation } from "lucide-react";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { HOTELS, trackHotelClick, withUtm } from "@/config/hotels";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
-const CANONICAL = "https://www.playpickla.com/hotell";
+const CANONICAL = "https://playpickla.com/hotell";
 
 const SEO_TITLE = "Hotell nära Pickla Solna | Boende för event, turneringar och spelare";
 const SEO_DESC = "Boka hotell nära Pickla i Solna. Hotellalternativ för spelare, turneringar, företagsevent och gäster.";
@@ -55,7 +56,7 @@ function useSeo() {
     upsertMeta('meta[property="og:description"]', { property: "og:description", content: SEO_DESC });
     upsertMeta('meta[property="og:url"]', { property: "og:url", content: CANONICAL });
     upsertMeta('meta[property="og:type"]', { property: "og:type", content: "website" });
-    upsertMeta('meta[property="og:image"]', { property: "og:image", content: "https://www.playpickla.com/pwa-512x512.png" });
+    upsertMeta('meta[property="og:image"]', { property: "og:image", content: canonicalAppUrl("/pwa-512x512.png") });
     upsertMeta('meta[name="twitter:card"]', { name: "twitter:card", content: "summary_large_image" });
     upsertMeta('meta[name="twitter:title"]', { name: "twitter:title", content: SEO_TITLE });
     upsertMeta('meta[name="twitter:description"]', { name: "twitter:description", content: SEO_DESC });

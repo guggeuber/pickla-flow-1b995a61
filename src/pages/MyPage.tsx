@@ -29,6 +29,7 @@ import { ThreadRow } from "@/components/ui/ThreadRow";
 import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
 import { getDisplayName, getFirstName } from "@/lib/displayName";
 import { shareOrCopy } from "@/lib/share";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -1299,7 +1300,7 @@ function SessionRegistrationDetailsSheet({
   };
 
   const handleShare = async () => {
-    const url = `${window.location.origin}${programPath}`;
+    const url = canonicalAppUrl(programPath);
     const title = session?.name || "Aktivitet på Pickla";
     const text = `Häng med på ${title} på Pickla`;
     try {
@@ -1446,7 +1447,7 @@ function DayPassSection() {
   const sharedVouchers = guestVouchers.filter((p: any) => p.status === 'unused' && p.recipient_name);
   const activeCount = activePasses.length + availableVouchers.length;
 
-  const buildLink = (token: string) => `${window.location.origin}/pass/${token}`;
+  const buildLink = (token: string) => canonicalAppUrl(`/pass/${token}`);
   const getRecipientLabel = (share: any) => share?.recipient_name || share?.recipient_email || "en vän";
   const buildGiftMessage = (token: string, name: string) =>
     `Jag har gett dig ett dagspass på Pickla, ${name}! Hämta det här: ${buildLink(token)}`;

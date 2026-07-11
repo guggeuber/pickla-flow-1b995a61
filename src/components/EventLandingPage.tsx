@@ -10,6 +10,7 @@ import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 import { EventLandingConfig, SUBMENU, SUBMENU_GROUPS, EVENT_LANDING_PAGES } from "@/config/eventLandingPages";
 import { trackLandingInquiry, validateLandingPayload } from "@/lib/eventLandingTracking";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -53,7 +54,7 @@ function useSeo(cfg: EventLandingConfig) {
     upsertMeta('meta[property="og:description"]', { property: "og:description", content: ogDesc });
     upsertMeta('meta[property="og:url"]', { property: "og:url", content: cfg.canonical });
     upsertMeta('meta[property="og:type"]', { property: "og:type", content: "website" });
-    upsertMeta('meta[property="og:image"]', { property: "og:image", content: "https://www.playpickla.com/pwa-512x512.png" });
+    upsertMeta('meta[property="og:image"]', { property: "og:image", content: canonicalAppUrl("/pwa-512x512.png") });
     upsertMeta('meta[name="twitter:card"]', { name: "twitter:card", content: "summary_large_image" });
     upsertMeta('meta[name="twitter:title"]', { name: "twitter:title", content: ogTitle });
     upsertMeta('meta[name="twitter:description"]', { name: "twitter:description", content: ogDesc });
@@ -66,7 +67,7 @@ function useSeo(cfg: EventLandingConfig) {
         "@context": "https://schema.org",
         "@type": "LocalBusiness",
         name: "Pickla Arena Stockholm",
-        image: "https://www.playpickla.com/pwa-512x512.png",
+        image: canonicalAppUrl("/pwa-512x512.png"),
         url: cfg.canonical,
         email: "hej@playpickla.com",
         address: {

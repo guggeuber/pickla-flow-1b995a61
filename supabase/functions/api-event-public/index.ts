@@ -2,6 +2,7 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
+import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -236,12 +237,7 @@ function isLinkPreviewBot(userAgent: string | null) {
 }
 
 function publicSiteOrigin(req: Request) {
-  const configured = Deno.env.get('PUBLIC_SITE_URL') || Deno.env.get('SITE_URL') || 'https://www.playpickla.com';
-  try {
-    return new URL(configured).origin;
-  } catch {
-    return new URL(req.url).origin;
-  }
+  return canonicalPublicOrigin(req);
 }
 
 function publicPassPath(sessionId: string, sessionDate: string | null, venueSlug: string | null) {

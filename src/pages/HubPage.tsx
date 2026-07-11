@@ -35,6 +35,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { getPublicProfileMap } from "@/lib/publicProfiles";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { DateTime } from "luxon";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { EventCard } from "@/components/hub/EventCard";
@@ -878,7 +879,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
   }, []);
 
   const shareRoom = async () => {
-    const url = `${window.location.origin}/hub?join=${room.id}`;
+    const url = canonicalAppUrl(`/hub?join=${room.id}`);
     if (navigator.share) {
       await navigator.share({ title: room.title, text: "Gå med i min bokningschat på Pickla!", url });
     } else {
@@ -1497,7 +1498,7 @@ function BookingSmartPanel({
       { room_id: daily.id, user_id: userId },
       { onConflict: "room_id,user_id", ignoreDuplicates: true }
     );
-    const inviteUrl = `${window.location.origin}/hub?join=${room.id}`;
+    const inviteUrl = canonicalAppUrl(`/hub?join=${room.id}`);
     const content = `Jag söker spelare till ${courtNames} ${dateLabel} ${timeLabel}. Hoppa in här: ${inviteUrl}`;
     const { error } = await supabase.from("chat_messages").insert({
       room_id: daily.id,

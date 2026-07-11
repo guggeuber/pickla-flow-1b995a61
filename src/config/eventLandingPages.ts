@@ -1,5 +1,7 @@
 export type EventLandingCategory = "corporate" | "private";
 
+import { CANONICAL_PRODUCTION_ORIGIN } from "@/lib/canonicalOrigin";
+
 export type EventLandingConfig = {
   slug: string; // route slug e.g. "eventlokaler"
   path: string; // route path with leading /
@@ -60,7 +62,7 @@ export const SUBMENU_GROUPS: { label: string; items: { label: string; to: string
 // Flat list used for footer + mobile pill row (back-compat)
 export const SUBMENU: { label: string; to: string }[] = SUBMENU_GROUPS.flatMap((g) => g.items);
 
-const BASE = "https://www.playpickla.com";
+const BASE = CANONICAL_PRODUCTION_ORIGIN;
 
 const COMMON_FAQ_TAIL = [
   { q: "Kan vi få mat och dryck?", a: "Ja. Vi har allt från finger food och pizza till buffé och sittande middag, samt full bar med öl, vin och cocktails." },

@@ -619,6 +619,9 @@ function safeReturnUrl(value: unknown) {
   try {
     const parsed = new URL(raw);
     if (!['http:', 'https:'].includes(parsed.protocol)) return 'https://playpickla.com/hub/admin';
+    if (parsed.protocol === 'https:' && parsed.hostname === 'www.playpickla.com') {
+      parsed.hostname = 'playpickla.com';
+    }
     return parsed.toString();
   } catch (_error) {
     return 'https://playpickla.com/hub/admin';

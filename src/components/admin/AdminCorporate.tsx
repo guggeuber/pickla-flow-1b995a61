@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Building2, Copy, Clock, Loader2, ShoppingCart, FileText, CheckCircle2, CreditCard } from "lucide-react";
 import { toast } from "sonner";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 interface Props { venueId: string }
 
@@ -122,7 +123,7 @@ export default function AdminCorporate({ venueId }: Props) {
   };
 
   const copyInviteLink = (token: string) => {
-    navigator.clipboard.writeText(`${window.location.origin}/corp/join?token=${token}`);
+    navigator.clipboard.writeText(canonicalAppUrl(`/corp/join?token=${token}`));
     toast.success("Inbjudningslänk kopierad!");
   };
 

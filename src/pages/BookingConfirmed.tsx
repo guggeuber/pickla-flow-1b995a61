@@ -6,6 +6,7 @@ import { apiGet } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { resolveEntryDestination, safeLocalPath } from "@/lib/entryResolver";
+import { canonicalAppOrigin } from "@/lib/canonicalOrigin";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
@@ -92,7 +93,7 @@ export default function BookingConfirmed() {
     }
     if (data?.type === "booking_participant" && !authLoading) {
       if (data.ticket_url) {
-        navigate(new URL(data.ticket_url, window.location.origin).pathname, { replace: true });
+        navigate(new URL(data.ticket_url, canonicalAppOrigin()).pathname, { replace: true });
         return;
       }
       if (data.ticket_token) {

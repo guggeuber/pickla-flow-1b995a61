@@ -8,6 +8,7 @@ import { apiGet } from "@/lib/api";
 import { addManualBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
 import { shareOrCopy } from "@/lib/share";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 export type OperationsCourt = {
   id?: string | null;
@@ -486,7 +487,7 @@ export function OperationsBookingDrawer({
                       const checkedIn = Boolean(participant.checked_in || participant.checked_in_at);
                       const metadata = participant.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
                       const manualPlaceholder = !claimed && metadata.source === "manual_placeholder";
-                      const claimUrl = participant.invite_token ? `${window.location.origin}/booking/invite/${encodeURIComponent(participant.invite_token)}` : "";
+                      const claimUrl = participant.invite_token ? canonicalAppUrl(`/booking/invite/${encodeURIComponent(participant.invite_token)}`) : "";
                       return (
                         <div key={participant.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
                           <div className="flex flex-wrap items-start justify-between gap-2">

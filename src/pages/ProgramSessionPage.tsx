@@ -17,6 +17,7 @@ import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
 import { formatSek } from "@/lib/activityPricing";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { activityCheckInAvailable, activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -519,7 +520,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const shareActivity = async () => {
     if (!session || !occurrenceDate) return;
     const sharePath = publicProgramPath(session.id, occurrenceDate, venueSlug);
-    const shareUrl = `${window.location.origin}${sharePath}`;
+    const shareUrl = canonicalAppUrl(sharePath);
     const shareDate = DateTime.fromISO(occurrenceDate, { zone: "Europe/Stockholm" })
       .setLocale("sv")
       .toFormat("ccc d MMM");

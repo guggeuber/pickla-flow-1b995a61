@@ -7,6 +7,7 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { auditMutation, canOperateVenue } from '../_shared/authorization.ts';
+import { canonicalPublicOrigin, canonicalPublicUrl } from '../_shared/canonical_origin.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -582,8 +583,7 @@ async function completeBookingParticipantClaim(
   const representative = bookingRows[0];
   const ticketInvite = await ensureParticipantTicketInvite(admin, participant, representative, actorUserId);
   await ensureBookingChatMembership(admin, bookingRows, participant, { postClaimMessage: options.postClaimMessage });
-  const origin = req.headers.get('origin') || 'http://localhost:8080';
-  const ticketUrl = `${origin}/booking/ticket/${encodeURIComponent(ticketInvite.token)}`;
+  const ticketUrl = canonicalPublicUrl(`/booking/ticket/${encodeURIComponent(ticketInvite.token)}`, req);
   if (options.sendEmail && participant.email) {
     await sendParticipantTicketEmail(participant.email, ticketUrl, representative);
   }
@@ -1778,8 +1778,9 @@ Deno.serve(async (req) => {
 
     const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
 
-    // Derive base URL from request Origin to support multiple environments
-    const origin = req.headers.get('origin') || 'http://localhost:8080';
+    // Derive base URL from request Origin to support local development while
+    // forcing production links onto the canonical apex domain.
+    const origin = canonicalPublicOrigin(req);
 
     const meta = metadata || {};
     const requestIdempotencyKey = String(
@@ -2485,7 +2486,6 @@ Deno.serve(async (req) => {
 
         const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
         const ticketInvite = await ensureParticipantTicketInvite(serviceClient, participant, booking, participant.user_id || null);
-        const origin = req.headers.get('origin') || 'http://localhost:8080';
         const { data: venue } = await serviceClient
           .from('venues')
           .select('slug')
@@ -2498,7 +2498,9 @@ Deno.serve(async (req) => {
           participant_id: participant.id,
           booking_ref: booking?.booking_ref || '',
           ticket_token: ticketInvite?.token || '',
-          ticket_url: ticketInvite?.token ? `${origin}/booking/ticket/${encodeURIComponent(ticketInvite.token)}` : '',
+          ticket_url: ticketInvite?.token
+            ? canonicalPublicUrl(`/booking/ticket/${encodeURIComponent(ticketInvite.token)}`, req)
+            : '',
           venue_slug: venue?.slug || '',
         }, 200, 0);
       }
@@ -3250,10 +3252,9 @@ Deno.serve(async (req) => {
         metadata: { booking_id: booking.id, booking_group_key: groupKey },
       });
 
-      const origin = req.headers.get('origin') || 'http://localhost:8080';
       return jsonResponse({
         token: invite.token,
-        url: `${origin}/booking/invite/${encodeURIComponent(invite.token)}`,
+        url: canonicalPublicUrl(`/booking/invite/${encodeURIComponent(invite.token)}`, req),
       }, 200, 0);
     }
 
@@ -3420,17 +3421,16 @@ Deno.serve(async (req) => {
         metadata: { booking_id: booking.id, booking_group_key: groupKey, invite_id: invite.id },
       });
 
-      const origin = req.headers.get('origin') || 'http://localhost:8080';
       return jsonResponse({
         ok: true,
         participant: {
           ...participant,
           checked_in: false,
           amount_sek: minorToSek(participant.price_minor),
-          claim_url: `${origin}/booking/invite/${encodeURIComponent(invite.token)}`,
+          claim_url: canonicalPublicUrl(`/booking/invite/${encodeURIComponent(invite.token)}`, req),
         },
         token: invite.token,
-        url: `${origin}/booking/invite/${encodeURIComponent(invite.token)}`,
+        url: canonicalPublicUrl(`/booking/invite/${encodeURIComponent(invite.token)}`, req),
       }, 201, 0);
     }
 

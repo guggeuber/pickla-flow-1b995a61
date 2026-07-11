@@ -4,6 +4,7 @@ import type { User, Session } from "@supabase/supabase-js";
 import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
+import { canonicalAppOrigin } from "@/lib/canonicalOrigin";
 
 interface AuthContextType {
   user: User | null;
@@ -20,8 +21,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const PENDING_CLAIM_KEY = "pickla_pending_claim_token";
 
 export function authRedirectOrigin() {
-  if (window.location.hostname === "www.playpickla.com") return "https://playpickla.com";
-  return window.location.origin;
+  return canonicalAppOrigin();
 }
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {

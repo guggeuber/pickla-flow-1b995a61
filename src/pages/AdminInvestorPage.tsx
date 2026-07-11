@@ -14,6 +14,7 @@ import {
 } from "@/lib/investorContent";
 import { toast } from "sonner";
 import { Loader2, Copy, Check, X, RefreshCw, Upload, Save } from "lucide-react";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 type Lead = {
   id: string;
@@ -197,7 +198,7 @@ export default function AdminInvestorPage() {
     setBusyId(id);
     try {
       const res = await apiPost<{ token: string }>("api-investor", "approve", { id });
-      const link = `${window.location.origin}/invest/memo/${res.token}`;
+      const link = canonicalAppUrl(`/invest/memo/${res.token}`);
       setIssuedLinks((m) => ({ ...m, [id]: link }));
       toast.success("Approved — link generated");
       load();
@@ -242,7 +243,7 @@ export default function AdminInvestorPage() {
       const res = await apiPost<{ token: string; pulse_token: PulseToken }>("api-pulse", "create-token", {
         label: pulseLabel.trim() || "Pulse report",
       });
-      const link = `${window.location.origin}/pulse/${res.pulse_token.id}`;
+      const link = canonicalAppUrl(`/pulse/${res.pulse_token.id}`);
       setIssuedPulseLink(link);
       setPulseTokens((current) => [res.pulse_token, ...current]);
       toast.success("Pulse link created");
@@ -581,7 +582,7 @@ function PulseLinksPanel(props: {
           <div className="mt-6 space-y-3">
             {props.tokens.map((token) => {
               const active = token.status === "active";
-              const link = `${window.location.origin}/pulse/${token.id}`;
+              const link = canonicalAppUrl(`/pulse/${token.id}`);
               return (
                 <div key={token.id} className="rounded-xl border border-neutral-900 bg-[#0B0C0E] p-4">
                   <div className="flex flex-wrap items-start justify-between gap-4">

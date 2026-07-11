@@ -7,6 +7,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { apiGet, apiPost } from "@/lib/api";
+import { canonicalAppOrigin } from "@/lib/canonicalOrigin";
 
 const SCORE_POLLING_ENABLED = import.meta.env.VITE_ENABLE_SCORE_POLLING === "true";
 
@@ -67,11 +68,7 @@ const createSetupId = () => {
 };
 
 const scoreJoinOrigin = () => {
-  const { hostname, origin } = window.location;
-  if (hostname === "playpickla.com" || hostname === "www.playpickla.com") {
-    return "https://www.playpickla.com";
-  }
-  return origin;
+  return canonicalAppOrigin();
 };
 
 export default function ScoreStartPage() {

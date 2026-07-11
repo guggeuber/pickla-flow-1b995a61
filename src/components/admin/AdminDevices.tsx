@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 interface Court {
   id: string;
@@ -110,7 +111,7 @@ export default function AdminDevices({ venueId }: { venueId: string }) {
   });
 
   const selectedCourt = sortedCourts.find((court) => court.id === courtId);
-  const deviceUrl = (token: string) => `${window.location.origin}/display/device/${token}`;
+  const deviceUrl = (token: string) => canonicalAppUrl(`/display/device/${token}`);
 
   const startEdit = (device: DisplayDevice) => {
     setEditingId(device.id);

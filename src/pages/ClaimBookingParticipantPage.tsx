@@ -7,6 +7,9 @@ import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import { supabase } from "@/integrations/supabase/client";
+import type { Session } from "@supabase/supabase-js";
+import { canonicalAppOrigin, canonicalRedirectUrl, enforceCanonicalHost } from "@/lib/canonicalOrigin";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
@@ -33,27 +36,64 @@ type InviteInfo = {
   identity_required?: boolean;
 };
 
+function isUsableSession(session: Session | null) {
+  if (!session?.access_token || !session.user?.id) return false;
+  if (session.expires_at && session.expires_at * 1000 <= Date.now()) return false;
+  return true;
+}
+
 export default function ClaimBookingParticipantPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
+  const { loading: authLoading } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
+  const [verifiedSession, setVerifiedSession] = useState<Session | null>(null);
+  const [authNotice, setAuthNotice] = useState("");
+  const currentPath = `${window.location.pathname}${window.location.search}`;
+  const isWrongAuthOrigin = Boolean(canonicalRedirectUrl());
+  const verifiedUser = isUsableSession(verifiedSession) ? verifiedSession?.user ?? null : null;
+
+  useEffect(() => {
+    if (!isWrongAuthOrigin) return;
+    enforceCanonicalHost();
+  }, [isWrongAuthOrigin]);
+
+  useEffect(() => {
+    if (authLoading || isWrongAuthOrigin) return;
+    let active = true;
+    setSessionHydrated(false);
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      const session = isUsableSession(data.session) ? data.session : null;
+      setVerifiedSession(session);
+      setSessionHydrated(true);
+    }).catch((error) => {
+      if (!active) return;
+      console.error("[booking-participant-claim] auth hydration failed", error?.name, error?.message);
+      setVerifiedSession(null);
+      setSessionHydrated(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isWrongAuthOrigin]);
 
   const { data, isLoading, error, refetch } = useQuery<InviteInfo>({
-    queryKey: ["booking-participant-invite", token, user?.id || "guest"],
+    queryKey: ["booking-participant-invite", token, verifiedUser?.id || "guest"],
     queryFn: () => apiGet("api-bookings", "booking-participant-invite", { token: token || "" }),
-    enabled: Boolean(token) && !authLoading,
+    enabled: Boolean(token) && !authLoading && sessionHydrated && !isWrongAuthOrigin,
   });
 
   useEffect(() => {
-    const meta = user?.user_metadata || {};
+    const meta = verifiedUser?.user_metadata || {};
     const name = String(meta.display_name || meta.full_name || meta.name || "").trim();
     if (name && !displayName) setDisplayName(name);
-    if (user?.email && !email) setEmail(user.email);
-  }, [displayName, email, user]);
+    if (verifiedUser?.email && !email) setEmail(verifiedUser.email);
+  }, [displayName, email, verifiedUser]);
 
   const dateLine = useMemo(() => {
     if (!data?.booking?.start_time || !data?.booking?.end_time) return "";
@@ -68,18 +108,19 @@ export default function ClaimBookingParticipantPage() {
     .join(", ");
 
   const formatMoney = (value: number) => `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
-  const currentPath = `${window.location.pathname}${window.location.search}`;
   const nameValid = displayName.trim().length > 0;
-  const claimDisabled = submitting || !user || !data?.booking || !nameValid;
+  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || !nameValid;
   const claimDebugState = {
-    authLoaded: !authLoading,
+    authLoaded: !authLoading && sessionHydrated,
     inviteLoaded: Boolean(data?.invite),
     bookingLoaded: Boolean(data?.booking),
-    customerResolved: Boolean(user),
-    profileResolved: Boolean(displayName.trim() || user?.user_metadata),
+    customerResolved: Boolean(verifiedUser),
+    profileResolved: Boolean(displayName.trim() || verifiedUser?.user_metadata),
     nameValid,
     isLoading,
     authLoading,
+    sessionHydrated,
+    verifiedSessionPresent: Boolean(verifiedSession?.access_token),
     submitting,
     pricingResolved: Boolean(data?.pricing),
     capacityState: data?.booking ? `${data.booking.claimed_count}/${data.booking.capacity}` : null,
@@ -95,10 +136,6 @@ export default function ClaimBookingParticipantPage() {
   const handleClaim = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!token || !data?.booking?.venue_id) return;
-    if (!user) {
-      goToIdentity();
-      return;
-    }
     if (!displayName.trim()) {
       console.info("[booking-participant-claim] blocked before submit", claimDebugState);
       toast.error("Skriv ditt namn först.");
@@ -107,6 +144,15 @@ export default function ClaimBookingParticipantPage() {
 
     setSubmitting(true);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const currentSession = isUsableSession(sessionData.session) ? sessionData.session : null;
+      if (!currentSession) {
+        console.info("[booking-participant-claim] missing verified session before submit", claimDebugState);
+        setVerifiedSession(null);
+        setAuthNotice("Logga in för att hämta din plats.");
+        preserveIntendedRoute(currentPath);
+        return;
+      }
       const claim = await apiPost<any>("api-bookings", "booking-participant-claim", {
         token,
         displayName: displayName.trim(),
@@ -116,7 +162,7 @@ export default function ClaimBookingParticipantPage() {
 
       if (claim.free || Number(claim.amount_sek || 0) <= 0) {
         toast.success("Din plats är klar.");
-        navigate(claim.ticket_url ? new URL(claim.ticket_url, window.location.origin).pathname : (claim.booking_ref ? `/b/${claim.booking_ref}` : "/my"));
+        navigate(claim.ticket_url ? new URL(claim.ticket_url, canonicalAppOrigin()).pathname : (claim.booking_ref ? `/b/${claim.booking_ref}` : "/my"));
         return;
       }
 
@@ -133,7 +179,7 @@ export default function ClaimBookingParticipantPage() {
         metadata: {
           booking_participant_id: claim.participant_id,
           customer_name: displayName.trim(),
-          customer_email: email.trim() || user.email || "",
+          customer_email: email.trim() || currentSession.user.email || "",
           customer_phone: phone.trim(),
           success_path: "/booking/confirmed?type=booking_participant",
         },
@@ -150,7 +196,7 @@ export default function ClaimBookingParticipantPage() {
     }
   };
 
-  if (isLoading || authLoading) {
+  if (isLoading || authLoading || !sessionHydrated || isWrongAuthOrigin) {
     return (
       <div className="min-h-[100dvh] bg-[#f7f4ee] grid place-items-center">
         <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
@@ -205,7 +251,7 @@ export default function ClaimBookingParticipantPage() {
             <p>{data.booking.claimed_count}/{data.booking.capacity} spelare klara</p>
           </div>
 
-          {!user ? (
+          {!verifiedUser ? (
             <div className="mt-6 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
               <p className="text-[11px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
                 Personlig plats
@@ -216,6 +262,11 @@ export default function ClaimBookingParticipantPage() {
               <p className="mt-2 text-sm leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
                 Priset visas först efter login, eftersom Founder, Play, Play+ och drop-in kan ha olika rätt.
               </p>
+              {authNotice && (
+                <p className="mt-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-600" style={{ fontFamily: FONT_MONO }}>
+                  {authNotice}
+                </p>
+              )}
               <button
                 type="button"
                 onClick={goToIdentity}

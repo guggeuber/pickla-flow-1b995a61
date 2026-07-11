@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { auditMutation } from '../_shared/authorization.ts';
+import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const cleanString = (value: unknown) => {
@@ -71,9 +72,7 @@ function maskEmail(email: string | null) {
 }
 
 function authRedirectOrigin(req: Request) {
-  const origin = req.headers.get('origin');
-  if (origin?.startsWith('http://') || origin?.startsWith('https://')) return origin;
-  return 'https://www.playpickla.com';
+  return canonicalPublicOrigin(req);
 }
 
 async function resolveCustomerAuthTarget(admin: ReturnType<typeof getServiceClient>, input: {

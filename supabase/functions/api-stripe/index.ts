@@ -4,6 +4,7 @@
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 
 const STRIPE_API_BASE = 'https://api.stripe.com/v1';
 
@@ -129,7 +130,7 @@ Deno.serve(async (req) => {
     // ── POST /setup-session — create Stripe Checkout in setup mode ──────────────
     if (req.method === 'POST' && path === 'setup-session') {
       const customerId = await getOrCreateStripeCustomer();
-      const origin = req.headers.get('origin') || 'https://playpickla.com';
+      const origin = canonicalPublicOrigin(req);
 
       const session = await stripeRequest<StripeCheckoutSession>(stripeKey, '/checkout/sessions', {
         method: 'POST',
