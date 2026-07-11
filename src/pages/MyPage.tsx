@@ -15,7 +15,6 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import {
-  getBookingAccessCodes,
   getBookingChatResourceId,
   getBookingCourtLabel,
   getBookingCourtNamesLabel,
@@ -890,6 +889,7 @@ function BookingDetailsSheet({
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [cancelling, setCancelling] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [creatingInvite, setCreatingInvite] = useState(false);
@@ -947,36 +947,54 @@ function BookingDetailsSheet({
     (booking as any).bookings?.find((row: any) => row?.participant_summary)?.participant_summary ||
     null
   ) as BookingParticipantSummaryData | null;
+  const participants = Array.isArray((booking as any).participants)
+    ? (booking as any).participants
+    : Array.isArray((booking as any).bookings)
+      ? ((booking as any).bookings.find((row: any) => Array.isArray(row?.participants))?.participants || [])
+      : [];
+  const personalParticipant = participant ||
+    participants.find((row: any) => row?.user_id && row.user_id === user?.id) ||
+    (!isParticipantPlace ? participants.find((row: any) => row?.role === "booker") : null);
   const courtName = getBookingCourtLabel(booking);
   const courtNames = getBookingCourtNamesLabel(booking);
-  const accessCodes = getBookingAccessCodes(booking);
   const bookingIds = getBookingIds(booking);
   const start = new Date(booking.start_time);
   const end = new Date(booking.end_time);
   const startSthlm = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
   const endSthlm = DateTime.fromISO(booking.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
+  const checkInWindowOpen = activityCheckInAvailable({
+    sessionDate: startSthlm.toISODate(),
+    startTime: startSthlm.toFormat("HH:mm"),
+    endTime: endSthlm.toFormat("HH:mm"),
+  });
+  const personalCheckedIn = Boolean(personalParticipant?.checked_in_at);
+  const personalPaymentStatus = String(personalParticipant?.payment_status || "").toLowerCase();
+  const personalPaidEnough = ["paid", "free"].includes(personalPaymentStatus);
   const dateLabel = start.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
   const timeLabel = `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
   const bookingTimingLabel = activityTimingLabel({
     sessionDate: startSthlm.toISODate(),
     startTime: startSthlm.toFormat("HH:mm"),
     endTime: endSthlm.toFormat("HH:mm"),
-    checkedIn: Boolean(participant?.checked_in_at),
-    checkInAvailable: isParticipantPlace ? activityCheckInAvailable({
-      sessionDate: startSthlm.toISODate(),
-      startTime: startSthlm.toFormat("HH:mm"),
-      endTime: endSthlm.toFormat("HH:mm"),
-    }) : false,
+    checkedIn: personalCheckedIn,
+    checkInAvailable: Boolean(personalParticipant?.id) && checkInWindowOpen,
   });
-  const participantCanCheckIn = isParticipantPlace
-    && participant?.id
-    && ["paid", "free"].includes(String(participant?.payment_status || "").toLowerCase())
-    && !participant?.checked_in_at
-    && activityCheckInAvailable({
-      sessionDate: startSthlm.toISODate(),
-      startTime: startSthlm.toFormat("HH:mm"),
-      endTime: endSthlm.toFormat("HH:mm"),
-    });
+  const participantCanCheckIn = Boolean(personalParticipant?.id)
+    && personalPaidEnough
+    && !personalCheckedIn
+    && checkInWindowOpen;
+  const checkInOpensLabel = startSthlm.minus({ minutes: 30 }).toFormat("HH:mm");
+  const checkInButtonLabel = personalCheckedIn
+    ? "Incheckad ✓"
+    : !personalParticipant?.id
+      ? "Check-in via biljett"
+      : !personalPaidEnough
+        ? "Väntar på betalning"
+        : DateTime.now().setZone("Europe/Stockholm") > endSthlm
+          ? "Check-in stängd"
+          : checkInWindowOpen
+            ? "Checka in"
+            : `Check-in öppnar ${checkInOpensLabel}`;
 
   const handleCancel = async () => {
     if (!bookingIds.length) return;
@@ -996,13 +1014,13 @@ function BookingDetailsSheet({
   };
 
   const handleParticipantCheckIn = async () => {
-    if (!participant?.id || !booking.venue_id || checkingIn) return;
+    if (!personalParticipant?.id || !booking.venue_id || checkingIn) return;
     setCheckingIn(true);
     try {
       await apiPost("api-checkins", "self", {
         venue_id: booking.venue_id,
         entry_type: "booking_participant",
-        entitlement_id: participant.id,
+        entitlement_id: personalParticipant.id,
       });
       toast.success("Du är incheckad");
       await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
@@ -1097,30 +1115,12 @@ function BookingDetailsSheet({
 
           {participantSummary && (
             <div className="mt-4">
-              <BookingParticipantSummary summary={participantSummary} compact />
-            </div>
-          )}
-
-          {!isParticipantPlace && accessCodes.length > 0 && (
-            <div className="mt-4 rounded-2xl p-4" style={{ background: BLUE_LIGHT, border: `1.5px solid ${BLUE_BORDER}` }}>
-              <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
-                Check-in
-              </p>
-              <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-                Checka in med din biljett
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {accessCodes.map((code) => (
-                  <div key={code} className="rounded-xl px-4 py-2" style={{ background: CARD_BG, border: `1px solid ${BLUE_BORDER}` }}>
-                    <span className="text-2xl font-bold tracking-widest" style={{ fontFamily: FONT_MONO, color: BLUE }}>{code}</span>
-                  </div>
-                ))}
-              </div>
+              <BookingParticipantSummary summary={participantSummary} compact viewerIsBooker={!isParticipantPlace} />
             </div>
           )}
 
           <div className="flex flex-col gap-2 mt-5">
-            {isParticipantPlace ? (
+            {personalParticipant?.id && (
               <button
                 onClick={handleParticipantCheckIn}
                 disabled={!participantCanCheckIn || checkingIn}
@@ -1128,9 +1128,10 @@ function BookingDetailsSheet({
                 style={{ background: TEXT_PRIMARY, color: CARD_BG, fontFamily: FONT_HEADING }}
               >
                 {checkingIn ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                {participant?.checked_in_at ? "Incheckad" : "Checka in"}
+                {checkInButtonLabel}
               </button>
-            ) : (
+            )}
+            {!isParticipantPlace && (
               <button
                 onClick={handleInvitePlayers}
                 disabled={creatingInvite || invitePreparing}

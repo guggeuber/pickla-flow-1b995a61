@@ -51,10 +51,12 @@ export function BookingParticipantSummary({
   summary,
   compact = false,
   tone = "light",
+  viewerIsBooker = false,
 }: {
   summary?: BookingParticipantSummaryData | null;
   compact?: boolean;
   tone?: "light" | "dark";
+  viewerIsBooker?: boolean;
 }) {
   if (!summary) return null;
 
@@ -75,9 +77,9 @@ export function BookingParticipantSummary({
           <Users className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
-          {summary.booker?.first_name ? (
+          {summary.booker?.first_name || viewerIsBooker ? (
             <p className={`text-sm font-black ${text}`} style={{ fontFamily: FONT_GROTESK }}>
-              Bokad av {summary.booker.first_name}
+              {viewerIsBooker ? "Bokad av dig" : `Bokad av ${summary.booker?.first_name}`}
             </p>
           ) : null}
           {capacity > 0 ? (

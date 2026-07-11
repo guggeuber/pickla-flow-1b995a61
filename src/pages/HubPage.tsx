@@ -353,15 +353,15 @@ function useBookingRooms(venueId: string | undefined, userId: string | undefined
     staleTime: 0,
     queryFn: async () => {
       const now = DateTime.now().setZone("Europe/Stockholm").toUTC().toISO()!;
-      const { data } = await supabase
-        .from("bookings")
-        .select("id, booking_ref, stripe_session_id, start_time, end_time, total_price, status, notes, venue_courts(name), access_code")
-        .eq("user_id", userId!)
-        .neq("status", "cancelled")
-        .gte("end_time", now)
-        .order("start_time", { ascending: true })
-        .limit(30);
-      return groupBookingRows((data || []) as any[]).slice(0, 5);
+      const response = await apiGet<{ items: any[] }>("api-bookings", "my-bookings");
+      const rows = (response.items || []).filter((booking: any) =>
+        String(booking.status || "") !== "cancelled" &&
+        booking.end_time &&
+        new Date(booking.end_time).getTime() >= new Date(now).getTime()
+      );
+      return groupBookingRows(rows as any[])
+        .sort((a: any, b: any) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+        .slice(0, 30);
     },
   });
 }
@@ -2465,6 +2465,7 @@ function HubList({
   botData,
   autoOpenBookingRef,
   directBookingMode = false,
+  bookingRoomsReady = false,
   bookings,
   events,
   onSelectRoom,
@@ -2479,12 +2480,14 @@ function HubList({
   botData?: { freeCount: number; totalCount: number; nextSession: any } | null;
   autoOpenBookingRef?: string | null;
   directBookingMode?: boolean;
+  bookingRoomsReady?: boolean;
   bookings: any[];
   events: any[];
   onSelectRoom: (room: ChatRoom) => void;
 }) {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
+  const [directBookingError, setDirectBookingError] = useState<string | null>(null);
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const autoOpenedRef = useRef<string | null>(null);
   const nextSession = botData?.nextSession;
@@ -2513,6 +2516,7 @@ function HubList({
   const { data: previews = {} } = useRoomPreviews(allRoomIds);
 
   const openBookingRoom = useCallback(async (booking: any) => {
+    setDirectBookingError(null);
     const courtName = getBookingCourtLabel(booking);
     const resourceId = getBookingChatResourceId(booking);
     const time = DateTime.fromISO(booking.start_time, { zone: "utc" })
@@ -2524,7 +2528,7 @@ function HubList({
     const courtNames = getBookingCourtNamesLabel(booking);
     const subtitle = `${date} · ${time} · ${courtNames}`;
 
-    const { data } = await supabase.rpc("upsert_resource_chat_room", {
+    const { data, error } = await supabase.rpc("upsert_resource_chat_room", {
       p_venue_id: venueId,
       p_resource_id: resourceId,
       p_room_type: "booking",
@@ -2533,9 +2537,16 @@ function HubList({
       p_emoji: "🎾",
       p_is_public: false,
     });
+    if (error) throw error;
+    if (!data?.[0]) throw new Error("Chat room could not be opened");
 
     if (data?.[0]) onSelectRoom(data[0] as ChatRoom);
   }, [venueId, onSelectRoom]);
+
+  useEffect(() => {
+    autoOpenedRef.current = null;
+    setDirectBookingError(null);
+  }, [autoOpenBookingRef]);
 
   useEffect(() => {
     if (!autoOpenBookingRef || autoOpenedRef.current === autoOpenBookingRef) return;
@@ -2545,10 +2556,21 @@ function HubList({
       b.id === autoOpenBookingRef ||
       b.bookings?.some((row: any) => row.booking_ref === autoOpenBookingRef || row.id === autoOpenBookingRef)
     );
-    if (!booking) return;
+    if (!booking) {
+      if (directBookingMode && bookingRoomsReady && !authLoading && user?.id) {
+        setDirectBookingError("Chatten hittades inte för den här bokningen. Öppna biljetten från Min sida eller be bokaren skicka länken igen.");
+      }
+      return;
+    }
     autoOpenedRef.current = autoOpenBookingRef;
-    openBookingRoom(booking);
-  }, [autoOpenBookingRef, bookings, openBookingRoom]);
+    openBookingRoom(booking).catch((error) => {
+      console.error("[hub] booking chat open failed", {
+        name: error?.name,
+        message: error?.message,
+      });
+      setDirectBookingError("Chatten kunde inte öppnas just nu. Försök igen om en stund.");
+    });
+  }, [autoOpenBookingRef, authLoading, bookingRoomsReady, bookings, directBookingMode, openBookingRoom, user?.id]);
 
   const openEventRoom = useCallback(async (event: any) => {
     const isProgramSession = !!event.occurrence_date || !!event.recurrence_days || !!event.activity_series;
@@ -2627,6 +2649,51 @@ function HubList({
                     Visa bokningsbekräftelse
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (directBookingError) {
+      return (
+        <div style={{ minHeight: "100dvh", background: HUB_BG }}>
+          <header
+            className="fixed top-0 left-0 right-0 z-40 px-5 pt-[env(safe-area-inset-top,12px)] pb-3 flex items-end justify-between"
+            style={{
+              background: "linear-gradient(to bottom, rgba(250,248,245,0.95) 0%, rgba(250,248,245,0.7) 50%, transparent 100%)",
+            }}
+          >
+            <div className="pt-2">
+              <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
+            </div>
+            <div className="w-9 h-9 mb-1" />
+          </header>
+          <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", padding: "96px 24px 120px" }}>
+            <div style={{ textAlign: "center", maxWidth: 340 }}>
+              <MessageCircle style={{ width: 38, height: 38, color: HUB_NAVY, margin: "0 auto 14px" }} />
+              <p style={{ fontFamily: FONT_HEADING, fontSize: 20, fontWeight: 900, color: HUB_TEXT, margin: 0 }}>
+                Chatten kunde inte öppnas
+              </p>
+              <p style={{ fontFamily: "Inter, sans-serif", fontSize: 14, lineHeight: 1.45, color: HUB_MUTED, margin: "8px 0 18px" }}>
+                {directBookingError}
+              </p>
+              <div style={{ display: "grid", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/my?v=${encodeURIComponent(slug)}`)}
+                  style={{ border: 0, borderRadius: 16, background: HUB_NAVY, color: "white", padding: "13px 16px", fontFamily: FONT_HEADING, fontWeight: 900 }}
+                >
+                  Öppna Min sida
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(-1)}
+                  style={{ border: `1px solid ${HUB_BORDER}`, borderRadius: 16, background: HUB_CARD, color: HUB_TEXT, padding: "13px 16px", fontFamily: FONT_HEADING, fontWeight: 900 }}
+                >
+                  Tillbaka
+                </button>
               </div>
             </div>
           </div>
@@ -3113,7 +3180,7 @@ const HubPage = () => {
   const { data: playerCount = 0 } = usePlayerCount(venueId);
   const { data: dailyRoom } = useDailyRoom(venueId);
   const { data: botData } = useDailyBotData(venueId);
-  const { data: bookings = [] } = useBookingRooms(venueId, user?.id);
+  const { data: bookings = [], isFetched: bookingsFetched } = useBookingRooms(venueId, user?.id);
   const { data: events = [] } = useEventRooms(venueId);
   const { data: weeklyProgram = [] } = useWeeklyProgram(venueId, slug);
 
@@ -3239,6 +3306,7 @@ const HubPage = () => {
         botData={botData}
         autoOpenBookingRef={bookingRoomRef}
         directBookingMode={directChatMode}
+        bookingRoomsReady={bookingsFetched}
         bookings={bookings}
         events={weeklyProgram.length > 0 ? weeklyProgram : events}
         onSelectRoom={async (room) => {

@@ -29,6 +29,7 @@ type ParticipantTicketResponse = {
   participant: {
     id: string;
     display_name: string | null;
+    role?: string | null;
     price_minor: number;
     payment_status: string;
     checked_in_at: string | null;
@@ -155,11 +156,23 @@ export default function BookingParticipantTicketPage() {
     <div className="min-h-[100dvh] bg-[#f7f4ee] text-neutral-950">
       <main className="mx-auto flex min-h-[100dvh] w-full max-w-md flex-col px-5 py-6">
         <div className="flex items-center justify-between">
-          <Link to="/my" className="grid h-11 w-11 place-items-center rounded-full bg-white border border-neutral-200">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="grid h-11 w-11 place-items-center rounded-full bg-white border border-neutral-200"
+            aria-label="Tillbaka"
+          >
             <ArrowLeft className="h-5 w-5" />
-          </Link>
+          </button>
           <img src={picklaLogo} alt="Pickla" className="h-7 w-auto" />
-          <div className="h-11 w-11" />
+          <button
+            type="button"
+            onClick={() => navigate("/my")}
+            className="grid h-11 w-11 place-items-center rounded-full bg-white border border-neutral-200"
+            aria-label="Stäng"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         <section className="mt-8 rounded-[32px] bg-white border border-neutral-200 p-6 shadow-sm">
@@ -193,7 +206,7 @@ export default function BookingParticipantTicketPage() {
           </div>
 
           <div className="mt-4">
-            <BookingParticipantSummary summary={data.participant_summary} />
+            <BookingParticipantSummary summary={data.participant_summary} viewerIsBooker={data.participant.role === "booker"} />
           </div>
 
           {needsAuth && (

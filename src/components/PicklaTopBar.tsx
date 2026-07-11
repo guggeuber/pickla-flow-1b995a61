@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { supabase } from "@/integrations/supabase/client";
+import { apiGet } from "@/lib/api";
 import {
   getBookingChatResourceId,
   getBookingCourtLabel,
@@ -30,15 +30,13 @@ function useRecentBookings(userId?: string) {
     enabled: !!userId,
     staleTime: 30000,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bookings")
-        .select("*, venue_courts(name)")
-        .eq("user_id", userId!)
-        .in("status", ["confirmed", "pending"])
-        .order("start_time", { ascending: false })
-        .limit(30);
-      if (error) throw error;
-      return groupBookingRows(data || []);
+      const response = await apiGet<{ items: any[] }>("api-bookings", "my-bookings");
+      const rows = (response.items || []).filter((booking: any) =>
+        ["confirmed", "pending"].includes(String(booking.status || ""))
+      );
+      return groupBookingRows(rows)
+        .sort((a: any, b: any) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
+        .slice(0, 5);
     },
   });
 }
