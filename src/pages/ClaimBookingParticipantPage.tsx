@@ -69,6 +69,23 @@ export default function ClaimBookingParticipantPage() {
 
   const formatMoney = (value: number) => `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
   const currentPath = `${window.location.pathname}${window.location.search}`;
+  const nameValid = displayName.trim().length > 0;
+  const claimDisabled = submitting || !user || !data?.booking || !nameValid;
+  const claimDebugState = {
+    authLoaded: !authLoading,
+    inviteLoaded: Boolean(data?.invite),
+    bookingLoaded: Boolean(data?.booking),
+    customerResolved: Boolean(user),
+    profileResolved: Boolean(displayName.trim() || user?.user_metadata),
+    nameValid,
+    isLoading,
+    authLoading,
+    submitting,
+    pricingResolved: Boolean(data?.pricing),
+    capacityState: data?.booking ? `${data.booking.claimed_count}/${data.booking.capacity}` : null,
+    holdState: "not_acquired_until_checkout",
+    disabled: claimDisabled,
+  };
 
   const goToIdentity = () => {
     preserveIntendedRoute(currentPath);
@@ -83,6 +100,7 @@ export default function ClaimBookingParticipantPage() {
       return;
     }
     if (!displayName.trim()) {
+      console.info("[booking-participant-claim] blocked before submit", claimDebugState);
       toast.error("Skriv ditt namn först.");
       return;
     }
@@ -216,12 +234,17 @@ export default function ClaimBookingParticipantPage() {
                 </p>
                 <div className="mt-2 flex items-end justify-between gap-4">
                   <p className="text-lg font-bold text-neutral-700" style={{ fontFamily: FONT_GROTESK }}>
-                    {data.pricing?.label || "Din del av banan"}
+                    {data.pricing?.label || "Personligt pris"}
                   </p>
                   <p className="text-[34px] leading-none font-black" style={{ fontFamily: FONT_GROTESK }}>
-                    {formatMoney(data.pricing?.price_sek || 0)}
+                    {data.pricing ? formatMoney(data.pricing.price_sek || 0) : "—"}
                   </p>
                 </div>
+                {!data.pricing && (
+                  <p className="mt-2 text-xs text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                    Priset hämtas säkert när du hämtar platsen.
+                  </p>
+                )}
               </div>
 
               <form onSubmit={handleClaim} className="mt-6 space-y-3">
@@ -251,7 +274,7 @@ export default function ClaimBookingParticipantPage() {
                 />
                 <button
                   type="submit"
-                  disabled={submitting || !data.pricing}
+                  disabled={claimDisabled}
                   className="mt-2 inline-flex w-full items-center justify-center gap-3 rounded-full bg-neutral-950 px-5 py-4 text-base font-black text-white disabled:opacity-50"
                   style={{ fontFamily: FONT_GROTESK }}
                 >
