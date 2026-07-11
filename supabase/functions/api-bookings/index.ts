@@ -412,6 +412,53 @@ async function listBookingParticipants(admin: any, venueId: string, groupKey: st
   return data || [];
 }
 
+function participantIsClaimed(participant: any) {
+  return Boolean(participant?.customer_id || participant?.user_id);
+}
+
+function participantIsCommitted(participant: any) {
+  const status = String(participant?.payment_status || '').toLowerCase();
+  return status === 'paid' || status === 'free';
+}
+
+function publicParticipantName(value: unknown) {
+  return String(value || '').trim().slice(0, 80) || 'Spelare';
+}
+
+function firstName(value: unknown) {
+  return publicParticipantName(value).split(/\s+/).filter(Boolean)[0] || 'bokaren';
+}
+
+function bookingGroupParticipantSummary(participants: any[], bookingRows: any[], capacity: number) {
+  const representative = bookingRows[0] || {};
+  const contact = bookingContactFromNotes(representative.notes);
+  const bookerParticipant = (participants || []).find((participant: any) => participant.role === 'booker');
+  const bookerName = publicParticipantName(bookerParticipant?.display_name || contact.name || representative.booked_by || 'Bokaren');
+  const claimed = (participants || [])
+    .filter(participantIsClaimed)
+    .map((participant: any) => ({
+      id: participant.id,
+      display_name: publicParticipantName(participant.display_name),
+      role: participant.role || 'player',
+      payment_status: participant.payment_status || 'pending',
+      checked_in_at: participant.checked_in_at || null,
+      committed: participantIsCommitted(participant),
+    }));
+  const committedCount = claimed.filter((participant: any) => participant.committed).length;
+
+  return {
+    booker: {
+      display_name: bookerName,
+      first_name: firstName(bookerName),
+    },
+    participants: claimed,
+    claimed_count: claimed.length,
+    committed_count: committedCount,
+    capacity,
+    remaining_committed_capacity: Math.max(0, capacity - committedCount),
+  };
+}
+
 async function ensureParticipantTicketInvite(admin: any, participant: any, booking: any, actorUserId?: string | null) {
   const { data: existing, error: existingErr } = await admin
     .from('booking_participant_invites')
@@ -1370,6 +1417,9 @@ Deno.serve(async (req) => {
     const representative = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
     if (!representative) return errorResponse('Booking not found', 404);
     const bookingRows = await getBookingGroupRows(admin, representative);
+    const participants = await listBookingParticipants(admin, participant.venue_id, participant.booking_group_key);
+    const capacity = bookingParticipantCapacity(bookingRows);
+    const participantSummary = bookingGroupParticipantSummary(participants, bookingRows, capacity);
     const userId = await getOptionalAuthUserId(req, admin);
     const canMutate = Boolean(userId && participant.user_id === userId);
     const venue = Array.isArray(invite.venues) ? invite.venues[0] : invite.venues;
@@ -1386,12 +1436,14 @@ Deno.serve(async (req) => {
         chat_resource_id: bookingChatResourceId(representative),
         start_time: representative.start_time,
         end_time: representative.end_time,
+        capacity,
         courts: bookingRows.map((row: any) => ({
           id: row.venue_court_id,
           name: row.venue_courts?.name || null,
           court_number: row.venue_courts?.court_number || null,
         })),
       },
+      participant_summary: participantSummary,
       participant: {
         id: participant.id,
         display_name: participant.display_name,
@@ -1426,6 +1478,8 @@ Deno.serve(async (req) => {
     const bookingRows = await getBookingGroupRows(admin, representative);
     const groupKey = invite.booking_group_key || bookingGroupKey(representative);
     const participants = await listBookingParticipants(admin, invite.venue_id, groupKey);
+    const capacity = bookingParticipantCapacity(bookingRows);
+    const participantSummary = bookingGroupParticipantSummary(participants, bookingRows, capacity);
     const userId = await getOptionalAuthUserId(req, admin);
     const durationHours = bookingDurationHours(representative);
     const pricing = userId
@@ -1457,10 +1511,12 @@ Deno.serve(async (req) => {
           name: row.venue_courts?.name || null,
           court_number: row.venue_courts?.court_number || null,
         })),
-        capacity: bookingParticipantCapacity(bookingRows),
-        claimed_count: participants.length,
+        capacity,
+        claimed_count: participantSummary.claimed_count,
+        committed_count: participantSummary.committed_count,
         founder_booking: isFounderBookingGroup(bookingRows),
       },
+      participant_summary: participantSummary,
       identity_required: !userId,
       pricing: pricing ? {
         price_minor: pricing.price_minor,
@@ -3156,7 +3212,41 @@ Deno.serve(async (req) => {
         .limit(80);
       if (ownedErr) return errorResponse(ownedErr.message, 500);
 
-      const owned = ownedRows || [];
+      const ownedRaw = ownedRows || [];
+      const ownedRowsByGroupKey = new Map<string, any[]>();
+      for (const row of ownedRaw) {
+        const key = bookingGroupKey(row);
+        const rows = ownedRowsByGroupKey.get(key) || [];
+        rows.push(row);
+        ownedRowsByGroupKey.set(key, rows);
+      }
+      const ownedGroupKeys = Array.from(ownedRowsByGroupKey.keys()).filter(Boolean);
+      const ownedParticipantsByGroupKey = new Map<string, any[]>();
+      if (ownedGroupKeys.length > 0) {
+        const { data: ownedParticipantRows, error: ownedParticipantErr } = await admin
+          .from('booking_participants')
+          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
+          .in('booking_group_key', ownedGroupKeys)
+          .neq('payment_status', 'cancelled')
+          .order('created_at', { ascending: true });
+        if (ownedParticipantErr) return errorResponse(ownedParticipantErr.message, 500);
+        for (const participant of ownedParticipantRows || []) {
+          const rows = ownedParticipantsByGroupKey.get(participant.booking_group_key) || [];
+          rows.push(participant);
+          ownedParticipantsByGroupKey.set(participant.booking_group_key, rows);
+        }
+      }
+      const owned = ownedRaw.map((row: any) => {
+        const groupKey = bookingGroupKey(row);
+        const groupRows = ownedRowsByGroupKey.get(groupKey) || [row];
+        const participants = ownedParticipantsByGroupKey.get(groupKey) || [];
+        const capacity = bookingParticipantCapacity(groupRows);
+        return {
+          ...row,
+          participants,
+          participant_summary: bookingGroupParticipantSummary(participants, groupRows, capacity),
+        };
+      });
       const ownedKeys = new Set(owned.map((row: any) => bookingChatResourceId(row)).filter(Boolean));
       const { data: participantRows, error: participantErr } = await admin
         .from('booking_participants')
@@ -3179,9 +3269,14 @@ Deno.serve(async (req) => {
         const chatKey = bookingChatResourceId(representative);
         if (ownedKeys.has(chatKey)) continue;
         const groupRows = await getBookingGroupRows(admin, representative);
+        const groupParticipants = await listBookingParticipants(admin, participant.venue_id, participant.booking_group_key);
+        const capacity = bookingParticipantCapacity(groupRows);
+        const participantSummary = bookingGroupParticipantSummary(groupParticipants, groupRows, capacity);
         for (const row of groupRows) {
           participantRowsOut.push({
             ...row,
+            participants: groupParticipants,
+            participant_summary: participantSummary,
             participant,
             is_participant_place: participant.role !== 'booker' || row.user_id !== userId,
             participant_id: participant.id,

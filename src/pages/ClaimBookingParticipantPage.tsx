@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Ticket, Users } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Session } from "@supabase/supabase-js";
 import { canonicalAppOrigin, canonicalRedirectUrl, enforceCanonicalHost } from "@/lib/canonicalOrigin";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@/components/bookings/BookingParticipantSummary";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -26,7 +27,9 @@ type InviteInfo = {
     courts: { name?: string | null; court_number?: number | null }[];
     capacity: number;
     claimed_count: number;
+    committed_count?: number;
   };
+  participant_summary?: BookingParticipantSummaryData;
   pricing?: {
     price_minor: number;
     price_sek: number;
@@ -45,7 +48,8 @@ function isUsableSession(session: Session | null) {
 export default function ClaimBookingParticipantPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { loading: authLoading } = useAuth();
+  const queryClient = useQueryClient();
+  const { loading: authLoading, session } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -53,7 +57,8 @@ export default function ClaimBookingParticipantPage() {
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [verifiedSession, setVerifiedSession] = useState<Session | null>(null);
   const [authNotice, setAuthNotice] = useState("");
-  const currentPath = `${window.location.pathname}${window.location.search}`;
+  const previousAuthKeyRef = useRef("initial");
+  const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   const isWrongAuthOrigin = Boolean(canonicalRedirectUrl());
   const verifiedUser = isUsableSession(verifiedSession) ? verifiedSession?.user ?? null : null;
 
@@ -66,7 +71,12 @@ export default function ClaimBookingParticipantPage() {
     if (authLoading || isWrongAuthOrigin) return;
     let active = true;
     setSessionHydrated(false);
-    supabase.auth.getSession().then(({ data }) => {
+    const hydrate = async () => {
+      const fresh = isUsableSession(session) ? session : null;
+      if (fresh) return { data: { session: fresh } };
+      return supabase.auth.getSession();
+    };
+    hydrate().then(({ data }) => {
       if (!active) return;
       const session = isUsableSession(data.session) ? data.session : null;
       setVerifiedSession(session);
@@ -80,13 +90,25 @@ export default function ClaimBookingParticipantPage() {
     return () => {
       active = false;
     };
-  }, [authLoading, isWrongAuthOrigin]);
+  }, [authLoading, isWrongAuthOrigin, session?.access_token, session?.user?.id]);
+
+  const authKey = verifiedUser?.id
+    ? `${verifiedUser.id}:${verifiedSession?.access_token?.slice(-10) || "session"}`
+    : "guest";
 
   const { data, isLoading, error, refetch } = useQuery<InviteInfo>({
-    queryKey: ["booking-participant-invite", token, verifiedUser?.id || "guest"],
+    queryKey: ["booking-participant-invite", token, authKey],
     queryFn: () => apiGet("api-bookings", "booking-participant-invite", { token: token || "" }),
     enabled: Boolean(token) && !authLoading && sessionHydrated && !isWrongAuthOrigin,
   });
+
+  useEffect(() => {
+    if (!token || !sessionHydrated) return;
+    const previous = previousAuthKeyRef.current;
+    previousAuthKeyRef.current = authKey;
+    if (previous === "initial" || previous === authKey) return;
+    queryClient.invalidateQueries({ queryKey: ["booking-participant-invite", token] });
+  }, [authKey, queryClient, sessionHydrated, token]);
 
   useEffect(() => {
     const meta = verifiedUser?.user_metadata || {};
@@ -109,7 +131,8 @@ export default function ClaimBookingParticipantPage() {
 
   const formatMoney = (value: number) => `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
   const nameValid = displayName.trim().length > 0;
-  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || !nameValid;
+  const authenticatedPricingResolving = Boolean(verifiedUser) && (!data?.pricing || isLoading);
+  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || !nameValid;
   const claimDebugState = {
     authLoaded: !authLoading && sessionHydrated,
     inviteLoaded: Boolean(data?.invite),
@@ -248,7 +271,11 @@ export default function ClaimBookingParticipantPage() {
           <div className="mt-6 space-y-2 text-sm text-neutral-600" style={{ fontFamily: FONT_MONO }}>
             <p>{dateLine}</p>
             {courtLine && <p>{courtLine}</p>}
-            <p>{data.booking.claimed_count}/{data.booking.capacity} spelare klara</p>
+            <p>{Number(data.booking.committed_count ?? (data.booking.claimed_count || 0))}/{data.booking.capacity} spelare klara</p>
+          </div>
+
+          <div className="mt-5">
+            <BookingParticipantSummary summary={data.participant_summary} compact />
           </div>
 
           {!verifiedUser ? (
@@ -257,10 +284,10 @@ export default function ClaimBookingParticipantPage() {
                 Personlig plats
               </p>
               <p className="mt-2 text-lg font-black text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-                Identifiera dig för att få din personliga plats.
+                Logga in för att hämta din plats
               </p>
               <p className="mt-2 text-sm leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                Priset visas först efter login, eftersom Founder, Play, Play+ och drop-in kan ha olika rätt.
+                Efter inloggning kommer du tillbaka hit.
               </p>
               {authNotice && (
                 <p className="mt-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-600" style={{ fontFamily: FONT_MONO }}>
@@ -274,7 +301,7 @@ export default function ClaimBookingParticipantPage() {
                 style={{ fontFamily: FONT_GROTESK }}
               >
                 <Ticket className="h-5 w-5" />
-                Identifiera mig
+                Logga in
               </button>
             </div>
           ) : (
@@ -285,15 +312,15 @@ export default function ClaimBookingParticipantPage() {
                 </p>
                 <div className="mt-2 flex items-end justify-between gap-4">
                   <p className="text-lg font-bold text-neutral-700" style={{ fontFamily: FONT_GROTESK }}>
-                    {data.pricing?.label || "Personligt pris"}
+                    {data.pricing?.label || "Hämtar personligt pris"}
                   </p>
                   <p className="text-[34px] leading-none font-black" style={{ fontFamily: FONT_GROTESK }}>
-                    {data.pricing ? formatMoney(data.pricing.price_sek || 0) : "—"}
+                    {data.pricing ? formatMoney(data.pricing.price_sek || 0) : <Loader2 className="h-7 w-7 animate-spin text-neutral-400" />}
                   </p>
                 </div>
                 {!data.pricing && (
                   <p className="mt-2 text-xs text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                    Priset hämtas säkert när du hämtar platsen.
+                    Vi kontrollerar medlemskap och rätt pris.
                   </p>
                 )}
               </div>

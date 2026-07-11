@@ -30,6 +30,7 @@ import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTim
 import { getDisplayName, getFirstName } from "@/lib/displayName";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
+import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@/components/bookings/BookingParticipantSummary";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -941,6 +942,11 @@ function BookingDetailsSheet({
   if (!booking) return null;
 
   const participant = (booking as any).participant || null;
+  const participantSummary = (
+    (booking as any).participant_summary ||
+    (booking as any).bookings?.find((row: any) => row?.participant_summary)?.participant_summary ||
+    null
+  ) as BookingParticipantSummaryData | null;
   const courtName = getBookingCourtLabel(booking);
   const courtNames = getBookingCourtNamesLabel(booking);
   const accessCodes = getBookingAccessCodes(booking);
@@ -1086,6 +1092,12 @@ function BookingDetailsSheet({
                   ? "Betald"
                   : "Väntar på betalning"}
               </p>
+            </div>
+          )}
+
+          {participantSummary && (
+            <div className="mt-4">
+              <BookingParticipantSummary summary={participantSummary} compact />
             </div>
           )}
 

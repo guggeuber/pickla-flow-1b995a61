@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@/components/bookings/BookingParticipantSummary";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -21,8 +22,10 @@ type ParticipantTicketResponse = {
     chat_resource_id?: string;
     start_time: string;
     end_time: string;
+    capacity?: number;
     courts: { id?: string; name?: string | null; court_number?: number | null }[];
   };
+  participant_summary?: BookingParticipantSummaryData;
   participant: {
     id: string;
     display_name: string | null;
@@ -187,6 +190,10 @@ export default function BookingParticipantTicketPage() {
                 </p>
               </div>
             </div>
+          </div>
+
+          <div className="mt-4">
+            <BookingParticipantSummary summary={data.participant_summary} />
           </div>
 
           {needsAuth && (
