@@ -611,7 +611,11 @@ function useRoomMessages(roomId: string | null) {
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${roomId}` },
-        (payload) => setMessages((prev) => [...prev, payload.new as ChatMessage])
+        (payload) => setMessages((prev) => {
+          const incoming = payload.new as ChatMessage;
+          if (prev.some((message) => message.id === incoming.id)) return prev;
+          return [...prev, incoming];
+        })
       )
       .on(
         "postgres_changes",
@@ -938,19 +942,71 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
     };
   }, [isNearMessagesBottom, room.id, scrollMessagesToBottom]);
 
-  const sendGif = async (gif: { url: string; thumb: string }) => {
-    if (!user?.id) return;
-    setShowGifPicker(false);
+  const sendMediaMessage = async ({
+    content,
+    metadata,
+    retryMessage,
+  }: {
+    content: string;
+    metadata: Record<string, unknown>;
+    retryMessage?: ChatMessage;
+  }) => {
+    if (!user?.id || sending) return;
     shouldAutoFollowRef.current = true;
-    await supabase.from("chat_messages").insert({
+    setSending(true);
+    const localId = retryMessage?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const localMessage: ChatMessage = {
+      id: localId,
       room_id: room.id,
       user_id: user.id,
       message_type: "text",
+      content,
+      metadata,
+      created_at: retryMessage?.created_at || new Date().toISOString(),
+      reply_to_id: retryMessage?.reply_to_id ?? null,
+      localStatus: "sending",
+      localError: null,
+    };
+    setLocalMessages((prev) => retryMessage
+      ? prev.map((message) => message.id === retryMessage.id ? localMessage : message)
+      : [...prev, localMessage]
+    );
+    scheduleScrollToBottom("auto");
+
+    const { data, error } = await supabase.from("chat_messages").insert({
+      room_id: room.id,
+      user_id: user.id,
+      message_type: "text",
+      content,
+      metadata,
+    }).select("*").single();
+    if (error) {
+      console.warn("[booking-chat] media send failed", { name: error.name, message: error.message });
+      setLocalMessages((prev) => prev.map((message) =>
+        message.id === localId
+          ? { ...message, localStatus: "failed", localError: "Kunde inte skicka" }
+          : message
+      ));
+      setSending(false);
+      return;
+    }
+
+    const sent = data as ChatMessage;
+    setLocalMessages((prev) => prev.map((message) =>
+      message.id === localId ? { ...sent, localStatus: "sent" } : message
+    ));
+    qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
+    scheduleScrollToBottom("auto");
+    setSending(false);
+  };
+
+  const sendGif = async (gif: { url: string; thumb: string }) => {
+    if (!user?.id) return;
+    setShowGifPicker(false);
+    await sendMediaMessage({
       content: gif.url,
       metadata: { type: "gif", thumb: gif.thumb },
     });
-    qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
-    scheduleScrollToBottom("auto");
   };
 
   const uploadImage = async (file: File) => {
@@ -1067,6 +1123,19 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
     const preview = content.length > 60 ? content.slice(0, 60) + "…" : content;
     apiPost("api-notifications", "chat-message", { room_id: room.id, preview }).catch(() => {});
     setSending(false);
+  };
+
+  const retryChatMessage = (message: ChatMessage) => {
+    const mediaType = message.metadata?.type;
+    if ((mediaType === "gif" || mediaType === "image") && message.content) {
+      sendMediaMessage({
+        content: message.content,
+        metadata: message.metadata || { type: mediaType },
+        retryMessage: message,
+      });
+      return;
+    }
+    sendMessage(message);
   };
 
   const handleReact = async (messageId: string, emoji: string) => {
@@ -1257,7 +1326,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
                   showTimestamp={isLastInGroup}
                   onLongPress={() => setContextMsg(msg)}
                   onReactionToggle={(emoji) => handleReact(msg.id, emoji)}
-                  onRetry={() => sendMessage(msg)}
+                  onRetry={() => retryChatMessage(msg)}
                 />
               </span>
             );
@@ -2190,31 +2259,6 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
                 {relativeTime(message.created_at)}
               </p>
             )}
-            {isOwn && localStatus && localStatus !== "sent" && (
-              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: 4 }}>
-                <span style={{ fontSize: 10, color: isOwn ? "rgba(255,255,255,0.65)" : HUB_MUTED, fontFamily: "Inter, sans-serif" }}>
-                  {localStatus === "failed" ? "Kunde inte skicka" : "Skickar…"}
-                </span>
-                {localStatus === "failed" && (
-                  <button
-                    type="button"
-                    onClick={onRetry}
-                    style={{
-                      border: "none",
-                      background: "transparent",
-                      color: "#fff",
-                      fontFamily: FONT_HEADING,
-                      fontSize: 10,
-                      fontWeight: 800,
-                      textDecoration: "underline",
-                      padding: 0,
-                    }}
-                  >
-                    Försök igen
-                  </button>
-                )}
-              </div>
-            )}
             {hasReactions && (
               <div style={{ position: "absolute", bottom: -12, ...(isOwn ? { right: 8 } : { left: 8 }) }}>
                 <ReactionBar reactions={reactions} currentUserId={currentUserId} onToggle={onReactionToggle} />
@@ -2223,6 +2267,31 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
           </>
         )}
       </div>
+      {isOwn && localStatus && localStatus !== "sent" && (
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: 4, paddingRight: 4 }}>
+          <span style={{ fontSize: 10, color: localStatus === "failed" ? HUB_RED : HUB_MUTED, fontFamily: "Inter, sans-serif" }}>
+            {localStatus === "failed" ? "Kunde inte skicka" : "Skickar…"}
+          </span>
+          {localStatus === "failed" && (
+            <button
+              type="button"
+              onClick={onRetry}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: HUB_NAVY,
+                fontFamily: FONT_HEADING,
+                fontSize: 10,
+                fontWeight: 800,
+                textDecoration: "underline",
+                padding: 0,
+              }}
+            >
+              Försök igen
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
