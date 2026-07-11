@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -35,7 +35,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { getPublicProfileMap } from "@/lib/publicProfiles";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
-import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { DateTime } from "luxon";
 import { BotMessage } from "@/components/hub/BotMessage";
 import { EventCard } from "@/components/hub/EventCard";
@@ -91,6 +90,8 @@ interface ChatMessage {
   metadata: Record<string, any>;
   created_at: string;
   reply_to_id?: string | null;
+  localStatus?: "sending" | "failed" | "sent";
+  localError?: string | null;
 }
 
 interface Reaction {
@@ -420,24 +421,6 @@ function useBookingDetailsForRoom(room: ChatRoom, userId: string | undefined) {
       }
 
       return groupBookingRows([firstBooking as any])[0] || null;
-    },
-  });
-}
-
-function useBookingPublishedState(roomId: string | undefined, enabled: boolean) {
-  return useQuery({
-    queryKey: ["booking-published-state", roomId],
-    enabled: enabled && !!roomId,
-    staleTime: 30000,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("chat_messages")
-        .select("id")
-        .contains("metadata", { booking_room_id: roomId })
-        .limit(1)
-        .maybeSingle();
-      if (error) return false;
-      return !!data;
     },
   });
 }
@@ -835,7 +818,15 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { messages, loading: msgsLoading } = useRoomMessages(publicActivityPreview ? null : room.id);
-  const visibleMessages = publicActivityPreview?.messages || messages;
+  const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
+  const visibleMessages = useMemo(() => {
+    const baseMessages = publicActivityPreview?.messages || messages;
+    const baseIds = new Set(baseMessages.map((message) => message.id));
+    const unresolvedLocal = localMessages.filter((message) => message.localStatus === "failed" || !baseIds.has(message.id));
+    return [...baseMessages, ...unresolvedLocal].sort((a, b) =>
+      DateTime.fromISO(a.created_at).toMillis() - DateTime.fromISO(b.created_at).toMillis()
+    );
+  }, [localMessages, messages, publicActivityPreview?.messages]);
   const { data: botData } = useDailyBotData(room.room_type === "daily" ? venueId : undefined);
   const { data: inquiryEvent } = useInquiryEventDetails(room.resource_id, room.room_type === "event" && !!room.resource_id);
   const { data: fallbackActivitySession } = useFallbackActivitySessionForRoom(room, venueId);
@@ -849,13 +840,13 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [gifQuery, setGifQuery] = useState("");
   const [gifResults, setGifResults] = useState<{ id: string; url: string; thumb: string }[]>([]);
   const [gifLoading, setGifLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const headerTitle = room.room_type === "booking" ? "Bokningschatt" : room.title;
   const headerSubtitle = consumerRoomText(room.subtitle);
   const isInquiryEvent =
     room.room_type === "event" &&
@@ -877,17 +868,6 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
       vv.removeEventListener("scroll", update);
     };
   }, []);
-
-  const shareRoom = async () => {
-    const url = canonicalAppUrl(`/hub?join=${room.id}`);
-    if (navigator.share) {
-      await navigator.share({ title: room.title, text: "Gå med i min bokningschat på Pickla!", url });
-    } else {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
 
   useEffect(() => {
     if (!showGifPicker) return;
@@ -961,26 +941,58 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [visibleMessages, botData, keyboardOffset]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || !user?.id || sending) return;
+  const sendMessage = async (retryMessage?: ChatMessage) => {
+    const pendingContent = retryMessage?.content || input.trim();
+    if (!pendingContent.trim() || !user?.id || sending) return;
     setSending(true);
-    const content = input.trim();
-    setInput("");
-    if (editingMessage) {
+    const content = pendingContent.trim();
+    if (!retryMessage) setInput("");
+    if (editingMessage && !retryMessage) {
       setEditingMessage(null);
       await supabase.from("chat_messages").update({ content }).eq("id", editingMessage.id).eq("user_id", user.id);
       setSending(false);
       return;
     }
-    const replyRef = replyTo?.id ?? null;
+    const replyRef = retryMessage?.reply_to_id ?? replyTo?.id ?? null;
     setReplyTo(null);
-    await supabase.from("chat_messages").insert({
+    const localId = retryMessage?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const localMessage: ChatMessage = {
+      id: localId,
+      room_id: room.id,
+      user_id: user.id,
+      message_type: "text",
+      content,
+      metadata: {},
+      created_at: retryMessage?.created_at || new Date().toISOString(),
+      reply_to_id: replyRef,
+      localStatus: "sending",
+      localError: null,
+    };
+    setLocalMessages((prev) => retryMessage
+      ? prev.map((message) => message.id === retryMessage.id ? localMessage : message)
+      : [...prev, localMessage]
+    );
+    const { data, error } = await supabase.from("chat_messages").insert({
       room_id: room.id,
       user_id: user.id,
       message_type: "text",
       content,
       ...(replyRef ? { reply_to_id: replyRef } : {}),
-    });
+    }).select("*").single();
+    if (error) {
+      console.warn("[booking-chat] message send failed", { name: error.name, message: error.message });
+      setLocalMessages((prev) => prev.map((message) =>
+        message.id === localId
+          ? { ...message, localStatus: "failed", localError: "Kunde inte skicka" }
+          : message
+      ));
+      setSending(false);
+      return;
+    }
+    const sent = data as ChatMessage;
+    setLocalMessages((prev) => prev.map((message) =>
+      message.id === localId ? { ...sent, localStatus: "sent" } : message
+    ));
     qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
     const preview = content.length > 60 ? content.slice(0, 60) + "…" : content;
     apiPost("api-notifications", "chat-message", { room_id: room.id, preview }).catch(() => {});
@@ -1051,25 +1063,27 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
           <ArrowLeft style={{ width: 16, height: 16, color: HUB_TEXT }} />
         </motion.button>
 
-        <div
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 10,
-            background: HUB_NAVY,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 17,
-            flexShrink: 0,
-          }}
-        >
-          {room.emoji}
-        </div>
+        {room.room_type !== "booking" && (
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: HUB_NAVY,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 17,
+              flexShrink: 0,
+            }}
+          >
+            {room.emoji}
+          </div>
+        )}
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <p style={{ fontFamily: FONT_HEADING, fontSize: 15, fontWeight: 700, color: HUB_TEXT }}>
-            {room.title}
+            {headerTitle}
           </p>
           {headerSubtitle && (
             <p style={{ fontSize: 10, fontFamily: "Inter, sans-serif", color: HUB_MUTED }}>
@@ -1078,8 +1092,22 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
           )}
         </div>
 
-        {room.room_type === "booking" && copied && (
-          <Check style={{ width: 18, height: 18, color: HUB_GREEN, flexShrink: 0 }} />
+        {room.room_type === "booking" && (
+          <button
+            type="button"
+            onClick={() => navigate(`/my?booking=${encodeURIComponent(room.resource_id || "")}`)}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: HUB_MUTED,
+              fontFamily: FONT_HEADING,
+              fontSize: 12,
+              fontWeight: 800,
+              flexShrink: 0,
+            }}
+          >
+            Visa bokningen
+          </button>
         )}
       </div>
 
@@ -1110,11 +1138,6 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
               time="nu"
             />
           </>
-        )}
-
-        {/* Booking room: booking card */}
-        {room.room_type === "booking" && (
-          <BookingSmartPanel room={room} venueId={venueId} userId={user?.id} onShare={shareRoom} />
         )}
 
         {/* Event room: public event card or internal inquiry customer panel */}
@@ -1156,6 +1179,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
                 showTimestamp={isLastInGroup}
                 onLongPress={() => setContextMsg(msg)}
                 onReactionToggle={(emoji) => handleReact(msg.id, emoji)}
+                onRetry={() => sendMessage(msg)}
               />
             </span>
           );
@@ -1437,193 +1461,6 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview }: C
         />
       )}
     </div>
-  );
-}
-
-function BookingSmartPanel({
-  room,
-  venueId,
-  userId,
-  onShare,
-}: {
-  room: ChatRoom;
-  venueId: string;
-  userId?: string;
-  onShare: () => void;
-}) {
-  const qc = useQueryClient();
-  const { data: booking, isLoading } = useBookingDetailsForRoom(room, userId);
-  const [publishing, setPublishing] = useState(false);
-  const [confirmPublish, setConfirmPublish] = useState(false);
-  const [publishedNow, setPublishedNow] = useState(false);
-  const { data: hasPublishedInvite = false } = useBookingPublishedState(room.id, room.room_type === "booking");
-
-  const isOwner = !!booking && booking.bookings?.some((b: any) => b.user_id === userId);
-  const isPublished = publishedNow || hasPublishedInvite;
-  const courtName = booking ? getBookingCourtLabel(booking) : room.title.split(" · ")[0] || "Bana";
-  const courtNames = booking ? getBookingCourtNamesLabel(booking) : courtName;
-  const start = booking?.start_time
-    ? DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm")
-    : null;
-  const end = booking?.end_time
-    ? DateTime.fromISO(booking.end_time, { zone: "utc" }).setZone("Europe/Stockholm")
-    : null;
-  const dateLabel = start ? start.toFormat("ccc d LLL", { locale: "sv" }) : "";
-  const timeLabel = start && end ? `${start.toFormat("HH:mm")}–${end.toFormat("HH:mm")}` : consumerRoomText(room.subtitle);
-  const status = booking?.status || "confirmed";
-  const isCancelled = status === "cancelled";
-  const statusLabel = isCancelled ? "Avbokad" : status === "pending" ? "Väntande" : "Bekräftad";
-  const statusColor = isCancelled ? HUB_RED : status === "pending" ? "#2563eb" : HUB_GREEN;
-
-  const publishToDailyRoom = async () => {
-    if (!booking || !userId || publishing || isPublished) return;
-    if (!confirmPublish) {
-      setConfirmPublish(true);
-      return;
-    }
-    setPublishing(true);
-    const today = DateTime.now().setZone("Europe/Stockholm").toISODate()!;
-    const { data: dailyRoom } = await supabase.rpc("upsert_daily_chat_room", {
-      p_venue_id: venueId,
-      p_session_date: today,
-      p_name: "Pickla Idag",
-    });
-    const daily = dailyRoom?.[0];
-    if (!daily?.id) {
-      setPublishing(false);
-      toast.error("Kunde inte göra bokningen publik");
-      return;
-    }
-    await supabase.from("chat_participants").upsert(
-      { room_id: daily.id, user_id: userId },
-      { onConflict: "room_id,user_id", ignoreDuplicates: true }
-    );
-    const inviteUrl = canonicalAppUrl(`/hub?join=${room.id}`);
-    const content = `Jag söker spelare till ${courtNames} ${dateLabel} ${timeLabel}. Hoppa in här: ${inviteUrl}`;
-    const { error } = await supabase.from("chat_messages").insert({
-      room_id: daily.id,
-      user_id: userId,
-      message_type: "text",
-      content,
-      metadata: {
-        type: "booking_invite",
-        booking_room_id: room.id,
-        booking_ref: booking.primary_booking_ref || booking.booking_ref,
-        booking_refs: booking.bookings?.map((b: any) => b.booking_ref).filter(Boolean) || [booking.booking_ref].filter(Boolean),
-      },
-    });
-    setPublishing(false);
-    if (error) {
-      toast.error("Kunde inte posta i Pickla Idag");
-      return;
-    }
-    setPublishedNow(true);
-    setConfirmPublish(false);
-    qc.invalidateQueries({ queryKey: ["hub-room-previews"] });
-    qc.invalidateQueries({ queryKey: ["booking-published-state", room.id] });
-    toast.success("Publicerad i Pickla Idag");
-  };
-
-  return (
-    <div
-      style={{
-        background: HUB_CARD,
-        border: `1px solid ${HUB_BORDER}`,
-        borderRadius: 18,
-        padding: 14,
-        boxShadow: "0 8px 26px rgba(17,24,39,0.06)",
-        marginBottom: 6,
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-        <div style={{ minWidth: 0 }}>
-          <p style={{ fontFamily: FONT_HEADING, fontSize: 10, fontWeight: 800, color: HUB_MUTED, letterSpacing: "0.08em", textTransform: "uppercase", margin: 0 }}>
-            Bokningschat
-          </p>
-          <p style={{ fontFamily: FONT_HEADING, fontSize: 19, fontWeight: 800, color: HUB_TEXT, margin: "4px 0 0" }}>
-            {courtName}
-          </p>
-          <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_SUB, margin: "3px 0 0" }}>
-            {isLoading ? "Hämtar bokningen..." : [dateLabel, timeLabel].filter(Boolean).join(" · ") || consumerRoomText(room.subtitle)}
-          </p>
-          {booking && (
-            <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: HUB_MUTED, margin: "5px 0 0", lineHeight: 1.35 }}>
-              {courtNames}
-            </p>
-          )}
-        </div>
-        <span
-          style={{
-            flexShrink: 0,
-            borderRadius: 999,
-            padding: "5px 9px",
-            background: `${statusColor}14`,
-            color: statusColor,
-            fontFamily: FONT_HEADING,
-            fontSize: 11,
-            fontWeight: 800,
-          }}
-        >
-          {statusLabel}
-        </span>
-      </div>
-
-      {isOwner && !isCancelled && (
-        <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", WebkitOverflowScrolling: "touch" as any }}>
-          <SmartActionButton
-            label={isPublished ? "Publik ✓" : confirmPublish ? "Publicera?" : "Gör publik"}
-            onClick={publishToDailyRoom}
-            disabled={publishing || isPublished}
-            tone={isPublished ? "green" : "neutral"}
-          />
-          <SmartActionButton label="Bjud in" onClick={onShare} tone="dark" />
-          {confirmPublish && (
-            <SmartActionButton label="Avbryt" onClick={() => setConfirmPublish(false)} tone="neutral" />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SmartActionButton({
-  label,
-  onClick,
-  disabled,
-  tone = "neutral",
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  tone?: "neutral" | "dark" | "danger" | "green";
-}) {
-  const styles = {
-    neutral: { background: HUB_BG, color: HUB_TEXT, border: HUB_BORDER },
-    dark: { background: HUB_NAVY, color: "#fff", border: HUB_NAVY },
-    danger: { background: "rgba(239,68,68,0.08)", color: HUB_RED, border: "rgba(239,68,68,0.2)" },
-    green: { background: "rgba(34,197,94,0.1)", color: HUB_GREEN, border: "rgba(34,197,94,0.2)" },
-  }[tone];
-  return (
-    <motion.button
-      whileTap={{ scale: disabled ? 1 : 0.97 }}
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
-      style={{
-        flexShrink: 0,
-        borderRadius: 999,
-        border: `1px solid ${styles.border}`,
-        background: styles.background,
-        color: styles.color,
-        padding: "9px 12px",
-        fontFamily: FONT_HEADING,
-        fontSize: 12,
-        fontWeight: 800,
-        cursor: disabled ? "default" : "pointer",
-        opacity: disabled ? 0.65 : 1,
-      }}
-    >
-      {label}
-    </motion.button>
   );
 }
 
@@ -2146,7 +1983,7 @@ function LinkifiedText({ text, isOwn }: { text: string; isOwn: boolean }) {
   );
 }
 
-function MessageBubble({ message, currentUserId, replyToMessage, reactions, showTimestamp, onLongPress, onReactionToggle }: {
+function MessageBubble({ message, currentUserId, replyToMessage, reactions, showTimestamp, onLongPress, onReactionToggle, onRetry }: {
   message: ChatMessage;
   currentUserId?: string;
   replyToMessage?: ChatMessage;
@@ -2154,12 +1991,14 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
   showTimestamp?: boolean;
   onLongPress: () => void;
   onReactionToggle: (emoji: string) => void;
+  onRetry?: () => void;
 }) {
   const isOwn = message.user_id === currentUserId;
   const isBot = message.message_type === "bot";
   const isDeleted = message.content === null;
   const isMedia = !isDeleted && (message.metadata?.type === "gif" || message.metadata?.type === "image");
   const isEmail = message.metadata?.channel === "email";
+  const localStatus = message.localStatus;
   const isInboundEmail = isEmail && message.metadata?.direction === "inbound";
   const emailLabel = isInboundEmail ? "Mail från kund" : isEmail ? "Mail till kund" : "";
   const longPress = useLongPress(onLongPress);
@@ -2271,6 +2110,31 @@ function MessageBubble({ message, currentUserId, replyToMessage, reactions, show
               <p style={{ fontSize: 9, fontFamily: "Inter, sans-serif", color: isOwn && !isEmail ? "rgba(255,255,255,0.45)" : HUB_MUTED, marginTop: 3, textAlign: "right" }}>
                 {relativeTime(message.created_at)}
               </p>
+            )}
+            {isOwn && localStatus && localStatus !== "sent" && (
+              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <span style={{ fontSize: 10, color: isOwn ? "rgba(255,255,255,0.65)" : HUB_MUTED, fontFamily: "Inter, sans-serif" }}>
+                  {localStatus === "failed" ? "Kunde inte skicka" : "Skickar…"}
+                </span>
+                {localStatus === "failed" && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "#fff",
+                      fontFamily: FONT_HEADING,
+                      fontSize: 10,
+                      fontWeight: 800,
+                      textDecoration: "underline",
+                      padding: 0,
+                    }}
+                  >
+                    Försök igen
+                  </button>
+                )}
+              </div>
             )}
             {hasReactions && (
               <div style={{ position: "absolute", bottom: -12, ...(isOwn ? { right: 8 } : { left: 8 }) }}>
@@ -2488,6 +2352,7 @@ function HubList({
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const [directBookingError, setDirectBookingError] = useState<string | null>(null);
+  const [directBookingRetryKey, setDirectBookingRetryKey] = useState(0);
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const autoOpenedRef = useRef<string | null>(null);
   const nextSession = botData?.nextSession;
@@ -2528,6 +2393,7 @@ function HubList({
     const courtNames = getBookingCourtNamesLabel(booking);
     const subtitle = `${date} · ${time} · ${courtNames}`;
 
+    const startedAt = performance.now();
     const { data, error } = await supabase.rpc("upsert_resource_chat_room", {
       p_venue_id: venueId,
       p_resource_id: resourceId,
@@ -2537,6 +2403,7 @@ function HubList({
       p_emoji: "🎾",
       p_is_public: false,
     });
+    console.info("[booking-chat-open]", { phase: "room_resolution", elapsedMs: Math.round(performance.now() - startedAt) });
     if (error) throw error;
     if (!data?.[0]) throw new Error("Chat room could not be opened");
 
@@ -2563,14 +2430,21 @@ function HubList({
       return;
     }
     autoOpenedRef.current = autoOpenBookingRef;
-    openBookingRoom(booking).catch((error) => {
+    const timeout = new Promise<never>((_, reject) => {
+      window.setTimeout(() => reject(new Error("booking_chat_timeout")), 8000);
+    });
+    Promise.race([openBookingRoom(booking), timeout]).catch((error) => {
       console.error("[hub] booking chat open failed", {
         name: error?.name,
         message: error?.message,
       });
-      setDirectBookingError("Chatten kunde inte öppnas just nu. Försök igen om en stund.");
+      setDirectBookingError(
+        error?.message === "booking_chat_timeout"
+          ? "Chatten tog för lång tid att öppna. Försök igen."
+          : "Chatten kunde inte öppnas just nu. Försök igen om en stund."
+      );
     });
-  }, [autoOpenBookingRef, authLoading, bookingRoomsReady, bookings, directBookingMode, openBookingRoom, user?.id]);
+  }, [autoOpenBookingRef, authLoading, bookingRoomsReady, bookings, directBookingMode, directBookingRetryKey, openBookingRoom, user?.id]);
 
   const openEventRoom = useCallback(async (event: any) => {
     const isProgramSession = !!event.occurrence_date || !!event.recurrence_days || !!event.activity_series;
@@ -2682,17 +2556,21 @@ function HubList({
               <div style={{ display: "grid", gap: 10 }}>
                 <button
                   type="button"
-                  onClick={() => navigate(`/my?v=${encodeURIComponent(slug)}`)}
+                  onClick={() => {
+                    autoOpenedRef.current = null;
+                    setDirectBookingError(null);
+                    setDirectBookingRetryKey((value) => value + 1);
+                  }}
                   style={{ border: 0, borderRadius: 16, background: HUB_NAVY, color: "white", padding: "13px 16px", fontFamily: FONT_HEADING, fontWeight: 900 }}
                 >
-                  Öppna Min sida
+                  Försök igen
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate(-1)}
+                  onClick={() => navigate(`/my?v=${encodeURIComponent(slug)}`)}
                   style={{ border: `1px solid ${HUB_BORDER}`, borderRadius: 16, background: HUB_CARD, color: HUB_TEXT, padding: "13px 16px", fontFamily: FONT_HEADING, fontWeight: 900 }}
                 >
-                  Tillbaka
+                  Öppna Min sida
                 </button>
               </div>
             </div>
@@ -2718,10 +2596,7 @@ function HubList({
           <div style={{ textAlign: "center" }}>
             <div style={{ width: 34, height: 34, borderRadius: "50%", border: `3px solid ${HUB_BORDER}`, borderTopColor: HUB_NAVY, margin: "0 auto 14px", animation: "spin 0.8s linear infinite" }} />
             <p style={{ fontFamily: FONT_HEADING, fontSize: 16, fontWeight: 800, color: HUB_TEXT, margin: 0 }}>
-              Öppnar chatten
-            </p>
-            <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: HUB_MUTED, margin: "5px 0 0" }}>
-              Aktivitet → tråd, utan omväg.
+              Öppnar bokningschatten…
             </p>
           </div>
         </div>
