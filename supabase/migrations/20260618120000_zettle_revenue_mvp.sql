@@ -63,7 +63,7 @@ CREATE POLICY "Staff can view zettle_purchases"
       WHERE venue_staff.user_id = auth.uid()
         AND venue_staff.venue_id = zettle_purchases.venue_id
         AND venue_staff.is_active = true
-        AND venue_staff.role IN ('super_admin', 'admin', 'venue_admin', 'desk')
+        AND venue_staff.role IN ('venue_admin', 'desk_staff')
     )
     OR public.is_super_admin()
   );

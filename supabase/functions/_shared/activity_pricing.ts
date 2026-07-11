@@ -67,7 +67,21 @@ function normalizeChannel(value: unknown) {
     : 'online';
 }
 
-async function countActivityRegistrations(client: any, activitySessionId: string, sessionDate: string) {
+async function countActivityFill(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
+  const { data: fillRows, error: fillError } = await client.rpc('capacity_fill', {
+    p_venue_id: venueId,
+    p_scope_type: 'activity_session',
+    p_scope_id: activitySessionId,
+    p_session_date: sessionDate,
+  });
+  const fill = Array.isArray(fillRows) ? fillRows[0] : fillRows;
+  if (!fillError && fill) {
+    return Number(fill.fill_count || 0);
+  }
+
+  // Backward-compatible fallback for deployments where the R2 capacity RPC has
+  // not been applied yet. Once the migration is live, capacity_fill is the
+  // single read model for scarcity/early-bird fill.
   const { count, error } = await client
     .from('session_registrations')
     .select('id', { count: 'exact', head: true })
@@ -182,7 +196,7 @@ export async function resolveActivityPricingDecision({
   const scarcityMode = configuredScarcityMode;
   const shouldCountRegistrations = purchaseKind === 'activity_ticket' && scarcityMode !== 'none';
   const registrationsCount = shouldCountRegistrations
-    ? await countActivityRegistrations(client, activitySessionId, sessionDate)
+    ? await countActivityFill(client, venueId, activitySessionId, sessionDate)
     : 0;
   const earlyBirdPriceSek = minorToSek(earlyBirdPriceMinor);
   const earlyBirdRemaining = earlyBirdSlots ? Math.max(earlyBirdSlots - registrationsCount, 0) : 0;

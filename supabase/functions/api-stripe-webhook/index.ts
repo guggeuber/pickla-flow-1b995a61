@@ -12,6 +12,7 @@ import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
+const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
 
 // Deno-native Stripe webhook signature verification.
 // Do not use the Stripe Node SDK in Supabase Edge Runtime here; it can trigger
@@ -232,6 +233,126 @@ function bookingGroupKey(row: any) {
   return `booking:${row?.id || row?.booking_ref || crypto.randomUUID()}`;
 }
 
+function bookingParticipantCapacity(rows: any[]) {
+  return Math.max(rows.length, 1) * BOOKING_PARTICIPANT_MAX_PER_COURT;
+}
+
+function bookingSessionDate(row: any) {
+  const iso = row?.start_time;
+  if (!iso) return DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+  return DateTime.fromISO(iso, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate()!;
+}
+
+type CapacityRpcResult = {
+  ok: boolean;
+  hold_id?: string | null;
+  registration_id?: string | null;
+  participant_id?: string | null;
+  reason?: string | null;
+  available_count?: number | null;
+};
+
+async function rpcSingle(serviceClient: any, fn: string, args: Record<string, unknown>): Promise<CapacityRpcResult> {
+  const { data, error } = await serviceClient.rpc(fn, args).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data || { ok: false, reason: 'empty_rpc_result' };
+}
+
+async function commitActivityRegistrationCapacity(serviceClient: any, args: Record<string, unknown>) {
+  return rpcSingle(serviceClient, 'commit_activity_registration_capacity', args);
+}
+
+async function commitBookingParticipantCapacity(serviceClient: any, args: Record<string, unknown>) {
+  return rpcSingle(serviceClient, 'commit_booking_participant_capacity', args);
+}
+
+async function recordPaidCapacityConflict(serviceClient: any, params: {
+  venueId: string;
+  scopeType: string;
+  scopeId: string;
+  sessionDate?: string | null;
+  stripeSessionId: string;
+  paymentIntentId?: string | null;
+  receiptId?: string | null;
+  ledgerSourceType?: string | null;
+  ledgerSourceId?: string | null;
+  customerId?: string | null;
+  userId?: string | null;
+  title: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const agentKey = `paid_capacity_conflict:${params.stripeSessionId}`;
+  const incidentMetadata = {
+    type: 'paid_capacity_conflict',
+    agent_key: agentKey,
+    scope_type: params.scopeType,
+    scope_id: params.scopeId,
+    session_date: params.sessionDate || null,
+    stripe_session_id: params.stripeSessionId,
+    stripe_payment_intent_id: params.paymentIntentId || null,
+    booking_receipt_id: params.receiptId || null,
+    ledger_source_type: params.ledgerSourceType || null,
+    ledger_source_id: params.ledgerSourceId || null,
+    customer_id: params.customerId || null,
+    user_id: params.userId || null,
+    ...(params.metadata || {}),
+  };
+
+  const { data: existing } = await serviceClient
+    .from('ops_incidents')
+    .select('id')
+    .eq('venue_id', params.venueId)
+    .contains('metadata', { agent_key: agentKey })
+    .neq('status', 'resolved')
+    .limit(1)
+    .maybeSingle();
+
+  if (existing?.id) {
+    await serviceClient.from('ops_incidents')
+      .update({
+        status: 'open',
+        severity: 'P1',
+        title: params.title,
+        impact: 'Betalning mottagen men ingen spelrätt kunde levereras eftersom kapaciteten var full.',
+        metadata: incidentMetadata,
+      })
+      .eq('id', existing.id);
+  } else {
+    await serviceClient.from('ops_incidents').insert({
+      venue_id: params.venueId,
+      severity: 'P1',
+      title: params.title,
+      status: 'open',
+      owner_name: 'Desk',
+      impact: 'Betalning mottagen men ingen spelrätt kunde levereras eftersom kapaciteten var full.',
+      containment: 'Blockera automatisk incheckning och lös manuellt innan spel.',
+      affected_ids: [params.scopeId, params.stripeSessionId, params.receiptId].filter(Boolean).join(','),
+      metadata: incidentMetadata,
+    });
+  }
+
+  await serviceClient.from('ops_signals')
+    .upsert({
+      venue_id: params.venueId,
+      signal_key: 'bookings',
+      status: 'red',
+      note: 'Betald plats kunde inte levereras på grund av full kapacitet.',
+      source: 'stripe_webhook',
+      details: incidentMetadata,
+      last_auto_checked_at: new Date().toISOString(),
+    }, { onConflict: 'venue_id,signal_key' });
+
+  await serviceClient.from('audit_log').insert({
+    venue_id: params.venueId,
+    actor_type: 'webhook',
+    action: 'capacity.paid_capacity_conflict',
+    entity_table: 'ops_incidents',
+    request_id: params.stripeSessionId,
+    after: incidentMetadata,
+    metadata: incidentMetadata,
+  });
+}
+
 function bookingContactFromNotes(notes?: string | null) {
   const parts = String(notes || '').split(' | ').map((part) => part.trim());
   return {
@@ -246,6 +367,26 @@ function isFounderBookingGroup(rows: any[]) {
     Number(row?.included_court_hours || 0) > 0 ||
     row?.membership_usage_entitlement_type === 'court_hours_per_week'
   );
+}
+
+async function getBookingGroupRows(serviceClient: any, booking: any) {
+  let query = serviceClient
+    .from('bookings')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type')
+    .eq('venue_id', booking.venue_id)
+    .neq('status', 'cancelled');
+
+  if (booking.stripe_session_id) {
+    query = query.eq('stripe_session_id', booking.stripe_session_id);
+  } else if (booking.access_code) {
+    query = query.eq('access_code', booking.access_code).eq('start_time', booking.start_time).eq('end_time', booking.end_time);
+  } else {
+    query = query.eq('start_time', booking.start_time).eq('end_time', booking.end_time).eq('notes', booking.notes);
+  }
+
+  const { data, error } = await query.order('start_time', { ascending: true });
+  if (error) throw new Error(error.message);
+  return data?.length ? data : [booking];
 }
 
 async function ensureBookerParticipant(serviceClient: any, bookingRows: any[]) {
@@ -268,25 +409,29 @@ async function ensureBookerParticipant(serviceClient: any, bookingRows: any[]) {
     ? 'paid'
     : 'pending';
 
-  const { error } = await serviceClient.from('booking_participants').insert({
-    venue_id: booking.venue_id,
-    booking_id: booking.id,
-    booking_group_key: groupKey,
-    customer_id: customerId,
-    user_id: booking.user_id,
-    display_name: contact.name || 'Bokare',
-    email: contact.email || null,
-    phone: contact.phone || null,
-    role: 'booker',
-    price_minor: 0,
-    payment_status: paymentStatus,
-    payment_method: booking.stripe_session_id ? 'stripe' : null,
-    metadata: {
+  if (!['paid', 'free'].includes(paymentStatus)) return null;
+
+  const result = await commitBookingParticipantCapacity(serviceClient, {
+    p_venue_id: booking.venue_id,
+    p_booking_id: booking.id,
+    p_booking_group_key: groupKey,
+    p_session_date: bookingSessionDate(booking),
+    p_capacity: bookingParticipantCapacity(bookingRows),
+    p_customer_id: customerId,
+    p_user_id: booking.user_id,
+    p_display_name: contact.name || 'Bokare',
+    p_email: contact.email || null,
+    p_phone: contact.phone || null,
+    p_role: 'booker',
+    p_price_minor: 0,
+    p_payment_status: paymentStatus,
+    p_payment_method: booking.stripe_session_id ? 'stripe' : null,
+    p_metadata: {
       source: 'booking_owner',
       founder_booking: isFounderBookingGroup(bookingRows),
     },
   });
-  if (error && !String(error.message || '').includes('duplicate key')) throw new Error(error.message);
+  return result.participant_id ? { id: result.participant_id } : null;
 }
 
 function stripeId(value: unknown): string | null {
@@ -1043,22 +1188,6 @@ async function handleBookingParticipant(
     product_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
   };
 
-  await serviceClient
-    .from('booking_participants')
-    .update({
-      payment_status: 'paid',
-      payment_method: receiptPaymentMethod(session),
-      payment_stripe_session_id: session.id,
-      email: session.customer_details?.email || participant.email || null,
-      user_id: resolvedUserId,
-      metadata: {
-        ...(participant.metadata || {}),
-        stripe_session_id: session.id,
-        stripe_payment_intent_id: session.payment_intent || null,
-      },
-    })
-    .eq('id', participant.id);
-
   const receipt = await createPurchaseReceipt({
     session,
     meta: paidMeta,
@@ -1070,11 +1199,78 @@ async function handleBookingParticipant(
     productDescription: 'Medspelarplats · Banbokning',
   });
 
-  if (receipt?.id) {
-    await serviceClient
-      .from('booking_participants')
-      .update({ booking_receipt_id: receipt.id })
-      .eq('id', participant.id);
+  const { data: representativeBooking } = await serviceClient
+    .from('bookings')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type')
+    .eq('id', participant.booking_id)
+    .maybeSingle();
+  const bookingForCapacity = representativeBooking || booking;
+  const groupedRows = bookingForCapacity ? await getBookingGroupRows(serviceClient, bookingForCapacity) : [];
+  const commit = await commitBookingParticipantCapacity(serviceClient, {
+    p_venue_id: participant.venue_id,
+    p_booking_id: participant.booking_id,
+    p_booking_group_key: participant.booking_group_key,
+    p_session_date: bookingSessionDate(bookingForCapacity),
+    p_capacity: bookingParticipantCapacity(groupedRows),
+    p_customer_id: participant.customer_id || receipt?.customer_id || null,
+    p_user_id: resolvedUserId,
+    p_display_name: participant.display_name || paidMeta.customer_name || 'Spelare',
+    p_email: session.customer_details?.email || participant.email || null,
+    p_phone: participant.phone || null,
+    p_role: 'player',
+    p_price_minor: amountMinor,
+    p_payment_status: 'paid',
+    p_payment_method: receiptPaymentMethod(session),
+    p_payment_stripe_session_id: session.id,
+    p_booking_receipt_id: receipt?.id || null,
+    p_metadata: {
+      ...(participant.metadata || {}),
+      stripe_session_id: session.id,
+      stripe_payment_intent_id: session.payment_intent || null,
+    },
+    p_hold_id: meta.capacity_hold_id || null,
+    p_participant_id: participant.id,
+  });
+
+  if (!commit.ok) {
+    await createLedgerEntryFromReceipt({
+      session,
+      meta: paidMeta,
+      serviceClient,
+      sourceType: 'stripe_payment',
+      sourceId: session.id,
+      receipt,
+      amountIncVatMinor: amountMinor,
+      metadata: {
+        intended_source_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
+        delivery_status: 'capacity_conflict',
+        booking_participant_id: participant.id,
+        booking_id: participant.booking_id,
+        booking_group_key: participant.booking_group_key,
+        booking_ref: booking?.booking_ref || null,
+      },
+    });
+    await recordPaidCapacityConflict(serviceClient, {
+      venueId: participant.venue_id,
+      scopeType: 'booking_group',
+      scopeId: participant.booking_group_key,
+      sessionDate: bookingSessionDate(bookingForCapacity),
+      stripeSessionId: session.id,
+      paymentIntentId: session.payment_intent || null,
+      receiptId: receipt?.id || null,
+      ledgerSourceType: 'stripe_payment',
+      ledgerSourceId: session.id,
+      customerId: participant.customer_id || receipt?.customer_id || null,
+      userId: resolvedUserId,
+      title: `Betald medspelarplats kunde inte levereras: ${participant.display_name || 'Spelare'}`,
+      metadata: {
+        product_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
+        booking_participant_id: participant.id,
+        booking_group_key: participant.booking_group_key,
+        booking_id: participant.booking_id,
+      },
+    });
+    return;
   }
 
   await createLedgerEntryFromReceipt({
@@ -1199,17 +1395,18 @@ async function handleDayPass(
   const includesDayAccess = includes_day_access !== 'false';
 
   if (activitySessionId) {
-    await serviceClient.from('session_registrations').upsert({
-      venue_id,
-      activity_session_id: activitySessionId,
-      session_date: date,
-      user_id: resolvedUserId,
-      status: 'confirmed',
-      price_paid_sek: priceSek,
-      stripe_session_id: session.id,
-      source_type: 'day_pass',
-      source_id: dayPass.id,
-      metadata: {
+    const commit = await commitActivityRegistrationCapacity(serviceClient, {
+      p_venue_id: venue_id,
+      p_activity_session_id: activitySessionId,
+      p_session_date: date,
+      p_user_id: resolvedUserId,
+      p_customer_id: receipt?.customer_id || null,
+      p_status: 'confirmed',
+      p_price_paid_sek: priceSek,
+      p_stripe_session_id: session.id,
+      p_source_type: 'day_pass',
+      p_source_id: dayPass.id,
+      p_metadata: {
         session_type: kind,
         session_name: meta.session_name || null,
         pricing_reason: meta.pricing_reason || null,
@@ -1218,7 +1415,26 @@ async function handleDayPass(
         early_bird_slots: meta.early_bird_slots || null,
         early_bird_remaining_at_checkout: meta.early_bird_remaining_at_checkout || null,
       },
-    }, { onConflict: 'activity_session_id,session_date,user_id' });
+      p_hold_id: meta.capacity_hold_id || null,
+    });
+    if (!commit.ok) {
+      await recordPaidCapacityConflict(serviceClient, {
+        venueId: venue_id,
+        scopeType: 'activity_session',
+        scopeId: activitySessionId,
+        sessionDate: date,
+        stripeSessionId: session.id,
+        paymentIntentId: session.payment_intent || null,
+        receiptId: receipt?.id || null,
+        ledgerSourceType: 'day_pass',
+        ledgerSourceId: session.id,
+        customerId: receipt?.customer_id || null,
+        userId: resolvedUserId,
+        title: `Betald dagsaccess kunde inte levereras: ${meta.session_name || 'Aktivitet'}`,
+        metadata: { product_type: 'day_pass', day_pass_id: dayPass?.id || null },
+      });
+      return;
+    }
   }
 
   if (dayPass?.id) {
@@ -1305,27 +1521,58 @@ async function handleActivityTicket(
     return;
   }
 
-  const { data: registration, error } = await serviceClient
-    .from('session_registrations')
-    .upsert({
-      venue_id,
-      activity_session_id: activitySessionId,
-      session_date: date,
-      user_id: resolvedUserId,
-      status: 'confirmed',
-      price_paid_sek: priceSek,
-      stripe_session_id: session.id,
-      source_type: 'session_ticket',
-      source_id: null,
-      metadata: {
-        session_type: kind,
-        session_name: meta.session_name || null,
-      },
-    }, { onConflict: 'activity_session_id,session_date,user_id' })
-    .select('id')
-    .single();
+  const commit = await commitActivityRegistrationCapacity(serviceClient, {
+    p_venue_id: venue_id,
+    p_activity_session_id: activitySessionId,
+    p_session_date: date,
+    p_user_id: resolvedUserId,
+    p_customer_id: receipt?.customer_id || null,
+    p_status: 'confirmed',
+    p_price_paid_sek: priceSek,
+    p_stripe_session_id: session.id,
+    p_source_type: 'session_ticket',
+    p_source_id: null,
+    p_metadata: {
+      session_type: kind,
+      session_name: meta.session_name || null,
+    },
+    p_hold_id: meta.capacity_hold_id || null,
+  });
 
-  if (error) throw new Error(`Failed to insert session registration: ${error.message}`);
+  if (!commit.ok) {
+    await createLedgerEntryFromReceipt({
+      session,
+      meta: { ...meta, venue_id },
+      serviceClient,
+      sourceType: 'stripe_payment',
+      sourceId: session.id,
+      receipt,
+      amountIncVatMinor: Number(session.amount_total || 0),
+      metadata: {
+        intended_source_type: 'activity_registration',
+        delivery_status: 'capacity_conflict',
+        activity_session_id: activitySessionId,
+        session_date: date,
+        session_type: kind,
+      },
+    });
+    await recordPaidCapacityConflict(serviceClient, {
+      venueId: venue_id,
+      scopeType: 'activity_session',
+      scopeId: activitySessionId,
+      sessionDate: date,
+      stripeSessionId: session.id,
+      paymentIntentId: session.payment_intent || null,
+      receiptId: receipt?.id || null,
+      ledgerSourceType: 'stripe_payment',
+      ledgerSourceId: session.id,
+      customerId: receipt?.customer_id || null,
+      userId: resolvedUserId,
+      title: `Betald aktivitet kunde inte levereras: ${meta.session_name || 'Aktivitet'}`,
+      metadata: { product_type: 'activity_ticket', session_type: kind },
+    });
+    return;
+  }
 
   await createLedgerEntryFromReceipt({
     session,
@@ -1336,7 +1583,7 @@ async function handleActivityTicket(
     receipt,
     amountIncVatMinor: Number(session.amount_total || 0),
       metadata: {
-        session_registration_id: registration?.id || null,
+        session_registration_id: commit.registration_id || null,
         activity_session_id: activitySessionId,
         session_date: date,
         session_type: kind,
@@ -1345,7 +1592,7 @@ async function handleActivityTicket(
       },
   });
 
-  if (registration?.id) {
+  if (commit.registration_id) {
     const { error: entitlementErr } = await serviceClient
       .from('access_entitlements')
       .upsert({
@@ -1354,7 +1601,7 @@ async function handleActivityTicket(
         entitlement_type: 'session_ticket',
         status: 'active',
         source_type: 'session_ticket',
-        source_id: registration.id,
+        source_id: commit.registration_id,
         activity_session_id: activitySessionId,
         session_date: date,
         valid_date: null,

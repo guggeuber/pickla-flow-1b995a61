@@ -8,6 +8,7 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
 const RESEND_REPLY_DOMAIN = (Deno.env.get('RESEND_INBOUND_DOMAIN') || 'playpickla.com')
   .replace(/^reply\.playpickla\.com$/i, 'playpickla.com');
+const COMMITTED_REGISTRATION_STATUSES = new Set(['confirmed', 'checked_in', 'no_show']);
 
 function escapeHtml(value: unknown) {
   return String(value ?? '')
@@ -486,12 +487,23 @@ async function publicActivitySessionHosts(client: any, sessionIds: string[]) {
   return data || [];
 }
 
-async function activityRegistrationCount(client: any, activitySessionId: string, sessionDate: string) {
+async function activityRegistrationCount(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
+  const { data: fillRows, error: fillError } = await client.rpc('capacity_fill', {
+    p_venue_id: venueId,
+    p_scope_type: 'activity_session',
+    p_scope_id: activitySessionId,
+    p_session_date: sessionDate,
+  });
+  const fill = Array.isArray(fillRows) ? fillRows[0] : fillRows;
+  if (!fillError && fill) {
+    return Number(fill.committed_count || 0);
+  }
+
   const { count } = await client.from('session_registrations')
     .select('id', { count: 'exact', head: true })
     .eq('activity_session_id', activitySessionId)
     .eq('session_date', sessionDate)
-    .not('status', 'in', '("cancelled","refunded")');
+    .in('status', [...COMMITTED_REGISTRATION_STATUSES]);
   return count || 0;
 }
 
@@ -614,7 +626,7 @@ async function activitySocialProof(client: any, {
   };
 
   for (const row of registrationsResult.data || []) {
-    if (row.status === 'cancelled' || row.status === 'refunded') continue;
+    if (!COMMITTED_REGISTRATION_STATUSES.has(String(row.status || ''))) continue;
     getRow(row.activity_session_id, row.session_date).registrations_count += 1;
   }
 
@@ -1027,6 +1039,7 @@ Deno.serve(async (req) => {
         });
         const registrationCount = await activityRegistrationCount(
           client,
+          preview.activity_session.venue_id,
           preview.activity_session.id,
           preview.activity_session.occurrence_date,
         );
@@ -1084,7 +1097,7 @@ Deno.serve(async (req) => {
         const socialProofPromise = (async () => {
           const socialProofStartedAt = performance.now();
           const [registrationCount, interests] = await Promise.all([
-            activityRegistrationCount(client, preview.activity_session.id, preview.activity_session.occurrence_date),
+            activityRegistrationCount(client, preview.activity_session.venue_id, preview.activity_session.id, preview.activity_session.occurrence_date),
             activityInterestState(client, {
               activitySessionId: preview.activity_session.id,
               sessionDate: preview.activity_session.occurrence_date,

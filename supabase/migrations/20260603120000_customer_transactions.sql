@@ -54,7 +54,7 @@ CREATE POLICY "Staff can view venue customer_transactions" ON public.customer_tr
             SELECT 1 FROM venue_staff
             WHERE venue_staff.user_id = auth.uid()
             AND venue_staff.venue_id = customer_transactions.venue_id
-            AND venue_staff.role IN ('owner', 'admin', 'desk')
+            AND venue_staff.role IN ('venue_admin', 'desk_staff')
         )
     );
 
@@ -67,4 +67,4 @@ CREATE POLICY "Users can view own customer_transactions" ON public.customer_tran
 CREATE TRIGGER set_updated_at
     BEFORE UPDATE ON public.customer_transactions
     FOR EACH ROW
-    EXECUTE FUNCTION public.set_current_timestamp_updated_at();
+    EXECUTE FUNCTION public.update_updated_at_column();
