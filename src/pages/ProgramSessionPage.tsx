@@ -182,7 +182,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const commerceParticipationProduct = commerceCatalog.data?.products.find((product) => product.commerce_kind === "participation" && product.product_key === sessionProductKey);
   const offeredRentalIds = new Set((commerceCatalog.data?.relationships || []).filter((relationship) => relationship.source_product_id === commerceParticipationProduct?.id).map((relationship) => relationship.target_product_id));
   const commerceExtras = (commerceCatalog.data?.products || []).filter((product) => (
-    (product.commerce_kind === "rental" && offeredRentalIds.has(product.id)) || product.commerce_kind === "merchandise"
+    product.commerce_kind !== "participation"
+    && product.activity_addon_enabled
+    && offeredRentalIds.has(product.id)
   ));
   const commercePilotEnabled = Boolean(commerceParticipationProduct);
   const sessionCourtIds = useMemo(() => (
@@ -523,7 +525,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             ...extras.map((product) => ({
               product_id: product.id,
               quantity: 1,
-              ...(product.commerce_kind === "rental" ? { parent_product_id: commerceParticipationProduct.id } : {}),
+              parent_product_id: commerceParticipationProduct.id,
             })),
           ],
         });

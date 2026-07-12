@@ -63,7 +63,7 @@ const groups: SettingsGroup[] = [
     title: "Catalog",
     emoji: "💸",
     items: [
-      { id: "products", label: "Produkter", desc: "Access & biljetter", icon: Package, tint: ax("magenta", 0.7) },
+      { id: "products", label: "Produkter", desc: "Utbud & försäljning", icon: Package, tint: ax("magenta", 0.7) },
       { id: "pricing", label: "Priser", desc: "Dynamiska regler", icon: Tag, tint: ax("lime", 0.7) },
       { id: "memberships", label: "Medlemskap", desc: "Nivåer & rabatter", icon: Crown, tint: ax("sun", 0.7) },
       { id: "schedule", label: "Schema", desc: "Program & pass", icon: CalendarCheck, tint: ax("electric", 0.7) },

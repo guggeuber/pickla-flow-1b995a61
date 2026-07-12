@@ -1,9 +1,16 @@
-import { useState } from "react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
-import { AlertTriangle, Loader2, Package, Plus, Save, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Archive, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Package, Plus, Search, Save, X } from "lucide-react";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import {
+  filterAndSortProducts,
+  productSalesModeLabel,
+  ProductCatalogFilters,
+  ProductCatalogStatus,
+} from "@/lib/adminProductCatalog";
+import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
+import { Switch } from "@/components/ui/switch";
 
 interface AccessProduct {
   id: string;
@@ -19,534 +26,343 @@ interface AccessProduct {
   commerce_kind: "participation" | "rental" | "merchandise" | null;
   fulfillment_type: "participation" | "desk_pickup" | null;
   commerce_enabled: boolean;
-  resolver_rules?: Record<string, unknown>;
+  status: ProductCatalogStatus;
+  standalone_enabled: boolean;
+  activity_addon_enabled: boolean;
+  fulfillment_presentation: "desk_pickup" | "digital" | "participation" | null;
+  category: string | null;
+  sport: string | null;
+  image_url: string | null;
 }
 
 interface ProductRelationship {
   id: string;
   source_product_id: string;
   target_product_id: string;
-  relationship_type: "offered_with";
   is_active: boolean;
 }
 
-interface MembershipTier {
-  id: string;
+interface ProductDraft {
   name: string;
-  is_active: boolean;
+  description: string;
+  price: string;
+  vatRate: string;
+  status: ProductCatalogStatus;
+  standaloneEnabled: boolean;
+  activityAddonEnabled: boolean;
+  fulfillment: "desk_pickup" | "digital" | "participation";
+  category: string;
+  sport: string;
+  imageUrl: string;
 }
 
-interface TierPricing {
-  tier_id: string;
-  product_type: string;
-  fixed_price: number | null;
-  discount_percent: number | null;
-}
+const PAGE_SIZE = 50;
+const inputClass = "w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary";
 
-const PRODUCT_KINDS = [
-  { key: "day_access", label: "Day Pass / dagsmedlemskap" },
-  { key: "session_ticket", label: "Session ticket" },
-  { key: "session_with_day_access", label: "Session + Day Pass" },
-  { key: "voucher", label: "Voucher / gåva" },
-  { key: "membership", label: "Membership" },
-  { key: "rental", label: "Hyra" },
-  { key: "merchandise", label: "Vara" },
-];
+const emptyDraft = (): ProductDraft => ({
+  name: "",
+  description: "",
+  price: "",
+  vatRate: "25",
+  status: "draft",
+  standaloneEnabled: false,
+  activityAddonEnabled: false,
+  fulfillment: "desk_pickup",
+  category: "",
+  sport: "",
+  imageUrl: "",
+});
 
-const SESSION_TYPES = [
-  { key: "", label: "Ingen / gäller hela dagen" },
-  { key: "open_play", label: "Open Play" },
-  { key: "group_training", label: "Gruppträning" },
-  { key: "pickla_open", label: "Pickla Open" },
-  { key: "event", label: "Event" },
-];
+const draftFromProduct = (product: AccessProduct): ProductDraft => ({
+  name: product.name,
+  description: product.description || "",
+  price: String(product.base_price_sek ?? 0),
+  vatRate: String(product.vat_rate ?? 0),
+  status: product.status || (product.is_active ? "active" : "archived"),
+  standaloneEnabled: Boolean(product.standalone_enabled),
+  activityAddonEnabled: Boolean(product.activity_addon_enabled),
+  fulfillment: product.fulfillment_presentation || (product.fulfillment_type === "participation" ? "participation" : "desk_pickup"),
+  category: product.category || "",
+  sport: product.sport || "",
+  imageUrl: product.image_url || "",
+});
 
-const keyFromName = (name: string) =>
-  name.trim().toLowerCase().replace(/å/g, "a").replace(/ä/g, "a").replace(/ö/g, "o").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+const keyFromName = (name: string) => name.trim().toLowerCase()
+  .replace(/å/g, "a").replace(/ä/g, "a").replace(/ö/g, "o")
+  .replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 
 const formatPrice = (amount: number) => `${Math.round(Number(amount || 0)).toLocaleString("sv-SE")} kr`;
+const statusLabel = (status: ProductCatalogStatus) => status === "active" ? "Aktiv" : status === "archived" ? "Arkiverad" : "Utkast";
+const fulfillmentLabel = (value: AccessProduct["fulfillment_presentation"]) => value === "participation" ? "Deltagande" : value === "digital" ? "Digital" : "Hämtas vid disken";
 
-const REQUIRED_PRODUCTS = [
-  {
-    product_key: "open_play_slot",
-    name: "Open Play-biljett",
-    description: "En biljett till ett schemalagt Open Play-pass. Priset sätts på passet i Schema.",
-    product_kind: "session_ticket",
-    session_type: "open_play",
-    base_price_sek: 0,
-    grants: {
-      entitlement_type: "session_ticket",
-    },
-    sort_order: 0,
-  },
-  {
-    product_key: "day_access",
-    name: "Dagsmedlemskap",
-    description: "Heldagstillgång. Kan användas som upsell från enstaka aktivitetspass.",
-    product_kind: "day_access",
-    session_type: null,
-    base_price_sek: 199,
-    grants: {
-      entitlement_type: "day_access",
-      includes_session_types: ["open_play"],
-    },
-    sort_order: 1,
-  },
-  {
-    product_key: "group_training",
-    name: "Gruppträning",
-    description: "Biljett till schemalagt träningspass. Priset sätts på passet i Schema.",
-    product_kind: "session_ticket",
-    session_type: "group_training",
-    base_price_sek: 0,
-    grants: {
-      entitlement_type: "session_ticket",
-    },
-    sort_order: 2,
-  },
-];
+function internalProductFields(draft: ProductDraft, existing?: AccessProduct | null) {
+  const rentalCategory = /^(hyra|uthyrning|rental)$/i.test(draft.category.trim());
+  const commerceKind = draft.fulfillment === "participation"
+    ? "participation"
+    : rentalCategory ? "rental" : existing?.commerce_kind === "rental" && !draft.category.trim() ? "rental" : "merchandise";
+  return {
+    product_kind: commerceKind === "participation" ? existing?.product_kind || "day_access" : commerceKind,
+    commerce_kind: commerceKind,
+    fulfillment_type: draft.fulfillment === "desk_pickup" ? "desk_pickup" : "participation",
+  };
+}
 
-const ProductPriceCard = ({
+function RelationshipSelector({
   product,
-  tiers,
-  tierPricing,
-  onUpdate,
-  onDelete,
+  products,
+  relationships,
+  onToggle,
+  pending,
 }: {
   product: AccessProduct;
-  tiers: MembershipTier[];
-  tierPricing: TierPricing[];
-  onUpdate: (body: Record<string, unknown>) => void;
-  onDelete: (productId: string) => void;
-}) => {
-  const [basePrice, setBasePrice] = useState(String(product.base_price_sek ?? 0));
-  const [name, setName] = useState(product.name);
-  const [vatRate, setVatRate] = useState(String(product.vat_rate ?? 0));
-  const [commerceKind, setCommerceKind] = useState(product.commerce_kind || "");
-  const [fulfillmentType, setFulfillmentType] = useState(product.fulfillment_type || "");
-  const isDayAccess = product.product_key === "day_access";
-  const isSessionPricedProduct = product.product_kind === "session_ticket" && product.product_key !== "day_access";
-  const hasBadDayAccessPrice = isDayAccess && Number(product.base_price_sek || 0) <= 0;
+  products: AccessProduct[];
+  relationships: ProductRelationship[];
+  onToggle: (sourceId: string, targetId: string, relationshipId?: string) => void;
+  pending: boolean;
+}) {
+  const [search, setSearch] = useState("");
+  const productIsParticipation = product.commerce_kind === "participation";
+  const candidates = products.filter((candidate) => productIsParticipation
+    ? candidate.id !== product.id && candidate.activity_addon_enabled
+    : candidate.commerce_kind === "participation");
+  const rows = candidates.map((candidate) => {
+    const sourceId = productIsParticipation ? product.id : candidate.id;
+    const targetId = productIsParticipation ? candidate.id : product.id;
+    const relationship = relationships.find((item) => item.source_product_id === sourceId && item.target_product_id === targetId && item.is_active);
+    return { candidate, sourceId, targetId, relationship };
+  }).filter(({ candidate }) => !search.trim() || candidate.name.toLocaleLowerCase("sv-SE").includes(search.trim().toLocaleLowerCase("sv-SE")))
+    .sort((left, right) => Number(Boolean(right.relationship)) - Number(Boolean(left.relationship)) || left.candidate.name.localeCompare(right.candidate.name, "sv-SE"));
 
-  const previewRows = tiers
-    .filter((tier) => tier.is_active)
-    .map((tier) => {
-      const rule = tierPricing.find((row) => row.tier_id === tier.id && row.product_type === product.product_key);
-      if (!rule) return null;
-      const base = Number(product.base_price_sek || 0);
-      const price = rule.fixed_price != null
-        ? Number(rule.fixed_price)
-        : Math.max(0, Math.round(base * (1 - Number(rule.discount_percent || 0) / 100)));
-      const suffix = rule.fixed_price != null ? "fast pris" : `${rule.discount_percent}% rabatt`;
-      const displayPrice = isSessionPricedProduct && rule.fixed_price == null ? suffix : price <= 0 ? "Ingår" : formatPrice(price);
-      return { tierName: tier.name, displayPrice, suffix };
-    })
-    .filter(Boolean) as Array<{ tierName: string; displayPrice: string; suffix: string }>;
+  if (!productIsParticipation && !product.activity_addon_enabled) return null;
 
   return (
-    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
-      <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
-          <Package className="w-5 h-5" />
-        </div>
-        <div className="flex-1 min-w-0 space-y-3">
-          <div>
-            <p className="text-sm font-bold">{product.name}</p>
-            <p className="text-[10px] text-muted-foreground font-mono">{product.product_key}</p>
-            {product.description && <p className="text-xs text-muted-foreground mt-1">{product.description}</p>}
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              <span className="status-chip bg-primary/15 text-primary text-[9px]">{product.product_kind}</span>
-              {product.session_type && <span className="status-chip bg-muted text-muted-foreground text-[9px]">{product.session_type}</span>}
-              <span className="status-chip bg-court-free/15 text-court-free text-[9px]">{product.base_price_sek} kr</span>
-            </div>
-          </div>
-
-          {isDayAccess && (
-            <div className="rounded-xl p-3 text-xs space-y-1" style={{ background: "hsl(var(--surface-2))" }}>
-              <p className="font-semibold">Canonical plats för dagsmedlemskap</p>
-              <p className="text-muted-foreground">
-                Baspriset sätts här. Medlemsrabatter sätts på medlemskapsnivån under prislistan för produktnyckel <span className="font-mono">day_access</span>.
-              </p>
-              {hasBadDayAccessPrice && (
-                <p className="flex items-center gap-1.5 text-amber-400 font-semibold">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  Baspris saknas eller är 0 kr. Då använder backend bara en nöd-fallback tills produkten är sparad.
-                </p>
-              )}
-            </div>
-          )}
-
-          {isSessionPricedProduct && (
-            <div className="rounded-xl p-3 text-xs space-y-1" style={{ background: "hsl(var(--surface-2))" }}>
-              <p className="font-semibold">Produktnyckel för schemapass</p>
-              <p className="text-muted-foreground">
-                Produktens baspris är huvudpris för pass som använder den här produkten. Schema ska bara ändra pris när ett enskilt pass uttryckligen behöver avvika. Medlemsrabatter sätts på medlemskapsnivån för produktnyckel <span className="font-mono">{product.product_key}</span>.
-              </p>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-[1fr_120px_auto] gap-2">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="rounded-xl px-3 py-2 text-xs outline-none"
-              style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-            />
-            <input
-              type="number"
-              value={basePrice}
-              onChange={(e) => setBasePrice(e.target.value)}
-              className="rounded-xl px-3 py-2 text-xs outline-none"
-              style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-            />
-            <button
-              onClick={() => onUpdate({
-                productId: product.id,
-                name: name.trim() || product.name,
-                base_price_sek: Math.max(0, Math.round(Number(basePrice || 0))),
-                vat_rate: Math.max(0, Number(vatRate || 0)),
-                commerce_kind: commerceKind || null,
-                fulfillment_type: fulfillmentType || null,
-              })}
-              className="rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground flex items-center justify-center gap-2"
-            >
-              <Save className="w-3.5 h-3.5" />
-              Spara pris
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <label className="grid gap-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-              Commerce-typ
-              <select value={commerceKind} onChange={(event) => setCommerceKind(event.target.value)} className="rounded-xl px-3 py-2 text-xs normal-case" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-                <option value="">Inte klassificerad</option>
-                <option value="participation">Participation</option>
-                <option value="rental">Rental</option>
-                <option value="merchandise">Merchandise</option>
-              </select>
-            </label>
-            <label className="grid gap-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-              Leverans
-              <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value)} className="rounded-xl px-3 py-2 text-xs normal-case" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-                <option value="">Inte vald</option>
-                <option value="participation">Participation</option>
-                <option value="desk_pickup">Hämtas vid desk</option>
-              </select>
-            </label>
-            <label className="grid gap-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-              Moms %
-              <input type="number" min="0" max="100" step="0.01" value={vatRate} onChange={(event) => setVatRate(event.target.value)} className="rounded-xl px-3 py-2 text-xs normal-case" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} />
-            </label>
-          </div>
-
-          <div className="rounded-xl p-3" style={{ background: "hsl(var(--surface-2))" }}>
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Medlemspris-preview</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
-                <span className="text-muted-foreground">Vanlig kund</span>
-                <span className="font-bold">{formatPrice(product.base_price_sek)}</span>
-              </div>
-              {previewRows.length > 0 ? previewRows.map((row) => (
-                <div key={`${product.product_key}-${row.tierName}`} className="rounded-full px-3 py-2 text-xs flex items-center justify-between" style={{ background: "hsl(var(--surface-1))" }}>
-                  <span className="text-muted-foreground">{row.tierName} · {row.suffix}</span>
-                  <span className="font-bold">{row.displayPrice}</span>
-                </div>
-              )) : (
-                <div className="rounded-full px-3 py-2 text-xs text-muted-foreground" style={{ background: "hsl(var(--surface-1))" }}>
-                  Inga medlemsprisregler för den här produkten ännu.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="flex flex-col gap-1 items-end">
-          <button
-            onClick={() => onUpdate({ productId: product.id, is_active: !product.is_active })}
-            className={`text-[10px] px-2 py-1 rounded-full font-semibold ${product.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}
-          >
-            {product.is_active ? "Aktiv" : "Av"}
-          </button>
-          <button
-            onClick={() => onUpdate({ productId: product.id, commerce_enabled: !product.commerce_enabled })}
-            disabled={!product.commerce_enabled && (!product.commerce_kind || !product.fulfillment_type)}
-            className={`text-[10px] px-2 py-1 rounded-full font-semibold disabled:opacity-40 ${product.commerce_enabled ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}
-          >
-            {product.commerce_enabled ? "Commerce på" : "Commerce av"}
-          </button>
-          <button onClick={() => { if (confirm("Ta bort produkten?")) onDelete(product.id); }} className="text-muted-foreground/50 hover:text-destructive">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+    <section className="border-t border-border px-4 py-5">
+      <h3 className="text-sm font-bold">{productIsParticipation ? "Produkter som kan läggas till" : "Kan köpas tillsammans med"}</h3>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {productIsParticipation ? `Gäller alla pass som använder produkten ${product.name}.` : "Välj vilka aktivitetsprodukter som får erbjuda den här produkten."}
+      </p>
+      <div className="relative mt-3">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Sök aktivitet eller produkt" className={`${inputClass} pl-9`} />
       </div>
-    </motion.div>
+      <div className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-border">
+        {rows.length === 0 ? (
+          <p className="px-3 py-4 text-sm text-muted-foreground">Inga matchande produkter.</p>
+        ) : rows.map(({ candidate, sourceId, targetId, relationship }) => (
+          <label key={candidate.id} className="flex cursor-pointer items-center justify-between gap-3 border-b border-border px-3 py-3 last:border-0">
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold">{candidate.name}</span>
+              <span className="text-xs text-muted-foreground">{formatPrice(candidate.base_price_sek)}</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={Boolean(relationship)}
+              disabled={pending}
+              onChange={() => onToggle(sourceId, targetId, relationship?.id)}
+              className="h-5 w-5 accent-primary"
+            />
+          </label>
+        ))}
+      </div>
+    </section>
   );
-};
+}
 
-const AdminProducts = ({ venueId }: { venueId: string }) => {
-  const qc = useQueryClient();
-  const [name, setName] = useState("");
-  const [productKey, setProductKey] = useState("");
-  const [description, setDescription] = useState("");
-  const [kind, setKind] = useState("day_access");
-  const [sessionType, setSessionType] = useState("");
-  const [price, setPrice] = useState("");
-  const [vatRate, setVatRate] = useState("6");
-  const [relationshipSource, setRelationshipSource] = useState("");
-  const [relationshipTarget, setRelationshipTarget] = useState("");
+export default function AdminProducts({ venueId }: { venueId: string }) {
+  const queryClient = useQueryClient();
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState<ProductDraft>(emptyDraft);
+  const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState<ProductCatalogFilters>({ search: "", status: "all", salesMode: "all", category: "", sport: "", sort: "name" });
 
-  const { data: products, isLoading } = useQuery<AccessProduct[]>({
+  const productsQuery = useQuery<AccessProduct[]>({
     queryKey: ["admin-access-products", venueId],
     queryFn: () => apiGet("api-admin", "products", { venueId }),
   });
-  const { data: tiers } = useQuery<MembershipTier[]>({
-    queryKey: ["membership-tiers", venueId],
-    enabled: !!venueId,
-    queryFn: () => apiGet("api-memberships", "tiers", { venueId, includeHidden: "true" }),
-  });
-  const { data: relationships = [] } = useQuery<ProductRelationship[]>({
+  const relationshipsQuery = useQuery<ProductRelationship[]>({
     queryKey: ["admin-product-relationships", venueId],
     queryFn: () => apiGet("api-admin", "product-relationships", { venueId }),
   });
-  const tierPricingQueries = useQueries({
-    queries: (tiers || []).map((tier) => ({
-      queryKey: ["tier-pricing", tier.id],
-      queryFn: () => apiGet<TierPricing[]>("api-memberships", "tier-pricing", { tierId: tier.id }),
-      enabled: !!tier.id,
-    })),
-  });
-  const allTierPricing = tierPricingQueries.flatMap((query) => query.data || []);
-  const missingRequiredProducts = REQUIRED_PRODUCTS.filter(
-    (required) => !(products || []).some((product) => product.product_key === required.product_key),
-  );
+  const products = useMemo(() => productsQuery.data || [], [productsQuery.data]);
+  const relationships = useMemo(() => relationshipsQuery.data || [], [relationshipsQuery.data]);
+  const selectedProduct = products.find((product) => product.id === selectedProductId) || null;
+
+  useEffect(() => {
+    if (selectedProduct) setDraft(draftFromProduct(selectedProduct));
+  }, [selectedProduct]);
+  useEffect(() => setPage(1), [filters]);
+
+  const invalidateCatalog = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["admin-access-products", venueId] }),
+    queryClient.invalidateQueries({ queryKey: ["commerce-catalog", venueId] }),
+  ]);
 
   const saveProduct = useMutation({
-    mutationFn: (body: any) => apiPost("api-admin", "products", body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin-access-products", venueId] });
-      toast.success("Produkt sparad");
-      setName(""); setProductKey(""); setDescription(""); setPrice(""); setVatRate("6");
+    mutationFn: async () => {
+      if (!draft.name.trim()) throw new Error("Namn krävs");
+      const internal = internalProductFields(draft, selectedProduct);
+      const body: Record<string, unknown> = {
+        name: draft.name.trim(),
+        description: draft.description.trim() || null,
+        base_price_sek: Math.max(0, Math.round(Number(draft.price || 0))),
+        vat_rate: Math.max(0, Number(draft.vatRate || 0)),
+        status: draft.status,
+        fulfillment_presentation: draft.fulfillment,
+        category: draft.category.trim() || null,
+        sport: draft.sport.trim() || null,
+        image_url: draft.imageUrl.trim() || null,
+        ...internal,
+      };
+      if (internal.commerce_kind !== "participation") {
+        body.standalone_enabled = draft.standaloneEnabled;
+        body.activity_addon_enabled = draft.activityAddonEnabled;
+      }
+      if (selectedProduct) return apiPatch("api-admin", "products", { venueId, productId: selectedProduct.id, ...body });
+      const baseKey = keyFromName(draft.name) || "produkt";
+      const productKey = products.some((product) => product.product_key === baseKey) ? `${baseKey}_${Date.now().toString(36)}` : baseKey;
+      return apiPost("api-admin", "products", { venueId, product_key: productKey, sort_order: products.length * 10, ...body });
     },
-    onError: (e: any) => toast.error(e.message),
-  });
-
-  const updateProduct = useMutation({
-    mutationFn: (body: any) => apiPatch("api-admin", "products", body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin-access-products", venueId] });
-      toast.success("Produkt uppdaterad");
+    onSuccess: async (saved: AccessProduct) => {
+      await invalidateCatalog();
+      setCreating(false);
+      setSelectedProductId(saved.id);
+      toast.success("Produkten är sparad");
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (error: Error) => toast.error(error.message),
   });
 
-  const deleteProduct = useMutation({
-    mutationFn: (productId: string) => apiDelete("api-admin", "products", { venueId, productId }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin-access-products", venueId] });
-      toast.success("Produkt borttagen");
+  const relationshipMutation = useMutation({
+    mutationFn: ({ sourceId, targetId, relationshipId }: { sourceId: string; targetId: string; relationshipId?: string }) => relationshipId
+      ? apiDelete("api-admin", "product-relationships", { venueId, relationshipId })
+      : apiPost("api-admin", "product-relationships", { venueId, source_product_id: sourceId, target_product_id: targetId, is_active: true }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin-product-relationships", venueId] });
+      await queryClient.invalidateQueries({ queryKey: ["commerce-catalog", venueId] });
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (error: Error) => toast.error(error.message),
   });
 
-  const saveRelationship = useMutation({
-    mutationFn: () => apiPost("api-admin", "product-relationships", {
-      venueId,
-      source_product_id: relationshipSource,
-      target_product_id: relationshipTarget,
-      is_active: true,
-    }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin-product-relationships", venueId] });
-      toast.success("Tillval kopplat");
-      setRelationshipSource("");
-      setRelationshipTarget("");
-    },
-    onError: (error: any) => toast.error(error.message),
-  });
+  const filteredProducts = useMemo(() => filterAndSortProducts(products, filters), [products, filters]);
+  const categories = useMemo(() => Array.from(new Set(products.map((product) => product.category).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "sv-SE")), [products]);
+  const sports = useMemo(() => Array.from(new Set(products.map((product) => product.sport).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "sv-SE")), [products]);
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
+  const visibleProducts = filteredProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const drawerOpen = creating || Boolean(selectedProduct);
 
-  const deleteRelationship = useMutation({
-    mutationFn: (relationshipId: string) => apiDelete("api-admin", "product-relationships", { venueId, relationshipId }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-product-relationships", venueId] }),
-    onError: (error: any) => toast.error(error.message),
-  });
-
-  const handleCreate = () => {
-    const safeKey = productKey || keyFromName(name);
-    if (!name.trim() || !safeKey) {
-      toast.error("Namn krävs");
-      return;
-    }
-
-    saveProduct.mutate({
-      venueId,
-      product_key: safeKey,
-      name: name.trim(),
-      description: description.trim() || null,
-      product_kind: kind,
-      session_type: sessionType || null,
-      base_price_sek: Math.round(Number(price || 0)),
-      vat_rate: Number(vatRate || 0),
-      commerce_kind: kind === "rental" ? "rental" : kind === "merchandise" ? "merchandise" : null,
-      fulfillment_type: kind === "rental" || kind === "merchandise" ? "desk_pickup" : null,
-      commerce_enabled: false,
-      grants: kind === "rental" || kind === "merchandise" ? {} : {
-        entitlement_type: kind === "voucher" ? "voucher" : kind === "session_ticket" ? "session_ticket" : "day_access",
-        includes_session_types: sessionType ? [sessionType] : ["open_play"],
-        includes_session_ticket: kind === "session_with_day_access",
-      },
-      sort_order: (products?.length || 0) * 10,
-      is_active: true,
-    });
+  const openNewProduct = () => {
+    setSelectedProductId(null);
+    setDraft(emptyDraft());
+    setCreating(true);
+  };
+  const closeDrawer = () => {
+    setCreating(false);
+    setSelectedProductId(null);
   };
 
-  const createRequiredProduct = (required: typeof REQUIRED_PRODUCTS[number]) => {
-    saveProduct.mutate({
-      venueId,
-      product_key: required.product_key,
-      name: required.name,
-      description: required.description,
-      product_kind: required.product_kind,
-      session_type: required.session_type,
-      base_price_sek: required.base_price_sek,
-      vat_rate: 6,
-      grants: required.grants,
-      sort_order: required.sort_order,
-      is_active: true,
-    });
-  };
-
-  if (isLoading) return <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mt-8" />;
+  if (productsQuery.isLoading) return <Loader2 className="mx-auto mt-10 h-5 w-5 animate-spin text-primary" />;
 
   return (
     <div className="space-y-4">
-      <div className="glass-card rounded-2xl p-4 space-y-3">
-        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Ny produkt</p>
-        <input
-          placeholder="Namn, t.ex. Gruppträning + Day Pass"
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value);
-            if (!productKey) setProductKey(keyFromName(e.target.value));
-          }}
-          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
-          style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-        />
-        <input
-          placeholder="Produktnyckel"
-          value={productKey}
-          onChange={(e) => setProductKey(keyFromName(e.target.value))}
-          className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none"
-          style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-        />
-        <textarea
-          placeholder="Beskrivning"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none min-h-[72px]"
-          style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <select value={kind} onChange={(e) => setKind(e.target.value)} className="rounded-xl px-3 py-2.5 text-xs outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-            {PRODUCT_KINDS.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-          </select>
-          <select value={sessionType} onChange={(e) => setSessionType(e.target.value)} className="rounded-xl px-3 py-2.5 text-xs outline-none" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-            {SESSION_TYPES.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-          </select>
-        </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px_auto]">
-          <input
-            type="number"
-            placeholder="Pris SEK"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            className="rounded-xl px-3 py-2.5 text-sm outline-none"
-            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-          />
-          <input
-            type="number"
-            min="0"
-            max="100"
-            step="0.01"
-            placeholder="Moms %"
-            value={vatRate}
-            onChange={(event) => setVatRate(event.target.value)}
-            className="rounded-xl px-3 py-2.5 text-sm outline-none"
-            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
-          />
-          <button onClick={handleCreate} disabled={saveProduct.isPending} className="rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-50 flex items-center gap-2">
-            {saveProduct.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            Lägg till
-          </button>
-        </div>
-      </div>
-
-      <div className="glass-card rounded-2xl p-4 space-y-3">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Tillval till aktivitet</p>
-          <p className="mt-1 text-xs text-muted-foreground">Kopplingen avgör vilka hyresprodukter som får ligga i samma köp som biljetten.</p>
+          <h2 className="text-xl font-bold">Produkter</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Det Pickla säljer, samlat på ett ställe.</p>
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
-          <select value={relationshipSource} onChange={(event) => setRelationshipSource(event.target.value)} className="rounded-xl px-3 py-2.5 text-xs" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-            <option value="">Aktivitetsprodukt</option>
-            {(products || []).filter((product) => product.commerce_kind === "participation").map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-          </select>
-          <select value={relationshipTarget} onChange={(event) => setRelationshipTarget(event.target.value)} className="rounded-xl px-3 py-2.5 text-xs" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
-            <option value="">Hyresprodukt</option>
-            {(products || []).filter((product) => product.commerce_kind === "rental").map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-          </select>
-          <button type="button" onClick={() => saveRelationship.mutate()} disabled={!relationshipSource || !relationshipTarget || saveRelationship.isPending} className="rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground disabled:opacity-40">Koppla</button>
-        </div>
-        {relationships.map((relationship) => {
-          const source = (products || []).find((product) => product.id === relationship.source_product_id);
-          const target = (products || []).find((product) => product.id === relationship.target_product_id);
-          return (
-            <div key={relationship.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-xs" style={{ background: "hsl(var(--surface-2))" }}>
-              <span>{source?.name || "Produkt"} + {target?.name || "Tillval"}</span>
-              <button type="button" onClick={() => deleteRelationship.mutate(relationship.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
-            </div>
-          );
-        })}
+        <button type="button" onClick={openNewProduct} className="flex h-10 shrink-0 items-center gap-2 rounded-lg bg-primary px-3 text-sm font-bold text-primary-foreground">
+          <Plus className="h-4 w-4" /> Ny produkt
+        </button>
       </div>
-
-      {missingRequiredProducts.length > 0 && (
-        <div className="glass-card rounded-2xl p-4 space-y-3 border border-amber-500/30">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold">Saknad kärnprodukt</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Dagsmedlemskap behöver en produkt i katalogen. Utan den blir priset svårbegripligt och backend måste använda nöd-fallback.
-              </p>
-            </div>
-          </div>
-          {missingRequiredProducts.map((required) => (
-            <button
-              key={required.product_key}
-              onClick={() => createRequiredProduct(required)}
-              disabled={saveProduct.isPending}
-              className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50"
-            >
-              Skapa {required.name} · {required.base_price_sek} kr
-            </button>
-          ))}
-        </div>
-      )}
 
       <div className="space-y-2">
-        {(products || []).map((product) => (
-          <ProductPriceCard
-            key={product.id}
-            product={product}
-            tiers={tiers || []}
-            tierPricing={allTierPricing}
-            onUpdate={(body) => updateProduct.mutate(body)}
-            onDelete={(productId) => deleteProduct.mutate(productId)}
-          />
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Sök produkt" className={`${inputClass} pl-9`} />
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as ProductCatalogFilters["status"] }))} className={inputClass} aria-label="Status">
+            <option value="all">Alla statusar</option><option value="active">Aktiva</option><option value="draft">Utkast</option><option value="archived">Arkiverade</option>
+          </select>
+          <select value={filters.salesMode} onChange={(event) => setFilters((current) => ({ ...current, salesMode: event.target.value as ProductCatalogFilters["salesMode"] }))} className={inputClass} aria-label="Försäljningssätt">
+            <option value="all">Alla försäljningssätt</option><option value="standalone">Butik</option><option value="addon">Aktivitetstillval</option><option value="both">Butik + aktivitet</option>
+          </select>
+          <select value={filters.sort} onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as ProductCatalogFilters["sort"] }))} className={inputClass} aria-label="Sortering">
+            <option value="name">Namn A–Ö</option><option value="price_asc">Lägsta pris</option><option value="price_desc">Högsta pris</option>
+          </select>
+          {categories.length > 0 && <select value={filters.category} onChange={(event) => setFilters((current) => ({ ...current, category: event.target.value }))} className={inputClass} aria-label="Kategori"><option value="">Alla kategorier</option>{categories.map((value) => <option key={value}>{value}</option>)}</select>}
+          {sports.length > 0 && <select value={filters.sport} onChange={(event) => setFilters((current) => ({ ...current, sport: event.target.value }))} className={inputClass} aria-label="Sport"><option value="">Alla sporter</option>{sports.map((value) => <option key={value}>{value}</option>)}</select>}
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <div className="flex items-center justify-between border-b border-border px-3 py-2 text-xs text-muted-foreground">
+          <span>{filteredProducts.length} produkter</span><span>{products.length > PAGE_SIZE ? `Sida ${page} av ${pageCount}` : ""}</span>
+        </div>
+        {visibleProducts.length === 0 ? (
+          <div className="px-4 py-12 text-center"><Package className="mx-auto h-6 w-6 text-muted-foreground" /><p className="mt-2 text-sm text-muted-foreground">Inga produkter matchar urvalet.</p></div>
+        ) : visibleProducts.map((product) => (
+          <button key={product.id} type="button" onClick={() => { setCreating(false); setSelectedProductId(product.id); }} className="grid w-full grid-cols-[1fr_auto] items-center gap-3 border-b border-border px-3 py-3 text-left last:border-0 hover:bg-muted/40 sm:grid-cols-[minmax(0,1fr)_120px_150px_150px_auto]">
+            <span className="min-w-0"><span className="block truncate text-sm font-bold">{product.name}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground sm:hidden">{productSalesModeLabel(product)} · {fulfillmentLabel(product.fulfillment_presentation)}</span></span>
+            <span className="text-sm font-bold sm:text-right">{formatPrice(product.base_price_sek)}</span>
+            <span className="hidden text-xs text-muted-foreground sm:block">{statusLabel(product.status)}</span>
+            <span className="hidden text-xs text-muted-foreground sm:block">{productSalesModeLabel(product)}</span>
+            <span className="hidden text-xs text-muted-foreground sm:block">{fulfillmentLabel(product.fulfillment_presentation)}</span>
+            <ChevronRight className="hidden h-4 w-4 text-muted-foreground sm:block" />
+          </button>
         ))}
       </div>
+
+      {pageCount > 1 && <div className="flex items-center justify-between"><button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1} className="rounded-lg border border-border p-2 disabled:opacity-30" aria-label="Föregående sida"><ChevronLeft className="h-4 w-4" /></button><span className="text-xs text-muted-foreground">{page} / {pageCount}</span><button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={page === pageCount} className="rounded-lg border border-border p-2 disabled:opacity-30" aria-label="Nästa sida"><ChevronRight className="h-4 w-4" /></button></div>}
+
+      <Drawer open={drawerOpen} onOpenChange={(open) => { if (!open) closeDrawer(); }} shouldScaleBackground={false}>
+        <DrawerContent className="max-h-[92dvh]">
+          <div className="flex items-start justify-between border-b border-border px-4 pb-4 pt-2">
+            <div className="min-w-0"><DrawerTitle className="truncate text-left">{creating ? "Ny produkt" : selectedProduct?.name}</DrawerTitle><DrawerDescription className="mt-1 text-left">Pris, försäljning och leverans.</DrawerDescription></div>
+            <button type="button" onClick={closeDrawer} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-muted" aria-label="Stäng"><X className="h-4 w-4" /></button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <section className="space-y-3 px-4 py-5">
+              <h3 className="text-sm font-bold">Grunduppgifter</h3>
+              <label className="block text-xs font-semibold text-muted-foreground">Namn<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label>
+              <label className="block text-xs font-semibold text-muted-foreground">Beskrivning<textarea value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} rows={3} className={`${inputClass} mt-1 resize-none text-foreground`} /></label>
+              <div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-muted-foreground">Pris<input type="number" min="0" value={draft.price} onChange={(event) => setDraft((current) => ({ ...current, price: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label><label className="block text-xs font-semibold text-muted-foreground">Moms %<input type="number" min="0" max="100" step="0.01" value={draft.vatRate} onChange={(event) => setDraft((current) => ({ ...current, vatRate: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label></div>
+              <label className="block text-xs font-semibold text-muted-foreground">Status<select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ProductCatalogStatus }))} className={`${inputClass} mt-1 text-foreground`}><option value="draft">Utkast</option><option value="active">Aktiv</option><option value="archived">Arkiverad</option></select></label>
+              <div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-muted-foreground">Kategori<input value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} placeholder="T.ex. Hyra" className={`${inputClass} mt-1 text-foreground`} /></label><label className="block text-xs font-semibold text-muted-foreground">Sport<input value={draft.sport} onChange={(event) => setDraft((current) => ({ ...current, sport: event.target.value }))} placeholder="Valfritt" className={`${inputClass} mt-1 text-foreground`} /></label></div>
+              <label className="block text-xs font-semibold text-muted-foreground">Bildlänk<div className="relative mt-1"><ImageIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={draft.imageUrl} onChange={(event) => setDraft((current) => ({ ...current, imageUrl: event.target.value }))} placeholder="https://…" className={`${inputClass} pl-9 text-foreground`} /></div></label>
+            </section>
+
+            <section className="space-y-4 border-t border-border px-4 py-5">
+              <h3 className="text-sm font-bold">Försäljning</h3>
+              {selectedProduct?.commerce_kind === "participation" ? (
+                <p className="text-sm text-muted-foreground">Produkten säljs genom de pass och program som använder den.</p>
+              ) : (
+                <>
+                  <label className="flex items-center justify-between gap-4"><span><span className="block text-sm font-semibold">Säljs fristående i butiken</span><span className="block text-xs text-muted-foreground">Kunden kan köpa produkten utan en aktivitet.</span></span><Switch checked={draft.standaloneEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, standaloneEnabled: checked }))} /></label>
+                  <label className="flex items-center justify-between gap-4"><span><span className="block text-sm font-semibold">Kan läggas till på aktivitet</span><span className="block text-xs text-muted-foreground">Kräver att minst en aktivitet väljs nedan.</span></span><Switch checked={draft.activityAddonEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, activityAddonEnabled: checked }))} /></label>
+                </>
+              )}
+            </section>
+
+            <section className="border-t border-border px-4 py-5">
+              <h3 className="text-sm font-bold">Leverans</h3>
+              {selectedProduct?.commerce_kind === "participation" ? (
+                <p className="mt-2 text-sm text-muted-foreground">Deltagande</p>
+              ) : (
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {([['desk_pickup', 'Hämtas vid disken'], ['digital', 'Digital'], ['participation', 'Deltagande']] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setDraft((current) => ({ ...current, fulfillment: value }))} className={`min-h-12 rounded-lg border px-2 text-xs font-semibold ${draft.fulfillment === value ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground"}`}>{label}</button>)}
+                </div>
+              )}
+            </section>
+
+            {selectedProduct && <RelationshipSelector product={{ ...selectedProduct, activity_addon_enabled: draft.activityAddonEnabled }} products={products} relationships={relationships} onToggle={(sourceId, targetId, relationshipId) => relationshipMutation.mutate({ sourceId, targetId, relationshipId })} pending={relationshipMutation.isPending} />}
+
+            {selectedProduct && selectedProduct.status !== "archived" && <section className="border-t border-border px-4 py-5"><button type="button" onClick={() => setDraft((current) => ({ ...current, status: "archived" }))} className="flex items-center gap-2 text-sm font-semibold text-destructive"><Archive className="h-4 w-4" /> Arkivera produkt</button></section>}
+          </div>
+          <div className="border-t border-border bg-background px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
+            <button type="button" onClick={() => saveProduct.mutate()} disabled={saveProduct.isPending || !draft.name.trim()} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-primary font-bold text-primary-foreground disabled:opacity-40">{saveProduct.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Spara</button>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
-};
-
-export default AdminProducts;
+}

@@ -161,7 +161,7 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
   const productIds = Array.from(new Set(items.map((item) => String(item.product_id || '')).filter(Boolean)));
   const { data: products, error: productError } = await admin
     .from('access_products')
-    .select('id, venue_id, product_key, name, description, product_kind, commerce_kind, fulfillment_type, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active')
+    .select('id, venue_id, product_key, name, description, product_kind, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
     .eq('venue_id', venueId)
     .in('id', productIds);
   if (productError) throw new Error(productError.message);
@@ -170,7 +170,7 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
 
   const normalized = items.map((item, index) => {
     const product = productById.get(String(item.product_id || ''));
-    if (!product?.is_active || !product?.commerce_enabled || !product.commerce_kind || !product.fulfillment_type) {
+    if (product?.status !== 'active' || !product?.is_active || !product?.commerce_enabled || !product.commerce_kind || !product.fulfillment_type) {
       throw new Error('Product is not available');
     }
     const quantity = Math.min(Math.max(Math.floor(Number(item.quantity || 1)), 1), MAX_QUANTITY);
@@ -211,10 +211,15 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
       item.input.source_id = sessionId;
     }
 
-    if (item.product.commerce_kind === 'rental') {
+    if (item.product.commerce_kind !== 'participation') {
       const parentProductId = String(item.input.parent_product_id || '').trim();
+      if (!parentProductId) {
+        if (!item.product.standalone_enabled) throw new Error('Product is not available as a standalone purchase');
+        continue;
+      }
+      if (!item.product.activity_addon_enabled) throw new Error('Product is not available with activities');
       const parent = normalized.find((candidate) => candidate.product.id === parentProductId && candidate.product.commerce_kind === 'participation');
-      if (!parent) throw new Error('Rental must belong to a participation');
+      if (!parent) throw new Error('Add-on must belong to a participation');
       const { data: relation, error: relationError } = await admin
         .from('product_relationships')
         .select('id')
@@ -265,7 +270,7 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
   const productIds = lines.map((line) => line.product_id).filter(Boolean);
   const { data: products, error } = await admin
     .from('access_products')
-    .select('id, venue_id, product_key, name, commerce_kind, fulfillment_type, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active')
+    .select('id, venue_id, product_key, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
     .in('id', productIds);
   if (error) throw new Error(error.message);
   const productsById = new Map((products || []).map((product: any) => [product.id, product]));
@@ -274,13 +279,14 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
   const resolved: any[] = [];
   for (const line of lines) {
     const product = productsById.get(line.product_id);
-    if (!product?.is_active || !product?.commerce_enabled) throw new Error('Product is no longer available');
+    if (product?.status !== 'active' || !product?.is_active || !product?.commerce_enabled) throw new Error('Product is no longer available');
     if (product.venue_id !== order.venue_id || product.commerce_kind !== line.commerce_kind) {
       throw new Error('Product classification changed — review the cart again');
     }
-    if (line.commerce_kind === 'rental') {
+    if (line.commerce_kind !== 'participation' && line.parent_line_id) {
+      if (!product.activity_addon_enabled) throw new Error('Product is no longer available with activities');
       const parent = lineById.get(line.parent_line_id);
-      if (!parent || parent.commerce_kind !== 'participation') throw new Error('Rental has no participation');
+      if (!parent || parent.commerce_kind !== 'participation') throw new Error('Add-on has no participation');
       const { data: relationship, error: relationshipError } = await admin
         .from('product_relationships')
         .select('id')
@@ -292,6 +298,8 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
         .maybeSingle();
       if (relationshipError) throw new Error(relationshipError.message);
       if (!relationship) throw new Error('Product relationship changed — review the cart again');
+    } else if (line.commerce_kind !== 'participation' && !product.standalone_enabled) {
+      throw new Error('Product is no longer available as a standalone purchase');
     }
     let unitPriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
     let resolverSnapshot: Record<string, unknown> = { pricing_source: 'product_base_price' };
@@ -416,8 +424,8 @@ Deno.serve(async (req) => {
       if (!venueId) return errorResponse('Missing venueId', 400);
       const [{ data: products, error: productError }, { data: relationships, error: relationshipError }] = await Promise.all([
         admin.from('access_products')
-          .select('id, venue_id, product_key, name, description, commerce_kind, fulfillment_type, base_price_sek, vat_rate, resolver_rules, sort_order')
-          .eq('venue_id', venueId).eq('is_active', true).eq('commerce_enabled', true).order('sort_order'),
+          .select('id, venue_id, product_key, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
+          .eq('venue_id', venueId).eq('status', 'active').eq('is_active', true).eq('commerce_enabled', true).order('sort_order'),
         admin.from('product_relationships')
           .select('id, source_product_id, target_product_id, relationship_type, sort_order')
           .eq('venue_id', venueId).eq('is_active', true).order('sort_order'),

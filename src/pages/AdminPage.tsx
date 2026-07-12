@@ -216,7 +216,7 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
   );
 }
 
-const AdminPage = () => {
+const AdminPage = ({ initialModule = null }: { initialModule?: string | null }) => {
   const navigate = useNavigate();
   const { data: adminDataRaw, isLoading, isError } = useAdminCheck();
   const { data: venuesRaw } = useAdminVenues();
@@ -226,7 +226,7 @@ const AdminPage = () => {
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
   const [active, setActive] = useState<AdminSurfaceId>("today");
-  const [openModule, setOpenModule] = useState<string | null>(null);
+  const [openModule, setOpenModule] = useState<string | null>(initialModule);
 
   const venueId = selectedVenueId || adminData?.venueId;
   const currentVenue = venues.find((v: any) => v.id === venueId);
@@ -257,10 +257,16 @@ const AdminPage = () => {
   }
 
   if (openModule) {
-    return <ModuleDetail id={openModule} venueId={venueId} onBack={() => setOpenModule(null)} />;
+    return <ModuleDetail id={openModule} venueId={venueId} onBack={() => {
+      if (initialModule) navigate("/hub/admin");
+      else setOpenModule(null);
+    }} />;
   }
 
-  const openSettingsModule = (id: string) => setOpenModule(id);
+  const openSettingsModule = (id: string) => {
+    if (id === "products") navigate("/hub/admin/products");
+    else setOpenModule(id);
+  };
 
   return (
     <div className="min-h-screen bg-background max-w-2xl mx-auto">
@@ -385,7 +391,7 @@ const AdminPage = () => {
                 title="Catalog"
                 tagline="Produkter, priser, medlemskap och schema — på samma yta."
                 bullets={[
-                  { title: "En produktsida", desc: "Access products, event products och membership tiers i flikar." },
+                  { title: "En produktsida", desc: "Produkter, eventutbud och medlemskap samlade på en tydlig yta." },
                   { title: "Pris-koppling", desc: "Dynamiska prisregler visas direkt på produkten de styr." },
                   { title: "Schema bredvid", desc: "Activity sessions och series länkade till sin produkt." },
                 ]}

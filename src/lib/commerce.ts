@@ -10,9 +10,16 @@ export interface CommerceProduct {
   description: string | null;
   commerce_kind: CommerceKind;
   fulfillment_type: "participation" | "desk_pickup";
+  fulfillment_presentation: "participation" | "desk_pickup" | "digital" | null;
   base_price_sek: number;
   vat_rate: number;
   sort_order: number;
+  status: "draft" | "active" | "archived";
+  standalone_enabled: boolean;
+  activity_addon_enabled: boolean;
+  category: string | null;
+  sport: string | null;
+  image_url: string | null;
 }
 
 export interface CommerceRelationship {

@@ -123,6 +123,7 @@ function AppRoutes() {
             <Route path="/hub/admin/investors" element={<ProtectedRoute><AdminInvestorPage /></ProtectedRoute>} />
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/hub" element={<HubPage />} />
+            <Route path="/hub/admin/products" element={<ProtectedRoute><AdminPage initialModule="products" /></ProtectedRoute>} />
             <Route path="/hub/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/admin/event-leads" element={<ProtectedRoute><AdminEventLeadsPage /></ProtectedRoute>} />
             <Route path="/hub/admin/event-products" element={<ProtectedRoute><AdminEventProductsPage /></ProtectedRoute>} />

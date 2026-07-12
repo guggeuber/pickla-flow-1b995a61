@@ -4867,9 +4867,17 @@ Deno.serve(async (req) => {
       const {
         venueId: _v, product_key, name, description, product_kind, session_type,
         base_price_sek, vat_rate, grants, sort_order, is_active, commerce_kind,
-        fulfillment_type, resolver_rules, commerce_enabled,
+        fulfillment_type, resolver_rules, commerce_enabled, status,
+        standalone_enabled, activity_addon_enabled, fulfillment_presentation,
+        category, sport, image_url,
       } = await req.json();
       if (!product_key || !name) return errorResponse('Missing product_key or name');
+      const operatorStatus = ['draft', 'active', 'archived'].includes(status) ? status : 'draft';
+      const standaloneEnabled = standalone_enabled === true;
+      const activityAddonEnabled = activity_addon_enabled === true;
+      const effectiveCommerceEnabled = commerce_enabled ?? (
+        operatorStatus === 'active' && (standaloneEnabled || activityAddonEnabled)
+      );
       const { data, error: e } = await admin.from('access_products').upsert({
         venue_id: venueId,
         product_key,
@@ -4881,11 +4889,18 @@ Deno.serve(async (req) => {
         vat_rate: vat_rate ?? 6,
         grants: grants || {},
         sort_order: sort_order ?? 0,
-        is_active: is_active ?? true,
+        is_active: is_active ?? operatorStatus === 'active',
         commerce_kind: commerce_kind || null,
         fulfillment_type: fulfillment_type || null,
         resolver_rules: resolver_rules || {},
-        commerce_enabled: commerce_enabled ?? false,
+        commerce_enabled: effectiveCommerceEnabled,
+        status: operatorStatus,
+        standalone_enabled: standaloneEnabled,
+        activity_addon_enabled: activityAddonEnabled,
+        fulfillment_presentation: fulfillment_presentation || null,
+        category: category || null,
+        sport: sport || null,
+        image_url: image_url || null,
       }, { onConflict: 'venue_id,product_key' }).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data, 201);
@@ -4897,9 +4912,23 @@ Deno.serve(async (req) => {
       const allowed = new Set([
         'name', 'description', 'product_kind', 'session_type', 'base_price_sek',
         'vat_rate', 'grants', 'sort_order', 'is_active', 'commerce_kind',
-        'fulfillment_type', 'resolver_rules', 'commerce_enabled',
+        'fulfillment_type', 'resolver_rules', 'commerce_enabled', 'status',
+        'standalone_enabled', 'activity_addon_enabled', 'fulfillment_presentation',
+        'category', 'sport', 'image_url',
       ]);
       const safeUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => allowed.has(key)));
+      if (typeof safeUpdates.status === 'string') {
+        if (!['draft', 'active', 'archived'].includes(safeUpdates.status)) return errorResponse('Invalid product status');
+        safeUpdates.is_active = safeUpdates.status === 'active';
+      }
+      if (
+        typeof safeUpdates.status === 'string'
+        && typeof safeUpdates.standalone_enabled === 'boolean'
+        && typeof safeUpdates.activity_addon_enabled === 'boolean'
+      ) {
+        safeUpdates.commerce_enabled = safeUpdates.status === 'active'
+          && (safeUpdates.standalone_enabled || safeUpdates.activity_addon_enabled);
+      }
       if (Object.keys(safeUpdates).length === 0) return errorResponse('No supported product fields');
       const { data, error: e } = await admin.from('access_products')
         .update(safeUpdates).eq('id', productId).eq('venue_id', venueId).select().single();

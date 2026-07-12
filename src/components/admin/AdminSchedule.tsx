@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { AlertTriangle, CalendarDays, Edit3, Loader2, Plus, Save, Trash2, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Edit3, Loader2, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatSek } from "@/lib/activityPricing";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -58,6 +58,70 @@ type VenueCourtOption = {
   sport_type?: string | null;
   is_available?: boolean | null;
 };
+
+type ProductRelationship = {
+  id: string;
+  source_product_id: string;
+  target_product_id: string;
+  is_active: boolean;
+};
+
+type ScheduleProductOption = {
+  id: string;
+  product_key: string;
+  name: string;
+  base_price_sek?: number | null;
+  activity_addon_enabled?: boolean;
+  status?: string | null;
+  [key: string]: unknown;
+};
+
+function ScheduleAddonSelector({
+  sourceProduct,
+  products,
+  relationships,
+  pending,
+  onToggle,
+}: {
+  sourceProduct: ScheduleProductOption | null | undefined;
+  products: ScheduleProductOption[];
+  relationships: ProductRelationship[];
+  pending: boolean;
+  onToggle: (sourceId: string, targetId: string, relationshipId?: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  if (!sourceProduct) return <p className="text-[11px] text-muted-foreground">Välj vad passet säljer innan du lägger till produkter.</p>;
+  const normalizedSearch = search.trim().toLocaleLowerCase("sv-SE");
+  const options = products
+    .filter((product) => product.id !== sourceProduct.id && product.activity_addon_enabled && product.status !== "archived")
+    .map((product) => ({
+      product,
+      relationship: relationships.find((item) => item.source_product_id === sourceProduct.id && item.target_product_id === product.id && item.is_active),
+    }))
+    .filter(({ product }) => !normalizedSearch || String(product.name).toLocaleLowerCase("sv-SE").includes(normalizedSearch))
+    .sort((left, right) => Number(Boolean(right.relationship)) - Number(Boolean(left.relationship)) || String(left.product.name).localeCompare(String(right.product.name), "sv-SE"));
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-2">
+      <div>
+        <p className="text-xs font-bold">Produkter som kan läggas till</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">Gäller alla pass som använder produkten {sourceProduct.name}.</p>
+      </div>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Sök produkt" className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-3 text-xs outline-none" />
+      </div>
+      <div className="max-h-40 overflow-y-auto rounded-lg border border-border bg-background">
+        {options.length === 0 ? <p className="px-3 py-3 text-[11px] text-muted-foreground">Inga aktivitetstillval hittades.</p> : options.map(({ product, relationship }) => (
+          <label key={product.id} className="flex cursor-pointer items-center justify-between gap-3 border-b border-border px-3 py-2.5 last:border-0">
+            <span className="text-xs font-semibold">{product.name} · {formatSek(Number(product.base_price_sek || 0))}</span>
+            <input type="checkbox" checked={Boolean(relationship)} disabled={pending} onChange={() => onToggle(sourceProduct.id, product.id, relationship?.id)} className="h-4 w-4 accent-primary" />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const SOLD_AS_OPTIONS: { key: SoldAs; label: string; helper: string }[] = [
   {
@@ -323,7 +387,7 @@ const draftWarnings = (draft: {
     warnings.push({ message: "Passet ingår inte i dagsmedlemskap. Kunder med dagsmedlemskap får inte access." });
   }
   if (draft.product_key && !["open_play_slot", "group_training", "day_access", "event_fee"].includes(draft.product_key)) {
-    warnings.push({ message: `Okänd produktnyckel (${draft.product_key}). Kundpriser kan bli fel.`, blocking: true });
+    warnings.push({ message: "Den valda produkten stöds inte av schemat ännu. Välj en annan produkt innan passet publiceras.", blocking: true });
   }
   return warnings;
 };
@@ -459,9 +523,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, any>>({});
   const [hostSearch, setHostSearch] = useState("");
 
-  const { data: products = [] } = useQuery<any[]>({
+  const { data: products = [] } = useQuery<ScheduleProductOption[]>({
     queryKey: ["admin-access-products", venueId],
     queryFn: () => apiGet("api-admin", "products", { venueId }),
+  });
+  const { data: productRelationships = [] } = useQuery<ProductRelationship[]>({
+    queryKey: ["admin-product-relationships", venueId],
+    queryFn: () => apiGet("api-admin", "product-relationships", { venueId }),
   });
   const { data: membershipTiers = [] } = useQuery<MembershipTier[]>({
     queryKey: ["membership-tiers", venueId],
@@ -506,10 +574,21 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   });
 
   const productMap = useMemo(() => {
-    const map: Record<string, any> = {};
+    const map: Record<string, ScheduleProductOption> = {};
     products.forEach((product) => { map[product.product_key] = product; });
     return map;
   }, [products]);
+
+  const toggleProductRelationship = useMutation({
+    mutationFn: ({ sourceId, targetId, relationshipId }: { sourceId: string; targetId: string; relationshipId?: string }) => relationshipId
+      ? apiDelete("api-admin", "product-relationships", { venueId, relationshipId })
+      : apiPost("api-admin", "product-relationships", { venueId, source_product_id: sourceId, target_product_id: targetId, is_active: true }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-product-relationships", venueId] });
+      qc.invalidateQueries({ queryKey: ["commerce-catalog", venueId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
 
   const createSeries = useMutation({
     mutationFn: (body: any) => apiPost("api-admin", "activity-series", body),
@@ -923,6 +1002,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <option value="archived">Arkiv</option>
                       </select>
                     </div>
+                    <ScheduleAddonSelector
+                      sourceProduct={productMap[draft.product_key || item.product_key]}
+                      products={products}
+                      relationships={productRelationships}
+                      pending={toggleProductRelationship.isPending}
+                      onToggle={(sourceId, targetId, relationshipId) => toggleProductRelationship.mutate({ sourceId, targetId, relationshipId })}
+                    />
                     <div className="flex gap-2">
                       <button onClick={() => saveSeries(item)} disabled={updateSeries.isPending} className="flex-1 rounded-xl bg-primary py-2.5 text-xs font-bold text-primary-foreground flex items-center justify-center gap-2 disabled:opacity-50">
                         <Save className="h-3.5 w-3.5" /> Spara
@@ -938,7 +1024,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       <p className="text-sm font-bold">{item.name}</p>
                       <p className="text-[11px] text-muted-foreground">
                         {SERIES_TYPES.find((type) => type.key === item.series_type)?.label || item.series_type}
-                        {item.product_key ? ` · ${productMap[item.product_key]?.name || item.product_key}` : ""}
+                        {item.product_key ? ` · ${productMap[item.product_key]?.name || "Produkt saknas"}` : ""}
                       </p>
                     </div>
                     <button onClick={() => startEditSeries(item)} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground flex items-center gap-1">
@@ -1244,7 +1330,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       <div className="grid gap-2 text-[11px] sm:grid-cols-3">
                         <div className="rounded-lg bg-background/60 px-2 py-1.5">
                           <span className="block text-muted-foreground">Produkt</span>
-                          <span className="font-bold">{activeDraftProduct?.name || activeDraftProductKey}</span>
+                          <span className="font-bold">{activeDraftProduct?.name || "Produkt saknas"}</span>
                         </div>
                         <div className="rounded-lg bg-background/60 px-2 py-1.5">
                           <span className="block text-muted-foreground">Biljettyp</span>
@@ -1257,6 +1343,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       </div>
                     </div>
                   </div>
+                  <ScheduleAddonSelector
+                    sourceProduct={activeDraftProduct}
+                    products={products}
+                    relationships={productRelationships}
+                    pending={toggleProductRelationship.isPending}
+                    onToggle={(sourceId, targetId, relationshipId) => toggleProductRelationship.mutate({ sourceId, targetId, relationshipId })}
+                  />
                   <div className="rounded-xl bg-muted/40 p-3 space-y-3">
                     <div>
                       <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Värdar</p>
