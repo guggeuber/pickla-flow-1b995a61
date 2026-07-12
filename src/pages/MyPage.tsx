@@ -56,6 +56,7 @@ const OPEN_BOOKING_PACE_OPTIONS = [
   { value: "familiar_pace", label: "Vant tempo" },
   { value: "high_pace", label: "Högt tempo" },
 ];
+const OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY = 32;
 
 function normalizeOpenBookingPace(value?: string | null) {
   if (value === "newer_players") return "calm_pace";
@@ -925,7 +926,7 @@ function BookingDetailsSheet({
   const [checkingIn, setCheckingIn] = useState(false);
   const [openForMoreEditing, setOpenForMoreEditing] = useState(false);
   const [openForMoreSaving, setOpenForMoreSaving] = useState(false);
-  const [openForMoreTotal, setOpenForMoreTotal] = useState<2 | 4>(4);
+  const [openForMoreOpenedPlaces, setOpenForMoreOpenedPlaces] = useState(4);
   const [openForMorePace, setOpenForMorePace] = useState("all_levels");
   const [openForMoreNote, setOpenForMoreNote] = useState("");
   const inviteUrlRef = useRef<string | null>(null);
@@ -945,11 +946,16 @@ function BookingDetailsSheet({
   }, [bookingRef]);
 
   useEffect(() => {
-    const total = Number(openBookingSource?.open_for_more_total_players || 4);
-    setOpenForMoreTotal(total === 2 ? 2 : 4);
+    const committedAtPublication = Number(openBookingSource?.open_for_more_committed_at_publication || 0);
+    const publicCapacity = Number(openBookingSource?.open_for_more_public_capacity || openBookingSource?.open_for_more_total_players || 0);
+    const openedPlaces = Number(openBookingSource?.open_for_more_opened_places || Math.max(publicCapacity - committedAtPublication, 0) || 4);
+    setOpenForMoreOpenedPlaces(Math.max(1, Math.min(openedPlaces, OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY)));
     setOpenForMorePace(normalizeOpenBookingPace(openBookingSource?.open_for_more_pace));
     setOpenForMoreNote(String(openBookingSource?.open_for_more_note || ""));
   }, [
+    openBookingSource?.open_for_more_opened_places,
+    openBookingSource?.open_for_more_public_capacity,
+    openBookingSource?.open_for_more_committed_at_publication,
     openBookingSource?.open_for_more_total_players,
     openBookingSource?.open_for_more_pace,
     openBookingSource?.open_for_more_note,
@@ -996,8 +1002,14 @@ function BookingDetailsSheet({
     null
   ) as BookingParticipantSummaryData | null;
   const committedParticipants = Number(participantSummary?.committed_count || 0);
-  const openForMoreTotalEffective = Number(openBookingSource?.open_for_more_total_players || openForMoreTotal || 4);
-  const openForMoreSpots = Math.max(0, openForMoreTotalEffective - committedParticipants);
+  const openForMorePublicCapacityEffective = Number(
+    openBookingSource?.open_for_more_public_capacity ||
+    openBookingSource?.open_for_more_total_players ||
+    (committedParticipants + openForMoreOpenedPlaces)
+  );
+  const openForMoreSpots = Math.max(0, openForMorePublicCapacityEffective - committedParticipants);
+  const openForMoreDraftCapacity = committedParticipants + openForMoreOpenedPlaces;
+  const openForMoreExceedsMax = openForMoreDraftCapacity > OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY;
   const participants = Array.isArray((booking as any).participants)
     ? (booking as any).participants
     : Array.isArray((booking as any).bookings)
@@ -1134,7 +1146,7 @@ function BookingDetailsSheet({
       const result = await apiPost<{ url?: string; open_spots?: number }>("api-bookings", "open-for-more", {
         bookingRef,
         action: "open",
-        totalPlayers: openForMoreTotal,
+        openedPlaces: openForMoreOpenedPlaces,
         pace: openForMorePace,
         note: openForMoreNote,
       });
@@ -1142,7 +1154,7 @@ function BookingDetailsSheet({
         inviteUrlRef.current = result.url;
         setInviteUrl(result.url);
       }
-      toast.success(`${result.open_spots ?? Math.max(0, openForMoreTotal - committedParticipants)} platser öppna`);
+      toast.success(`${result.open_spots ?? openForMoreOpenedPlaces} platser öppna`);
       setOpenForMoreEditing(false);
       await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
       await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
@@ -1174,8 +1186,19 @@ function BookingDetailsSheet({
 
   return (
     <Drawer open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setConfirmCancel(false); }}>
-      <DrawerContent style={{ background: CARD_BG }}>
-        <div className="px-5 pb-6 pt-2 max-w-md mx-auto w-full">
+      <DrawerContent className="max-h-[92dvh] overflow-hidden border-0 p-0" style={{ background: CARD_BG }}>
+        <div className="mx-auto flex max-h-[92dvh] w-full max-w-md flex-col">
+          <div className="sticky top-0 z-10 px-5 pb-4 pt-2" style={{ background: CARD_BG, borderBottom: `1px solid ${CARD_BORDER}` }}>
+            <div className="mx-auto mb-3 h-1.5 w-14 rounded-full" style={{ background: CARD_BORDER }} />
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="absolute right-4 top-4 rounded-full p-2"
+              style={{ background: PAGE_BG, color: TEXT_PRIMARY }}
+              aria-label="Stäng"
+            >
+              <X className="h-4 w-4" />
+            </button>
           <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
             {isParticipantPlace ? "Din plats" : "Bokning"}
           </p>
@@ -1191,6 +1214,8 @@ function BookingDetailsSheet({
               {bookingTimingLabel}
             </p>
           )}
+          </div>
+          <div className="overflow-y-auto px-5 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] pt-4">
           {isParticipantPlace && participant && (
             <div className="mt-4 rounded-2xl p-4" style={{ background: PAGE_BG, border: `1.5px solid ${CARD_BORDER}` }}>
               <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
@@ -1223,7 +1248,7 @@ function BookingDetailsSheet({
                     Öppna för fler
                   </p>
                   <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-                    {openForMoreActive ? `${openForMoreSpots} platser öppna` : "Vi söker fler spelare"}
+                    {openForMoreActive ? `${openForMoreSpots} platser öppna` : "Inte öppnad"}
                   </p>
                   <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
                     Du behåller din bokning. Huset ordnar banan och betalningen — sällskapet skapar ni tillsammans.
@@ -1250,23 +1275,46 @@ function BookingDetailsSheet({
                       </p>
                     ))}
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[2, 4].map((value) => (
+                  <div className="rounded-2xl p-3" style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}>
+                    <p className="text-[10px] uppercase tracking-wider" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
+                      Hur många platser vill du öppna?
+                    </p>
+                    <div className="mt-3 grid grid-cols-[44px_1fr_44px] items-center gap-2">
                       <button
-                        key={value}
                         type="button"
-                        onClick={() => setOpenForMoreTotal(value as 2 | 4)}
-                        className="rounded-xl px-3 py-3 text-sm font-bold"
-                        style={{
-                          background: openForMoreTotal === value ? TEXT_PRIMARY : CARD_BG,
-                          color: openForMoreTotal === value ? CARD_BG : TEXT_PRIMARY,
-                          border: `1px solid ${CARD_BORDER}`,
-                          fontFamily: FONT_HEADING,
-                        }}
+                        onClick={() => setOpenForMoreOpenedPlaces((current) => Math.max(1, current - 1))}
+                        className="h-11 rounded-xl text-lg font-black"
+                        style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
                       >
-                        Totalt {value}
+                        -
                       </button>
-                    ))}
+                      <input
+                        type="number"
+                        min={1}
+                        max={OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY}
+                        value={openForMoreOpenedPlaces}
+                        onChange={(event) => {
+                          const next = Number(event.target.value || 1);
+                          setOpenForMoreOpenedPlaces(Math.max(1, Math.min(next, OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY)));
+                        }}
+                        className="h-11 rounded-xl px-3 text-center text-lg font-black outline-none"
+                        style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setOpenForMoreOpenedPlaces((current) => Math.min(OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY, current + 1))}
+                        className="h-11 rounded-xl text-lg font-black"
+                        style={{ background: PAGE_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
+                      >
+                        +
+                      </button>
+                    </div>
+                    <p className="mt-3 text-xs" style={{ color: openForMoreExceedsMax ? "#ef4444" : TEXT_MUTED }}>
+                      {committedParticipants} spelare klara · öppna {openForMoreOpenedPlaces} till · upp till {openForMoreDraftCapacity} spelare i passet
+                    </p>
+                    <p className="mt-1 text-[11px]" style={{ color: TEXT_MUTED }}>
+                      Max {OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY} i denna version. Det är ett skydd, inte en spelform.
+                    </p>
                   </div>
                   <select
                     value={openForMorePace}
@@ -1298,16 +1346,16 @@ function BookingDetailsSheet({
                     <button
                       type="button"
                       onClick={handleSaveOpenForMore}
-                      disabled={openForMoreSaving || committedParticipants >= openForMoreTotal}
+                      disabled={openForMoreSaving || openForMoreOpenedPlaces < 1 || openForMoreExceedsMax}
                       className="flex-1 rounded-xl py-3 text-sm font-bold disabled:opacity-50"
                       style={{ background: GREEN, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
                     >
                       {openForMoreSaving ? "Sparar..." : "Öppna"}
                     </button>
                   </div>
-                  {committedParticipants >= openForMoreTotal && (
+                  {openForMoreExceedsMax && (
                     <p className="text-xs" style={{ color: TEXT_MUTED }}>
-                      Välj fler spelare än de {committedParticipants} som redan är klara.
+                      Minska antalet öppna platser så passet ryms inom {OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY} spelare.
                     </p>
                   )}
                 </div>
@@ -1422,6 +1470,7 @@ function BookingDetailsSheet({
               </button>
             )}
           </div>
+        </div>
         </div>
       </DrawerContent>
     </Drawer>

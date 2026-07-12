@@ -39,7 +39,7 @@ const TOMORROW_SECTION_COLLAPSES_INTO_WEEKEND_WEEKDAYS = [5];
 
 type FeedItem = {
   id: string;
-  kind: "session" | "event" | "booking";
+  kind: "session" | "event" | "booking" | "open_booking";
   title: string;
   date: string;
   startTime: string;
@@ -134,6 +134,23 @@ type ActivitySocialProofRow = {
   user_is_interested: boolean;
 };
 
+type OpenBookingItem = {
+  id: string;
+  title: string;
+  start_time: string;
+  end_time: string;
+  open_spots: number;
+  public_capacity?: number | null;
+  total_players?: number | null;
+  opened_places?: number | null;
+  committed_at_publication?: number | null;
+  pace_label: string;
+  booker_first_name: string;
+  committed_count?: number | null;
+  claim_url: string;
+  courts?: Array<{ name?: string | null; court_number?: number | null }>;
+};
+
 type EventRow = {
   id: string;
   name: string;
@@ -188,7 +205,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         return endsAt <= now;
       };
 
-      const [sessionsRes, eventsRes, bookingsRes] = await Promise.all([
+      const [sessionsRes, eventsRes, bookingsRes, openBookingsRes] = await Promise.all([
         supabase
           .from("activity_sessions")
           .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode")
@@ -215,6 +232,11 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
               .lt("start_time", endUtc)
               .order("start_time", { ascending: true })
           : Promise.resolve({ data: [] as BookingRow[], error: null }),
+        apiGet<{ items: OpenBookingItem[] }>("api-bookings", "public-open-bookings", {
+          slug,
+          date: startDate,
+          days: String(DAYS_AHEAD),
+        }).catch(() => ({ items: [] })),
       ]);
 
       const sessionOccurrences: SessionOccurrence[] = [];
@@ -409,7 +431,42 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         };
       });
 
-      const mergedItems = [...sessionItems, ...eventItems, ...bookingItems].sort((a, b) =>
+      const openBookingItems: FeedItem[] = ((openBookingsRes as { items?: OpenBookingItem[] })?.items || []).map((item) => {
+        const start = DateTime.fromISO(item.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+        const end = DateTime.fromISO(item.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
+        const capacity = Number(item.public_capacity || item.total_players || 0);
+        const committed = Number(item.committed_count || 0);
+        const courtLabel = (item.courts || [])
+          .map((court) => court.name || (court.court_number ? `Bana ${court.court_number}` : null))
+          .filter(Boolean)
+          .join(", ");
+        let href = item.claim_url;
+        try {
+          const url = new URL(item.claim_url);
+          href = `${url.pathname}${url.search}`;
+        } catch {
+          // Keep absolute fallback from the API if URL parsing fails.
+        }
+        return {
+          id: `open-booking:${item.id}`,
+          kind: "open_booking",
+          title: "Privat bana",
+          date: start.toISODate()!,
+          startTime: start.toFormat("HH:mm"),
+          endTime: end.toFormat("HH:mm"),
+          category: item.pace_label,
+          status: item.open_spots > 0 ? "Öppen" : "Full",
+          spotsLeft: item.open_spots,
+          registrationsCount: committed,
+          participants: [],
+          capacity,
+          href,
+          cta: "Häng på",
+          chatSubtitle: courtLabel,
+        };
+      });
+
+      const mergedItems = [...sessionItems, ...eventItems, ...openBookingItems, ...bookingItems].sort((a, b) =>
         `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)
       );
 
@@ -491,6 +548,11 @@ function FeedRow({
       return;
     }
 
+    if (item.kind === "open_booking") {
+      navigate(item.href);
+      return;
+    }
+
     if (item.kind === "booking" || !item.chatResourceId || !venueId) {
       navigate(item.href);
       return;
@@ -553,6 +615,25 @@ function FeedRow({
             className="mt-1 text-[10px] !text-black/45"
             showInvitation={false}
           />
+        )}
+        {item.kind === "open_booking" && (
+          <div className="mt-1 space-y-1">
+            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-black/35" style={{ fontFamily: FONT_MONO }}>
+              Privat bana
+            </p>
+            <PeopleRow
+              people={[]}
+              participantCount={item.registrationsCount}
+              className="text-[10px] !text-black/45"
+              showInvitation={false}
+            />
+            <p className="text-[11px] text-black/45">
+              {Number(item.registrationsCount || 0)} spelare klara · {item.spotsLeft} platser kvar · {item.category}
+            </p>
+            <p className="text-[11px] text-black/40">
+              Din del av banan
+            </p>
+          </div>
         )}
         {item.kind === "session" && item.priceSek != null && item.priceSek > 0 && (
           <span className={`mt-1 block ${priceEmphasisClass}`}>
@@ -684,7 +765,18 @@ function FeaturedTonightHero({
 
         <div className="mt-6 grid gap-4">
           <div className="min-w-0">
-            <ParticipantLine participants={item?.participants} count={item?.registrationsCount} />
+            {item?.kind === "open_booking" ? (
+              <div className="space-y-1">
+                <p className="text-[13px] font-semibold" style={{ color: MUTED }}>
+                  {Number(item.registrationsCount || 0)} spelare klara · {item.spotsLeft} platser kvar
+                </p>
+                <p className="text-[12px]" style={{ color: MUTED }}>
+                  Din del av banan
+                </p>
+              </div>
+            ) : (
+              <ParticipantLine participants={item?.participants} count={item?.registrationsCount} />
+            )}
           </div>
           <span
             className="inline-flex w-fit items-center gap-2 rounded-full px-5 py-3 text-[15px] font-black text-white shadow-sm disabled:opacity-60"
@@ -729,7 +821,7 @@ export default function TodayPage() {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, []);
 
-  const activityItems = items.filter((item) => item.kind === "session" || item.kind === "event");
+  const activityItems = items.filter((item) => item.kind === "session" || item.kind === "event" || item.kind === "open_booking");
   const todayKey = now.toISODate();
   const tomorrowKey = now.plus({ days: 1 }).toISODate();
   const todayActivities = sortBySoonestThenPeople(activityItems.filter((item) => item.date === todayKey));

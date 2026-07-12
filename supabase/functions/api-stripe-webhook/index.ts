@@ -239,8 +239,14 @@ function bookingParticipantCapacity(rows: any[]) {
 
 function openBookingCapacity(rows: any[]) {
   const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  const total = Number(representative?.open_for_more_total_players || 0);
-  return total === 2 || total === 4 ? total : bookingParticipantCapacity(rows);
+  if (representative?.open_for_more_status !== 'open') return 0;
+  const publicCapacity = Number(representative?.open_for_more_public_capacity || 0);
+  if (publicCapacity > 0) return publicCapacity;
+  const openedPlaces = Number(representative?.open_for_more_opened_places || 0);
+  const committedAtPublication = Number(representative?.open_for_more_committed_at_publication || 0);
+  if (openedPlaces > 0) return committedAtPublication + openedPlaces;
+  const legacyTotal = Number(representative?.open_for_more_total_players || 0);
+  return legacyTotal > 0 ? legacyTotal : 0;
 }
 
 function bookingGroupIsOpenForMore(rows: any[]) {
@@ -386,7 +392,7 @@ function isFounderBookingGroup(rows: any[]) {
 async function getBookingGroupRows(serviceClient: any, booking: any) {
   let query = serviceClient
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
     .eq('venue_id', booking.venue_id)
     .neq('status', 'cancelled');
 
@@ -1107,7 +1113,7 @@ async function handleCourtBooking(
 
   const { data: sessionBookings, error: refsErr } = await serviceClient
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
     .eq('stripe_session_id', session.id)
     .neq('status', 'cancelled');
 
@@ -1182,7 +1188,7 @@ async function handleBookingParticipant(
 
   const { data: participant, error: participantErr } = await serviceClient
     .from('booking_participants')
-    .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, metadata, bookings(booking_ref, venue_id, start_time, end_time, access_code, stripe_session_id, notes, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+    .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, metadata, bookings(booking_ref, venue_id, start_time, end_time, access_code, stripe_session_id, notes, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
     .eq('id', participantId)
     .maybeSingle();
   if (participantErr) throw new Error(participantErr.message);
@@ -1215,13 +1221,19 @@ async function handleBookingParticipant(
 
   const { data: representativeBooking } = await serviceClient
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
     .eq('id', participant.booking_id)
     .maybeSingle();
   const bookingForCapacity = representativeBooking || booking;
   const groupedRows = bookingForCapacity ? await getBookingGroupRows(serviceClient, bookingForCapacity) : [];
   const participantMetadata = participant.metadata && typeof participant.metadata === 'object' ? participant.metadata : {};
-  const stableOpenBookingCapacity = Number(meta.open_booking_total_players || participantMetadata.open_booking_total_players || 0);
+  const stableOpenBookingCapacity = Number(
+    meta.open_booking_public_capacity ||
+    meta.open_booking_total_players ||
+    participantMetadata.open_booking_public_capacity ||
+    participantMetadata.open_booking_total_players ||
+    0
+  );
   const capacity = stableOpenBookingCapacity > 0
     ? stableOpenBookingCapacity
     : bookingParticipantCapacityLimit(groupedRows);
@@ -1268,6 +1280,9 @@ async function handleBookingParticipant(
         booking_group_key: participant.booking_group_key,
         booking_ref: booking?.booking_ref || null,
         open_booking_context: meta.open_booking_context || participantMetadata.source || null,
+        open_booking_opened_places: Number(meta.open_booking_opened_places || participantMetadata.open_booking_opened_places || 0) || null,
+        open_booking_public_capacity: stableOpenBookingCapacity || null,
+        open_booking_committed_at_publication: Number(meta.open_booking_committed_at_publication || participantMetadata.open_booking_committed_at_publication || 0) || null,
         open_booking_total_players: stableOpenBookingCapacity || null,
       },
     });
@@ -1290,6 +1305,9 @@ async function handleBookingParticipant(
         booking_group_key: participant.booking_group_key,
         booking_id: participant.booking_id,
         open_booking_context: meta.open_booking_context || participantMetadata.source || null,
+        open_booking_opened_places: Number(meta.open_booking_opened_places || participantMetadata.open_booking_opened_places || 0) || null,
+        open_booking_public_capacity: stableOpenBookingCapacity || null,
+        open_booking_committed_at_publication: Number(meta.open_booking_committed_at_publication || participantMetadata.open_booking_committed_at_publication || 0) || null,
         open_booking_total_players: stableOpenBookingCapacity || null,
       },
     });
@@ -1310,6 +1328,9 @@ async function handleBookingParticipant(
       booking_group_key: participant.booking_group_key,
       booking_ref: booking?.booking_ref || null,
       open_booking_context: meta.open_booking_context || participantMetadata.source || null,
+      open_booking_opened_places: Number(meta.open_booking_opened_places || participantMetadata.open_booking_opened_places || 0) || null,
+      open_booking_public_capacity: stableOpenBookingCapacity || null,
+      open_booking_committed_at_publication: Number(meta.open_booking_committed_at_publication || participantMetadata.open_booking_committed_at_publication || 0) || null,
       open_booking_total_players: stableOpenBookingCapacity || null,
     },
   });

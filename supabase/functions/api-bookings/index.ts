@@ -17,6 +17,7 @@ const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 const PARTICIPANT_TICKET_INVITE_SOURCE = 'booking_participant_ticket';
 const OPEN_BOOKING_INVITE_SOURCE = 'open_booking_slot';
 const OPEN_BOOKING_PACES = ['all_levels', 'calm_pace', 'familiar_pace', 'high_pace'];
+const OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY = 32;
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
 
 function isPlayingHostReason(value: unknown) {
@@ -242,8 +243,30 @@ function bookingParticipantCapacity(rows: any[]) {
 
 function openBookingCapacity(rows: any[]) {
   const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  const total = Number(representative?.open_for_more_total_players || 0);
-  return total === 2 || total === 4 ? total : bookingParticipantCapacity(rows);
+  if (representative?.open_for_more_status !== 'open') return 0;
+
+  const publicCapacity = Number(representative?.open_for_more_public_capacity || 0);
+  if (publicCapacity > 0) return publicCapacity;
+
+  const openedPlaces = Number(representative?.open_for_more_opened_places || 0);
+  const committedAtPublication = Number(representative?.open_for_more_committed_at_publication || 0);
+  if (openedPlaces > 0) return committedAtPublication + openedPlaces;
+
+  const legacyTotal = Number(representative?.open_for_more_total_players || 0);
+  return legacyTotal > 0 ? legacyTotal : 0;
+}
+
+function openBookingCapacitySnapshot(rows: any[], fallbackCapacity = 0) {
+  const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
+  const publicCapacity = openBookingCapacity(rows) || fallbackCapacity;
+  const openedPlaces = Number(representative?.open_for_more_opened_places || 0);
+  const committedAtPublication = Number(representative?.open_for_more_committed_at_publication || 0);
+  return {
+    opened_places: openedPlaces > 0 ? openedPlaces : null,
+    public_capacity: publicCapacity > 0 ? publicCapacity : null,
+    committed_at_publication: committedAtPublication >= 0 ? committedAtPublication : null,
+    published_at: representative?.open_for_more_published_at || null,
+  };
 }
 
 function bookingParticipantCapacityLimit(rows: any[], options: { openOnly?: boolean } = {}) {
@@ -414,7 +437,7 @@ async function resolveBookingParticipantPricing(
 async function getBookingGroupRows(admin: any, booking: any) {
   let query = admin
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
     .eq('venue_id', booking.venue_id)
     .neq('status', 'cancelled');
 
@@ -1235,7 +1258,7 @@ async function createFreeEntitlementBookingResponse({
         membership_usage_entitlement_type: includedHoursPerCourt > 0 ? 'court_hours_per_week' : null,
         membership_usage_period_start: includedHoursPerCourt > 0 ? weekStart : null,
         membership_usage_period_end: includedHoursPerCourt > 0 ? weekEnd : null,
-      }).select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at').single();
+      }).select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at').single();
       if (bookingErr) return errorResponse(bookingErr.message, 500);
       if (booking) bookings.push(booking);
     }
@@ -1499,7 +1522,7 @@ Deno.serve(async (req) => {
 
     const { data: participant, error: participantErr } = await admin
       .from('booking_participants')
-      .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type))')
+      .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type))')
       .eq('id', participantId)
       .maybeSingle();
     if (participantErr) return errorResponse(participantErr.message, 500);
@@ -1555,7 +1578,7 @@ Deno.serve(async (req) => {
     const admin = getServiceClient();
     const { data: invite, error: inviteErr } = await admin
       .from('booking_participant_invites')
-      .select('id, venue_id, booking_id, booking_group_key, token, status, expires_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)), venues(id, name, slug)')
+      .select('id, venue_id, booking_id, booking_group_key, token, status, expires_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)), venues(id, name, slug)')
       .eq('token', token)
       .maybeSingle();
     if (inviteErr) return errorResponse(inviteErr.message, 500);
@@ -1646,7 +1669,7 @@ Deno.serve(async (req) => {
     if (!userId) return errorResponse('Logga in för att hämta din plats', 401);
     const { data: invite, error: inviteErr } = await admin
       .from('booking_participant_invites')
-      .select('id, venue_id, booking_id, booking_group_key, token, status, expires_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)), venues(slug)')
+      .select('id, venue_id, booking_id, booking_group_key, token, status, expires_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)), venues(slug)')
       .eq('token', token)
       .maybeSingle();
     if (inviteErr) return errorResponse(inviteErr.message, 500);
@@ -1723,6 +1746,9 @@ Deno.serve(async (req) => {
       durationHours,
       isFounderBookingGroup(bookingRows),
     );
+    const openBookingSnapshot = isPublicOpenBookingInvite
+      ? openBookingCapacitySnapshot(bookingRows, capacity)
+      : null;
 
     if (placeholder) {
       const nextMetadata = {
@@ -1736,8 +1762,11 @@ Deno.serve(async (req) => {
         founder_booking: isFounderBookingGroup(bookingRows),
         source: isPublicOpenBookingInvite ? OPEN_BOOKING_INVITE_SOURCE : 'booking_owner_invite',
         open_booking_public_claim: isPublicOpenBookingInvite,
-        open_booking_published_at: openBookingPublishedAt,
-        open_booking_total_players: isPublicOpenBookingInvite ? capacity : null,
+        open_booking_published_at: openBookingSnapshot?.published_at || openBookingPublishedAt,
+        open_booking_opened_places: openBookingSnapshot?.opened_places || null,
+        open_booking_public_capacity: openBookingSnapshot?.public_capacity || null,
+        open_booking_committed_at_publication: openBookingSnapshot?.committed_at_publication || null,
+        open_booking_total_players: openBookingSnapshot?.public_capacity || null,
       };
       let participant: any = null;
       if (pricing.price_minor > 0) {
@@ -1836,8 +1865,11 @@ Deno.serve(async (req) => {
         founder_booking: isFounderBookingGroup(bookingRows),
         source: isPublicOpenBookingInvite ? OPEN_BOOKING_INVITE_SOURCE : 'booking_owner_invite',
         open_booking_public_claim: isPublicOpenBookingInvite,
-        open_booking_published_at: openBookingPublishedAt,
-        open_booking_total_players: isPublicOpenBookingInvite ? capacity : null,
+        open_booking_published_at: openBookingSnapshot?.published_at || openBookingPublishedAt,
+        open_booking_opened_places: openBookingSnapshot?.opened_places || null,
+        open_booking_public_capacity: openBookingSnapshot?.public_capacity || null,
+        open_booking_committed_at_publication: openBookingSnapshot?.committed_at_publication || null,
+        open_booking_total_players: openBookingSnapshot?.public_capacity || null,
       };
     let participant: any = null;
     if (pricing.price_minor > 0) {
@@ -1976,7 +2008,7 @@ Deno.serve(async (req) => {
       const adminCheckout = getServiceClient();
       const { data: participant, error: participantErr } = await adminCheckout
         .from('booking_participants')
-        .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, price_minor, payment_status, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+        .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, price_minor, payment_status, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
         .eq('id', participantId)
         .maybeSingle();
       if (participantErr) return errorResponse(participantErr.message, 500);
@@ -2006,10 +2038,19 @@ Deno.serve(async (req) => {
         if (!booking || booking.open_for_more_status !== 'open') {
           return errorResponse('De öppna platserna är stängda.', 409);
         }
-        const selectedCapacity = Number(participantMetadata.open_booking_total_players || booking.open_for_more_total_players || 0);
-        if (![2, 4].includes(selectedCapacity)) return errorResponse('Öppen bokning saknar kapacitetsregel', 409);
+        const selectedCapacity = Number(
+          participantMetadata.open_booking_public_capacity ||
+          participantMetadata.open_booking_total_players ||
+          booking.open_for_more_public_capacity ||
+          booking.open_for_more_total_players ||
+          0
+        );
+        if (selectedCapacity <= 0) return errorResponse('Öppen bokning saknar kapacitetsregel', 409);
         meta.open_booking_context = 'open_booking_slot';
         meta.open_booking_published_at = String(participantMetadata.open_booking_published_at || booking.open_for_more_published_at || '');
+        meta.open_booking_opened_places = String(participantMetadata.open_booking_opened_places || booking.open_for_more_opened_places || '');
+        meta.open_booking_public_capacity = String(selectedCapacity);
+        meta.open_booking_committed_at_publication = String(participantMetadata.open_booking_committed_at_publication || booking.open_for_more_committed_at_publication || '');
         meta.open_booking_total_players = String(selectedCapacity);
         meta.open_booking_pace = openBookingPaceValue(booking.open_for_more_pace);
       }
@@ -2487,14 +2528,20 @@ Deno.serve(async (req) => {
       if (product_type === BOOKING_PARTICIPANT_SOURCE_TYPE && meta.booking_participant_id) {
         const { data: participant } = await adminCapacity
           .from('booking_participants')
-          .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, payment_status, metadata, bookings(id, venue_id, start_time, end_time, access_code, stripe_session_id, notes, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+          .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, payment_status, metadata, bookings(id, venue_id, start_time, end_time, access_code, stripe_session_id, notes, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
           .eq('id', meta.booking_participant_id)
           .maybeSingle();
         const booking = Array.isArray(participant?.bookings) ? participant.bookings[0] : participant?.bookings;
         if (!participant || !booking) return errorResponse('Booking participant not found', 404);
         const bookingRows = await getBookingGroupRows(adminCapacity, booking);
         const participantMetadata = participant.metadata && typeof participant.metadata === 'object' ? participant.metadata : {};
-        const publicOpenCapacity = Number(meta.open_booking_total_players || participantMetadata.open_booking_total_players || 0);
+        const publicOpenCapacity = Number(
+          meta.open_booking_public_capacity ||
+          meta.open_booking_total_players ||
+          participantMetadata.open_booking_public_capacity ||
+          participantMetadata.open_booking_total_players ||
+          0
+        );
         const capacity = publicOpenCapacity > 0
           ? publicOpenCapacity
           : bookingParticipantCapacityLimit(bookingRows, { openOnly: bookingGroupIsOpenForMore(bookingRows) });
@@ -2514,7 +2561,10 @@ Deno.serve(async (req) => {
             booking_id: participant.booking_id,
             booking_group_key: participant.booking_group_key,
             open_booking_context: meta.open_booking_context || null,
-            open_booking_total_players: meta.open_booking_total_players || null,
+            open_booking_opened_places: meta.open_booking_opened_places || null,
+            open_booking_public_capacity: meta.open_booking_public_capacity || meta.open_booking_total_players || null,
+            open_booking_committed_at_publication: meta.open_booking_committed_at_publication || null,
+            open_booking_total_players: meta.open_booking_public_capacity || meta.open_booking_total_players || null,
             open_booking_published_at: meta.open_booking_published_at || null,
           },
         });
@@ -2572,6 +2622,9 @@ Deno.serve(async (req) => {
       booking_ref: String(meta.booking_ref || ''),
       capacity_hold_id: String(meta.capacity_hold_id || ''),
       open_booking_context: String(meta.open_booking_context || ''),
+      open_booking_opened_places: String(meta.open_booking_opened_places || ''),
+      open_booking_public_capacity: String(meta.open_booking_public_capacity || ''),
+      open_booking_committed_at_publication: String(meta.open_booking_committed_at_publication || ''),
       open_booking_total_players: String(meta.open_booking_total_players || ''),
       open_booking_published_at: String(meta.open_booking_published_at || ''),
       open_booking_pace: String(meta.open_booking_pace || ''),
@@ -2676,7 +2729,7 @@ Deno.serve(async (req) => {
       if (!registration) {
         const { data: participant } = await serviceClient
           .from('booking_participants')
-          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
           .eq('payment_stripe_session_id', sessionId)
           .limit(1)
           .maybeSingle();
@@ -3183,7 +3236,7 @@ Deno.serve(async (req) => {
 
     const { data: rows, error: rowsErr } = await admin
       .from('bookings')
-      .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, venue_courts(name, court_number, sport_type)')
+      .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, venue_courts(name, court_number, sport_type)')
       .eq('venue_id', venue.id)
       .eq('open_for_more_status', 'open')
       .neq('status', 'cancelled')
@@ -3234,7 +3287,10 @@ Deno.serve(async (req) => {
           court_number: row.venue_courts?.court_number || null,
         })),
         open_spots: openSpots,
+        public_capacity: capacity,
         total_players: capacity,
+        opened_places: Number(representative.open_for_more_opened_places || Math.max(0, capacity - Number(summary.committed_count || 0))),
+        committed_at_publication: Number(representative.open_for_more_committed_at_publication || 0),
         pace: openBookingPaceValue(representative.open_for_more_pace),
         pace_label: openBookingPaceLabel(openBookingPaceValue(representative.open_for_more_pace)),
         note: String(representative.open_for_more_note || '').slice(0, 120) || null,
@@ -3496,7 +3552,7 @@ Deno.serve(async (req) => {
       for (const participant of participantRows || []) {
         const { data: representative, error: bookingErr } = await admin
           .from('bookings')
-          .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name)')
+          .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name)')
           .eq('id', participant.booking_id)
           .maybeSingle();
         if (bookingErr) return errorResponse(bookingErr.message, 500);
@@ -3534,7 +3590,7 @@ Deno.serve(async (req) => {
       const admin = getServiceClient();
       let bookingQuery = admin
         .from('bookings')
-        .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
+        .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
         .neq('status', 'cancelled')
         .limit(1);
       bookingQuery = bookingId ? bookingQuery.eq('id', bookingId) : bookingQuery.eq('booking_ref', bookingRef);
@@ -3600,7 +3656,7 @@ Deno.serve(async (req) => {
       const admin = getServiceClient();
       let bookingQuery = admin
         .from('bookings')
-        .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
+        .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
         .neq('status', 'cancelled')
         .limit(1);
       bookingQuery = bookingId ? bookingQuery.eq('id', bookingId) : bookingQuery.eq('booking_ref', bookingRef);
@@ -3637,15 +3693,15 @@ Deno.serve(async (req) => {
         return jsonResponse(result || { ok: true, status: 'closed' }, 200, 0);
       }
 
-      const totalPlayers = Number(body.totalPlayers || body.total_players || 0);
+      const openedPlaces = Number(body.openedPlaces || body.opened_places || 0);
       const pace = openBookingPaceValue(body.pace || 'all_levels');
       const note = String(body.note || '').trim().slice(0, 120);
-      if (![2, 4].includes(totalPlayers)) return errorResponse('Välj totalt 2 eller 4 spelare', 400);
+      if (!Number.isFinite(openedPlaces) || openedPlaces < 1) return errorResponse('Välj minst 1 plats att öppna', 400);
+      if ((committedCount + openedPlaces) > OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY) {
+        return errorResponse(`Max ${OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY} spelare kan öppnas i denna version`, 400);
+      }
       if (!OPEN_BOOKING_PACES.includes(pace)) {
         return errorResponse('Välj tempokategori', 400);
-      }
-      if (committedCount >= totalPlayers) {
-        return errorResponse('Det finns inga öppna platser att publicera', 409);
       }
 
       const { data: result, error: rpcErr } = await admin.rpc('set_open_booking_slots', {
@@ -3653,7 +3709,7 @@ Deno.serve(async (req) => {
         p_actor_user_id: userId,
         p_booking_ids: rowIds,
         p_booking_group_key: groupKey,
-        p_total_players: totalPlayers,
+        p_opened_places: openedPlaces,
         p_pace: pace,
         p_note: note || null,
         p_request_id: req.headers.get('x-request-id') || crypto.randomUUID(),
@@ -3668,8 +3724,11 @@ Deno.serve(async (req) => {
       return jsonResponse({
         ok: true,
         status: 'open',
-        total_players: Number(rpcResult.total_players || totalPlayers),
-        open_spots: Number(rpcResult.open_spots || Math.max(0, totalPlayers - committedCount)),
+        opened_places: Number(rpcResult.opened_places || openedPlaces),
+        public_capacity: Number(rpcResult.public_capacity || (committedCount + openedPlaces)),
+        committed_at_publication: Number(rpcResult.committed_at_publication || committedCount),
+        total_players: Number(rpcResult.public_capacity || (committedCount + openedPlaces)),
+        open_spots: Number(rpcResult.open_spots || openedPlaces),
         pace: String(rpcResult.pace || pace),
         pace_label: openBookingPaceLabel(pace),
         note: rpcResult.note || note || null,
@@ -3693,7 +3752,7 @@ Deno.serve(async (req) => {
       const admin = getServiceClient();
       let bookingQuery = admin
         .from('bookings')
-        .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
+        .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at, venue_courts(name, court_number, sport_type)')
         .neq('status', 'cancelled')
         .limit(1);
       bookingQuery = bookingId ? bookingQuery.eq('id', bookingId) : bookingQuery.eq('booking_ref', bookingRef);
@@ -3864,7 +3923,7 @@ Deno.serve(async (req) => {
       const admin = getServiceClient();
       const { data: participant, error: participantErr } = await admin
         .from('booking_participants')
-        .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+        .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
         .eq('id', participantId)
         .maybeSingle();
       if (participantErr) return errorResponse(participantErr.message, 500);
@@ -3964,7 +4023,7 @@ Deno.serve(async (req) => {
 
       const { data: participant, error: participantErr } = await admin
         .from('booking_participants')
-        .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, price_minor, payment_status, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+        .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, price_minor, payment_status, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
         .eq('id', resolvedParticipantId)
         .maybeSingle();
       if (participantErr) return errorResponse(participantErr.message, 500);
@@ -4590,7 +4649,7 @@ Deno.serve(async (req) => {
       const admin = getServiceClient();
       const { data: rows, error: rowsErr } = await admin
         .from('bookings')
-        .select('id, booking_ref, venue_id, user_id, booked_by, status, start_time, end_time, total_price, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, included_court_hours, membership_usage_period_start, membership_usage_period_end, venue_courts(sport_type)')
+        .select('id, booking_ref, venue_id, user_id, booked_by, status, start_time, end_time, total_price, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, included_court_hours, membership_usage_period_start, membership_usage_period_end, venue_courts(sport_type)')
         .in('id', ids);
       if (rowsErr) return errorResponse(rowsErr.message, 500);
       if (!rows?.length) return errorResponse('Booking not found', 404);
@@ -4631,7 +4690,10 @@ Deno.serve(async (req) => {
             participant.role !== 'booker' && participant.payment_status === 'paid'
           );
           const wasOpened = groupRows.some((row: any) =>
-            row.open_for_more_status === 'open' || row.open_for_more_total_players != null
+            row.open_for_more_status === 'open' ||
+            row.open_for_more_public_capacity != null ||
+            row.open_for_more_opened_places != null ||
+            row.open_for_more_total_players != null
           );
           if (wasOpened && paidExternalParticipants.length > 0) {
             const { data: incident } = await admin.from('ops_incidents').insert({
