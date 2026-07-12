@@ -28,12 +28,18 @@ type InviteInfo = {
     capacity: number;
     claimed_count: number;
     committed_count?: number;
+    source?: "open_booking" | "private_invite" | string;
+    pace_label?: string | null;
+    open_for_more_note?: string | null;
+    booker_first_name?: string | null;
   };
   participant_summary?: BookingParticipantSummaryData;
   pricing?: {
     price_minor: number;
     price_sek: number;
     label: string;
+    reason?: string;
+    membership_tier_names?: string[];
     requires_payment: boolean;
   } | null;
   identity_required?: boolean;
@@ -131,6 +137,8 @@ export default function ClaimBookingParticipantPage() {
 
   const formatMoney = (value: number) => `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
   const nameValid = displayName.trim().length > 0;
+  const isOpenPrivateBooking = data?.booking?.source === "open_booking";
+  const hasPlayPlus = (data?.pricing?.membership_tier_names || []).some((name) => /play\+/i.test(name));
   const authenticatedPricingResolving = Boolean(verifiedUser) && (!data?.pricing || isLoading);
   const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || !nameValid;
   const claimDebugState = {
@@ -257,10 +265,10 @@ export default function ClaimBookingParticipantPage() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[11px] uppercase tracking-[0.22em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                Medspelare
+                {isOpenPrivateBooking ? "PRIVAT BANA" : "Medspelare"}
               </p>
               <h1 className="mt-3 text-[32px] leading-none font-black tracking-tight" style={{ fontFamily: FONT_GROTESK }}>
-                Din plats på banan
+                {isOpenPrivateBooking ? `Häng på ${data.booking.booker_first_name || "bokaren"}` : "Din plats på banan"}
               </h1>
             </div>
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-neutral-100">
@@ -271,8 +279,22 @@ export default function ClaimBookingParticipantPage() {
           <div className="mt-6 space-y-2 text-sm text-neutral-600" style={{ fontFamily: FONT_MONO }}>
             <p>{dateLine}</p>
             {courtLine && <p>{courtLine}</p>}
+            {isOpenPrivateBooking && data.booking.pace_label && <p>{data.booking.pace_label}</p>}
             <p>{Number(data.booking.committed_count ?? (data.booking.claimed_count || 0))}/{data.booking.capacity} spelare klara</p>
           </div>
+          {isOpenPrivateBooking && (
+            <div className="mt-4 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
+              <p className="text-sm font-bold text-neutral-800" style={{ fontFamily: FONT_GROTESK }}>
+                Din del av banan
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                Det här är en delad privat bana, inte Open Play. Ditt pris räknas personligt efter inloggning.
+              </p>
+              {data.booking.open_for_more_note && (
+                <p className="mt-3 text-sm text-neutral-600">{data.booking.open_for_more_note}</p>
+              )}
+            </div>
+          )}
 
           <div className="mt-5">
             <BookingParticipantSummary summary={data.participant_summary} compact />
@@ -308,7 +330,7 @@ export default function ClaimBookingParticipantPage() {
             <>
               <div className="mt-6 rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
                 <p className="text-[11px] uppercase tracking-[0.2em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                  Din plats
+                  {isOpenPrivateBooking ? "Din del av banan" : "Din plats"}
                 </p>
                 <div className="mt-2 flex items-end justify-between gap-4">
                   <p className="text-lg font-bold text-neutral-700" style={{ fontFamily: FONT_GROTESK }}>
@@ -321,6 +343,11 @@ export default function ClaimBookingParticipantPage() {
                 {!data.pricing && (
                   <p className="mt-2 text-xs text-neutral-500" style={{ fontFamily: FONT_MONO }}>
                     Vi kontrollerar medlemskap och rätt pris.
+                  </p>
+                )}
+                {isOpenPrivateBooking && data.pricing?.requires_payment && hasPlayPlus && (
+                  <p className="mt-2 text-xs text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+                    Ingår inte i Play+. Det här är en delad privat bana, inte Open Play.
                   </p>
                 )}
               </div>

@@ -114,6 +114,8 @@ type OpenBookingItem = {
   pace_label: string;
   note?: string | null;
   booker_first_name: string;
+  anonymous_others_count?: number;
+  committed_count?: number;
   claim_url: string;
   courts?: Array<{ name?: string | null; court_number?: number | null }>;
 };
@@ -949,7 +951,7 @@ export default function BookingPage() {
             {openBookingsForDate.length > 0 && (
               <section className="rounded-[28px] border border-neutral-200 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.05)]">
                 <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                  Öppna banor
+                  Vi söker fler spelare
                 </p>
                 <div className="mt-4 space-y-3">
                   {openBookingsForDate.map((item) => {
@@ -976,13 +978,16 @@ export default function BookingPage() {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-[20px] leading-none text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
-                              Öppen bana
+                              Privat bana
                             </p>
                             <p className="mt-1 text-[13px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
                               {start.toFormat("HH:mm")}–{end.toFormat("HH:mm")} · {courtLabel}
                             </p>
                             <p className="mt-2 text-[13px] text-neutral-600">
-                              {item.open_spots} platser kvar · {item.pace_label} · Bokad av {item.booker_first_name}
+                              {item.booker_first_name}{Number(item.anonymous_others_count || 0) > 0 ? ` +${item.anonymous_others_count}` : ""} · {item.open_spots} platser kvar · {item.pace_label}
+                            </p>
+                            <p className="mt-1 text-[12px] text-neutral-500">
+                              Din del av banan · personligt pris i nästa steg
                             </p>
                             {item.note && (
                               <p className="mt-1 text-[12px] text-neutral-400">{item.note}</p>

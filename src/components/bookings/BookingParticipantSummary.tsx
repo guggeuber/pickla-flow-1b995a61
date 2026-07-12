@@ -18,6 +18,7 @@ export type BookingParticipantSummaryData = {
   }>;
   committed_count?: number;
   claimed_count?: number;
+  anonymous_others_count?: number;
   capacity?: number;
   remaining_committed_capacity?: number;
 };
@@ -62,6 +63,7 @@ export function BookingParticipantSummary({
 
   const participants = Array.isArray(summary.participants) ? summary.participants : [];
   const committedCount = Number(summary.committed_count || 0);
+  const anonymousOthersCount = Number(summary.anonymous_others_count || 0);
   const capacity = Number(summary.capacity || 0);
   const remaining = Math.max(0, Number(summary.remaining_committed_capacity ?? capacity - committedCount));
   const muted = tone === "dark" ? "text-white/50" : "text-neutral-500";
@@ -108,6 +110,10 @@ export function BookingParticipantSummary({
             </div>
           ))}
         </div>
+      ) : anonymousOthersCount > 0 ? (
+        <p className={`mt-3 text-xs font-semibold ${muted}`} style={{ fontFamily: FONT_MONO }}>
+          {anonymousOthersCount} medspelare visas anonymt tills du hämtat din plats.
+        </p>
       ) : (
         <p className={`mt-3 text-xs font-semibold ${muted}`} style={{ fontFamily: FONT_MONO }}>
           Inga medspelare har hämtat sin plats än.

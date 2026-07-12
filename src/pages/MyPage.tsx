@@ -52,10 +52,17 @@ const PAGE_BG = "#F8FAFC";
 
 const OPEN_BOOKING_PACE_OPTIONS = [
   { value: "all_levels", label: "Alla nivåer" },
-  { value: "newer_players", label: "Nyare spelare" },
-  { value: "experienced_players", label: "Van spelare" },
-  { value: "high_tempo", label: "Högt tempo" },
+  { value: "calm_pace", label: "Lugnt tempo" },
+  { value: "familiar_pace", label: "Vant tempo" },
+  { value: "high_pace", label: "Högt tempo" },
 ];
+
+function normalizeOpenBookingPace(value?: string | null) {
+  if (value === "newer_players") return "calm_pace";
+  if (value === "experienced_players") return "familiar_pace";
+  if (value === "high_tempo") return "high_pace";
+  return OPEN_BOOKING_PACE_OPTIONS.some((option) => option.value === value) ? value! : "all_levels";
+}
 
 type PlayerProfileContact = {
   phone?: string | null;
@@ -940,7 +947,7 @@ function BookingDetailsSheet({
   useEffect(() => {
     const total = Number(openBookingSource?.open_for_more_total_players || 4);
     setOpenForMoreTotal(total === 2 ? 2 : 4);
-    setOpenForMorePace(String(openBookingSource?.open_for_more_pace || "all_levels"));
+    setOpenForMorePace(normalizeOpenBookingPace(openBookingSource?.open_for_more_pace));
     setOpenForMoreNote(String(openBookingSource?.open_for_more_note || ""));
   }, [
     openBookingSource?.open_for_more_total_players,
@@ -1216,10 +1223,10 @@ function BookingDetailsSheet({
                     Öppna för fler
                   </p>
                   <p className="text-sm font-bold mt-1" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
-                    {openForMoreActive ? `${openForMoreSpots} platser öppna` : "Fyll bokningen med fler spelare"}
+                    {openForMoreActive ? `${openForMoreSpots} platser öppna` : "Vi söker fler spelare"}
                   </p>
                   <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
-                    Du behåller din bokning. Öppna platser bokas och betalas direkt till Pickla.
+                    Du behåller din bokning. Huset ordnar banan och betalningen — sällskapet skapar ni tillsammans.
                   </p>
                 </div>
                 {openForMoreActive && (
@@ -1231,6 +1238,18 @@ function BookingDetailsSheet({
 
               {openForMoreEditing ? (
                 <div className="mt-4 space-y-3">
+                  <div className="rounded-2xl p-3 space-y-2" style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}>
+                    {[
+                      "Din bokning, ditt förnamn och tiden syns öppet i schemat.",
+                      "Tidigare privata deltagare visas inte med namn.",
+                      "Nya spelare som hänger på får tillgång till chatten från och med att bokningen öppnas.",
+                      "Platser säljs av Pickla till aktuellt medspelarpris. Din egen bokningskostnad ändras inte — du öppnar för sällskapet, inte för intäkten.",
+                    ].map((line) => (
+                      <p key={line} className="text-[11px] leading-relaxed" style={{ color: TEXT_MUTED }}>
+                        {line}
+                      </p>
+                    ))}
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     {[2, 4].map((value) => (
                       <button
@@ -1263,7 +1282,7 @@ function BookingDetailsSheet({
                     value={openForMoreNote}
                     maxLength={120}
                     onChange={(event) => setOpenForMoreNote(event.target.value)}
-                    placeholder="Kort text, t.ex. Gärna matchvana spelare."
+                    placeholder="Kort text, t.ex. Vi spelar ett lugnt och socialt dubbelpass."
                     className="w-full min-h-[78px] rounded-xl px-3 py-3 text-sm"
                     style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY }}
                   />

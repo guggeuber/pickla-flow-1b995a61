@@ -1220,7 +1220,11 @@ async function handleBookingParticipant(
     .maybeSingle();
   const bookingForCapacity = representativeBooking || booking;
   const groupedRows = bookingForCapacity ? await getBookingGroupRows(serviceClient, bookingForCapacity) : [];
-  const capacity = bookingParticipantCapacityLimit(groupedRows);
+  const participantMetadata = participant.metadata && typeof participant.metadata === 'object' ? participant.metadata : {};
+  const stableOpenBookingCapacity = Number(meta.open_booking_total_players || participantMetadata.open_booking_total_players || 0);
+  const capacity = stableOpenBookingCapacity > 0
+    ? stableOpenBookingCapacity
+    : bookingParticipantCapacityLimit(groupedRows);
   const commit = await commitBookingParticipantCapacity(serviceClient, {
     p_venue_id: participant.venue_id,
     p_booking_id: participant.booking_id,
@@ -1263,6 +1267,8 @@ async function handleBookingParticipant(
         booking_id: participant.booking_id,
         booking_group_key: participant.booking_group_key,
         booking_ref: booking?.booking_ref || null,
+        open_booking_context: meta.open_booking_context || participantMetadata.source || null,
+        open_booking_total_players: stableOpenBookingCapacity || null,
       },
     });
     await recordPaidCapacityConflict(serviceClient, {
@@ -1283,6 +1289,8 @@ async function handleBookingParticipant(
         booking_participant_id: participant.id,
         booking_group_key: participant.booking_group_key,
         booking_id: participant.booking_id,
+        open_booking_context: meta.open_booking_context || participantMetadata.source || null,
+        open_booking_total_players: stableOpenBookingCapacity || null,
       },
     });
     return;
@@ -1301,6 +1309,8 @@ async function handleBookingParticipant(
       booking_id: participant.booking_id,
       booking_group_key: participant.booking_group_key,
       booking_ref: booking?.booking_ref || null,
+      open_booking_context: meta.open_booking_context || participantMetadata.source || null,
+      open_booking_total_players: stableOpenBookingCapacity || null,
     },
   });
 }

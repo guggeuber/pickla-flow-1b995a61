@@ -593,24 +593,47 @@ function useWeeklyProgram(venueId: string | undefined, venueSlug: string) {
   });
 }
 
-function useRoomMessages(roomId: string | null) {
+function useRoomMessages(roomId: string | null, userId?: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!roomId) { setMessages([]); return; }
+    let active = true;
     setLoading(true);
 
-    supabase
+    const loadMessages = async () => {
+      const { data: participant } = userId
+        ? await supabase
+          .from("chat_participants")
+          .select("visible_from")
+          .eq("room_id", roomId)
+          .eq("user_id", userId)
+          .maybeSingle()
+        : { data: null as any };
+      const visibleFrom = participant?.visible_from || null;
+      let query = supabase
       .from("chat_messages")
       .select("*")
       .eq("room_id", roomId)
       .order("created_at", { ascending: true })
-      .limit(100)
-      .then(({ data }) => {
+        .limit(100);
+      if (visibleFrom) query = query.gte("created_at", visibleFrom);
+      const { data } = await query;
+      if (!active) return;
         setMessages((data || []) as ChatMessage[]);
         setLoading(false);
-      });
+      return visibleFrom as string | null;
+    };
+
+    let visibleFromBoundary: string | null = null;
+    loadMessages().then((visibleFrom) => {
+      visibleFromBoundary = visibleFrom || null;
+    }).catch(() => {
+      if (!active) return;
+      setMessages([]);
+      setLoading(false);
+    });
 
     const channel = supabase
       .channel(`hub:${roomId}`)
@@ -619,6 +642,9 @@ function useRoomMessages(roomId: string | null) {
         { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${roomId}` },
         (payload) => setMessages((prev) => {
           const incoming = payload.new as ChatMessage;
+          if (visibleFromBoundary && DateTime.fromISO(incoming.created_at).toMillis() < DateTime.fromISO(visibleFromBoundary).toMillis()) {
+            return prev;
+          }
           if (prev.some((message) => message.id === incoming.id)) return prev;
           return [...prev, incoming];
         })
@@ -630,8 +656,11 @@ function useRoomMessages(roomId: string | null) {
       )
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [roomId]);
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [roomId, userId]);
 
   return { messages, loading };
 }
@@ -677,13 +706,25 @@ function useExistingResourceRooms(venueId: string | undefined, resourceIds: stri
 }
 
 function useRoomPreviews(roomIds: string[]) {
+  const { user } = useAuth();
   const key = roomIds.slice().sort().join(",");
   return useQuery({
-    queryKey: ["hub-room-previews", key],
+    queryKey: ["hub-room-previews", key, user?.id || "guest"],
     enabled: roomIds.length > 0,
     staleTime: 15000,
     refetchInterval: 30000,
     queryFn: async () => {
+      const visibleFromByRoom = new Map<string, string>();
+      if (user?.id) {
+        const { data: participantRows } = await supabase
+          .from("chat_participants")
+          .select("room_id, visible_from")
+          .eq("user_id", user.id)
+          .in("room_id", roomIds);
+        for (const row of participantRows || []) {
+          if (row.visible_from) visibleFromByRoom.set(row.room_id, row.visible_from);
+        }
+      }
       const { data: messages } = await supabase
         .from("chat_messages")
         .select("room_id, content, created_at, user_id, message_type, metadata")
@@ -694,6 +735,8 @@ function useRoomPreviews(roomIds: string[]) {
 
       const lastByRoom: Record<string, typeof messages[0]> = {};
       for (const msg of messages) {
+        const visibleFrom = visibleFromByRoom.get(msg.room_id);
+        if (visibleFrom && DateTime.fromISO(msg.created_at).toMillis() < DateTime.fromISO(visibleFrom).toMillis()) continue;
         if (!lastByRoom[msg.room_id]) lastByRoom[msg.room_id] = msg;
       }
 
@@ -828,7 +871,7 @@ function ChatRoom({ room, venueId, venueSlug, onBack, publicActivityPreview, boo
   const { user } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { messages, loading: msgsLoading } = useRoomMessages(publicActivityPreview ? null : room.id);
+  const { messages, loading: msgsLoading } = useRoomMessages(publicActivityPreview ? null : room.id, user?.id);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const visibleMessages = useMemo(() => {
     const baseMessages = publicActivityPreview?.messages || messages;
