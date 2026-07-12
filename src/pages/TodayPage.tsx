@@ -16,12 +16,12 @@ import { formatSek } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
-import { PriceLine } from "@/components/ui/PriceLine";
-import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
+import { SessionPeopleRow, SessionScheduleRow } from "@/components/session";
 import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
 import { getTodayHeroTiming } from "@/lib/todayHeroTiming";
 import { activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
 import { getFirstName } from "@/lib/displayName";
+import { activitySessionToPresentation, openBookingToPresentation } from "@/lib/sessionPresentation";
 
 
 const PAGE_BG = "#fffaf7";
@@ -56,6 +56,8 @@ type FeedItem = {
   isSpecialPass?: boolean;
   onlineCheaper?: boolean;
   participants?: PublicProfile[];
+  resourceNames?: string[];
+  hostFirstName?: string | null;
   activitySession?: {
     id: string;
     name: string;
@@ -450,7 +452,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         return {
           id: `open-booking:${item.id}`,
           kind: "open_booking",
-          title: "Privat bana",
+          title: item.booker_first_name ? `Häng på ${item.booker_first_name}` : "Häng på en bana",
           date: start.toISODate()!,
           startTime: start.toFormat("HH:mm"),
           endTime: end.toFormat("HH:mm"),
@@ -459,6 +461,8 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           spotsLeft: item.open_spots,
           registrationsCount: committed,
           participants: [],
+          resourceNames: courtLabel ? [courtLabel] : [],
+          hostFirstName: item.booker_first_name,
           capacity,
           href,
           cta: "Häng på",
@@ -535,13 +539,6 @@ function FeedRow({
   const [opening, setOpening] = useState(false);
   const end = item.endTime ? DateTime.fromISO(`${item.date}T${item.endTime}`, { zone: "Europe/Stockholm" }) : null;
   const isPast = !!end && end < now;
-  const popBorder = item.isSpecialPass ? "rgba(237,63,143,0.28)" : highlight ? "rgba(17,17,17,0.14)" : BORDER;
-  const popBackground = item.isSpecialPass
-    ? "#fff7fb"
-    : highlight
-    ? "#ece7e2"
-    : SOFT;
-  const priceEmphasisClass = emphasis === "secondary" ? "opacity-60" : "";
   const openItem = async () => {
     if (item.kind === "session") {
       navigate(item.href, { state: { backgroundLocation: location, activitySession: item.activitySession } });
@@ -585,81 +582,60 @@ function FeedRow({
     }
   };
 
+  const presentation =
+    item.kind === "open_booking"
+      ? openBookingToPresentation({
+          id: item.id,
+          bookerFirstName: item.hostFirstName,
+          startsAt: DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" }).toISO()!,
+          endsAt: DateTime.fromISO(`${item.date}T${item.endTime || item.startTime}`, { zone: "Europe/Stockholm" }).toISO()!,
+          resourceNames: item.resourceNames,
+          people: item.participants,
+          committedCount: item.registrationsCount,
+          capacity: item.capacity,
+          placesLeft: item.spotsLeft,
+          pace: item.category,
+          pricing: { kind: "status", label: "Din del av banan" },
+          primaryAction: { key: "open", label: item.cta },
+          route: item.href,
+          now,
+        })
+      : activitySessionToPresentation({
+          id: item.id,
+          typeLabel: item.isSpecialPass ? "SPECIALPASS" : item.category,
+          title: item.title,
+          sessionDate: item.date,
+          startTime: item.startTime,
+          endTime: item.endTime || item.startTime,
+          resourceNames: item.resourceNames,
+          people: item.participants,
+          committedCount: item.registrationsCount,
+          capacity: item.capacity,
+          placesLeft: item.spotsLeft,
+          pricing:
+            item.kind === "session"
+              ? Number(item.priceSek || 0) <= 0
+                ? { kind: "included", label: "Ingår", amountSek: 0 }
+                : { kind: "amount", amountSek: item.priceSek }
+              : null,
+          primaryAction: { key: "open", label: item.cta },
+          route: item.href,
+          now,
+        });
+
   return (
-    <button
-      type="button"
+    <SessionScheduleRow
+      presentation={presentation}
       onClick={openItem}
       disabled={opening}
-      className="grid w-full grid-cols-[58px_1fr_auto] items-center gap-2 px-3 py-3 text-left transition-transform active:scale-[0.99]"
-      style={{
-        background: popBackground,
-        color: TEXT,
-        opacity: isPast || item.status === "Full" ? 0.48 : 1,
-        border: `1px solid ${popBorder}`,
-        boxShadow: item.isSpecialPass ? "0 10px 26px rgba(237,63,143,0.08)" : "none",
-        fontFamily: FONT_MONO,
-      }}
-    >
-      <span className="text-[15px]">{item.startTime}</span>
-      <div className="min-w-0">
-        {item.isSpecialPass && (
-          <span className="mb-1 inline-flex rounded-full bg-black px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-white">
-            Specialpass
-          </span>
-        )}
-        <span className="block truncate text-[15px]">{item.title}</span>
-        {item.kind === "session" && (
-          <PeopleRow
-            people={item.participants}
-            participantCount={item.registrationsCount}
-            className="mt-1 text-[10px] !text-black/45"
-            showInvitation={false}
-          />
-        )}
-        {item.kind === "open_booking" && (
-          <div className="mt-1 space-y-1">
-            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-black/35" style={{ fontFamily: FONT_MONO }}>
-              Privat bana
-            </p>
-            <PeopleRow
-              people={[]}
-              participantCount={item.registrationsCount}
-              className="text-[10px] !text-black/45"
-              showInvitation={false}
-            />
-            <p className="text-[11px] text-black/45">
-              {Number(item.registrationsCount || 0)} spelare klara · {item.spotsLeft} platser kvar · {item.category}
-            </p>
-            <p className="text-[11px] text-black/40">
-              Din del av banan
-            </p>
-          </div>
-        )}
-        {item.kind === "session" && item.priceSek != null && item.priceSek > 0 && (
-          <span className={`mt-1 block ${priceEmphasisClass}`}>
-            <PriceLine amountSek={item.priceSek} size="sm" />
-          </span>
-        )}
-        {item.kind === "session" && Number(item.priceSek || 0) <= 0 && (
-          <span
-            className={`mt-1 block text-[12px] font-black ${emphasis === "secondary" ? "text-black/40" : "text-black/55"}`}
-            style={{ fontFamily: FONT_HEADING }}
-          >
-            Ingår
-          </span>
-        )}
-      </div>
-      {opening ? (
-        <span className="rounded-full bg-white/65 px-2 py-1 text-[10px] font-bold text-black/55">Öppnar</span>
-      ) : (
-        <ScarcityBadge remaining={item.spotsLeft} capacity={item.capacity} />
-      )}
-    </button>
+      emphasis={emphasis === "secondary" ? "future" : "today"}
+      className={[
+        isPast || item.status === "Full" ? "opacity-50" : "",
+        item.isSpecialPass ? "border-pink-200 bg-pink-50" : "",
+        highlight ? "bg-[#ece7e2]" : "",
+      ].join(" ")}
+    />
   );
-}
-
-function ParticipantLine({ participants, count }: { participants?: PublicProfile[]; count?: number }) {
-  return <PeopleRow people={participants} participantCount={count} />;
 }
 
 function itemEndDateTime(item: FeedItem) {
@@ -765,18 +741,21 @@ function FeaturedTonightHero({
 
         <div className="mt-6 grid gap-4">
           <div className="min-w-0">
+            <SessionPeopleRow
+              presentation={{
+                people: item?.participants ?? [],
+                committedCount: item?.registrationsCount ?? 0,
+                capacity: item?.kind === "open_booking" ? item.capacity : null,
+                placesLeft: item?.kind === "open_booking" ? item.spotsLeft : null,
+              }}
+              variant="drawer"
+              showInvitation
+            />
             {item?.kind === "open_booking" ? (
-              <div className="space-y-1">
-                <p className="text-[13px] font-semibold" style={{ color: MUTED }}>
-                  {Number(item.registrationsCount || 0)} spelare klara · {item.spotsLeft} platser kvar
-                </p>
-                <p className="text-[12px]" style={{ color: MUTED }}>
-                  Din del av banan
-                </p>
-              </div>
-            ) : (
-              <ParticipantLine participants={item?.participants} count={item?.registrationsCount} />
-            )}
+              <p className="mt-2 text-[12px]" style={{ color: MUTED }}>
+                Din del av banan
+              </p>
+            ) : null}
           </div>
           <span
             className="inline-flex w-fit items-center gap-2 rounded-full px-5 py-3 text-[15px] font-black text-white shadow-sm disabled:opacity-60"

@@ -12,6 +12,8 @@ import { apiGet, apiPost } from "@/lib/api";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import { SessionScheduleRow } from "@/components/session";
+import { openBookingToPresentation } from "@/lib/sessionPresentation";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
@@ -102,6 +104,12 @@ interface ExistingBooking {
   court_id: string;
   start: string;
   end: string;
+}
+
+const EMPTY_EXISTING_BOOKINGS: ExistingBooking[] = [];
+
+function sameStringArray(a: string[], b: string[]) {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 type OpenBookingItem = {
@@ -327,7 +335,7 @@ export default function BookingPage() {
   const courts = useMemo<CourtData[]>(() => data?.courts || [], [data?.courts]);
   const dayAvailability = (data?.availabilityByDate?.[dateStr] || {
     openingHours: data?.openingHours || null,
-    bookings: data?.bookings || [],
+    bookings: data?.bookings || EMPTY_EXISTING_BOOKINGS,
   }) as DayAvailability;
   const openingHours = dayAvailability.openingHours;
   const existingBookings = useMemo<ExistingBooking[]>(
@@ -475,8 +483,8 @@ export default function BookingPage() {
     const candidateSlots = periodSlots.length ? periodSlots : filteredTimeSlots;
 
     if (candidateSlots.length === 0) {
-      setSelectedTime(null);
-      setSelectedCourts([]);
+      if (selectedTime !== null) setSelectedTime(null);
+      setSelectedCourts((current) => current.length ? [] : current);
       return;
     }
 
@@ -486,9 +494,10 @@ export default function BookingPage() {
 
     const nextSlot = candidateSlots.find((slot) => getFirstAvailableCourtForSlot(slot)) || candidateSlots[0];
     const match = getFirstAvailableCourtForSlot(nextSlot);
-    setSelectedTime(nextSlot);
-    setSelectedCourts(match ? [match.court.id] : []);
-  }, [dateStr, selectedPeriod, selectedDuration, sportFilter, filteredTimeSlots, existingBookings, sportCourts]); // eslint-disable-line react-hooks/exhaustive-deps
+    const nextCourts = match ? [match.court.id] : [];
+    if (selectedTime !== nextSlot) setSelectedTime(nextSlot);
+    setSelectedCourts((current) => sameStringArray(current, nextCourts) ? current : nextCourts);
+  }, [dateStr, selectedPeriod, selectedDuration, sportFilter, filteredTimeSlots, existingBookings, sportCourts, selectedTime]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedCourtObjects = useMemo(
     () => selectedCourts.map((id) => courts.find((court) => court.id === id)).filter(Boolean) as CourtData[],
@@ -526,7 +535,8 @@ export default function BookingPage() {
       courtAvailability[id] !== false && sportCourts.some((court) => court.id === id)
     );
     if (validSelected.length === selectedCourts.length) return;
-    setSelectedCourts(validSelected.length ? validSelected : firstAvailableCourt ? [firstAvailableCourt.id] : []);
+    const nextCourts = validSelected.length ? validSelected : firstAvailableCourt ? [firstAvailableCourt.id] : [];
+    setSelectedCourts((current) => sameStringArray(current, nextCourts) ? current : nextCourts);
   }, [selectedTime, selectedCourts, courtAvailability, sportCourts, firstAvailableCourt]);
 
   const switchSport = (sport: SportFilter) => {
@@ -979,46 +989,38 @@ export default function BookingPage() {
                         .map((court) => court.name || (court.court_number ? `Bana ${court.court_number}` : null))
                         .filter(Boolean)
                         .join(", ");
+                      const capacity = Number(item.public_capacity || item.total_players || 0);
+                      const presentation = openBookingToPresentation({
+                        id: item.id,
+                        bookerFirstName: item.booker_first_name,
+                        startsAt: start.toISO()!,
+                        endsAt: end.toISO()!,
+                        resourceNames: courtLabel ? [courtLabel] : [],
+                        people: [],
+                        committedCount: Number(item.committed_count || 0),
+                        capacity,
+                        placesLeft: item.open_spots,
+                        pace: item.pace_label,
+                        description: item.note,
+                        pricing: { kind: "status", label: "Din del av banan" },
+                        primaryAction: { key: "join", label: "Häng på" },
+                        route: item.claim_url,
+                      });
+                      const openClaim = () => {
+                        try {
+                          const url = new URL(item.claim_url);
+                          navigate(`${url.pathname}${url.search}`);
+                        } catch {
+                          window.location.href = item.claim_url;
+                        }
+                      };
                       return (
-                        <button
+                        <SessionScheduleRow
                           key={item.id}
-                          type="button"
-                          onClick={() => {
-                            try {
-                              const url = new URL(item.claim_url);
-                              navigate(`${url.pathname}${url.search}`);
-                            } catch {
-                              window.location.href = item.claim_url;
-                            }
-                          }}
-                          className="w-full rounded-2xl border border-neutral-100 bg-neutral-50 p-4 text-left transition-transform active:scale-[0.98]"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                                Privat bana
-                              </p>
-                              <p className="mt-1 text-[18px] leading-none text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
-                                {start.toFormat("HH:mm")}–{end.toFormat("HH:mm")}
-                              </p>
-                              <p className="mt-1 truncate text-[12px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                                {courtLabel}
-                              </p>
-                              <p className="mt-2 text-[13px] text-neutral-600">
-                                {Number(item.committed_count || 0)} spelare klara · {item.open_spots} platser kvar · {item.pace_label}
-                              </p>
-                              <p className="mt-1 text-[12px] text-neutral-500">
-                                Bokad av {item.booker_first_name} · Din del av banan
-                              </p>
-                              {item.note && (
-                                <p className="mt-1 text-[12px] text-neutral-400">{item.note}</p>
-                              )}
-                            </div>
-                            <span className="shrink-0 rounded-full bg-neutral-950 px-3 py-2 text-[11px] font-bold text-white" style={{ fontFamily: FONT_MONO }}>
-                              Häng på
-                            </span>
-                          </div>
-                        </button>
+                          presentation={presentation}
+                          onClick={openClaim}
+                          className="rounded-2xl border-neutral-100 bg-neutral-50"
+                        />
                       );
                     })}
                   </div>
