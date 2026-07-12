@@ -30,7 +30,7 @@ import {
   Workflow,
   Wrench,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   useAdminCheck,
   useAdminVenues,
@@ -73,6 +73,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { adminModuleHref, adminModuleIdFromPath } from "@/lib/adminModuleRoute";
 
 /* ── Surfaces ── */
 const SURFACES: AdminSurfaceDef[] = [
@@ -216,8 +217,10 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
   );
 }
 
-const AdminPage = ({ initialModule = null }: { initialModule?: string | null }) => {
+const AdminPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { modulePath } = useParams<{ modulePath?: string }>();
   const { data: adminDataRaw, isLoading, isError } = useAdminCheck();
   const { data: venuesRaw } = useAdminVenues();
   const adminData = adminDataRaw as any;
@@ -226,7 +229,7 @@ const AdminPage = ({ initialModule = null }: { initialModule?: string | null }) 
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
   const [active, setActive] = useState<AdminSurfaceId>("today");
-  const [openModule, setOpenModule] = useState<string | null>(initialModule);
+  const routeModule = adminModuleIdFromPath(modulePath);
 
   const venueId = selectedVenueId || adminData?.venueId;
   const currentVenue = venues.find((v: any) => v.id === venueId);
@@ -256,16 +259,18 @@ const AdminPage = ({ initialModule = null }: { initialModule?: string | null }) 
     );
   }
 
-  if (openModule) {
-    return <ModuleDetail id={openModule} venueId={venueId} onBack={() => {
-      if (initialModule) navigate("/hub/admin");
-      else setOpenModule(null);
+  if (routeModule) {
+    const routeState = location.state as { adminModuleParent?: string } | null;
+    return <ModuleDetail id={routeModule} venueId={venueId} onBack={() => {
+      if (routeState?.adminModuleParent) navigate(-1);
+      else navigate("/hub/admin");
     }} />;
   }
 
   const openSettingsModule = (id: string) => {
-    if (id === "products") navigate("/hub/admin/products");
-    else setOpenModule(id);
+    navigate(adminModuleHref(id), {
+      state: { adminModuleParent: `${location.pathname}${location.search}` },
+    });
   };
 
   return (
