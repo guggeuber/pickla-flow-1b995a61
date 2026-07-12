@@ -56,9 +56,7 @@ export default function ClaimBookingParticipantPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { loading: authLoading, session } = useAuth();
-  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [verifiedSession, setVerifiedSession] = useState<Session | null>(null);
@@ -117,29 +115,28 @@ export default function ClaimBookingParticipantPage() {
   }, [authKey, queryClient, sessionHydrated, token]);
 
   useEffect(() => {
-    const meta = verifiedUser?.user_metadata || {};
-    const name = String(meta.display_name || meta.full_name || meta.name || "").trim();
-    if (name && !displayName) setDisplayName(name);
     if (verifiedUser?.email && !email) setEmail(verifiedUser.email);
-  }, [displayName, email, verifiedUser]);
+  }, [email, verifiedUser]);
 
   const courtLine = (data?.booking?.courts || [])
     .map((court) => court.name || (court.court_number ? `Bana ${court.court_number}` : null))
     .filter(Boolean)
     .join(", ");
 
-  const nameValid = displayName.trim().length > 0;
   const isOpenPrivateBooking = data?.booking?.source === "open_booking";
   const hasPlayPlus = (data?.pricing?.membership_tier_names || []).some((name) => /play\+/i.test(name));
+  const requiresPayment = Boolean(data?.pricing?.requires_payment);
+  const sessionEmail = String(verifiedUser?.email || "").trim();
+  const effectiveEmail = email.trim() || sessionEmail;
+  const needsReceiptEmail = Boolean(verifiedUser && requiresPayment && !effectiveEmail);
   const authenticatedPricingResolving = Boolean(verifiedUser) && (!data?.pricing || isLoading);
-  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || !nameValid;
+  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || needsReceiptEmail;
   const claimDebugState = {
     authLoaded: !authLoading && sessionHydrated,
-    inviteLoaded: Boolean(data?.invite),
+    inviteLoaded: Boolean(data),
     bookingLoaded: Boolean(data?.booking),
     customerResolved: Boolean(verifiedUser),
-    profileResolved: Boolean(displayName.trim() || verifiedUser?.user_metadata),
-    nameValid,
+    receiptEmailReady: !needsReceiptEmail,
     isLoading,
     authLoading,
     sessionHydrated,
@@ -183,13 +180,13 @@ export default function ClaimBookingParticipantPage() {
               ? { kind: "included", label: data.pricing.label || "Ingår", amountSek: 0 }
               : { kind: "amount", amountSek: data.pricing.price_sek, contextLabel: data.pricing.label || "Din del av banan" }
             : { kind: "pending", label: "Hämtar personligt pris", contextLabel: "Vi kontrollerar medlemskap och rätt pris." }
-          : { kind: "status", label: "Logga in för att hämta din plats" },
+          : null,
         primaryAction: {
           key: verifiedUser ? "claim" : "login",
           label: verifiedUser
             ? data.pricing?.requires_payment
-              ? "Betala och hämta plats"
-              : "Hämta plats"
+              ? "Betala och boka plats"
+              : "Boka plats"
             : "Logga in",
         },
         route: currentPath,
@@ -201,14 +198,10 @@ export default function ClaimBookingParticipantPage() {
     navigate(`/auth?redirect=${encodeURIComponent(currentPath)}`);
   };
 
-  const handleClaim = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const handleClaim = async () => {
     if (!token || !data?.booking?.venue_id) return;
-    if (!displayName.trim()) {
-      console.info("[booking-participant-claim] blocked before submit", claimDebugState);
-      toast.error("Skriv ditt namn först.");
-      return;
-    }
+    if (!verifiedUser) return goToIdentity();
+    if (needsReceiptEmail) return;
 
     setSubmitting(true);
     try {
@@ -223,9 +216,9 @@ export default function ClaimBookingParticipantPage() {
       }
       const claim = await apiPost<any>("api-bookings", "booking-participant-claim", {
         token,
-        displayName: displayName.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
+        displayName: "",
+        email: effectiveEmail,
+        phone: "",
       });
 
       if (claim.free || Number(claim.amount_sek || 0) <= 0) {
@@ -234,7 +227,7 @@ export default function ClaimBookingParticipantPage() {
         return;
       }
 
-      if (!email.trim()) {
+      if (!effectiveEmail) {
         toast.error("E-post krävs för betalning.");
         await refetch();
         return;
@@ -246,9 +239,9 @@ export default function ClaimBookingParticipantPage() {
         venue_id: data.booking.venue_id,
         metadata: {
           booking_participant_id: claim.participant_id,
-          customer_name: displayName.trim(),
-          customer_email: email.trim() || currentSession.user.email || "",
-          customer_phone: phone.trim(),
+          customer_name: "",
+          customer_email: effectiveEmail || currentSession.user.email || "",
+          customer_phone: "",
           success_path: "/booking/confirmed?type=booking_participant",
         },
       });
@@ -289,16 +282,23 @@ export default function ClaimBookingParticipantPage() {
 
   if (!sessionPresentation) return null;
 
-  return (
-    <SessionDrawerShell
-      standalone
-      presentation={sessionPresentation}
-      onOpenChange={(open) => {
-        if (!open) navigate("/today");
-      }}
-      footer={
-        !verifiedUser ? (
+  const actionCard = (
+    <div className="rounded-[26px] border border-neutral-200 bg-[#fbfaf7] p-4 shadow-sm">
+      {!verifiedUser ? (
+        <>
+          <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+            Logga in för att hämta din plats
+          </p>
+          <p className="mt-2 text-[13px] font-semibold leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            Efter inloggning kommer du tillbaka hit.
+          </p>
+          {authNotice ? (
+            <p className="mt-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 text-[12px] font-semibold text-neutral-600" style={{ fontFamily: FONT_MONO }}>
+              {authNotice}
+            </p>
+          ) : null}
           <SessionActions
+            className="mt-4"
             primary={{
               key: "login",
               label: "Logga in",
@@ -306,23 +306,80 @@ export default function ClaimBookingParticipantPage() {
               icon: <Ticket className="h-5 w-5" />,
             }}
           />
-        ) : (
+        </>
+      ) : authenticatedPricingResolving ? (
+        <>
+          <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+            Hämtar personligt pris
+          </p>
+          <p className="mt-2 text-[13px] font-semibold leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            Vi kontrollerar medlemskap och rätt pris.
+          </p>
           <SessionActions
+            className="mt-4"
+            primary={{
+              key: "pricing",
+              label: "Hämtar pris...",
+              disabled: true,
+              icon: <Loader2 className="h-5 w-5 animate-spin" />,
+            }}
+          />
+        </>
+      ) : (
+        <>
+          <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+            {requiresPayment ? "Betala och boka plats" : "Boka plats"}
+          </p>
+          <p className="mt-2 text-[13px] font-semibold leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            {requiresPayment
+              ? "Din plats blir klar när betalningen är genomförd."
+              : `${data.pricing?.label || "Din rätt gäller"} för den här sessionen.`}
+          </p>
+          {isOpenPrivateBooking && data.pricing?.requires_payment && hasPlayPlus ? (
+            <p className="mt-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 text-[12px] font-semibold text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+              Ingår inte i Play+. Det här är en delad privat bana, inte Open Play.
+            </p>
+          ) : null}
+          {needsReceiptEmail ? (
+            <label className="mt-4 block">
+              <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+                E-post för kvitto
+              </span>
+              <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="namn@example.com"
+                type="email"
+                className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
+                style={{ fontFamily: FONT_MONO }}
+              />
+            </label>
+          ) : null}
+          <SessionActions
+            className="mt-4"
             primary={{
               key: "claim",
-              label: data.pricing?.requires_payment ? "Betala och hämta plats" : "Hämta plats",
-              type: "submit",
-              form: "booking-participant-claim-form",
+              label: requiresPayment ? "Betala och boka plats" : "Boka plats",
+              onClick: handleClaim,
               disabled: claimDisabled,
               icon: submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Ticket className="h-5 w-5" />,
             }}
           />
-        )
-      }
+        </>
+      )}
+    </div>
+  );
+
+  return (
+    <SessionDrawerShell
+      standalone
+      presentation={sessionPresentation}
+      onOpenChange={(open) => {
+        if (!open) navigate("/today");
+      }}
+      footer={actionCard}
     >
       <SessionPeopleRow presentation={sessionPresentation} variant="drawer" />
-
-      <SessionPriceBlock presentation={sessionPresentation} variant="drawer" />
 
       {data.booking.open_for_more_note ? (
         <div className="rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
@@ -332,55 +389,9 @@ export default function ClaimBookingParticipantPage() {
 
       <BookingParticipantSummary summary={data.participant_summary} compact />
 
-      {!verifiedUser ? (
-        <div className="rounded-3xl border border-neutral-200 bg-[#fbfaf7] p-4">
-          <p className="text-lg font-black text-neutral-900" style={{ fontFamily: FONT_GROTESK }}>
-            Logga in för att hämta din plats
-          </p>
-          <p className="mt-2 text-sm leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-            Efter inloggning kommer du tillbaka hit.
-          </p>
-          {authNotice ? (
-            <p className="mt-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-600" style={{ fontFamily: FONT_MONO }}>
-              {authNotice}
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          {isOpenPrivateBooking && data.pricing?.requires_payment && hasPlayPlus ? (
-            <p className="rounded-2xl border border-neutral-200 bg-[#fbfaf7] px-4 py-3 text-xs text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-              Ingår inte i Play+. Det här är en delad privat bana, inte Open Play.
-            </p>
-          ) : null}
-          <form id="booking-participant-claim-form" onSubmit={handleClaim} className="space-y-3">
-            <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              placeholder="Ditt namn"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
-              style={{ fontFamily: FONT_MONO }}
-              required
-            />
-            <input
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="E-post för kvitto"
-              type="email"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
-              style={{ fontFamily: FONT_MONO }}
-              required={Boolean(data.pricing?.requires_payment)}
-            />
-            <input
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="Telefon (valfritt)"
-              className="w-full rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-base outline-none focus:border-neutral-400"
-              style={{ fontFamily: FONT_MONO }}
-            />
-          </form>
-        </>
-      )}
+      {sessionPresentation.pricing ? (
+        <SessionPriceBlock presentation={sessionPresentation} variant="drawer" />
+      ) : null}
     </SessionDrawerShell>
   );
 }
