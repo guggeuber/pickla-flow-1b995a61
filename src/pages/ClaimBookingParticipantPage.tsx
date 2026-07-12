@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Ticket } from "lucide-react";
+import { Loader2, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
@@ -51,9 +51,10 @@ function isUsableSession(session: Session | null) {
   return true;
 }
 
-export default function ClaimBookingParticipantPage() {
+export default function ClaimBookingParticipantPage({ overlayOnly = false }: { overlayOnly?: boolean }) {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { loading: authLoading, session } = useAuth();
   const [email, setEmail] = useState("");
@@ -63,6 +64,7 @@ export default function ClaimBookingParticipantPage() {
   const [authNotice, setAuthNotice] = useState("");
   const previousAuthKeyRef = useRef("initial");
   const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const hasBackgroundLocation = Boolean((location.state as { backgroundLocation?: unknown } | null)?.backgroundLocation);
   const isWrongAuthOrigin = Boolean(canonicalRedirectUrl());
   const verifiedUser = isUsableSession(verifiedSession) ? verifiedSession?.user ?? null : null;
 
@@ -198,6 +200,38 @@ export default function ClaimBookingParticipantPage() {
     navigate(`/auth?redirect=${encodeURIComponent(currentPath)}`);
   };
 
+  const closeDrawer = () => {
+    if (overlayOnly && hasBackgroundLocation) {
+      navigate(-1);
+      return;
+    }
+    navigate("/today");
+  };
+
+  const placeholderPresentation = openBookingToPresentation({
+    id: token || "booking-invite",
+    title: "Hämtar plats",
+    startsAt: new Date().toISOString(),
+    endsAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    resourceNames: [],
+    people: [],
+    pricing: { kind: "pending", label: "Hämtar" },
+    primaryAction: { key: "loading", label: "Hämtar...", disabled: true },
+    route: currentPath,
+  });
+
+  const renderStateShell = (children: ReactNode) => (
+    <SessionDrawerShell
+      standalone={!overlayOnly}
+      presentation={placeholderPresentation}
+      onOpenChange={(open) => {
+        if (!open) closeDrawer();
+      }}
+    >
+      {children}
+    </SessionDrawerShell>
+  );
+
   const handleClaim = async () => {
     if (!token || !data?.booking?.venue_id) return;
     if (!verifiedUser) return goToIdentity();
@@ -258,25 +292,19 @@ export default function ClaimBookingParticipantPage() {
   };
 
   if (isLoading || authLoading || !sessionHydrated || isWrongAuthOrigin) {
-    return (
-      <div className="min-h-[100dvh] bg-[#f7f4ee] grid place-items-center">
+    return renderStateShell(
+      <div className="grid min-h-[220px] place-items-center">
         <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
-      </div>
+      </div>,
     );
   }
 
   if (error || !data?.booking) {
-    return (
-      <div className="min-h-[100dvh] bg-[#f7f4ee] px-6 py-10">
-        <Link to="/" className="inline-flex items-center gap-2 text-sm text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-          <ArrowLeft className="h-4 w-4" />
-          Tillbaka
-        </Link>
-        <div className="mt-20 rounded-[28px] bg-white border border-neutral-200 p-6 text-center">
-          <p className="text-lg font-bold" style={{ fontFamily: FONT_GROTESK }}>Länken hittades inte</p>
-          <p className="mt-2 text-sm text-neutral-500" style={{ fontFamily: FONT_MONO }}>Be bokaren skicka en ny medspelarlänk.</p>
-        </div>
-      </div>
+    return renderStateShell(
+      <div className="rounded-[28px] border border-neutral-200 bg-white p-6 text-center">
+        <p className="text-lg font-bold" style={{ fontFamily: FONT_GROTESK }}>Länken hittades inte</p>
+        <p className="mt-2 text-sm text-neutral-500" style={{ fontFamily: FONT_MONO }}>Be bokaren skicka en ny medspelarlänk.</p>
+      </div>,
     );
   }
 
@@ -372,10 +400,10 @@ export default function ClaimBookingParticipantPage() {
 
   return (
     <SessionDrawerShell
-      standalone
+      standalone={!overlayOnly}
       presentation={sessionPresentation}
       onOpenChange={(open) => {
-        if (!open) navigate("/today");
+        if (!open) closeDrawer();
       }}
       footer={actionCard}
     >

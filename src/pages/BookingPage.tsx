@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
+import { useLocation, useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, CheckCircle2, Building2, Check, CircleDot, Target } from "lucide-react";
 import { toast } from "sonner";
@@ -208,6 +208,7 @@ export default function BookingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const requestedSport: SportFilter = searchParams.get("sport") === "dart" ? "dart" : "pickleball";
 
@@ -1009,7 +1010,7 @@ export default function BookingPage() {
                       const openClaim = () => {
                         try {
                           const url = new URL(item.claim_url);
-                          navigate(`${url.pathname}${url.search}`);
+                          navigate(`${url.pathname}${url.search}`, { state: { backgroundLocation: location } });
                         } catch {
                           window.location.href = item.claim_url;
                         }

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { ArrowLeft, Loader2 } from "lucide-react";
@@ -260,6 +260,7 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
 
 export default function OpenPlayPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
@@ -279,7 +280,7 @@ export default function OpenPlayPage() {
   }, [schedule, now]);
 
   const openItem = (item: WeeklyScheduleItem) => {
-    navigate(item.href);
+    navigate(item.href, { state: { backgroundLocation: location } });
   };
 
   return (

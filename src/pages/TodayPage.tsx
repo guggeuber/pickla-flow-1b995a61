@@ -546,7 +546,7 @@ function FeedRow({
     }
 
     if (item.kind === "open_booking") {
-      navigate(item.href);
+      navigate(item.href, { state: { backgroundLocation: location } });
       return;
     }
 

@@ -101,6 +101,7 @@ function AppRoutes() {
   const location = useLocation();
   const state = location.state as { backgroundLocation?: RouterLocation } | null;
   const backgroundLocation = state?.backgroundLocation;
+  const isBookingInviteRoute = location.pathname.startsWith("/booking/invite/");
 
   return (
     <>
@@ -163,7 +164,7 @@ function AppRoutes() {
             <Route path="/cookies" element={<LegalPage kind="cookies" />} />
             <Route path="/b/:ref" element={<BookingConfirmation />} />
             <Route path="/booking/confirmed" element={<BookingConfirmed />} />
-            <Route path="/booking/invite/:token" element={<ClaimBookingParticipantPage />} />
+            <Route path="/booking/invite/:token" element={<TodayPage />} />
             <Route path="/booking/ticket/:token" element={<BookingParticipantTicketPage />} />
             <Route path="/booking-chat/:bookingRef" element={<HubPage />} />
             <Route path="/chat/:roomId" element={<HubPage />} />
@@ -181,10 +182,11 @@ function AppRoutes() {
             <Route path="/score/match/:matchId" element={<ScoreMatchPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
-          {backgroundLocation && (
+          {(backgroundLocation || isBookingInviteRoute) && (
             <Routes>
               <Route path="/p/:sessionId" element={<ProgramSessionPage overlayOnly />} />
               <Route path="/program/:sessionId" element={<ProgramSessionPage overlayOnly />} />
+              <Route path="/booking/invite/:token" element={<ClaimBookingParticipantPage overlayOnly />} />
             </Routes>
           )}
     </>
