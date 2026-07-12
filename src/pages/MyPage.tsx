@@ -2298,6 +2298,34 @@ function WalletSection() {
   );
 }
 
+function CommercePurchasesSection() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["commerce-my-orders"],
+    queryFn: () => apiGet<{ orders: any[]; lines: any[] }>("api-commerce", "my-orders"),
+    staleTime: 15000,
+  });
+  const orderById = new Map((data?.orders || []).map((order) => [order.id, order]));
+  const pickupLines = (data?.lines || []).filter((line) => line.fulfillment_type === "desk_pickup" && ["paid", "attention"].includes(orderById.get(line.commerce_order_id)?.status));
+
+  return (
+    <motion.div variants={item}>
+      <div className="mb-2 flex items-center gap-2">
+        <ShoppingBag className="h-4 w-4" style={{ color: BLUE }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Köp att hämta</span>
+      </div>
+      <div className="overflow-hidden rounded-2xl" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+        {isLoading ? <div className="flex items-center justify-center gap-2 p-4 text-xs" style={{ color: TEXT_MUTED }}><Loader2 className="h-4 w-4 animate-spin" />Hämtar köp...</div> : pickupLines.length ? pickupLines.map((line) => (
+          <div key={line.id} className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-0" style={{ borderColor: CARD_BORDER }}>
+            <div><p className="text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-[11px]" style={{ color: TEXT_MUTED }}>{line.fulfillment_status === "collected" ? "Uthämtad" : line.fulfillment_status === "attention" ? "Kontakta Pickla" : "Hämtas vid disken"}</p></div>
+            <span className="rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: line.fulfillment_status === "collected" ? GREEN_LIGHT : BLUE_LIGHT, color: line.fulfillment_status === "collected" ? GREEN : BLUE }}>{line.fulfillment_status === "collected" ? "KLAR" : "ATT HÄMTA"}</span>
+          </div>
+        )) : <div className="p-4 text-center text-xs" style={{ color: TEXT_MUTED }}>Inga väntande köp.</div>}
+        <Link to="/shop" className="flex items-center justify-between border-t px-4 py-3 text-sm font-bold" style={{ borderColor: CARD_BORDER, color: BLUE }}><span>Se Pickla-produkter</span><ChevronRight className="h-4 w-4" /></Link>
+      </div>
+    </motion.div>
+  );
+}
+
 function SettingsSection() {
   const [searchParams] = useSearchParams();
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
@@ -2930,6 +2958,8 @@ const MyPage = () => {
 
           {/* Corporate memberships */}
           {!isActivityPage && <CorporateSection />}
+
+          {!isActivityPage && <CommercePurchasesSection />}
 
           {/* Wallet: saved cards */}
           {!isActivityPage && <WalletSection />}

@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { Activity, AlertTriangle, CalendarCheck, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, Mail, Phone, ReceiptText, Sparkles, UserCheck, UserPlus } from "lucide-react";
+import { Activity, AlertTriangle, CalendarCheck, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, Mail, PackageCheck, Phone, ReceiptText, Sparkles, UserCheck, UserPlus } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { useTodayBookings, useTodayRevenue, useVenueCourts } from "@/hooks/useDesk";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPatch } from "@/lib/api";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
@@ -184,6 +184,12 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const { data: bookings } = useTodayBookings(venueId, selectedDate);
   const { data: revenue } = useTodayRevenue(venueId);
   const { data: courts } = useVenueCourts(venueId);
+  const { data: fulfillment } = useQuery({
+    queryKey: ["commerce-fulfillment", venueId, "pending_pickup"],
+    enabled: !!venueId && isToday,
+    queryFn: () => apiGet<{ items: any[] }>("api-commerce", "fulfillment", { venueId: venueId!, status: "pending_pickup" }),
+    refetchInterval: 30000,
+  });
   const changeDateBy = (days: number) => {
     const next = toStockholmDate(selectedDate).plus({ days }).toISODate()!;
     setSelectedDate(clampDeskDate(next, today));
@@ -233,6 +239,15 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
       qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
+  });
+  const collectMutation = useMutation({
+    mutationFn: (lineId: string) => apiPatch("api-commerce", "fulfillment", { venue_id: venueId, line_id: lineId, status: "collected" }),
+    onSuccess: () => {
+      toast.success("Uthämtningen är klar");
+      qc.invalidateQueries({ queryKey: ["commerce-fulfillment", venueId] });
+      qc.invalidateQueries({ queryKey: ["commerce-my-orders"] });
+    },
+    onError: (error: any) => toast.error(error?.message || "Kunde inte markera uthämtad"),
   });
 
   const rows = (bookings as any[] | undefined) || [];
@@ -403,6 +418,20 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
               ))}
             </div>
           )}
+        </section>
+      ) : null}
+
+      {isToday && (fulfillment?.items || []).length > 0 ? (
+        <section className="space-y-2">
+          <AxSectionLabel icon={PackageCheck} accent={ax("lime")}>Att lämna ut</AxSectionLabel>
+          <div className="grid gap-2 lg:grid-cols-2">
+            {(fulfillment?.items || []).map((line) => (
+              <AxCard key={line.id} className="flex items-center justify-between gap-3 p-3">
+                <div className="min-w-0"><p className="truncate text-sm font-black text-white">{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="truncate text-xs font-bold" style={{ color: ax("muted") }}>{line.order?.guest_name || line.order?.guest_email || "Kund"}</p></div>
+                <button type="button" onClick={() => collectMutation.mutate(line.id)} disabled={collectMutation.isPending} className="shrink-0 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50" style={{ background: ax("lime"), color: ax("ink") }}>{collectMutation.isPending && collectMutation.variables === line.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Utlämnad"}</button>
+              </AxCard>
+            ))}
+          </div>
         </section>
       ) : null}
 
@@ -945,6 +974,15 @@ function ActivityParticipantRow({
             </AxChip>
             {receiptRef && <AxChip tone="neutral">Kvitto {receiptRef}</AxChip>}
           </div>
+          {Array.isArray(participant.commerce_items) && participant.commerce_items.length > 0 ? (
+            <div className="mt-2 grid gap-1">
+              {participant.commerce_items.map((item: any) => (
+                <p key={item.id} className="text-[11px] font-black" style={{ color: item.fulfillment_status === "collected" ? ax("lime") : ax("electricSoft") }}>
+                  {item.product_name}{Number(item.quantity || 1) > 1 ? ` · ${item.quantity} st` : ""} · {item.fulfillment_status === "collected" ? "Uthämtad" : "Lämna ut vid incheckning"}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2 md:justify-end">
           {checkedIn ? (

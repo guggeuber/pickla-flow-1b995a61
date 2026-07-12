@@ -94,6 +94,35 @@ export async function apiPost<T = unknown>(
   return res.json();
 }
 
+export async function apiPut<T = unknown>(
+  fn: string,
+  endpoint: string,
+  body: Record<string, unknown>
+): Promise<T> {
+  const headers = await getAuthHeaders();
+  const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
+  const startedAt = performance.now();
+  const res = await fetch(requestUrl, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(body),
+  });
+  logApiTiming("PUT", requestUrl, startedAt, res.status);
+  if (!res.ok) {
+    const message = await readErrorBody(res);
+    reportApiFailure({
+      method: "PUT",
+      fn,
+      endpoint,
+      status: res.status,
+      message,
+      duration_ms: Math.round(performance.now() - startedAt),
+    });
+    throw new Error(message);
+  }
+  return res.json();
+}
+
 export async function apiPatch<T = unknown>(
   fn: string,
   endpoint: string,

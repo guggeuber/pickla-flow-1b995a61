@@ -46,6 +46,114 @@ export async function resolveCustomerIdForUser(admin: any, userId?: string | nul
   return customer?.id || null;
 }
 
+export async function resolveOrCreateGuestCustomerByEmail(
+  admin: any,
+  input: {
+    venueId: string;
+    email: string;
+    displayName?: string | null;
+    phone?: string | null;
+    source?: string;
+  },
+): Promise<string> {
+  const email = normalizeEmail(input.email);
+  if (!email) throw new Error('Missing guest customer email');
+  const organizationId = await organizationIdForVenue(admin, input.venueId);
+  if (!organizationId) throw new Error('Missing organization for guest customer');
+
+  const { data: existingIdentity, error: identityError } = await admin
+    .from('customer_identities')
+    .select('customer_id')
+    .eq('organization_id', organizationId)
+    .eq('provider', 'email')
+    .eq('provider_id', email)
+    .maybeSingle();
+  if (identityError) throw new Error(identityError.message);
+  let customerId = existingIdentity?.customer_id
+    ? await resolveCanonicalCustomerId(admin, organizationId, existingIdentity.customer_id)
+    : null;
+
+  if (!customerId) {
+    const { data: existing, error: existingError } = await admin
+      .from('customers')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('email_normalized', email)
+      .is('merged_into_id', null)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    customerId = existing?.id || null;
+  }
+  if (!customerId) {
+    const displayName = cleanName(input.displayName) || 'Gäst';
+    const phone = normalizePhone(input.phone);
+    const { data: inserted, error: insertError } = await admin
+      .from('customers')
+      .insert({
+        organization_id: organizationId,
+        auth_user_id: null,
+        display_name: displayName,
+        primary_email: email,
+        primary_phone: input.phone || null,
+        email_normalized: email,
+        phone_e164: phone,
+        metadata: { source: input.source || 'commerce_guest_checkout' },
+      })
+      .select('id')
+      .single();
+    if (insertError) {
+      if (insertError.code !== '23505') throw new Error(insertError.message);
+      const { data: concurrent, error: concurrentError } = await admin
+        .from('customers')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .eq('email_normalized', email)
+        .is('merged_into_id', null)
+        .eq('status', 'active')
+        .maybeSingle();
+      if (concurrentError || !concurrent) throw new Error(concurrentError?.message || 'Guest customer conflict');
+      customerId = concurrent.id;
+    } else {
+      customerId = inserted.id;
+    }
+  }
+
+  await assertIdentityCanAttach(admin, organizationId, customerId, 'email', email);
+  await insertIdentityIfMissing(admin, {
+    customer_id: customerId,
+    organization_id: organizationId,
+    provider: 'email',
+    provider_id: email,
+    email,
+    verified_at: null,
+    metadata: { source: input.source || 'commerce_guest_checkout', verified: false },
+  });
+  await linkCustomerToVenue(admin, customerId, input.venueId, input.source || 'commerce_guest_checkout');
+  return customerId;
+}
+
+async function resolveCanonicalCustomerId(admin: any, organizationId: string, startingCustomerId: string) {
+  let customerId = startingCustomerId;
+  const seen = new Set<string>();
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (seen.has(customerId)) throw new Error('Customer merge cycle detected');
+    seen.add(customerId);
+    const { data: customer, error } = await admin.from('customers')
+      .select('id, organization_id, merged_into_id, status')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!customer || customer.organization_id !== organizationId) throw new Error('Customer identity scope mismatch');
+    if (!customer.merged_into_id) {
+      if (customer.status === 'archived') throw new Error('Customer identity is archived');
+      return customer.id as string;
+    }
+    customerId = customer.merged_into_id;
+  }
+  throw new Error('Customer merge chain is too deep');
+}
+
 async function organizationIdForVenue(admin: any, venueId?: string | null): Promise<string | null> {
   const cleanVenueId = String(venueId || '').trim();
   if (cleanVenueId) {

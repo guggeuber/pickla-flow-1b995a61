@@ -4378,6 +4378,7 @@ Deno.serve(async (req) => {
         const customersById = new Map<string, any>();
         const receiptByStripe = new Map<string, any>();
         const checkinByRegistrationId = new Map<string, any>();
+        const commerceItemsByRegistrationId = new Map<string, any[]>();
 
         if (userIds.length > 0) {
           const { data: profiles, error: profilesErr } = await client
@@ -4429,6 +4430,30 @@ Deno.serve(async (req) => {
           if (registrationCheckinsErr) return errorResponse(registrationCheckinsErr.message);
           for (const checkin of registrationCheckins || []) {
             checkinByRegistrationId.set(checkin.entitlement_id, checkin);
+          }
+
+          const { data: participationLines, error: participationLinesError } = await lookupClient
+            .from('commerce_order_lines')
+            .select('id, session_registration_id')
+            .in('session_registration_id', registrationIds)
+            .eq('commerce_kind', 'participation');
+          if (participationLinesError) return errorResponse(participationLinesError.message);
+          const parentLineIds = (participationLines || []).map((line: any) => line.id).filter(Boolean);
+          if (parentLineIds.length > 0) {
+            const { data: itemLines, error: itemLinesError } = await lookupClient
+              .from('commerce_order_lines')
+              .select('id, parent_line_id, product_name, quantity, fulfillment_type, fulfillment_status')
+              .in('parent_line_id', parentLineIds)
+              .eq('fulfillment_type', 'desk_pickup');
+            if (itemLinesError) return errorResponse(itemLinesError.message);
+            const registrationByParentLine = new Map((participationLines || []).map((line: any) => [line.id, line.session_registration_id]));
+            for (const item of itemLines || []) {
+              const registrationId = registrationByParentLine.get(item.parent_line_id);
+              if (!registrationId) continue;
+              const current = commerceItemsByRegistrationId.get(registrationId) || [];
+              current.push(item);
+              commerceItemsByRegistrationId.set(registrationId, current);
+            }
           }
         }
 
@@ -4491,6 +4516,7 @@ Deno.serve(async (req) => {
             checked_in: Boolean(checkin) || registration.status === 'checked_in',
             checked_in_at: checkin?.checked_in_at || null,
             consumed: Boolean(checkin) || registration.status === 'checked_in',
+            commerce_items: commerceItemsByRegistrationId.get(registration.id) || [],
             notes: session.name || 'Aktivitet',
             booking_ref: null,
             venue_courts: null,

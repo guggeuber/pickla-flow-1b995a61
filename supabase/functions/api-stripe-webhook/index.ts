@@ -3,12 +3,13 @@
 //
 // Configure the webhook endpoint in the Stripe dashboard:
 //   https://<project>.supabase.co/functions/v1/api-stripe-webhook
-// Events to listen for: checkout.session.completed, invoice.paid
+// Events to listen for: checkout.session.completed, checkout.session.expired, invoice.paid
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
-import { resolveCustomerIdForUser } from '../_shared/customers.ts';
+import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser, resolveOrCreateGuestCustomerByEmail } from '../_shared/customers.ts';
+import { canonicalPublicUrl } from '../_shared/canonical_origin.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
@@ -160,6 +161,22 @@ Deno.serve(async (req) => {
     }
   }
 
+  if (event.type === 'checkout.session.expired') {
+    try {
+      await handleCommerceCheckoutExpired(event.data.object, serviceClient);
+      await serviceClient.from('stripe_events')
+        .update({ status: 'processed', processed_at: new Date().toISOString(), error: null })
+        .eq('id', eventId);
+      return jsonResponse({ received: true }, 200);
+    } catch (err) {
+      console.error('Error processing checkout.session.expired webhook:', err);
+      await serviceClient.from('stripe_events')
+        .update({ status: 'failed', processed_at: new Date().toISOString(), error: (err as Error).message })
+        .eq('id', eventId);
+      return errorResponse((err as Error).message, 500);
+    }
+  }
+
   if (event.type !== 'checkout.session.completed') {
     await serviceClient.from('stripe_events')
       .update({ status: 'skipped', processed_at: new Date().toISOString() })
@@ -170,8 +187,9 @@ Deno.serve(async (req) => {
   const session = event.data.object;
   const meta = session.metadata || {};
   const { product_type } = meta;
+  const commerceOrderId = String(meta.commerce_order_id || '').trim();
 
-  if (!product_type) {
+  if (!product_type && !commerceOrderId) {
     console.error('Missing product_type in session', session.id);
     await serviceClient.from('stripe_events')
       .update({ status: 'failed', processed_at: new Date().toISOString(), error: 'Missing session metadata' })
@@ -180,7 +198,9 @@ Deno.serve(async (req) => {
   }
 
   try {
-    if (product_type === 'court_booking') {
+    if (commerceOrderId) {
+      await handleCommerceOrder(session, meta, serviceClient);
+    } else if (product_type === 'court_booking') {
       await handleCourtBooking(session, meta, serviceClient);
     } else if (product_type === 'day_pass') {
       await handleDayPass(session, meta, serviceClient);
@@ -204,6 +224,247 @@ Deno.serve(async (req) => {
 
   return jsonResponse({ received: true }, 200);
 });
+
+function randomCommerceToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = '';
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function hashCommerceToken(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function escapeCommerceEmailHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[character] || character));
+}
+
+async function sendCommerceReceiptEmail(params: {
+  email: string;
+  name?: string | null;
+  receiptNumber?: string | null;
+  token: string;
+  pickupItems: string[];
+}) {
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  if (!resendKey) {
+    console.error('Commerce receipt email skipped: RESEND_API_KEY missing');
+    return;
+  }
+  const receiptUrl = canonicalPublicUrl(`/order/${encodeURIComponent(params.token)}`);
+  const pickupCopy = params.pickupItems.length
+    ? `<p><strong>Hämtas vid disken:</strong> ${params.pickupItems.map(escapeCommerceEmailHtml).join(', ')}</p>`
+    : '';
+  const firstName = params.name ? escapeCommerceEmailHtml(params.name.split(' ')[0]) : '';
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>',
+      to: [params.email],
+      subject: `Ditt Pickla-köp${params.receiptNumber ? ` · ${params.receiptNumber}` : ''}`,
+      html: `<p>Hej${firstName ? ` ${firstName}` : ''}!</p><p>Ditt köp är klart.</p>${pickupCopy}<p><a href="${receiptUrl}">Visa kvitto och uthämtning</a></p>`,
+    }),
+  });
+  if (!response.ok) console.error('Commerce receipt email failed', await response.text());
+}
+
+async function handleCommerceOrder(
+  session: any,
+  meta: Record<string, string>,
+  serviceClient: any,
+) {
+  const orderId = String(meta.commerce_order_id || '').trim();
+  const orderVersion = Number(meta.commerce_order_version || 0);
+  if (!orderId || !orderVersion) throw new Error('Missing commerce order metadata');
+
+  const { data: order, error: orderError } = await serviceClient
+    .from('commerce_orders')
+    .select('*')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (orderError || !order) throw new Error(orderError?.message || 'Commerce order not found');
+  if (Number(order.version) !== orderVersion) throw new Error('Commerce order version mismatch');
+  if (order.stripe_session_id !== session.id) throw new Error('Commerce order Stripe session mismatch');
+  if (Number(order.total_inc_vat_minor || 0) !== Number(session.amount_total || 0)) {
+    throw new Error('Commerce order total mismatch');
+  }
+  if (String(order.currency || 'SEK').toLowerCase() !== String(session.currency || '').toLowerCase()) {
+    throw new Error('Commerce order currency mismatch');
+  }
+
+  const { data: lines, error: linesError } = await serviceClient
+    .from('commerce_order_lines')
+    .select('*')
+    .eq('commerce_order_id', orderId)
+    .order('sort_order');
+  if (linesError || !lines?.length) throw new Error(linesError?.message || 'Commerce order has no lines');
+
+  const customerEmail = String(session.customer_details?.email || order.guest_email || '').trim().toLowerCase();
+  const customerName = session.customer_details?.name || order.guest_name || null;
+  const customerPhone = session.customer_details?.phone || order.guest_phone || null;
+  let customerId = order.customer_id || null;
+  if (order.user_id) {
+    customerId = await resolveOrCreateCustomerIdForUser(serviceClient, order.user_id, order.venue_id, 'commerce_webhook');
+  } else {
+    if (!customerEmail) throw new Error('Guest commerce payment has no email');
+    customerId = await resolveOrCreateGuestCustomerByEmail(serviceClient, {
+      venueId: order.venue_id,
+      email: customerEmail,
+      displayName: customerName,
+      phone: customerPhone,
+      source: 'commerce_webhook',
+    });
+  }
+
+  const { data: financial, error: financialError } = await serviceClient.rpc('finalize_commerce_payment', {
+    p_order_id: orderId,
+    p_order_version: orderVersion,
+    p_stripe_session_id: session.id,
+    p_payment_intent_id: stripeId(session.payment_intent),
+    p_customer_id: customerId,
+    p_user_id: order.user_id || null,
+    p_customer_name: customerName,
+    p_customer_email: customerEmail,
+    p_customer_phone: customerPhone,
+    p_payment_method: receiptPaymentMethod(session),
+  }).maybeSingle();
+  if (financialError || !financial) throw new Error(financialError?.message || 'Commerce financial finalization failed');
+
+  const participation = lines.find((line: any) => line.commerce_kind === 'participation');
+  if (participation) {
+    if (!order.user_id) throw new Error('Commerce participation has no authenticated user');
+    const { data: activity } = await serviceClient
+      .from('activity_sessions')
+      .select('id, name, session_type')
+      .eq('id', participation.activity_session_id)
+      .maybeSingle();
+    const commit = await commitActivityRegistrationCapacity(serviceClient, {
+      p_venue_id: order.venue_id,
+      p_activity_session_id: participation.activity_session_id,
+      p_session_date: participation.session_date,
+      p_user_id: order.user_id,
+      p_customer_id: customerId,
+      p_status: 'confirmed',
+      p_price_paid_sek: Math.round(Number(participation.line_total_inc_vat_minor || 0)) / 100,
+      p_stripe_session_id: session.id,
+      p_source_type: 'commerce_order',
+      p_source_id: participation.id,
+      p_metadata: {
+        commerce_order_id: orderId,
+        commerce_order_line_id: participation.id,
+        pricing_reason: participation.resolver_snapshot?.pricing_reason || null,
+        session_type: activity?.session_type || 'open_play',
+        session_name: activity?.name || participation.product_name,
+      },
+      p_hold_id: participation.capacity_hold_id || null,
+    });
+
+    if (!commit.ok || !commit.registration_id) {
+      await serviceClient.from('commerce_orders').update({ status: 'attention' }).eq('id', orderId);
+      await serviceClient.from('commerce_order_lines')
+        .update({ fulfillment_status: 'attention' })
+        .eq('commerce_order_id', orderId)
+        .or(`id.eq.${participation.id},parent_line_id.eq.${participation.id}`);
+      await recordPaidCapacityConflict(serviceClient, {
+        venueId: order.venue_id,
+        scopeType: 'activity_session',
+        scopeId: participation.activity_session_id,
+        sessionDate: participation.session_date,
+        stripeSessionId: session.id,
+        paymentIntentId: stripeId(session.payment_intent),
+        receiptId: financial.receipt_id,
+        ledgerSourceType: 'commerce_order',
+        ledgerSourceId: orderId,
+        customerId,
+        userId: order.user_id,
+        title: `Betald commerce-order kunde inte leverera ${activity?.name || participation.product_name}`,
+        metadata: { commerce_order_id: orderId, commerce_order_line_id: participation.id },
+      });
+    } else {
+      await serviceClient.from('commerce_order_lines')
+        .update({ session_registration_id: commit.registration_id })
+        .eq('commerce_order_id', orderId)
+        .or(`id.eq.${participation.id},parent_line_id.eq.${participation.id}`);
+      await serviceClient.from('access_entitlements').upsert({
+        venue_id: order.venue_id,
+        user_id: order.user_id,
+        entitlement_type: 'session_ticket',
+        status: 'active',
+        source_type: 'session_ticket',
+        source_id: commit.registration_id,
+        activity_session_id: participation.activity_session_id,
+        session_date: participation.session_date,
+        valid_date: null,
+        includes_session_types: [activity?.session_type || 'open_play'],
+        metadata: {
+          commerce_order_id: orderId,
+          commerce_order_line_id: participation.id,
+          stripe_session_id: session.id,
+        },
+      }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
+      const roomId = participation.metadata?.chat_room_id;
+      if (roomId) {
+        await announceActivityRegistration(serviceClient, {
+          roomId,
+          userId: order.user_id,
+          activitySessionId: participation.activity_session_id,
+          sessionDate: participation.session_date,
+          stripeSessionId: session.id,
+        });
+      }
+    }
+  }
+
+  if (customerEmail) {
+    const receiptToken = randomCommerceToken();
+    await serviceClient.from('commerce_orders')
+      .update({ receipt_token_hash: await hashCommerceToken(receiptToken) })
+      .eq('id', orderId);
+    const { data: receipt } = await serviceClient.from('booking_receipts')
+      .select('receipt_number').eq('id', financial.receipt_id).maybeSingle();
+    await sendCommerceReceiptEmail({
+      email: customerEmail,
+      name: customerName,
+      receiptNumber: receipt?.receipt_number || null,
+      token: receiptToken,
+      pickupItems: lines.filter((line: any) => line.fulfillment_type === 'desk_pickup').map((line: any) => `${line.quantity > 1 ? `${line.quantity} × ` : ''}${line.product_name}`),
+    });
+  }
+}
+
+async function handleCommerceCheckoutExpired(session: any, serviceClient: any) {
+  const orderId = String(session?.metadata?.commerce_order_id || '').trim();
+  if (!orderId) return;
+  const { data: order, error: orderError } = await serviceClient.from('commerce_orders')
+    .select('id, status, stripe_session_id')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (orderError) throw new Error(orderError.message);
+  if (!order || order.stripe_session_id !== session.id || order.status !== 'checkout_pending') return;
+  const { data: lines, error: linesError } = await serviceClient.from('commerce_order_lines')
+    .select('capacity_hold_id')
+    .eq('commerce_order_id', order.id)
+    .not('capacity_hold_id', 'is', null);
+  if (linesError) throw new Error(linesError.message);
+  for (const line of lines || []) {
+    const { error: releaseError } = await serviceClient.rpc('release_capacity_hold', {
+      p_hold_id: line.capacity_hold_id,
+      p_reason: 'stripe_checkout_expired',
+    });
+    if (releaseError) throw new Error(releaseError.message);
+  }
+  const { error: expireError } = await serviceClient.from('commerce_orders')
+    .update({ status: 'expired', expires_at: new Date().toISOString() })
+    .eq('id', order.id)
+    .eq('status', 'checkout_pending');
+  if (expireError) throw new Error(expireError.message);
+}
 
 // ── Court booking ─────────────────────────────────────────────────────────────
 

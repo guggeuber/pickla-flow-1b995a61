@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, Star, Ticket, UserCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, ShoppingBag, Star, Ticket, UserCheck } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
@@ -16,6 +16,7 @@ import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { activityCheckInAvailable, useActivityNow } from "@/lib/activityTiming";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { activitySessionToPresentation } from "@/lib/sessionPresentation";
+import { createCommerceCart, fetchCommerceCatalog, formatCommerceMoney } from "@/lib/commerce";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -98,6 +99,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [loading, setLoading] = useState(false);
   const [interestLoading, setInterestLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState(false);
+  const [selectedCommerceProductIds, setSelectedCommerceProductIds] = useState<string[]>([]);
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
   const ticketMode = searchParams.get("ticket") === "1";
@@ -170,6 +172,19 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const room = data?.room;
   const occurrenceDate = data?.occurrence_date || requestedDate || session?.session_date || null;
   const venueId = session?.venue_id || data?.venue?.id;
+  const commerceCatalog = useQuery({
+    queryKey: ["commerce-catalog", venueId],
+    queryFn: () => fetchCommerceCatalog(venueId!),
+    enabled: !!venueId,
+    staleTime: 60000,
+  });
+  const sessionProductKey = String(session?.product_key || (session?.session_type === "open_play" ? "open_play_slot" : ""));
+  const commerceParticipationProduct = commerceCatalog.data?.products.find((product) => product.commerce_kind === "participation" && product.product_key === sessionProductKey);
+  const offeredRentalIds = new Set((commerceCatalog.data?.relationships || []).filter((relationship) => relationship.source_product_id === commerceParticipationProduct?.id).map((relationship) => relationship.target_product_id));
+  const commerceExtras = (commerceCatalog.data?.products || []).filter((product) => (
+    (product.commerce_kind === "rental" && offeredRentalIds.has(product.id)) || product.commerce_kind === "merchandise"
+  ));
+  const commercePilotEnabled = Boolean(commerceParticipationProduct);
   const sessionCourtIds = useMemo(() => (
     Array.isArray(session?.court_ids) ? session.court_ids.filter(Boolean) : []
   ), [session?.court_ids]);
@@ -259,6 +274,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
   const currentRegistration = user?.id ? registrations.find((row: any) => row.user_id === user.id) : null;
+  const { data: participationItems = [] } = useQuery({
+    queryKey: ["commerce-participation-items", currentRegistration?.id],
+    enabled: !!currentRegistration?.id && !!user?.id,
+    queryFn: async () => {
+      const result = await apiGet<{ items: Array<{ id: string; product_name: string; quantity: number; fulfillment_status: string }> }>("api-commerce", "participation-items", { registrationId: currentRegistration.id });
+      return result.items || [];
+    },
+  });
   const isRegistered = !!currentRegistration;
   const currentRegistrationMetadata = currentRegistration?.metadata && typeof currentRegistration.metadata === "object" ? currentRegistration.metadata : {};
   const userIsPlayingHost = Boolean(
@@ -485,6 +508,29 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     if (loading) return;
     setLoading(true);
     try {
+      if (commercePilotEnabled && commerceParticipationProduct) {
+        const extras = commerceExtras.filter((product) => selectedCommerceProductIds.includes(product.id));
+        const cart = await createCommerceCart({
+          venueId: session.venue_id,
+          source: "activity_drawer",
+          items: [
+            {
+              product_id: commerceParticipationProduct.id,
+              quantity: 1,
+              activity_session_id: sessionId,
+              session_date: occurrenceDate,
+            },
+            ...extras.map((product) => ({
+              product_id: product.id,
+              quantity: 1,
+              ...(product.commerce_kind === "rental" ? { parent_product_id: commerceParticipationProduct.id } : {}),
+            })),
+          ],
+        });
+        if (!cart.cart_token) throw new Error("Varukorgen kunde inte skapas");
+        navigate(`/cart?token=${encodeURIComponent(cart.cart_token)}`);
+        return;
+      }
       const result = await apiPost("api-bookings", "create-checkout", {
         product_type: "activity_ticket",
         amount_sek: backendPricing.effectivePriceSek ?? backendPricing.finalAmountSek ?? 0,
@@ -786,7 +832,35 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </div>
           ) : null}
 
+          {isRegistered && participationItems.length > 0 ? (
+            <div className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-3">
+              {participationItems.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-[13px] font-bold text-emerald-950">
+                  <span>{item.product_name} {item.quantity > 1 ? `· ${item.quantity} st` : ""} ✓</span>
+                  <span className="text-[11px] text-emerald-800/70">{item.fulfillment_status === "collected" ? "Uthämtad" : "Hämtas vid disken"}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={priceContextLine} />
+
+          {!isRegistered && commercePilotEnabled && commerceExtras.length > 0 ? (
+            <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
+              <div className="mb-2 flex items-center gap-2"><ShoppingBag className="h-4 w-4" /><p className="text-[13px] font-black">Lägg till i samma köp</p></div>
+              <div className="grid gap-2">
+                {commerceExtras.map((product) => {
+                  const selected = selectedCommerceProductIds.includes(product.id);
+                  return (
+                    <label key={product.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-white px-3 py-3 text-[13px] font-bold">
+                      <span><span className="block">{product.name}</span><span className="block text-[11px] font-semibold text-neutral-500">Hämtas vid disken</span></span>
+                      <span className="flex items-center gap-3"><span>{formatCommerceMoney(product.base_price_sek * 100)}</span><input type="checkbox" checked={selected} onChange={() => setSelectedCommerceProductIds((current) => selected ? current.filter((id) => id !== product.id) : [...current, product.id])} className="h-5 w-5 accent-slate-950" /></span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
             {pricingPending && (

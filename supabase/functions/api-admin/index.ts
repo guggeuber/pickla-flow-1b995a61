@@ -33,6 +33,7 @@ function adminEntityTableForPath(path: string) {
     hours: 'opening_hours',
     pricing: 'pricing_rules',
     products: 'access_products',
+    'product-relationships': 'product_relationships',
     'activity-series': 'activity_series',
     'activity-sessions': 'activity_sessions',
     links: 'venue_links',
@@ -58,6 +59,7 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'hours') return body.dayOfWeek || body.day_of_week || null;
   if (path === 'pricing') return body.ruleId || url.searchParams.get('ruleId');
   if (path === 'products') return body.productId || body.product_key || url.searchParams.get('productId');
+  if (path === 'product-relationships') return body.relationshipId || `${body.source_product_id || ''}:${body.target_product_id || ''}`;
   if (path === 'activity-series') return body.seriesId || url.searchParams.get('seriesId');
   if (path === 'activity-sessions') return body.sessionId || url.searchParams.get('sessionId');
   if (path === 'links') return body.linkId || url.searchParams.get('linkId');
@@ -3465,6 +3467,7 @@ Deno.serve(async (req) => {
         day_pass: 'Day Pass',
         membership: 'Membership',
         membership_invoice: 'Membership Invoice',
+        commerce_order: 'Commerce Order',
         zettle: 'Zettle',
       };
 
@@ -4861,7 +4864,11 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === 'POST' && path === 'products') {
-      const { venueId: _v, product_key, name, description, product_kind, session_type, base_price_sek, vat_rate, grants, sort_order, is_active } = await req.json();
+      const {
+        venueId: _v, product_key, name, description, product_kind, session_type,
+        base_price_sek, vat_rate, grants, sort_order, is_active, commerce_kind,
+        fulfillment_type, resolver_rules, commerce_enabled,
+      } = await req.json();
       if (!product_key || !name) return errorResponse('Missing product_key or name');
       const { data, error: e } = await admin.from('access_products').upsert({
         venue_id: venueId,
@@ -4875,6 +4882,10 @@ Deno.serve(async (req) => {
         grants: grants || {},
         sort_order: sort_order ?? 0,
         is_active: is_active ?? true,
+        commerce_kind: commerce_kind || null,
+        fulfillment_type: fulfillment_type || null,
+        resolver_rules: resolver_rules || {},
+        commerce_enabled: commerce_enabled ?? false,
       }, { onConflict: 'venue_id,product_key' }).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data, 201);
@@ -4883,8 +4894,15 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'products') {
       const { productId, ...updates } = await req.json();
       if (!productId) return errorResponse('Missing productId');
+      const allowed = new Set([
+        'name', 'description', 'product_kind', 'session_type', 'base_price_sek',
+        'vat_rate', 'grants', 'sort_order', 'is_active', 'commerce_kind',
+        'fulfillment_type', 'resolver_rules', 'commerce_enabled',
+      ]);
+      const safeUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => allowed.has(key)));
+      if (Object.keys(safeUpdates).length === 0) return errorResponse('No supported product fields');
       const { data, error: e } = await admin.from('access_products')
-        .update(updates).eq('id', productId).eq('venue_id', venueId).select().single();
+        .update(safeUpdates).eq('id', productId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
@@ -4893,6 +4911,44 @@ Deno.serve(async (req) => {
       const productId = url.searchParams.get('productId');
       if (!productId) return errorResponse('Missing productId');
       const { error: e } = await admin.from('access_products').delete().eq('id', productId).eq('venue_id', venueId);
+      if (e) return errorResponse(e.message);
+      return jsonResponse({ ok: true });
+    }
+
+    if (req.method === 'GET' && path === 'product-relationships') {
+      const { data, error: e } = await admin.from('product_relationships')
+        .select('*').eq('venue_id', venueId).order('sort_order').order('created_at');
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 200, 15);
+    }
+
+    if (req.method === 'POST' && path === 'product-relationships') {
+      const body = await req.json();
+      const sourceProductId = String(body.source_product_id || '');
+      const targetProductId = String(body.target_product_id || '');
+      if (!sourceProductId || !targetProductId) return errorResponse('Missing product relationship');
+      const { data: ownedProducts, error: ownedError } = await admin.from('access_products')
+        .select('id').eq('venue_id', venueId).in('id', [sourceProductId, targetProductId]);
+      if (ownedError) return errorResponse(ownedError.message);
+      if ((ownedProducts || []).length !== 2) return errorResponse('Products must belong to the selected venue', 403);
+      const { data, error: e } = await admin.from('product_relationships').upsert({
+        venue_id: venueId,
+        source_product_id: sourceProductId,
+        target_product_id: targetProductId,
+        relationship_type: 'offered_with',
+        is_active: body.is_active ?? true,
+        sort_order: Number(body.sort_order || 0),
+        metadata: body.metadata || {},
+      }, { onConflict: 'venue_id,source_product_id,target_product_id,relationship_type' }).select().single();
+      if (e) return errorResponse(e.message);
+      return jsonResponse(data, 201);
+    }
+
+    if (req.method === 'DELETE' && path === 'product-relationships') {
+      const relationshipId = url.searchParams.get('relationshipId');
+      if (!relationshipId) return errorResponse('Missing relationshipId');
+      const { error: e } = await admin.from('product_relationships')
+        .delete().eq('id', relationshipId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
     }

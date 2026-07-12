@@ -16,6 +16,18 @@ interface AccessProduct {
   vat_rate: number;
   is_active: boolean;
   sort_order: number;
+  commerce_kind: "participation" | "rental" | "merchandise" | null;
+  fulfillment_type: "participation" | "desk_pickup" | null;
+  commerce_enabled: boolean;
+  resolver_rules?: Record<string, unknown>;
+}
+
+interface ProductRelationship {
+  id: string;
+  source_product_id: string;
+  target_product_id: string;
+  relationship_type: "offered_with";
+  is_active: boolean;
 }
 
 interface MembershipTier {
@@ -37,6 +49,8 @@ const PRODUCT_KINDS = [
   { key: "session_with_day_access", label: "Session + Day Pass" },
   { key: "voucher", label: "Voucher / gåva" },
   { key: "membership", label: "Membership" },
+  { key: "rental", label: "Hyra" },
+  { key: "merchandise", label: "Vara" },
 ];
 
 const SESSION_TYPES = [
@@ -107,6 +121,9 @@ const ProductPriceCard = ({
 }) => {
   const [basePrice, setBasePrice] = useState(String(product.base_price_sek ?? 0));
   const [name, setName] = useState(product.name);
+  const [vatRate, setVatRate] = useState(String(product.vat_rate ?? 0));
+  const [commerceKind, setCommerceKind] = useState(product.commerce_kind || "");
+  const [fulfillmentType, setFulfillmentType] = useState(product.fulfillment_type || "");
   const isDayAccess = product.product_key === "day_access";
   const isSessionPricedProduct = product.product_kind === "session_ticket" && product.product_key !== "day_access";
   const hasBadDayAccessPrice = isDayAccess && Number(product.base_price_sek || 0) <= 0;
@@ -187,12 +204,39 @@ const ProductPriceCard = ({
                 productId: product.id,
                 name: name.trim() || product.name,
                 base_price_sek: Math.max(0, Math.round(Number(basePrice || 0))),
+                vat_rate: Math.max(0, Number(vatRate || 0)),
+                commerce_kind: commerceKind || null,
+                fulfillment_type: fulfillmentType || null,
               })}
               className="rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground flex items-center justify-center gap-2"
             >
               <Save className="w-3.5 h-3.5" />
               Spara pris
             </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <label className="grid gap-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Commerce-typ
+              <select value={commerceKind} onChange={(event) => setCommerceKind(event.target.value)} className="rounded-xl px-3 py-2 text-xs normal-case" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+                <option value="">Inte klassificerad</option>
+                <option value="participation">Participation</option>
+                <option value="rental">Rental</option>
+                <option value="merchandise">Merchandise</option>
+              </select>
+            </label>
+            <label className="grid gap-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Leverans
+              <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value)} className="rounded-xl px-3 py-2 text-xs normal-case" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+                <option value="">Inte vald</option>
+                <option value="participation">Participation</option>
+                <option value="desk_pickup">Hämtas vid desk</option>
+              </select>
+            </label>
+            <label className="grid gap-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Moms %
+              <input type="number" min="0" max="100" step="0.01" value={vatRate} onChange={(event) => setVatRate(event.target.value)} className="rounded-xl px-3 py-2 text-xs normal-case" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }} />
+            </label>
           </div>
 
           <div className="rounded-xl p-3" style={{ background: "hsl(var(--surface-2))" }}>
@@ -222,6 +266,13 @@ const ProductPriceCard = ({
           >
             {product.is_active ? "Aktiv" : "Av"}
           </button>
+          <button
+            onClick={() => onUpdate({ productId: product.id, commerce_enabled: !product.commerce_enabled })}
+            disabled={!product.commerce_enabled && (!product.commerce_kind || !product.fulfillment_type)}
+            className={`text-[10px] px-2 py-1 rounded-full font-semibold disabled:opacity-40 ${product.commerce_enabled ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}
+          >
+            {product.commerce_enabled ? "Commerce på" : "Commerce av"}
+          </button>
           <button onClick={() => { if (confirm("Ta bort produkten?")) onDelete(product.id); }} className="text-muted-foreground/50 hover:text-destructive">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -239,6 +290,9 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
   const [kind, setKind] = useState("day_access");
   const [sessionType, setSessionType] = useState("");
   const [price, setPrice] = useState("");
+  const [vatRate, setVatRate] = useState("6");
+  const [relationshipSource, setRelationshipSource] = useState("");
+  const [relationshipTarget, setRelationshipTarget] = useState("");
 
   const { data: products, isLoading } = useQuery<AccessProduct[]>({
     queryKey: ["admin-access-products", venueId],
@@ -248,6 +302,10 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
     queryKey: ["membership-tiers", venueId],
     enabled: !!venueId,
     queryFn: () => apiGet("api-memberships", "tiers", { venueId, includeHidden: "true" }),
+  });
+  const { data: relationships = [] } = useQuery<ProductRelationship[]>({
+    queryKey: ["admin-product-relationships", venueId],
+    queryFn: () => apiGet("api-admin", "product-relationships", { venueId }),
   });
   const tierPricingQueries = useQueries({
     queries: (tiers || []).map((tier) => ({
@@ -266,7 +324,7 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin-access-products", venueId] });
       toast.success("Produkt sparad");
-      setName(""); setProductKey(""); setDescription(""); setPrice("");
+      setName(""); setProductKey(""); setDescription(""); setPrice(""); setVatRate("6");
     },
     onError: (e: any) => toast.error(e.message),
   });
@@ -289,6 +347,28 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const saveRelationship = useMutation({
+    mutationFn: () => apiPost("api-admin", "product-relationships", {
+      venueId,
+      source_product_id: relationshipSource,
+      target_product_id: relationshipTarget,
+      is_active: true,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-product-relationships", venueId] });
+      toast.success("Tillval kopplat");
+      setRelationshipSource("");
+      setRelationshipTarget("");
+    },
+    onError: (error: any) => toast.error(error.message),
+  });
+
+  const deleteRelationship = useMutation({
+    mutationFn: (relationshipId: string) => apiDelete("api-admin", "product-relationships", { venueId, relationshipId }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-product-relationships", venueId] }),
+    onError: (error: any) => toast.error(error.message),
+  });
+
   const handleCreate = () => {
     const safeKey = productKey || keyFromName(name);
     if (!name.trim() || !safeKey) {
@@ -304,8 +384,11 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
       product_kind: kind,
       session_type: sessionType || null,
       base_price_sek: Math.round(Number(price || 0)),
-      vat_rate: 6,
-      grants: {
+      vat_rate: Number(vatRate || 0),
+      commerce_kind: kind === "rental" ? "rental" : kind === "merchandise" ? "merchandise" : null,
+      fulfillment_type: kind === "rental" || kind === "merchandise" ? "desk_pickup" : null,
+      commerce_enabled: false,
+      grants: kind === "rental" || kind === "merchandise" ? {} : {
         entitlement_type: kind === "voucher" ? "voucher" : kind === "session_ticket" ? "session_ticket" : "day_access",
         includes_session_types: sessionType ? [sessionType] : ["open_play"],
         includes_session_ticket: kind === "session_with_day_access",
@@ -369,7 +452,7 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
             {SESSION_TYPES.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
         </div>
-        <div className="grid grid-cols-[1fr_auto] gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px_auto]">
           <input
             type="number"
             placeholder="Pris SEK"
@@ -378,11 +461,50 @@ const AdminProducts = ({ venueId }: { venueId: string }) => {
             className="rounded-xl px-3 py-2.5 text-sm outline-none"
             style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
           />
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            placeholder="Moms %"
+            value={vatRate}
+            onChange={(event) => setVatRate(event.target.value)}
+            className="rounded-xl px-3 py-2.5 text-sm outline-none"
+            style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}
+          />
           <button onClick={handleCreate} disabled={saveProduct.isPending} className="rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-50 flex items-center gap-2">
             {saveProduct.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
             Lägg till
           </button>
         </div>
+      </div>
+
+      <div className="glass-card rounded-2xl p-4 space-y-3">
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Tillval till aktivitet</p>
+          <p className="mt-1 text-xs text-muted-foreground">Kopplingen avgör vilka hyresprodukter som får ligga i samma köp som biljetten.</p>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+          <select value={relationshipSource} onChange={(event) => setRelationshipSource(event.target.value)} className="rounded-xl px-3 py-2.5 text-xs" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+            <option value="">Aktivitetsprodukt</option>
+            {(products || []).filter((product) => product.commerce_kind === "participation").map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+          </select>
+          <select value={relationshipTarget} onChange={(event) => setRelationshipTarget(event.target.value)} className="rounded-xl px-3 py-2.5 text-xs" style={{ background: "hsl(var(--surface-2))", border: "1px solid hsl(var(--border))" }}>
+            <option value="">Hyresprodukt</option>
+            {(products || []).filter((product) => product.commerce_kind === "rental").map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+          </select>
+          <button type="button" onClick={() => saveRelationship.mutate()} disabled={!relationshipSource || !relationshipTarget || saveRelationship.isPending} className="rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground disabled:opacity-40">Koppla</button>
+        </div>
+        {relationships.map((relationship) => {
+          const source = (products || []).find((product) => product.id === relationship.source_product_id);
+          const target = (products || []).find((product) => product.id === relationship.target_product_id);
+          return (
+            <div key={relationship.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-xs" style={{ background: "hsl(var(--surface-2))" }}>
+              <span>{source?.name || "Produkt"} + {target?.name || "Tillval"}</span>
+              <button type="button" onClick={() => deleteRelationship.mutate(relationship.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
+          );
+        })}
       </div>
 
       {missingRequiredProducts.length > 0 && (

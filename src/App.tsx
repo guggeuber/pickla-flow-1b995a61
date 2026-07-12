@@ -73,6 +73,9 @@ import InvestPage from "./pages/InvestPage";
 import InvestMemoPage from "./pages/InvestMemoPage";
 import AdminInvestorPage from "./pages/AdminInvestorPage";
 import PulsePage from "./pages/PulsePage";
+import CommerceCartPage from "./pages/CommerceCartPage";
+import CommerceOrderPage from "./pages/CommerceOrderPage";
+import CommerceShopPage from "./pages/CommerceShopPage";
 import { Loader2 } from "lucide-react";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { enforceCanonicalHost } from "@/lib/canonicalOrigin";
@@ -113,6 +116,10 @@ function AppRoutes() {
             <Route path="/invest" element={<InvestPage />} />
             <Route path="/invest/memo/:token" element={<InvestMemoPage />} />
             <Route path="/pulse/:token" element={<PulsePage />} />
+            <Route path="/shop" element={<CommerceShopPage />} />
+            <Route path="/cart" element={<CommerceCartPage />} />
+            <Route path="/commerce/confirmed" element={<CommerceOrderPage />} />
+            <Route path="/order/:token" element={<CommerceOrderPage />} />
             <Route path="/hub/admin/investors" element={<ProtectedRoute><AdminInvestorPage /></ProtectedRoute>} />
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/hub" element={<HubPage />} />
