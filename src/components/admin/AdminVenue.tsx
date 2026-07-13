@@ -3,11 +3,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAdminVenue, useAdminMutation } from "@/hooks/useAdmin";
 import { apiGet, apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Save, Upload, X } from "lucide-react";
+import { Loader2, Save, ShoppingBag, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 
 const CATEGORIES = [
   { key: "open_play", defaultName: "Open Play" },
@@ -173,7 +174,7 @@ function EventCategoriesSection({ venueId }: { venueId: string }) {
 
 const AdminVenue = ({ venueId }: { venueId: string }) => {
   const { data: venue, isLoading } = useAdminVenue(venueId);
-  const { updateVenue } = useAdminMutation(venueId);
+  const { updateVenue, updateVenueCommerce } = useAdminMutation(venueId);
   const [form, setForm] = useState<Record<string, string>>({});
   const [initialized, setInitialized] = useState(false);
   const [uploadingHeroImage, setUploadingHeroImage] = useState(false);
@@ -281,6 +282,36 @@ const AdminVenue = ({ venueId }: { venueId: string }) => {
       </div>
 
       {/* Divider */}
+      <div className="h-px bg-border" />
+
+      <section className="space-y-3" aria-labelledby="venue-commerce-title">
+        <div className="flex items-center gap-2">
+          <ShoppingBag className="h-4 w-4 text-primary" />
+          <p id="venue-commerce-title" className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Commerce</p>
+        </div>
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-[hsl(var(--surface-1))] p-4">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground">Enable online sales</p>
+            <p className="mt-1 text-xs text-muted-foreground">Allows this venue to sell products through the Pickla Store.</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-[10px] font-bold text-muted-foreground">OFF</span>
+            <Switch
+              checked={venue?.commerce_enabled === true}
+              disabled={updateVenueCommerce.isPending}
+              onCheckedChange={(enabled) => {
+                updateVenueCommerce.mutate(enabled, {
+                  onSuccess: () => toast.success(enabled ? "Online sales enabled" : "Online sales disabled"),
+                  onError: (error) => toast.error(error.message),
+                });
+              }}
+              aria-label="Enable online sales"
+            />
+            <span className="text-[10px] font-bold text-muted-foreground">ON</span>
+          </div>
+        </div>
+      </section>
+
       <div className="h-px bg-border" />
 
       <div className="space-y-3">

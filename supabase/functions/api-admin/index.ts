@@ -9,7 +9,7 @@ const ZETTLE_OAUTH_BASE_URL = 'https://oauth.zettle.com';
 const ZETTLE_PURCHASE_BASE_URL = 'https://purchase.izettle.com';
 const ZETTLE_SCOPES = ['READ:PURCHASE'];
 
-const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact', 'stripe-invoice-maintenance', 'zettle-backfill']);
+const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact', 'stripe-invoice-maintenance', 'zettle-backfill', 'venue-commerce']);
 const FINANCIAL_MAINTENANCE_TOKEN_TTL_MS = 10 * 60 * 1000;
 const SENSITIVE_AUDIT_KEYS = new Set([
   'access_token',
@@ -4236,8 +4236,29 @@ Deno.serve(async (req) => {
 
     if (req.method === 'PATCH' && path === 'venue') {
       const body = await req.json();
+      if (Object.prototype.hasOwnProperty.call(body, 'commerce_enabled')) {
+        return errorResponse('Use the Venue Commerce setting to change online sales availability', 400);
+      }
       const { data, error: e } = await admin.from('venues').update(body).eq('id', venueId).select().single();
       if (e) return errorResponse(e.message);
+      return jsonResponse(data);
+    }
+
+    if (req.method === 'PATCH' && path === 'venue-commerce') {
+      const body = await req.json();
+      if (typeof body.enabled !== 'boolean') return errorResponse('Missing enabled setting', 400);
+
+      const forwardedFor = req.headers.get('x-forwarded-for');
+      const ip = forwardedFor?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null;
+      const { data, error: commerceError } = await admin.rpc('set_venue_commerce_enabled', {
+        p_venue_id: venueId,
+        p_enabled: body.enabled,
+        p_actor_user_id: userId,
+        p_request_id: req.headers.get('x-request-id') || crypto.randomUUID(),
+        p_ip: ip,
+        p_user_agent: req.headers.get('user-agent') || null,
+      }).maybeSingle();
+      if (commerceError) return errorResponse(commerceError.message, commerceError.code === '42501' ? 403 : 400);
       return jsonResponse(data);
     }
 

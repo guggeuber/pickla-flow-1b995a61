@@ -580,6 +580,19 @@ export function useAdminMutation(venueId: string | undefined) {
     onSuccess: invalidate("venue"),
   });
 
+  const updateVenueCommerce = useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiPatch<{ commerce_enabled: boolean }>("api-admin", "venue-commerce", { venueId, enabled }),
+    onSuccess: (data) => {
+      qc.setQueryData(["admin-venue", venueId], (current: Record<string, unknown> | undefined) => (
+        current ? { ...current, commerce_enabled: data.commerce_enabled } : current
+      ));
+      qc.invalidateQueries({ queryKey: ["admin-venue", venueId] });
+      qc.invalidateQueries({ queryKey: ["admin-products", venueId] });
+      qc.invalidateQueries({ queryKey: ["commerce-catalog", venueId] });
+    },
+  });
+
   const createVenue = useMutation({
     mutationFn: (body: { name: string; slug: string; city?: string; address?: string }) =>
       apiPost("api-admin", "venues", body),
@@ -594,6 +607,6 @@ export function useAdminMutation(venueId: string | undefined) {
     saveHours,
     addPricing, updatePricing, deletePricing,
     addLink, updateLink, deleteLink, reorderLinks,
-    updateVenue, createVenue,
+    updateVenue, updateVenueCommerce, createVenue,
   };
 }

@@ -491,7 +491,7 @@ Deno.serve(async (req) => {
         message: venue.commerce_enabled === true ? null : 'Pickla Store är inte aktiverad för denna anläggning.',
         products: availableProducts,
         relationships: relationships || [],
-      }, 200, 30);
+      }, 200, 0);
     }
 
     if (req.method === 'POST' && path === 'cart') {
