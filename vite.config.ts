@@ -12,6 +12,14 @@ export default defineConfig(({ mode }) => {
   const themeColor = "#F8FAFC";
 
   return {
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        invest: path.resolve(__dirname, "invest.html"),
+      },
+    },
+  },
   server: {
     host: "::",
     port: 8080,

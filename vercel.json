@@ -86,6 +86,7 @@
     }
   ],
   "rewrites": [
+    { "source": "/invest", "destination": "/invest.html" },
     {
       "source": "/p/:sessionId",
       "has": [
