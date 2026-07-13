@@ -154,9 +154,10 @@ async function loadInvestorSettings(admin: ReturnType<typeof getServiceClient>) 
     .limit(1)
     .maybeSingle();
   if (error) {
-    console.warn('investor_settings unavailable, using defaults', error.message);
-    return normalizeSettings(null);
+    console.error('investor_settings query failed', error.message);
+    throw new Error('Investor settings unavailable');
   }
+  if (!data) throw new Error('Investor settings unavailable');
   return normalizeSettings(data as Record<string, unknown> | null);
 }
 

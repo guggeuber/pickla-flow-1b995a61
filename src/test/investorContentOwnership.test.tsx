@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { mergeInvestorSettings, type InvestorSettings } from "@/lib/investorContent";
+import { investorDefaults, mergeInvestorSettings, type InvestorSettings } from "@/lib/investorContent";
 import AdminInvestorPage from "@/pages/AdminInvestorPage";
 import InvestMemoPage from "@/pages/InvestMemoPage";
 import InvestPage from "@/pages/InvestPage";
@@ -44,6 +44,65 @@ afterEach(() => {
 });
 
 describe("investor content ownership", () => {
+  it("shows only a stable skeleton until database content and assets are ready", async () => {
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    const request = new Promise((resolve) => { resolveRequest = resolve; });
+    const databaseSettings = mergeInvestorSettings({
+      headline: "Database investor headline",
+      subheadline: "Database investor subheadline",
+      public_thesis: "Database investor thesis",
+    });
+    const heroAsset = {
+      id: "hero-1",
+      organization_id: null,
+      asset_type: "hero" as const,
+      title: "Database hero",
+      description: null,
+      storage_path: "investor/database-hero.jpg",
+      public_url: "https://example.com/database-hero.jpg",
+      sort_order: 0,
+      is_active: true,
+    };
+
+    mocks.apiGet.mockReturnValue(request);
+    render(<InvestPage />);
+
+    expect(screen.getByTestId("investor-page-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText(investorDefaults.headline!)).not.toBeInTheDocument();
+    expect(screen.queryByText("Database investor headline")).not.toBeInTheDocument();
+    expect(mocks.apiGet).toHaveBeenCalledTimes(1);
+
+    resolveRequest?.({ settings: databaseSettings, assets: [heroAsset] });
+
+    expect(await screen.findByText("Database investor headline")).toBeInTheDocument();
+    expect(screen.queryByTestId("investor-page-skeleton")).not.toBeInTheDocument();
+    const heroImage = screen.getByRole("img", { name: "Database hero" });
+    expect(screen.getByTestId("investor-hero-image")).toHaveClass("aspect-[4/3]");
+    expect(screen.getByTestId("investor-hero-image-skeleton")).toBeInTheDocument();
+
+    fireEvent.load(heroImage);
+    await waitFor(() => expect(screen.queryByTestId("investor-hero-image-skeleton")).not.toBeInTheDocument());
+    expect(mocks.apiGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an unavailable state instead of fallback copy when loading fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let rejectRequest: ((reason?: unknown) => void) | undefined;
+    const request = new Promise((_resolve, reject) => { rejectRequest = reject; });
+    mocks.apiGet.mockReturnValue(request);
+
+    render(<InvestPage />);
+
+    expect(screen.getByTestId("investor-page-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText(investorDefaults.headline!)).not.toBeInTheDocument();
+
+    rejectRequest?.(new Error("Network unavailable"));
+
+    expect(await screen.findByRole("heading", { name: "Investor content unavailable" })).toBeInTheDocument();
+    expect(screen.queryByText(investorDefaults.headline!)).not.toBeInTheDocument();
+    expect(mocks.apiGet).toHaveBeenCalledTimes(1);
+  });
+
   it("saves a memo section in admin and renders it with unchanged offer values", async () => {
     let persistedSettings: InvestorSettings = mergeInvestorSettings({
       id: "settings-1",
