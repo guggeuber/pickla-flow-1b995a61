@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Loader2, Package, Plus, Search, Save, X } from "lucide-react";
+import { Archive, ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Loader2, Package, Plus, RotateCcw, Search, Save, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -183,9 +183,6 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
   const relationships = useMemo(() => relationshipsQuery.data || [], [relationshipsQuery.data]);
   const selectedProduct = products.find((product) => product.id === selectedProductId) || null;
 
-  useEffect(() => {
-    if (selectedProduct) setDraft(draftFromProduct(selectedProduct));
-  }, [selectedProduct]);
   useEffect(() => setPage(1), [filters]);
 
   const invalidateCatalog = () => Promise.all([
@@ -211,12 +208,26 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
         body.standalone_enabled = draft.standaloneEnabled;
         body.activity_addon_enabled = draft.activityAddonEnabled;
       }
-      if (selectedProduct) return apiPatch("api-admin", "products", { venueId, productId: selectedProduct.id, ...body });
-      const baseKey = keyFromName(draft.name) || "produkt";
-      const productKey = products.some((product) => product.product_key === baseKey) ? `${baseKey}_${Date.now().toString(36)}` : baseKey;
-      return apiPost("api-admin", "products", { venueId, product_key: productKey, sort_order: products.length * 10, ...body });
+      let saved: AccessProduct;
+      if (selectedProduct) {
+        saved = await apiPatch<AccessProduct>("api-admin", "products", { venueId, productId: selectedProduct.id, ...body });
+      } else {
+        const baseKey = keyFromName(draft.name) || "produkt";
+        const productKey = products.some((product) => product.product_key === baseKey) ? `${baseKey}_${Date.now().toString(36)}` : baseKey;
+        saved = await apiPost<AccessProduct>("api-admin", "products", { venueId, product_key: productKey, sort_order: products.length * 10, ...body });
+      }
+      if (saved.status !== draft.status || saved.is_active !== (draft.status === "active")) {
+        throw new Error("Statusändringen kunde inte sparas. Ladda om och försök igen.");
+      }
+      return saved;
     },
     onSuccess: async (saved: AccessProduct) => {
+      queryClient.setQueryData<AccessProduct[]>(["admin-access-products", venueId], (current) => {
+        if (!current) return [saved];
+        const exists = current.some((product) => product.id === saved.id);
+        return exists ? current.map((product) => product.id === saved.id ? saved : product) : [...current, saved];
+      });
+      setDraft(draftFromProduct(saved));
       await invalidateCatalog();
       setCreating(false);
       setSelectedProductId(saved.id);
@@ -248,6 +259,11 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
     setSelectedProductId(null);
     setDraft(emptyDraft());
     setCreating(true);
+  };
+  const openProduct = (product: AccessProduct) => {
+    setCreating(false);
+    setSelectedProductId(product.id);
+    setDraft(draftFromProduct(product));
   };
   const closeDrawer = () => {
     setCreating(false);
@@ -295,7 +311,7 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
         {visibleProducts.length === 0 ? (
           <div className="px-4 py-12 text-center"><Package className="mx-auto h-6 w-6 text-muted-foreground" /><p className="mt-2 text-sm text-muted-foreground">Inga produkter matchar urvalet.</p></div>
         ) : visibleProducts.map((product) => (
-          <button key={product.id} type="button" onClick={() => { setCreating(false); setSelectedProductId(product.id); }} className="grid w-full grid-cols-[1fr_auto] items-center gap-3 border-b border-border px-3 py-3 text-left last:border-0 hover:bg-muted/40 sm:grid-cols-[minmax(0,1fr)_120px_150px_150px_auto]">
+          <button key={product.id} type="button" onClick={() => openProduct(product)} className="grid w-full grid-cols-[1fr_auto] items-center gap-3 border-b border-border px-3 py-3 text-left last:border-0 hover:bg-muted/40 sm:grid-cols-[minmax(0,1fr)_120px_150px_150px_auto]">
             <span className="min-w-0"><span className="block truncate text-sm font-bold">{product.name}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground sm:hidden">{productSalesModeLabel(product)} · {fulfillmentLabel(product.fulfillment_presentation)}</span></span>
             <span className="text-sm font-bold sm:text-right">{formatPrice(product.base_price_sek)}</span>
             <span className="hidden text-xs text-muted-foreground sm:block">{product.sales_state_label || statusLabel(product.status)}</span>
@@ -320,7 +336,7 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
               <label className="block text-xs font-semibold text-muted-foreground">Namn<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label>
               <label className="block text-xs font-semibold text-muted-foreground">Beskrivning<textarea value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} rows={3} className={`${inputClass} mt-1 resize-none text-foreground`} /></label>
               <div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-muted-foreground">Pris<input type="number" min="0" value={draft.price} onChange={(event) => setDraft((current) => ({ ...current, price: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label><label className="block text-xs font-semibold text-muted-foreground">Moms %<input type="number" min="0" max="100" step="0.01" value={draft.vatRate} onChange={(event) => setDraft((current) => ({ ...current, vatRate: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label></div>
-              <label className="block text-xs font-semibold text-muted-foreground">Status<select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ProductCatalogStatus }))} className={`${inputClass} mt-1 text-foreground`}><option value="draft">Utkast</option><option value="active">Aktiv</option><option value="archived">Arkiverad</option></select></label>
+              <label className="block text-xs font-semibold text-muted-foreground">Status<select aria-label="Produktstatus" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ProductCatalogStatus }))} className={`${inputClass} mt-1 text-foreground`}><option value="draft">Utkast</option><option value="active">Aktiv</option><option value="archived">Arkiverad</option></select></label>
               <div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-muted-foreground">Kategori<input value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} placeholder="T.ex. Hyra" className={`${inputClass} mt-1 text-foreground`} /></label><label className="block text-xs font-semibold text-muted-foreground">Sport<input value={draft.sport} onChange={(event) => setDraft((current) => ({ ...current, sport: event.target.value }))} placeholder="Valfritt" className={`${inputClass} mt-1 text-foreground`} /></label></div>
               <label className="block text-xs font-semibold text-muted-foreground">Bildlänk<div className="relative mt-1"><ImageIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={draft.imageUrl} onChange={(event) => setDraft((current) => ({ ...current, imageUrl: event.target.value }))} placeholder="https://…" className={`${inputClass} pl-9 text-foreground`} /></div></label>
             </section>
@@ -337,9 +353,13 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
               )}
               {selectedProduct && (
                 <div className={`rounded-lg border p-3 ${selectedProduct.sales_block_reason ? "border-amber-500/30 bg-amber-500/10" : "border-border bg-muted/30"}`}>
-                  <p className="text-sm font-bold">{selectedProduct.sales_state_label || statusLabel(selectedProduct.status)}</p>
-                  {selectedProduct.sales_block_reason && <p className="mt-1 text-xs text-muted-foreground">{selectedProduct.sales_block_reason}</p>}
-                  {selectedProduct.store_eligible && selectedProduct.store_path && (
+                  <p className="text-sm font-bold">{draft.status !== selectedProduct.status ? statusLabel(draft.status) : selectedProduct.sales_state_label || statusLabel(selectedProduct.status)}</p>
+                  {draft.status !== selectedProduct.status ? (
+                    <p className="mt-1 text-xs text-muted-foreground">Spara för att statusändringen ska börja gälla.</p>
+                  ) : selectedProduct.sales_block_reason ? (
+                    <p className="mt-1 text-xs text-muted-foreground">{selectedProduct.sales_block_reason}</p>
+                  ) : null}
+                  {draft.status === selectedProduct.status && selectedProduct.store_eligible && selectedProduct.store_path && (
                     <Link to={selectedProduct.store_path} className="mt-3 inline-flex items-center gap-1.5 text-sm font-bold text-primary">
                       Visa i butik <ExternalLink className="h-4 w-4" />
                     </Link>
@@ -361,7 +381,7 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
 
             {selectedProduct && <RelationshipSelector product={{ ...selectedProduct, activity_addon_enabled: draft.activityAddonEnabled }} products={products} relationships={relationships} onToggle={(sourceId, targetId, relationshipId) => relationshipMutation.mutate({ sourceId, targetId, relationshipId })} pending={relationshipMutation.isPending} />}
 
-            {selectedProduct && selectedProduct.status !== "archived" && <section className="border-t border-border px-4 py-5"><button type="button" onClick={() => setDraft((current) => ({ ...current, status: "archived" }))} className="flex items-center gap-2 text-sm font-semibold text-destructive"><Archive className="h-4 w-4" /> Arkivera produkt</button></section>}
+            {selectedProduct && <section className="border-t border-border px-4 py-5">{draft.status === "archived" ? <button type="button" onClick={() => setDraft((current) => ({ ...current, status: "active" }))} className="flex items-center gap-2 text-sm font-semibold text-primary"><RotateCcw className="h-4 w-4" /> Återställ som aktiv</button> : <button type="button" onClick={() => setDraft((current) => ({ ...current, status: "archived" }))} className="flex items-center gap-2 text-sm font-semibold text-destructive"><Archive className="h-4 w-4" /> Arkivera produkt</button>}</section>}
           </div>
           <div className="border-t border-border bg-background px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
             <button type="button" onClick={() => saveProduct.mutate()} disabled={saveProduct.isPending || !draft.name.trim()} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-primary font-bold text-primary-foreground disabled:opacity-40">{saveProduct.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Spara</button>

@@ -78,4 +78,24 @@ describe("Commerce product activation contract", () => {
       category: "Merch",
     })).toMatchObject({ is_active: false, commerce_enabled: false });
   });
+
+  it("restores archived products without recreating them and archives them again cleanly", () => {
+    const archived = { ...retailProduct, status: "archived", is_active: false, commerce_enabled: false };
+    expect(deriveCommerceCompatibilityFields({
+      ...archived,
+      status: "active",
+    }, archived)).toMatchObject({
+      status: "active",
+      is_active: true,
+      commerce_enabled: true,
+    });
+    expect(deriveCommerceCompatibilityFields({
+      ...retailProduct,
+      status: "archived",
+    }, retailProduct)).toMatchObject({
+      status: "archived",
+      is_active: false,
+      commerce_enabled: false,
+    });
+  });
 });
