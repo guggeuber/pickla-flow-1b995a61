@@ -4,6 +4,7 @@ import { requireVenueRole } from '../_shared/authorization.ts';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
+import { evaluateCommerceAvailability } from '../_shared/commerce_availability.ts';
 
 const CART_TOKEN_BYTES = 32;
 const MAX_CART_LINES = 25;
@@ -146,7 +147,7 @@ async function cartResponse(admin: any, order: any, token?: string | null) {
 async function venueContext(admin: any, venueId: string) {
   const { data, error } = await admin
     .from('venues')
-    .select('id, organization_id, name, slug')
+    .select('id, organization_id, name, slug, commerce_enabled')
     .eq('id', venueId)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -167,12 +168,10 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
   if (productError) throw new Error(productError.message);
   const productById = new Map((products || []).map((product: any) => [product.id, product]));
   if (productById.size !== productIds.length) throw new Error('Product not found');
+  const venue = await venueContext(admin, venueId);
 
   const normalized = items.map((item, index) => {
     const product = productById.get(String(item.product_id || ''));
-    if (product?.status !== 'active' || !product?.is_active || !product?.commerce_enabled || !product.commerce_kind || !product.fulfillment_type) {
-      throw new Error('Product is not available');
-    }
     const quantity = Math.min(Math.max(Math.floor(Number(item.quantity || 1)), 1), MAX_QUANTITY);
     if (product.commerce_kind === 'participation' && quantity !== 1) throw new Error('Participation quantity must be one');
     return {
@@ -192,6 +191,11 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
 
   for (const item of normalized) {
     if (item.product.commerce_kind === 'participation') {
+      const availability = evaluateCommerceAvailability(item.product, {
+        channel: 'participation',
+        venueCommerceEnabled: venue.commerce_enabled === true,
+      });
+      if (!availability.eligible) throw new Error(availability.message || 'Product is not available');
       const sessionId = String(item.input.activity_session_id || item.input.source_id || '').trim();
       const sessionDate = String(item.input.session_date || '').slice(0, 10);
       if (!sessionId || !sessionDate) throw new Error('Participation requires session and date');
@@ -214,10 +218,13 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
     if (item.product.commerce_kind !== 'participation') {
       const parentProductId = String(item.input.parent_product_id || '').trim();
       if (!parentProductId) {
-        if (!item.product.standalone_enabled) throw new Error('Product is not available as a standalone purchase');
+        const availability = evaluateCommerceAvailability(item.product, {
+          channel: 'standalone',
+          venueCommerceEnabled: venue.commerce_enabled === true,
+        });
+        if (!availability.eligible) throw new Error(availability.message || 'Product is not available as a standalone purchase');
         continue;
       }
-      if (!item.product.activity_addon_enabled) throw new Error('Product is not available with activities');
       const parent = normalized.find((candidate) => candidate.product.id === parentProductId && candidate.product.commerce_kind === 'participation');
       if (!parent) throw new Error('Add-on must belong to a participation');
       const { data: relation, error: relationError } = await admin
@@ -231,6 +238,12 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
         .maybeSingle();
       if (relationError) throw new Error(relationError.message);
       if (!relation) throw new Error('Invalid addon relationship');
+      const availability = evaluateCommerceAvailability(item.product, {
+        channel: 'activity_addon',
+        venueCommerceEnabled: venue.commerce_enabled === true,
+        hasActiveRelationship: true,
+      });
+      if (!availability.eligible) throw new Error(availability.message || 'Product is not available with activities');
       item.parentLineId = parent.id;
       item.input.activity_session_id = parent.input.activity_session_id;
       item.input.session_date = parent.input.session_date;
@@ -274,17 +287,17 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
     .in('id', productIds);
   if (error) throw new Error(error.message);
   const productsById = new Map((products || []).map((product: any) => [product.id, product]));
+  const venue = await venueContext(admin, order.venue_id);
   const customerId = userId ? await resolveCustomerIdForUser(admin, userId) : null;
   const lineById = new Map(lines.map((line) => [line.id, line]));
   const resolved: any[] = [];
   for (const line of lines) {
     const product = productsById.get(line.product_id);
-    if (product?.status !== 'active' || !product?.is_active || !product?.commerce_enabled) throw new Error('Product is no longer available');
+    if (!product) throw new Error('Product is no longer available');
     if (product.venue_id !== order.venue_id || product.commerce_kind !== line.commerce_kind) {
       throw new Error('Product classification changed — review the cart again');
     }
     if (line.commerce_kind !== 'participation' && line.parent_line_id) {
-      if (!product.activity_addon_enabled) throw new Error('Product is no longer available with activities');
       const parent = lineById.get(line.parent_line_id);
       if (!parent || parent.commerce_kind !== 'participation') throw new Error('Add-on has no participation');
       const { data: relationship, error: relationshipError } = await admin
@@ -298,8 +311,24 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
         .maybeSingle();
       if (relationshipError) throw new Error(relationshipError.message);
       if (!relationship) throw new Error('Product relationship changed — review the cart again');
-    } else if (line.commerce_kind !== 'participation' && !product.standalone_enabled) {
-      throw new Error('Product is no longer available as a standalone purchase');
+      const availability = evaluateCommerceAvailability(product, {
+        channel: 'activity_addon',
+        venueCommerceEnabled: venue.commerce_enabled === true,
+        hasActiveRelationship: true,
+      });
+      if (!availability.eligible) throw new Error(availability.message || 'Product is no longer available with activities');
+    } else if (line.commerce_kind !== 'participation') {
+      const availability = evaluateCommerceAvailability(product, {
+        channel: 'standalone',
+        venueCommerceEnabled: venue.commerce_enabled === true,
+      });
+      if (!availability.eligible) throw new Error(availability.message || 'Product is no longer available as a standalone purchase');
+    } else {
+      const availability = evaluateCommerceAvailability(product, {
+        channel: 'participation',
+        venueCommerceEnabled: venue.commerce_enabled === true,
+      });
+      if (!availability.eligible) throw new Error(availability.message || 'Participation is no longer available');
     }
     let unitPriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
     let resolverSnapshot: Record<string, unknown> = { pricing_source: 'product_base_price' };
@@ -422,16 +451,47 @@ Deno.serve(async (req) => {
     if (req.method === 'GET' && path === 'catalog') {
       const venueId = url.searchParams.get('venueId') || '';
       if (!venueId) return errorResponse('Missing venueId', 400);
-      const [{ data: products, error: productError }, { data: relationships, error: relationshipError }] = await Promise.all([
+      const [venue, { data: products, error: productError }, { data: relationships, error: relationshipError }] = await Promise.all([
+        venueContext(admin, venueId),
         admin.from('access_products')
-          .select('id, venue_id, product_key, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
-          .eq('venue_id', venueId).eq('status', 'active').eq('is_active', true).eq('commerce_enabled', true).order('sort_order'),
+          .select('id, venue_id, product_key, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, is_active, standalone_enabled, activity_addon_enabled, category, sport, image_url')
+          .eq('venue_id', venueId).eq('status', 'active').eq('is_active', true).order('sort_order'),
         admin.from('product_relationships')
           .select('id, source_product_id, target_product_id, relationship_type, sort_order')
           .eq('venue_id', venueId).eq('is_active', true).order('sort_order'),
       ]);
       if (productError || relationshipError) throw new Error(productError?.message || relationshipError?.message);
-      return jsonResponse({ products: products || [], relationships: relationships || [] }, 200, 30);
+      const relatedProductIds = new Set((relationships || []).map((relationship: any) => relationship.target_product_id));
+      const availableProducts = (products || []).filter((product: any) => {
+        if (product.commerce_kind === 'participation') {
+          return evaluateCommerceAvailability(product, {
+            channel: 'participation',
+            venueCommerceEnabled: venue.commerce_enabled === true,
+          }).eligible;
+        }
+        const store = evaluateCommerceAvailability(product, {
+          channel: 'standalone',
+          venueCommerceEnabled: venue.commerce_enabled === true,
+        });
+        const addon = evaluateCommerceAvailability(product, {
+          channel: 'activity_addon',
+          venueCommerceEnabled: venue.commerce_enabled === true,
+          hasActiveRelationship: relatedProductIds.has(product.id),
+        });
+        return store.eligible || addon.eligible;
+      }).map((product: any) => ({
+        ...product,
+        store_eligible: evaluateCommerceAvailability(product, {
+          channel: 'standalone',
+          venueCommerceEnabled: venue.commerce_enabled === true,
+        }).eligible,
+      }));
+      return jsonResponse({
+        commerce_available: venue.commerce_enabled === true,
+        message: venue.commerce_enabled === true ? null : 'Pickla Store är inte aktiverad för denna anläggning.',
+        products: availableProducts,
+        relationships: relationships || [],
+      }, 200, 30);
     }
 
     if (req.method === 'POST' && path === 'cart') {

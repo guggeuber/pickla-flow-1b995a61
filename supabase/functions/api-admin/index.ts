@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient } from '../_shared/auth.ts';
 import { auditMutation, requireSuperAdmin, requireVenueRole, writeAuditLog } from '../_shared/authorization.ts';
+import { deriveCommerceCompatibilityFields, evaluateCommerceAvailability } from '../_shared/commerce_availability.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -2823,6 +2824,68 @@ async function analyzeOperationImpact(
   };
 }
 
+async function decorateAdminProducts(admin: any, venueId: string, products: any[]) {
+  const [{ data: venue, error: venueError }, { data: relationships, error: relationshipsError }] = await Promise.all([
+    admin.from('venues').select('slug, commerce_enabled').eq('id', venueId).maybeSingle(),
+    admin.from('product_relationships').select('target_product_id').eq('venue_id', venueId).eq('is_active', true),
+  ]);
+  if (venueError) throw new Error(venueError.message);
+  if (relationshipsError) throw new Error(relationshipsError.message);
+  const relatedProductIds = new Set((relationships || []).map((row: any) => row.target_product_id));
+  const venueCommerceEnabled = venue?.commerce_enabled === true;
+
+  return products.map((product) => {
+    const hasActiveRelationship = relatedProductIds.has(product.id);
+    const store = evaluateCommerceAvailability(product, {
+      channel: 'standalone',
+      venueCommerceEnabled,
+    });
+    const addon = evaluateCommerceAvailability(product, {
+      channel: 'activity_addon',
+      venueCommerceEnabled,
+      hasActiveRelationship,
+    });
+    const participation = evaluateCommerceAvailability(product, {
+      channel: 'participation',
+      venueCommerceEnabled,
+    });
+    const isParticipation = product.commerce_kind === 'participation';
+    const intendedFailures = [
+      isParticipation && !participation.eligible ? participation : null,
+      product.standalone_enabled === true && !store.eligible ? store : null,
+      product.activity_addon_enabled === true && !addon.eligible ? addon : null,
+    ].filter(Boolean) as Array<{ code: string; message: string | null }>;
+    const relevantFailure = intendedFailures[0] || null;
+    const salesStateLabel = product.status === 'draft'
+      ? 'Utkast'
+      : product.status === 'archived'
+        ? 'Arkiverad'
+        : store.eligible && addon.eligible
+          ? 'Aktiv - butik och aktivitet'
+          : store.eligible
+            ? 'Aktiv - säljs i butik'
+            : addon.eligible
+              ? 'Aktiv - aktivitetstillval'
+              : participation.eligible
+                ? 'Aktiv'
+                : relevantFailure?.code === 'venue_disabled'
+                  ? 'Försäljning blockerad: Pickla Store är inte aktiverad för denna anläggning'
+                  : 'Aktiv - inte öppen för försäljning';
+
+    return {
+      ...product,
+      venue_commerce_enabled: venueCommerceEnabled,
+      store_eligible: store.eligible,
+      activity_addon_eligible: addon.eligible,
+      sales_state_label: salesStateLabel,
+      sales_block_reason: product.status === 'active' && relevantFailure
+        ? relevantFailure?.message || 'Produkten är inte öppen för försäljning.'
+        : null,
+      store_path: store.eligible && venue?.slug ? `/shop?v=${encodeURIComponent(venue.slug)}` : null,
+    };
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -4860,80 +4923,83 @@ Deno.serve(async (req) => {
       const { data, error: e } = await admin.from('access_products')
         .select('*').eq('venue_id', venueId).order('sort_order').order('name');
       if (e) return errorResponse(e.message);
-      return jsonResponse(data, 200, 15);
+      try {
+        return jsonResponse(await decorateAdminProducts(admin, venueId, data || []), 200, 15);
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : 'Could not evaluate product availability');
+      }
     }
 
     if (req.method === 'POST' && path === 'products') {
       const {
-        venueId: _v, product_key, name, description, product_kind, session_type,
-        base_price_sek, vat_rate, grants, sort_order, is_active, commerce_kind,
-        fulfillment_type, resolver_rules, commerce_enabled, status,
+        venueId: _v, product_key, name, description, session_type,
+        base_price_sek, vat_rate, grants, sort_order, status,
         standalone_enabled, activity_addon_enabled, fulfillment_presentation,
         category, sport, image_url,
       } = await req.json();
       if (!product_key || !name) return errorResponse('Missing product_key or name');
-      const operatorStatus = ['draft', 'active', 'archived'].includes(status) ? status : 'draft';
-      const standaloneEnabled = standalone_enabled === true;
-      const activityAddonEnabled = activity_addon_enabled === true;
-      const effectiveCommerceEnabled = commerce_enabled ?? (
-        operatorStatus === 'active' && (standaloneEnabled || activityAddonEnabled)
-      );
+      if (status !== undefined && !['draft', 'active', 'archived'].includes(status)) return errorResponse('Invalid product status');
+      const compatibility = deriveCommerceCompatibilityFields({
+        status: status || 'draft',
+        standalone_enabled,
+        activity_addon_enabled,
+        fulfillment_presentation,
+        category,
+      });
       const { data, error: e } = await admin.from('access_products').upsert({
         venue_id: venueId,
         product_key,
         name,
         description: description || null,
-        product_kind: product_kind || 'day_access',
         session_type: session_type || null,
         base_price_sek: base_price_sek ?? 0,
         vat_rate: vat_rate ?? 6,
         grants: grants || {},
         sort_order: sort_order ?? 0,
-        is_active: is_active ?? operatorStatus === 'active',
-        commerce_kind: commerce_kind || null,
-        fulfillment_type: fulfillment_type || null,
-        resolver_rules: resolver_rules || {},
-        commerce_enabled: effectiveCommerceEnabled,
-        status: operatorStatus,
-        standalone_enabled: standaloneEnabled,
-        activity_addon_enabled: activityAddonEnabled,
-        fulfillment_presentation: fulfillment_presentation || null,
+        resolver_rules: {},
+        ...compatibility,
         category: category || null,
         sport: sport || null,
         image_url: image_url || null,
       }, { onConflict: 'venue_id,product_key' }).select().single();
       if (e) return errorResponse(e.message);
-      return jsonResponse(data, 201);
+      try {
+        const [decorated] = await decorateAdminProducts(admin, venueId, [data]);
+        return jsonResponse(decorated, 201);
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : 'Could not evaluate product availability');
+      }
     }
 
     if (req.method === 'PATCH' && path === 'products') {
       const { productId, ...updates } = await req.json();
       if (!productId) return errorResponse('Missing productId');
       const allowed = new Set([
-        'name', 'description', 'product_kind', 'session_type', 'base_price_sek',
-        'vat_rate', 'grants', 'sort_order', 'is_active', 'commerce_kind',
-        'fulfillment_type', 'resolver_rules', 'commerce_enabled', 'status',
+        'name', 'description', 'session_type', 'base_price_sek',
+        'vat_rate', 'grants', 'sort_order', 'status',
         'standalone_enabled', 'activity_addon_enabled', 'fulfillment_presentation',
         'category', 'sport', 'image_url',
       ]);
       const safeUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => allowed.has(key)));
-      if (typeof safeUpdates.status === 'string') {
-        if (!['draft', 'active', 'archived'].includes(safeUpdates.status)) return errorResponse('Invalid product status');
-        safeUpdates.is_active = safeUpdates.status === 'active';
-      }
-      if (
-        typeof safeUpdates.status === 'string'
-        && typeof safeUpdates.standalone_enabled === 'boolean'
-        && typeof safeUpdates.activity_addon_enabled === 'boolean'
-      ) {
-        safeUpdates.commerce_enabled = safeUpdates.status === 'active'
-          && (safeUpdates.standalone_enabled || safeUpdates.activity_addon_enabled);
-      }
       if (Object.keys(safeUpdates).length === 0) return errorResponse('No supported product fields');
+      if (typeof safeUpdates.status === 'string' && !['draft', 'active', 'archived'].includes(safeUpdates.status)) {
+        return errorResponse('Invalid product status');
+      }
+      const { data: existing, error: existingError } = await admin.from('access_products')
+        .select('*').eq('id', productId).eq('venue_id', venueId).maybeSingle();
+      if (existingError) return errorResponse(existingError.message);
+      if (!existing) return errorResponse('Product not found', 404);
+      const merged = { ...existing, ...safeUpdates };
+      const compatibility = deriveCommerceCompatibilityFields(merged, existing);
       const { data, error: e } = await admin.from('access_products')
-        .update(safeUpdates).eq('id', productId).eq('venue_id', venueId).select().single();
+        .update({ ...safeUpdates, ...compatibility }).eq('id', productId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
-      return jsonResponse(data);
+      try {
+        const [decorated] = await decorateAdminProducts(admin, venueId, [data]);
+        return jsonResponse(decorated);
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : 'Could not evaluate product availability');
+      }
     }
 
     if (req.method === 'DELETE' && path === 'products') {

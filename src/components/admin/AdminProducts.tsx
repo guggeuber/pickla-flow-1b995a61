@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Package, Plus, Search, Save, X } from "lucide-react";
+import { Archive, ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Loader2, Package, Plus, Search, Save, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import {
@@ -33,6 +34,12 @@ interface AccessProduct {
   category: string | null;
   sport: string | null;
   image_url: string | null;
+  venue_commerce_enabled?: boolean;
+  store_eligible?: boolean;
+  activity_addon_eligible?: boolean;
+  sales_state_label?: string;
+  sales_block_reason?: string | null;
+  store_path?: string | null;
 }
 
 interface ProductRelationship {
@@ -94,18 +101,6 @@ const keyFromName = (name: string) => name.trim().toLowerCase()
 const formatPrice = (amount: number) => `${Math.round(Number(amount || 0)).toLocaleString("sv-SE")} kr`;
 const statusLabel = (status: ProductCatalogStatus) => status === "active" ? "Aktiv" : status === "archived" ? "Arkiverad" : "Utkast";
 const fulfillmentLabel = (value: AccessProduct["fulfillment_presentation"]) => value === "participation" ? "Deltagande" : value === "digital" ? "Digital" : "Hämtas vid disken";
-
-function internalProductFields(draft: ProductDraft, existing?: AccessProduct | null) {
-  const rentalCategory = /^(hyra|uthyrning|rental)$/i.test(draft.category.trim());
-  const commerceKind = draft.fulfillment === "participation"
-    ? "participation"
-    : rentalCategory ? "rental" : existing?.commerce_kind === "rental" && !draft.category.trim() ? "rental" : "merchandise";
-  return {
-    product_kind: commerceKind === "participation" ? existing?.product_kind || "day_access" : commerceKind,
-    commerce_kind: commerceKind,
-    fulfillment_type: draft.fulfillment === "desk_pickup" ? "desk_pickup" : "participation",
-  };
-}
 
 function RelationshipSelector({
   product,
@@ -201,7 +196,6 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
   const saveProduct = useMutation({
     mutationFn: async () => {
       if (!draft.name.trim()) throw new Error("Namn krävs");
-      const internal = internalProductFields(draft, selectedProduct);
       const body: Record<string, unknown> = {
         name: draft.name.trim(),
         description: draft.description.trim() || null,
@@ -212,9 +206,8 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
         category: draft.category.trim() || null,
         sport: draft.sport.trim() || null,
         image_url: draft.imageUrl.trim() || null,
-        ...internal,
       };
-      if (internal.commerce_kind !== "participation") {
+      if (selectedProduct?.commerce_kind !== "participation") {
         body.standalone_enabled = draft.standaloneEnabled;
         body.activity_addon_enabled = draft.activityAddonEnabled;
       }
@@ -227,7 +220,8 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
       await invalidateCatalog();
       setCreating(false);
       setSelectedProductId(saved.id);
-      toast.success("Produkten är sparad");
+      if (saved.sales_block_reason) toast.warning(saved.sales_block_reason);
+      else toast.success(saved.sales_state_label || "Produkten är sparad");
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -304,7 +298,7 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
           <button key={product.id} type="button" onClick={() => { setCreating(false); setSelectedProductId(product.id); }} className="grid w-full grid-cols-[1fr_auto] items-center gap-3 border-b border-border px-3 py-3 text-left last:border-0 hover:bg-muted/40 sm:grid-cols-[minmax(0,1fr)_120px_150px_150px_auto]">
             <span className="min-w-0"><span className="block truncate text-sm font-bold">{product.name}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground sm:hidden">{productSalesModeLabel(product)} · {fulfillmentLabel(product.fulfillment_presentation)}</span></span>
             <span className="text-sm font-bold sm:text-right">{formatPrice(product.base_price_sek)}</span>
-            <span className="hidden text-xs text-muted-foreground sm:block">{statusLabel(product.status)}</span>
+            <span className="hidden text-xs text-muted-foreground sm:block">{product.sales_state_label || statusLabel(product.status)}</span>
             <span className="hidden text-xs text-muted-foreground sm:block">{productSalesModeLabel(product)}</span>
             <span className="hidden text-xs text-muted-foreground sm:block">{fulfillmentLabel(product.fulfillment_presentation)}</span>
             <ChevronRight className="hidden h-4 w-4 text-muted-foreground sm:block" />
@@ -340,6 +334,17 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
                   <label className="flex items-center justify-between gap-4"><span><span className="block text-sm font-semibold">Säljs fristående i butiken</span><span className="block text-xs text-muted-foreground">Kunden kan köpa produkten utan en aktivitet.</span></span><Switch checked={draft.standaloneEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, standaloneEnabled: checked }))} /></label>
                   <label className="flex items-center justify-between gap-4"><span><span className="block text-sm font-semibold">Kan läggas till på aktivitet</span><span className="block text-xs text-muted-foreground">Kräver att minst en aktivitet väljs nedan.</span></span><Switch checked={draft.activityAddonEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, activityAddonEnabled: checked }))} /></label>
                 </>
+              )}
+              {selectedProduct && (
+                <div className={`rounded-lg border p-3 ${selectedProduct.sales_block_reason ? "border-amber-500/30 bg-amber-500/10" : "border-border bg-muted/30"}`}>
+                  <p className="text-sm font-bold">{selectedProduct.sales_state_label || statusLabel(selectedProduct.status)}</p>
+                  {selectedProduct.sales_block_reason && <p className="mt-1 text-xs text-muted-foreground">{selectedProduct.sales_block_reason}</p>}
+                  {selectedProduct.store_eligible && selectedProduct.store_path && (
+                    <Link to={selectedProduct.store_path} className="mt-3 inline-flex items-center gap-1.5 text-sm font-bold text-primary">
+                      Visa i butik <ExternalLink className="h-4 w-4" />
+                    </Link>
+                  )}
+                </div>
               )}
             </section>
 

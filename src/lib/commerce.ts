@@ -20,6 +20,7 @@ export interface CommerceProduct {
   category: string | null;
   sport: string | null;
   image_url: string | null;
+  store_eligible?: boolean;
 }
 
 export interface CommerceRelationship {
@@ -84,7 +85,12 @@ export function formatCommerceMoney(minor: number, currency = "SEK") {
 }
 
 export function fetchCommerceCatalog(venueId: string) {
-  return apiGet<{ products: CommerceProduct[]; relationships: CommerceRelationship[] }>("api-commerce", "catalog", { venueId });
+  return apiGet<{
+    commerce_available: boolean;
+    message: string | null;
+    products: CommerceProduct[];
+    relationships: CommerceRelationship[];
+  }>("api-commerce", "catalog", { venueId });
 }
 
 export function createCommerceCart(input: {
