@@ -9,8 +9,8 @@ const vercelConfig = JSON.parse(readFileSync(resolve(root, "vercel.json"), "utf8
   rewrites: Array<{ source: string; destination: string }>;
 };
 
-const SOCIAL_IMAGE_URL = "https://playpickla.com/og-invest-pickla-bag-v1.jpg";
-const socialImage = readFileSync(resolve(root, "public/og-invest-pickla-bag-v1.jpg"));
+const SOCIAL_IMAGE_URL = "https://playpickla.com/og-invest-arena-v2.jpg";
+const socialImage = readFileSync(resolve(root, "public/og-invest-arena-v2.jpg"));
 
 function parseHtml(html: string) {
   return new DOMParser().parseFromString(html, "text/html");
@@ -63,7 +63,7 @@ describe("investor social metadata", () => {
 
   it("sets explicit page and versioned-image cache policy", () => {
     const pageHeaders = vercelConfig.headers.find((entry) => entry.source === "/invest");
-    const imageHeaders = vercelConfig.headers.find((entry) => entry.source === "/og-invest-pickla-bag-v1.jpg");
+    const imageHeaders = vercelConfig.headers.find((entry) => entry.source === "/og-invest-arena-v2.jpg");
 
     expect(pageHeaders?.headers).toContainEqual(expect.objectContaining({ key: "Cache-Control", value: expect.stringContaining("no-store") }));
     expect(imageHeaders?.headers).toContainEqual({ key: "Cache-Control", value: "public, max-age=31536000, immutable" });
