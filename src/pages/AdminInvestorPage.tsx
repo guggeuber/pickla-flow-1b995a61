@@ -4,8 +4,10 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   InvestorAsset,
   InvestorAssetType,
+  InvestorContentCard,
   InvestorMemoSection,
   InvestorMetric,
+  InvestorPageContent,
   InvestorPerson,
   InvestorSettings,
   investorAssetTypes,
@@ -13,7 +15,7 @@ import {
   moneySek,
 } from "@/lib/investorContent";
 import { toast } from "sonner";
-import { Loader2, Copy, Check, X, RefreshCw, Upload, Save } from "lucide-react";
+import { Loader2, Copy, Check, X, RefreshCw, Upload, Save, Plus, Trash2 } from "lucide-react";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 type Lead = {
@@ -43,7 +45,7 @@ type PulseToken = {
   last_viewed_at?: string | null;
 };
 
-type JsonKey = "use_of_funds" | "traction_metrics" | "risks" | "team" | "memo_sections";
+type JsonKey = "use_of_funds" | "traction_metrics" | "risks" | "team" | "preview_highlights" | "preview_pillars";
 
 const statusStyles: Record<Lead["status"], string> = {
   pending: "bg-neutral-800 text-neutral-300",
@@ -78,7 +80,8 @@ export default function AdminInvestorPage() {
     traction_metrics: "[]",
     risks: "[]",
     team: "[]",
-    memo_sections: "[]",
+    preview_highlights: "[]",
+    preview_pillars: "[]",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -111,7 +114,8 @@ export default function AdminInvestorPage() {
         traction_metrics: jsonText(nextSettings.traction_metrics),
         risks: jsonText(nextSettings.risks),
         team: jsonText(nextSettings.team),
-        memo_sections: jsonText(nextSettings.memo_sections),
+        preview_highlights: jsonText(nextSettings.page_content.preview_highlights),
+        preview_pillars: jsonText(nextSettings.page_content.preview_pillars),
       });
     } catch (e) {
       toast.error((e as Error).message);
@@ -126,6 +130,39 @@ export default function AdminInvestorPage() {
     setSettings((current) => ({ ...current, ...patch }));
   }
 
+  function patchPageContent(patch: Partial<InvestorPageContent>) {
+    setSettings((current) => ({
+      ...current,
+      page_content: { ...current.page_content, ...patch },
+    }));
+  }
+
+  function patchMemoSection(index: number, patch: Partial<InvestorMemoSection>) {
+    setSettings((current) => ({
+      ...current,
+      memo_sections: current.memo_sections.map((section, sectionIndex) => (
+        sectionIndex === index ? { ...section, ...patch } : section
+      )),
+    }));
+  }
+
+  function addMemoSection() {
+    setSettings((current) => ({
+      ...current,
+      memo_sections: [
+        ...current.memo_sections,
+        { kicker: `${String(current.memo_sections.length + 1).padStart(2, "0")} · Section`, title: "New section", body: "" },
+      ],
+    }));
+  }
+
+  function removeMemoSection(index: number) {
+    setSettings((current) => ({
+      ...current,
+      memo_sections: current.memo_sections.filter((_, sectionIndex) => sectionIndex !== index),
+    }));
+  }
+
   async function saveSettings() {
     setSaving(true);
     try {
@@ -135,7 +172,11 @@ export default function AdminInvestorPage() {
         traction_metrics: parseJsonArray<InvestorMetric>("Traction metrics", jsonFields.traction_metrics),
         risks: parseJsonArray<InvestorMetric>("Risks", jsonFields.risks),
         team: parseJsonArray<InvestorPerson>("Team", jsonFields.team),
-        memo_sections: parseJsonArray<InvestorMemoSection>("Memo sections", jsonFields.memo_sections),
+        page_content: {
+          ...settings.page_content,
+          preview_highlights: parseJsonArray<InvestorContentCard>("Preview highlights", jsonFields.preview_highlights),
+          preview_pillars: parseJsonArray<InvestorContentCard>("Preview pillars", jsonFields.preview_pillars),
+        },
         is_active: true,
       };
       const res = await apiPost<{ settings: InvestorSettings }>("api-investor", "save-settings", payload as unknown as Record<string, unknown>);
@@ -191,6 +232,23 @@ export default function AdminInvestorPage() {
       await load();
     } catch (e) {
       toast.error((e as Error).message);
+    }
+  }
+
+  function patchAsset(id: string, patch: Partial<InvestorAsset>) {
+    setAssets((current) => current.map((asset) => asset.id === id ? { ...asset, ...patch } : asset));
+  }
+
+  async function saveAsset(asset: InvestorAsset) {
+    setBusyId(`asset-${asset.id}`);
+    try {
+      await apiPost("api-investor", "save-asset", asset as unknown as Record<string, unknown>);
+      toast.success("Asset details saved");
+      await load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -366,6 +424,7 @@ export default function AdminInvestorPage() {
 
             <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
               <h2 className="text-lg font-medium">Narrative</h2>
+              <p className="mt-1 text-sm text-neutral-500">Hero and thesis copy used by the public preview and private memo.</p>
               <div className="mt-6 space-y-4">
                 <TextArea label="Headline" value={settings.headline || ""} onChange={(v) => patchSettings({ headline: v })} rows={2} />
                 <TextArea label="Subheadline" value={settings.subheadline || ""} onChange={(v) => patchSettings({ subheadline: v })} rows={3} />
@@ -375,16 +434,123 @@ export default function AdminInvestorPage() {
             </section>
 
             <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
-              <h2 className="text-lg font-medium">Structured memo content</h2>
-              <p className="mt-1 text-sm text-neutral-500">Small JSON arrays. Keep objects as label/value, name/role/bio, or kicker/title/body.</p>
+              <h2 className="text-lg font-medium">Public preview copy</h2>
+              <p className="mt-1 text-sm text-neutral-500">Section labels and supporting copy around the hero and public thesis.</p>
+              <div className="mt-6 grid gap-4 lg:grid-cols-2">
+                <TextField label="Preview badge" value={settings.page_content.preview_badge} onChange={(v) => patchPageContent({ preview_badge: v })} />
+                <TextField label="Thesis eyebrow" value={settings.page_content.preview_thesis_eyebrow} onChange={(v) => patchPageContent({ preview_thesis_eyebrow: v })} />
+                <TextField label="Visual evidence heading" value={settings.page_content.preview_visual_heading} onChange={(v) => patchPageContent({ preview_visual_heading: v })} />
+                <TextField label="Product stack heading" value={settings.page_content.preview_stack_heading} onChange={(v) => patchPageContent({ preview_stack_heading: v })} />
+                <TextField label="Access eyebrow" value={settings.page_content.preview_access_eyebrow} onChange={(v) => patchPageContent({ preview_access_eyebrow: v })} />
+                <TextField label="Access title" value={settings.page_content.preview_access_title} onChange={(v) => patchPageContent({ preview_access_title: v })} />
+                <div className="lg:col-span-2">
+                  <TextArea label="Access body" value={settings.page_content.preview_access_body} onChange={(v) => patchPageContent({ preview_access_body: v })} rows={3} />
+                </div>
+                <JsonArea label="Preview highlights" value={jsonFields.preview_highlights} onChange={(v) => setJsonFields((s) => ({ ...s, preview_highlights: v }))} rows={10} />
+                <JsonArea label="Product pillars" value={jsonFields.preview_pillars} onChange={(v) => setJsonFields((s) => ({ ...s, preview_pillars: v }))} rows={10} />
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
+              <h2 className="text-lg font-medium">Visual evidence labels</h2>
+              <p className="mt-1 text-sm text-neutral-500">Headings for the venue, dart and product images. Image captions are edited in Assets below.</p>
+              <div className="mt-6 grid gap-4 lg:grid-cols-2">
+                <TextField label="Memo eyebrow" value={settings.page_content.memo_visual_eyebrow} onChange={(v) => patchPageContent({ memo_visual_eyebrow: v })} />
+                <TextField label="Memo visual title" value={settings.page_content.memo_visual_title} onChange={(v) => patchPageContent({ memo_visual_title: v })} />
+                <VisualLabelFields
+                  name="Venue"
+                  label={settings.page_content.visual_venue_label}
+                  title={settings.page_content.visual_venue_title}
+                  body={settings.page_content.visual_venue_body}
+                  onChange={patchPageContent}
+                  keys={{ label: "visual_venue_label", title: "visual_venue_title", body: "visual_venue_body" }}
+                />
+                <VisualLabelFields
+                  name="Dart"
+                  label={settings.page_content.visual_dart_label}
+                  title={settings.page_content.visual_dart_title}
+                  body={settings.page_content.visual_dart_body}
+                  onChange={patchPageContent}
+                  keys={{ label: "visual_dart_label", title: "visual_dart_title", body: "visual_dart_body" }}
+                />
+                <VisualLabelFields
+                  name="Product"
+                  label={settings.page_content.visual_product_label}
+                  title={settings.page_content.visual_product_title}
+                  body={settings.page_content.visual_product_body}
+                  onChange={patchPageContent}
+                  keys={{ label: "visual_product_label", title: "visual_product_title", body: "visual_product_body" }}
+                />
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-medium">Memo sections</h2>
+                  <p className="mt-1 text-sm text-neutral-500">Eyebrow, title and body render in this order in the private memo.</p>
+                </div>
+                <button type="button" onClick={addMemoSection} className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-800 px-3 text-sm hover:bg-neutral-900">
+                  <Plus className="h-4 w-4" /> Add section
+                </button>
+              </div>
+              <div className="mt-6 space-y-4">
+                {settings.memo_sections.map((section, index) => (
+                  <div key={index} className="rounded-xl border border-neutral-900 bg-[#0B0C0E] p-4">
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <TextField label={`Section ${index + 1} eyebrow`} value={section.kicker || ""} onChange={(v) => patchMemoSection(index, { kicker: v })} />
+                      <TextField label={`Section ${index + 1} title`} value={section.title} onChange={(v) => patchMemoSection(index, { title: v })} />
+                      <div className="lg:col-span-2">
+                        <TextArea label={`Section ${index + 1} body`} value={section.body} onChange={(v) => patchMemoSection(index, { body: v })} rows={4} />
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => removeMemoSection(index)} className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-red-950 px-3 text-xs text-red-300 hover:bg-red-950/30">
+                      <Trash2 className="h-3.5 w-3.5" /> Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
+              <h2 className="text-lg font-medium">Memo section labels</h2>
+              <p className="mt-1 text-sm text-neutral-500">Headings around the offer, evidence lists, team and interest card.</p>
+              <div className="mt-6 grid gap-4 lg:grid-cols-2">
+                <TextField label="Deck eyebrow" value={settings.page_content.memo_deck_eyebrow} onChange={(v) => patchPageContent({ memo_deck_eyebrow: v })} />
+                <TextField label="Deck title" value={settings.page_content.memo_deck_title} onChange={(v) => patchPageContent({ memo_deck_title: v })} />
+                <TextField label="Offer eyebrow" value={settings.page_content.memo_offer_eyebrow} onChange={(v) => patchPageContent({ memo_offer_eyebrow: v })} />
+                <TextField label="Round size label" value={settings.page_content.memo_round_size_label} onChange={(v) => patchPageContent({ memo_round_size_label: v })} />
+                <TextField label="Valuation label" value={settings.page_content.memo_valuation_label} onChange={(v) => patchPageContent({ memo_valuation_label: v })} />
+                <TextField label="Share price label" value={settings.page_content.memo_share_price_label} onChange={(v) => patchPageContent({ memo_share_price_label: v })} />
+                <TextField label="Shares offered label" value={settings.page_content.memo_shares_offered_label} onChange={(v) => patchPageContent({ memo_shares_offered_label: v })} />
+                <TextField label="Existing shares label" value={settings.page_content.memo_existing_shares_label} onChange={(v) => patchPageContent({ memo_existing_shares_label: v })} />
+                <TextField label="Minimum label" value={settings.page_content.memo_minimum_label} onChange={(v) => patchPageContent({ memo_minimum_label: v })} />
+                <TextField label="Deadline label" value={settings.page_content.memo_deadline_label} onChange={(v) => patchPageContent({ memo_deadline_label: v })} />
+                <TextField label="Allocation label" value={settings.page_content.memo_allocation_label} onChange={(v) => patchPageContent({ memo_allocation_label: v })} />
+                <TextField label="Use of funds eyebrow" value={settings.page_content.memo_use_of_funds_eyebrow} onChange={(v) => patchPageContent({ memo_use_of_funds_eyebrow: v })} />
+                <TextField label="Use of funds title" value={settings.page_content.memo_use_of_funds_title} onChange={(v) => patchPageContent({ memo_use_of_funds_title: v })} />
+                <TextField label="Traction eyebrow" value={settings.page_content.memo_traction_eyebrow} onChange={(v) => patchPageContent({ memo_traction_eyebrow: v })} />
+                <TextField label="Traction title" value={settings.page_content.memo_traction_title} onChange={(v) => patchPageContent({ memo_traction_title: v })} />
+                <TextField label="Risks eyebrow" value={settings.page_content.memo_risks_eyebrow} onChange={(v) => patchPageContent({ memo_risks_eyebrow: v })} />
+                <TextField label="Risks title" value={settings.page_content.memo_risks_title} onChange={(v) => patchPageContent({ memo_risks_title: v })} />
+                <TextField label="Team eyebrow" value={settings.page_content.memo_team_eyebrow} onChange={(v) => patchPageContent({ memo_team_eyebrow: v })} />
+                <TextField label="Team title" value={settings.page_content.memo_team_title} onChange={(v) => patchPageContent({ memo_team_title: v })} />
+                <TextField label="Interest eyebrow" value={settings.page_content.memo_interest_eyebrow} onChange={(v) => patchPageContent({ memo_interest_eyebrow: v })} />
+                <TextField label="Interest title" value={settings.page_content.memo_interest_title} onChange={(v) => patchPageContent({ memo_interest_title: v })} />
+                <div className="lg:col-span-2">
+                  <TextArea label="Interest body" value={settings.page_content.memo_interest_body} onChange={(v) => patchPageContent({ memo_interest_body: v })} rows={3} />
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
+              <h2 className="text-lg font-medium">Supporting structured content</h2>
+              <p className="mt-1 text-sm text-neutral-500">JSON arrays for repeated evidence and team cards.</p>
               <div className="mt-6 grid gap-4 lg:grid-cols-2">
                 <JsonArea label="Use of funds" value={jsonFields.use_of_funds} onChange={(v) => setJsonFields((s) => ({ ...s, use_of_funds: v }))} />
                 <JsonArea label="Traction metrics" value={jsonFields.traction_metrics} onChange={(v) => setJsonFields((s) => ({ ...s, traction_metrics: v }))} />
                 <JsonArea label="Risks" value={jsonFields.risks} onChange={(v) => setJsonFields((s) => ({ ...s, risks: v }))} />
                 <JsonArea label="Team" value={jsonFields.team} onChange={(v) => setJsonFields((s) => ({ ...s, team: v }))} />
-                <div className="lg:col-span-2">
-                  <JsonArea label="Memo sections" value={jsonFields.memo_sections} onChange={(v) => setJsonFields((s) => ({ ...s, memo_sections: v }))} rows={14} />
-                </div>
               </div>
             </section>
 
@@ -409,14 +575,38 @@ export default function AdminInvestorPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-[10px] uppercase tracking-[0.16em] text-neutral-600">{asset.asset_type}</div>
-                        <div className="mt-1 font-medium">{asset.title}</div>
-                        {asset.description && <div className="mt-1 text-sm text-neutral-500">{asset.description}</div>}
                         <div className="mt-2 truncate text-xs text-neutral-600">{asset.storage_path}</div>
                       </div>
                       <button onClick={() => toggleAsset(asset)} className="h-8 rounded-md border border-neutral-800 px-3 text-xs hover:bg-neutral-900">
                         {asset.is_active ? "Active" : "Inactive"}
                       </button>
                     </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-[150px_1fr_100px]">
+                      <label className="block">
+                        <span className="text-xs text-neutral-500">Asset type</span>
+                        <select
+                          value={asset.asset_type}
+                          onChange={(e) => patchAsset(asset.id, { asset_type: e.target.value as InvestorAssetType })}
+                          className="mt-1 h-10 w-full rounded-lg border border-neutral-800 bg-[#0B0C0E] px-3 text-sm outline-none focus:border-neutral-600"
+                        >
+                          {investorAssetTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                        </select>
+                      </label>
+                      <TextField label="Caption title" value={asset.title} onChange={(v) => patchAsset(asset.id, { title: v })} />
+                      <NumberField label="Sort order" value={asset.sort_order} onChange={(v) => patchAsset(asset.id, { sort_order: v || 0 })} />
+                      <div className="sm:col-span-3">
+                        <TextArea label="Caption description" value={asset.description || ""} onChange={(v) => patchAsset(asset.id, { description: v || null })} rows={2} />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => saveAsset(asset)}
+                      disabled={busyId === `asset-${asset.id}`}
+                      className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-neutral-800 px-3 text-xs hover:bg-neutral-900 disabled:opacity-50"
+                    >
+                      {busyId === `asset-${asset.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      Save caption
+                    </button>
                     {asset.public_url && asset.asset_type !== "deck" && (
                       <img src={asset.public_url} alt={asset.title} className="mt-4 aspect-video w-full rounded-lg object-cover" />
                     )}
@@ -662,6 +852,39 @@ function TextArea({ label, value, onChange, rows = 4 }: { label: string; value: 
       <span className="text-xs text-neutral-500">{label}</span>
       <textarea value={value} rows={rows} onChange={(e) => onChange(e.target.value)} className="mt-1 w-full rounded-lg border border-neutral-800 bg-[#0B0C0E] px-3 py-2 text-sm outline-none focus:border-neutral-600" />
     </label>
+  );
+}
+
+type PageContentTextKey = {
+  [Key in keyof InvestorPageContent]: InvestorPageContent[Key] extends string ? Key : never;
+}[keyof InvestorPageContent];
+
+function VisualLabelFields({
+  name,
+  label,
+  title,
+  body,
+  onChange,
+  keys,
+}: {
+  name: string;
+  label: string;
+  title: string;
+  body: string;
+  onChange: (patch: Partial<InvestorPageContent>) => void;
+  keys: { label: PageContentTextKey; title: PageContentTextKey; body: PageContentTextKey };
+}) {
+  return (
+    <div className="rounded-xl border border-neutral-900 bg-[#0B0C0E] p-4 lg:col-span-2">
+      <div className="text-xs font-medium text-neutral-300">{name}</div>
+      <div className="mt-3 grid gap-4 lg:grid-cols-2">
+        <TextField label={`${name} eyebrow`} value={label} onChange={(value) => onChange({ [keys.label]: value })} />
+        <TextField label={`${name} title`} value={title} onChange={(value) => onChange({ [keys.title]: value })} />
+        <div className="lg:col-span-2">
+          <TextArea label={`${name} body`} value={body} onChange={(value) => onChange({ [keys.body]: value })} rows={3} />
+        </div>
+      </div>
+    </div>
   );
 }
 

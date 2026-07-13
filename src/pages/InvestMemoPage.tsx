@@ -218,10 +218,11 @@ export default function InvestMemoPage() {
   const submitted = !!lead.submitted_interest_at;
   const logo = assetByType(assets, "logo")?.public_url || picklaLogo;
   const hero = assetByType(assets, "hero") || assetByType(assets, "venue_photo");
+  const content = settings.page_content;
   const visualAssets = [
-    { label: "Venue", title: "Pickla Arena", assets: assetsByType(assets, "venue_photo") },
-    { label: "Dart", title: "Stockholm Dart Arena", assets: assetsByType(assets, "dart_photo") },
-    { label: "Product", title: "Pickla OS screenshots", assets: assetsByType(assets, "product_screenshot") },
+    { label: content.visual_venue_label, title: content.visual_venue_title, assets: assetsByType(assets, "venue_photo") },
+    { label: content.visual_dart_label, title: content.visual_dart_title, assets: assetsByType(assets, "dart_photo") },
+    { label: content.visual_product_label, title: content.visual_product_title, assets: assetsByType(assets, "product_screenshot") },
   ].filter((section) => section.assets.length > 0);
   const deckAssets = assetsByType(assets, "deck");
 
@@ -263,8 +264,8 @@ export default function InvestMemoPage() {
 
         {visualAssets.length > 0 && (
           <section className="py-12 border-b border-neutral-900">
-            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Visual evidence</div>
-            <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">The venue and product surfaces</h2>
+            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">{content.memo_visual_eyebrow}</div>
+            <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">{content.memo_visual_title}</h2>
             <div className="mt-8 space-y-8">
               {visualAssets.map((section) => (
                 <div key={section.label}>
@@ -290,8 +291,8 @@ export default function InvestMemoPage() {
 
         {deckAssets.length > 0 && (
           <section className="py-12 border-b border-neutral-900">
-            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Deck</div>
-            <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">Investor deck</h2>
+            <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">{content.memo_deck_eyebrow}</div>
+            <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">{content.memo_deck_title}</h2>
             <div className="mt-6 space-y-3">
               {deckAssets.map((asset) => (
                 <a
@@ -310,18 +311,18 @@ export default function InvestMemoPage() {
         )}
 
         <section className="py-12 border-b border-neutral-900">
-          <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Offer</div>
+          <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">{content.memo_offer_eyebrow}</div>
           <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">{settings.round_name}</h2>
           <div className="mt-6 grid sm:grid-cols-2 gap-px overflow-hidden rounded-xl border border-neutral-900 bg-neutral-900">
             {[
-              ["Round size", moneySek(settings.round_size_sek)],
-              ["Valuation", moneySek(settings.valuation_sek)],
-              ["Share price", moneySek(settings.share_price_sek)],
-              ["Shares offered", settings.shares_offered?.toLocaleString("sv-SE") || "—"],
-              ["Existing shares", settings.total_existing_shares?.toLocaleString("sv-SE") || "—"],
-              ["Minimum", `${settings.minimum_shares?.toLocaleString("sv-SE") || "—"} shares · ${moneySek(settings.minimum_investment_sek)}`],
-              ["Application deadline", settings.deadline_date || "—"],
-              ["Allocation communicated", settings.allocation_date || "—"],
+              [content.memo_round_size_label, moneySek(settings.round_size_sek)],
+              [content.memo_valuation_label, moneySek(settings.valuation_sek)],
+              [content.memo_share_price_label, moneySek(settings.share_price_sek)],
+              [content.memo_shares_offered_label, settings.shares_offered?.toLocaleString("sv-SE") || "—"],
+              [content.memo_existing_shares_label, settings.total_existing_shares?.toLocaleString("sv-SE") || "—"],
+              [content.memo_minimum_label, `${settings.minimum_shares?.toLocaleString("sv-SE") || "—"} shares · ${moneySek(settings.minimum_investment_sek)}`],
+              [content.memo_deadline_label, settings.deadline_date || "—"],
+              [content.memo_allocation_label, settings.allocation_date || "—"],
             ].map(([label, value]) => (
               <div key={label} className="bg-[#0B0C0E] p-4">
                 <div className="text-[10px] uppercase tracking-[0.16em] text-neutral-600">{label}</div>
@@ -331,13 +332,13 @@ export default function InvestMemoPage() {
           </div>
         </section>
 
-        <ListSection kicker="Use of funds" title="Where the round goes" rows={settings.use_of_funds} />
-        <ListSection kicker="Traction" title="What is working" rows={settings.traction_metrics} />
-        <ListSection kicker="Risks" title="What could go wrong" rows={settings.risks} />
+        <ListSection kicker={content.memo_use_of_funds_eyebrow} title={content.memo_use_of_funds_title} rows={settings.use_of_funds} />
+        <ListSection kicker={content.memo_traction_eyebrow} title={content.memo_traction_title} rows={settings.traction_metrics} />
+        <ListSection kicker={content.memo_risks_eyebrow} title={content.memo_risks_title} rows={settings.risks} />
 
         <section className="py-12 border-b border-neutral-900">
-          <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Team</div>
-          <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">Operators, not tourists</h2>
+          <div className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">{content.memo_team_eyebrow}</div>
+          <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">{content.memo_team_title}</h2>
           <div className="mt-6 space-y-4">
             {settings.team.map((person) => (
               <div key={person.name} className="rounded-xl border border-neutral-900 bg-[#0B0C0E] p-5">
@@ -350,10 +351,10 @@ export default function InvestMemoPage() {
         </section>
 
         <section id="interest" className="mt-20 rounded-2xl border border-neutral-800 bg-neutral-950 p-8">
-          <p className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">Register interest</p>
-          <h3 className="text-2xl font-medium tracking-tight">Want to go deeper?</h3>
+          <p className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-3">{content.memo_interest_eyebrow}</p>
+          <h3 className="text-2xl font-medium tracking-tight">{content.memo_interest_title}</h3>
           <p className="mt-3 text-sm text-neutral-500">
-            Register non-binding interest. We'll follow up with the full data room, financials and offer details.
+            {content.memo_interest_body}
           </p>
 
           {submitted ? (

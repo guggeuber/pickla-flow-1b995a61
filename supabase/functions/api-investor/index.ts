@@ -29,6 +29,7 @@ const SETTINGS_COLUMNS = [
   'risks',
   'team',
   'memo_sections',
+  'page_content',
   'is_active',
   'created_at',
   'updated_at',
@@ -79,6 +80,7 @@ const DEFAULT_SETTINGS = {
     { kicker: '04 · Future', title: 'Hosts, ambassadors, affiliates and venues', body: 'The future architecture is resource-first and AI-assisted, designed for distributed hosts, ambassadors, affiliates and venue partners.' },
     { kicker: '05 · Offer', title: 'Round terms', body: 'Pickla Solna AB offers up to 125 shares at 10,000 SEK per share, with a maximum round size of 1,250,000 SEK.' },
   ],
+  page_content: {},
   is_active: true,
 };
 
@@ -119,6 +121,9 @@ function normalizeSettings(row: Record<string, unknown> | null | undefined) {
     risks: arrayOrDefault(row?.risks, DEFAULT_SETTINGS.risks),
     team: arrayOrDefault(row?.team, DEFAULT_SETTINGS.team),
     memo_sections: arrayOrDefault(row?.memo_sections, DEFAULT_SETTINGS.memo_sections),
+    page_content: row?.page_content && typeof row.page_content === 'object' && !Array.isArray(row.page_content)
+      ? row.page_content
+      : DEFAULT_SETTINGS.page_content,
   };
 }
 
@@ -135,6 +140,7 @@ function publicSettings(settings: Record<string, unknown>) {
     public_thesis: settings.public_thesis,
     traction_metrics: settings.traction_metrics,
     team: settings.team,
+    page_content: settings.page_content,
     is_active: settings.is_active,
   };
 }
@@ -184,6 +190,10 @@ function sanitizeArray(value: unknown) {
   return Array.isArray(value) ? value : [];
 }
 
+function sanitizeObject(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
 function settingsPayload(body: Record<string, unknown>) {
   return {
     organization_id: body.organization_id ? String(body.organization_id) : null,
@@ -209,6 +219,7 @@ function settingsPayload(body: Record<string, unknown>) {
     risks: sanitizeArray(body.risks),
     team: sanitizeArray(body.team),
     memo_sections: sanitizeArray(body.memo_sections),
+    page_content: sanitizeObject(body.page_content),
     is_active: body.is_active !== false,
   };
 }

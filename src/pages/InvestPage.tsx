@@ -5,17 +5,6 @@ import picklaLogo from "@/assets/pickla-logo.svg";
 import { assetByType, assetsByType, InvestorAsset, InvestorSettings, mergeInvestorSettings } from "@/lib/investorContent";
 import { toast } from "sonner";
 
-const pillars = [
-  ["Pickleball", "Courts, memberships, open play and community programming."],
-  ["Stockholm Dart Arena", "Dart as a first-class social sports surface."],
-  ["Events", "Corporate, private, tournaments and partner activations."],
-  ["F&B", "Venue revenue, hospitality and community rituals."],
-  ["Admin OS", "Planning, calendar, operations truth and capacity."],
-  ["Desk OS", "Arrivals, check-in, customers and live actions."],
-  ["Customer 360", "Bookings, tickets, memberships, receipts and history."],
-  ["AI Operations", "Agent-assisted planning with human approval."],
-];
-
 export default function InvestPage() {
   const [settings, setSettings] = useState<InvestorSettings>(() => mergeInvestorSettings());
   const [assets, setAssets] = useState<InvestorAsset[]>([]);
@@ -66,23 +55,24 @@ export default function InvestPage() {
 
   const logo = assetByType(assets, "logo")?.public_url || picklaLogo;
   const hero = assetByType(assets, "hero") || assetByType(assets, "venue_photo");
+  const content = settings.page_content;
   const visualAssets = [
     {
-      label: "Pickla Arena",
-      title: "Live venue",
-      body: "Pickleball, events, F&B and community operations in one venue.",
+      label: content.visual_venue_label,
+      title: content.visual_venue_title,
+      body: content.visual_venue_body,
       assets: assetsByType(assets, "venue_photo"),
     },
     {
-      label: "Stockholm Dart Arena",
-      title: "Dart is part of the core surface",
-      body: "Stockholm Dart Arena is presented as a first-class Pickla venue surface, not an add-on.",
+      label: content.visual_dart_label,
+      title: content.visual_dart_title,
+      body: content.visual_dart_body,
       assets: assetsByType(assets, "dart_photo"),
     },
     {
-      label: "Pickla OS",
-      title: "The operating system",
-      body: "Admin OS, Desk OS, Customer 360, Operations Truth, Revenue Ledger and Event OS.",
+      label: content.visual_product_label,
+      title: content.visual_product_title,
+      body: content.visual_product_body,
       assets: assetsByType(assets, "product_screenshot"),
     },
   ].filter((section) => section.assets.length > 0);
@@ -94,7 +84,7 @@ export default function InvestPage() {
         <div className="flex items-center gap-2 font-medium tracking-tight">
           <img src={logo} alt={settings.company_name || "Pickla"} className="h-8 w-auto max-w-[120px]" />
         </div>
-        <span className="text-xs text-neutral-500 uppercase tracking-widest">Investor preview</span>
+        <span className="text-xs text-neutral-500 uppercase tracking-widest">{content.preview_badge}</span>
       </header>
 
       <main className="max-w-6xl mx-auto px-6 pb-32">
@@ -122,15 +112,11 @@ export default function InvestPage() {
           </div>
 
           <div className="mt-12 grid sm:grid-cols-3 gap-px bg-neutral-900 rounded-xl overflow-hidden border border-neutral-900">
-            {[
-              ["1", "Live venue", "Pickleball + Stockholm Dart Arena + F&B"],
-              ["2", "One OS", "Booking, events, memberships, community"],
-              ["3", "Network", "Hosts, ambassadors, affiliates, venues"],
-            ].map(([n, t, d]) => (
-              <div key={n} className="bg-[#0B0C0E] p-6">
-                <div className="text-neutral-600 text-xs tracking-widest">0{n}</div>
-                <div className="mt-3 font-medium">{t}</div>
-                <div className="mt-1 text-sm text-neutral-500">{d}</div>
+            {content.preview_highlights.map((item) => (
+              <div key={`${item.label}-${item.title}`} className="bg-[#0B0C0E] p-6">
+                <div className="text-neutral-600 text-xs tracking-widest">{item.label}</div>
+                <div className="mt-3 font-medium">{item.title}</div>
+                <div className="mt-1 text-sm text-neutral-500">{item.body}</div>
               </div>
             ))}
           </div>
@@ -139,7 +125,7 @@ export default function InvestPage() {
         {/* Narrative sections */}
         <section className="py-24 space-y-24 border-b border-neutral-900">
           <div className="grid sm:grid-cols-12 gap-8">
-            <div className="sm:col-span-3 text-xs uppercase tracking-[0.2em] text-neutral-500">The thesis</div>
+            <div className="sm:col-span-3 text-xs uppercase tracking-[0.2em] text-neutral-500">{content.preview_thesis_eyebrow}</div>
             <div className="sm:col-span-9 max-w-2xl">
               <h2 className="text-2xl sm:text-3xl font-medium tracking-tight">{settings.round_name}</h2>
               <p className="mt-4 text-neutral-400 leading-relaxed">{settings.public_thesis}</p>
@@ -158,7 +144,7 @@ export default function InvestPage() {
         {visualAssets.length > 0 && (
           <section className="py-24 border-b border-neutral-900">
             <h2 className="text-2xl sm:text-3xl font-medium tracking-tight max-w-xl">
-              Built from a real operating floor.
+              {content.preview_visual_heading}
             </h2>
             <div className="mt-12 space-y-12">
               {visualAssets.map((section) => (
@@ -190,13 +176,13 @@ export default function InvestPage() {
         {/* Pillars */}
         <section className="py-24 border-b border-neutral-900">
           <h2 className="text-2xl sm:text-3xl font-medium tracking-tight max-w-xl">
-            One stack. Many surfaces.
+            {content.preview_stack_heading}
           </h2>
           <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-px bg-neutral-900 rounded-xl overflow-hidden border border-neutral-900">
-            {pillars.map(([t, d]) => (
-              <div key={t} className="bg-[#0B0C0E] p-6">
-                <div className="font-medium">{t}</div>
-                <div className="mt-2 text-sm text-neutral-500 leading-relaxed">{d}</div>
+            {content.preview_pillars.map((item) => (
+              <div key={`${item.label}-${item.title}`} className="bg-[#0B0C0E] p-6">
+                <div className="font-medium">{item.title}</div>
+                <div className="mt-2 text-sm text-neutral-500 leading-relaxed">{item.body}</div>
               </div>
             ))}
           </div>
@@ -205,10 +191,10 @@ export default function InvestPage() {
         {/* Request access */}
         <section id="request" className="py-24">
           <div className="max-w-xl">
-            <p className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-4">Investor access</p>
-            <h2 className="text-3xl sm:text-4xl font-medium tracking-tight">Request the memo.</h2>
+            <p className="text-xs uppercase tracking-[0.2em] text-neutral-500 mb-4">{content.preview_access_eyebrow}</p>
+            <h2 className="text-3xl sm:text-4xl font-medium tracking-tight">{content.preview_access_title}</h2>
             <p className="mt-4 text-neutral-400">
-              The full investor memorandum — vision, traction, team, financials and offer — is shared privately with vetted investors. Leave your email below and we'll get back to you.
+              {content.preview_access_body}
             </p>
 
             {done ? (
