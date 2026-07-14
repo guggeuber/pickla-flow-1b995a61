@@ -6,18 +6,25 @@ import { toast } from "sonner";
 import { apiGet } from "@/lib/api";
 import { createCommerceCart, fetchCommerceCatalog, formatCommerceMoney } from "@/lib/commerce";
 
+interface PublicVenueResponse {
+  venue: {
+    id: string;
+  };
+}
+
 export default function CommerceShopPage() {
   const [params] = useSearchParams();
   const slug = params.get("v") || "pickla-arena-sthlm";
   const navigate = useNavigate();
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const venue = useQuery({ queryKey: ["public-venue", slug], queryFn: () => apiGet<any>("api-bookings", "public-venue", { slug }) });
-  const catalog = useQuery({ queryKey: ["commerce-catalog", venue.data?.id], queryFn: () => fetchCommerceCatalog(venue.data.id), enabled: !!venue.data?.id });
+  const venue = useQuery({ queryKey: ["public-venue", slug], queryFn: () => apiGet<PublicVenueResponse>("api-bookings", "public-venue", { slug }) });
+  const venueId = venue.data?.venue.id;
+  const catalog = useQuery({ queryKey: ["commerce-catalog", venueId], queryFn: () => fetchCommerceCatalog(venueId!), enabled: !!venueId });
   const products = (catalog.data?.products || []).filter((product) => product.store_eligible === true);
   const selected = useMemo(() => products.filter((product) => (quantities[product.id] || 0) > 0), [products, quantities]);
   const totalMinor = selected.reduce((sum, product) => sum + (quantities[product.id] || 0) * Number(product.base_price_sek || 0) * 100, 0);
   const createCart = useMutation({
-    mutationFn: () => createCommerceCart({ venueId: venue.data.id, source: "commerce_shop", items: selected.map((product) => ({ product_id: product.id, quantity: quantities[product.id] })) }),
+    mutationFn: () => createCommerceCart({ venueId: venueId!, source: "commerce_shop", items: selected.map((product) => ({ product_id: product.id, quantity: quantities[product.id] })) }),
     onSuccess: (result) => navigate(`/cart?token=${encodeURIComponent(result.cart_token || "")}`),
     onError: (error: Error) => toast.error(error.message),
   });
