@@ -17,6 +17,10 @@ import {
 import { toast } from "sonner";
 import { Loader2, Copy, Check, X, RefreshCw, Upload, Save, Plus, Trash2 } from "lucide-react";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
+import { copyWithFallback } from "@/lib/share";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 type Lead = {
   id: string;
@@ -30,6 +34,10 @@ type Lead = {
   requested_shares: number | null;
   token_expires_at: string | null;
   message: string | null;
+  metadata?: {
+    source?: string | null;
+    internal_note?: string | null;
+  } | null;
   created_at: string;
 };
 
@@ -94,6 +102,9 @@ export default function AdminInvestorPage() {
   const [assetType, setAssetType] = useState<InvestorAssetType>("hero");
   const [assetTitle, setAssetTitle] = useState("");
   const [assetDescription, setAssetDescription] = useState("");
+  const [privateMemoOpen, setPrivateMemoOpen] = useState(false);
+  const [privateMemoForm, setPrivateMemoForm] = useState({ name: "", email: "", internalNote: "" });
+  const [privateMemoResult, setPrivateMemoResult] = useState<{ leadId: string; url: string } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -267,6 +278,31 @@ export default function AdminInvestorPage() {
     }
   }
 
+  async function createPrivateMemo() {
+    const name = privateMemoForm.name.trim();
+    if (!name) {
+      toast.error("Name is required");
+      return;
+    }
+
+    setBusyId("private-memo-create");
+    try {
+      const res = await apiPost<{ memo_url: string; lead: Lead }>("api-investor", "create-private-memo", {
+        name,
+        email: privateMemoForm.email.trim() || null,
+        internal_note: privateMemoForm.internalNote.trim() || null,
+      });
+      setLeads((current) => [res.lead, ...current.filter((lead) => lead.id !== res.lead.id)]);
+      setIssuedLinks((current) => ({ ...current, [res.lead.id]: res.memo_url }));
+      setPrivateMemoResult({ leadId: res.lead.id, url: res.memo_url });
+      toast.success("Private memo created");
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function reject(id: string) {
     if (!confirm("Reject this request?")) return;
     setBusyId(id);
@@ -333,6 +369,25 @@ export default function AdminInvestorPage() {
     });
   }
 
+  async function copyPrivateMemoLink(id: string, text: string) {
+    try {
+      await copyWithFallback(text);
+      setCopied(id);
+      setTimeout(() => setCopied(null), 1500);
+      toast.success("Link copied");
+    } catch (error) {
+      toast.error((error as Error).message || "Could not copy link");
+    }
+  }
+
+  function changePrivateMemoOpen(open: boolean) {
+    setPrivateMemoOpen(open);
+    if (!open) {
+      setPrivateMemoForm({ name: "", email: "", internalNote: "" });
+      setPrivateMemoResult(null);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 p-6">
       <div className="max-w-6xl mx-auto">
@@ -341,10 +396,64 @@ export default function AdminInvestorPage() {
             <h1 className="text-2xl font-medium tracking-tight">Investors</h1>
             <p className="text-sm text-neutral-500 mt-1">Manage access requests and investor page content.</p>
           </div>
-          <button onClick={load} className="inline-flex items-center gap-2 h-9 px-3 rounded-md border border-neutral-800 hover:bg-neutral-900 text-sm">
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPrivateMemoOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-md bg-white px-3 text-sm font-medium text-black hover:bg-neutral-200">
+              <Plus className="h-4 w-4" /> Private memo
+            </button>
+            <button onClick={load} className="inline-flex items-center gap-2 h-9 px-3 rounded-md border border-neutral-800 hover:bg-neutral-900 text-sm">
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         </div>
+
+        <Dialog open={privateMemoOpen} onOpenChange={changePrivateMemoOpen}>
+          <DialogContent className="border-neutral-800 bg-neutral-950 text-neutral-100 sm:max-w-md">
+            {privateMemoResult ? (
+              <div className="space-y-5">
+                <DialogHeader>
+                  <DialogTitle>Private memo created</DialogTitle>
+                  <DialogDescription>No email was sent. Share this private link directly with the recipient.</DialogDescription>
+                </DialogHeader>
+                <code className="block overflow-x-auto whitespace-nowrap rounded-md border border-neutral-800 bg-black/40 px-3 py-3 text-xs text-neutral-300">{privateMemoResult.url}</code>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button type="button" onClick={() => copyPrivateMemoLink(privateMemoResult.leadId, privateMemoResult.url)} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-white px-4 text-sm font-medium text-black hover:bg-neutral-200">
+                    {copied === privateMemoResult.leadId ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    {copied === privateMemoResult.leadId ? "Link copied" : "Copy link"}
+                  </button>
+                  <a href={privateMemoResult.url} target="_blank" rel="noreferrer" className="inline-flex h-10 items-center justify-center rounded-md border border-neutral-700 px-4 text-sm font-medium hover:bg-neutral-900">Open memo</a>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <DialogHeader>
+                  <DialogTitle>Create private memo</DialogTitle>
+                  <DialogDescription>Create a personalized, revocable investor link. Nothing is emailed automatically.</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <label className="block space-y-1.5" htmlFor="private-memo-name">
+                    <span className="text-sm font-medium">Name *</span>
+                    <Input id="private-memo-name" autoFocus value={privateMemoForm.name} onChange={(event) => setPrivateMemoForm((current) => ({ ...current, name: event.target.value }))} className="border-neutral-800 bg-neutral-900" />
+                  </label>
+                  <label className="block space-y-1.5" htmlFor="private-memo-email">
+                    <span className="text-sm font-medium">Email <span className="font-normal text-neutral-500">(optional)</span></span>
+                    <Input id="private-memo-email" type="email" value={privateMemoForm.email} onChange={(event) => setPrivateMemoForm((current) => ({ ...current, email: event.target.value }))} className="border-neutral-800 bg-neutral-900" />
+                  </label>
+                  <label className="block space-y-1.5" htmlFor="private-memo-note">
+                    <span className="text-sm font-medium">Internal note <span className="font-normal text-neutral-500">(optional)</span></span>
+                    <Textarea id="private-memo-note" value={privateMemoForm.internalNote} onChange={(event) => setPrivateMemoForm((current) => ({ ...current, internalNote: event.target.value }))} className="border-neutral-800 bg-neutral-900" />
+                  </label>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => changePrivateMemoOpen(false)} className="h-10 rounded-md border border-neutral-800 px-4 text-sm hover:bg-neutral-900">Cancel</button>
+                  <button type="button" onClick={createPrivateMemo} disabled={busyId === "private-memo-create" || !privateMemoForm.name.trim()} className="inline-flex h-10 items-center gap-2 rounded-md bg-white px-4 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50">
+                    {busyId === "private-memo-create" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Create memo
+                  </button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         <div className="mb-6 inline-flex rounded-lg border border-neutral-800 bg-neutral-950 p-1">
           {[
@@ -643,16 +752,24 @@ function LeadsList(props: {
     <div className="space-y-3">
       {props.leads.map((lead) => {
         const issued = props.issuedLinks[lead.id];
+        const isPrivate = lead.metadata?.source === "private_invite";
+        const isRevoked = isPrivate && lead.status === "rejected" && !!lead.approved_at && !lead.rejected_at;
         return (
           <div key={lead.id} className="rounded-xl border border-neutral-900 bg-neutral-950 p-5">
             <div className="flex flex-wrap items-start gap-4 justify-between">
               <div className="min-w-0">
                 <div className="flex items-center gap-3 flex-wrap">
                   <div className="font-medium">{lead.name || lead.email}</div>
-                  <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${statusStyles[lead.status]}`}>{lead.status}</span>
+                  {isPrivate && <span className="rounded border border-violet-800 bg-violet-950/40 px-2 py-0.5 text-[10px] uppercase tracking-wider text-violet-300">Private</span>}
+                  <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${statusStyles[lead.status]}`}>{isRevoked ? "revoked" : lead.status}</span>
                 </div>
-                <div className="text-xs text-neutral-500 mt-1">{lead.email} · received {new Date(lead.created_at).toLocaleString()}</div>
+                <div className="text-xs text-neutral-500 mt-1">
+                  {isPrivate
+                    ? <>{lead.email ? `${lead.email} · ` : ""}created {new Date(lead.created_at).toLocaleString()}</>
+                    : <>{lead.email} · received {new Date(lead.created_at).toLocaleString()}</>}
+                </div>
                 {lead.message && <div className="mt-3 text-sm text-neutral-400 border-l-2 border-neutral-800 pl-3 italic">{lead.message}</div>}
+                {isPrivate && lead.metadata?.internal_note && <div className="mt-3 border-l-2 border-neutral-800 pl-3 text-sm text-neutral-400">{lead.metadata.internal_note}</div>}
                 <div className="mt-3 text-xs text-neutral-600 flex flex-wrap gap-x-4 gap-y-1">
                   {lead.opened_at && <span>Opened {new Date(lead.opened_at).toLocaleString()}</span>}
                   {lead.submitted_interest_at && <span>Interest {new Date(lead.submitted_interest_at).toLocaleString()}</span>}

@@ -2,6 +2,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { auditMutation, requireSuperAdmin } from '../_shared/authorization.ts';
+import { canonicalPublicUrl } from '../_shared/canonical_origin.ts';
 
 const TOKEN_TTL_DAYS = 30;
 const SETTINGS_COLUMNS = [
@@ -356,6 +357,74 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, settings, assets });
     }
 
+    if (path === 'create-private-memo' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      const name = String(body.name || '').trim().slice(0, 120);
+      const email = String(body.email || '').trim().toLowerCase().slice(0, 255);
+      const internalNote = String(body.internal_note || '').trim().slice(0, 2000) || null;
+      if (!name) return errorResponse('Name is required', 400);
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return errorResponse('Invalid email', 400);
+      }
+
+      // Keep the public request endpoint's one-row-per-email assumption intact.
+      // Manual memos with an existing email require using the existing lead.
+      if (email) {
+        const { data: existing, error: existingError } = await admin
+          .from('investor_leads')
+          .select('id')
+          .eq('email', email)
+          .limit(1)
+          .maybeSingle();
+        if (existingError) return errorResponse(existingError.message, 500);
+        if (existing) return errorResponse('An investor record already exists for this email', 409);
+      }
+
+      const token = randomToken();
+      const hash = await sha256Hex(token);
+      const expires = new Date(Date.now() + TOKEN_TTL_DAYS * 86400_000).toISOString();
+      const now = new Date().toISOString();
+      const { data: lead, error } = await admin.from('investor_leads').insert({
+        name,
+        email,
+        status: 'approved',
+        approved_at: now,
+        access_token_hash: hash,
+        token_expires_at: expires,
+        opened_at: null,
+        message: null,
+        metadata: {
+          source: 'private_invite',
+          internal_note: internalNote,
+          created_by: adminCheck.userId,
+        },
+      }).select('id,email,name,status,approved_at,rejected_at,opened_at,submitted_interest_at,requested_shares,token_expires_at,message,metadata,created_at,updated_at').single();
+      if (error) return errorResponse(error.message, 500);
+
+      try {
+        await auditMutation(admin, {
+          req,
+          userId: adminCheck.userId!,
+          action: 'investor.private_memo.create',
+          entityTable: 'investor_leads',
+          entityId: lead.id,
+          after: lead as Record<string, unknown>,
+          metadata: { source: 'private_invite', ttl_days: TOKEN_TTL_DAYS },
+        });
+      } catch (auditError) {
+        await admin.from('investor_leads').delete().eq('id', lead.id);
+        throw auditError;
+      }
+
+      return jsonResponse({
+        ok: true,
+        token,
+        memo_url: canonicalPublicUrl(`/invest/memo/${encodeURIComponent(token)}`, req),
+        expires_at: expires,
+        lead,
+      }, 201, 0);
+    }
+
     if (path === 'save-settings' && req.method === 'POST') {
       const body = await req.json().catch(() => ({}));
       const payload = settingsPayload(body as Record<string, unknown>);
@@ -443,7 +512,7 @@ Deno.serve(async (req) => {
     if (path === 'leads' && req.method === 'GET') {
       const { data, error } = await admin
         .from('investor_leads')
-        .select('id,email,name,status,approved_at,rejected_at,opened_at,submitted_interest_at,requested_shares,token_expires_at,message,created_at,updated_at')
+        .select('id,email,name,status,approved_at,rejected_at,opened_at,submitted_interest_at,requested_shares,token_expires_at,message,metadata,created_at,updated_at')
         .order('created_at', { ascending: false })
         .limit(500);
       if (error) return errorResponse(error.message, 500);

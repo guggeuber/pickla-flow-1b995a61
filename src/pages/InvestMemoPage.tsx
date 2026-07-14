@@ -235,7 +235,7 @@ export default function InvestMemoPage() {
         <div className="flex items-center gap-2 font-medium tracking-tight">
           <img src={logo} alt={settings.company_name || "Pickla"} className="h-8 w-auto max-w-[120px]" />
         </div>
-        <span className="text-[10px] uppercase tracking-[0.2em] text-neutral-600">Confidential · {lead.email}</span>
+        <span className="text-[10px] uppercase tracking-[0.2em] text-neutral-600">Confidential{lead.email ? ` · ${lead.email}` : ""}</span>
       </header>
 
       <main className="max-w-3xl mx-auto px-6 pb-32">
