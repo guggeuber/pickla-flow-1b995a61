@@ -1,15 +1,15 @@
 import { ArrowRight, BarChart3, Calendar, LogIn, Menu, Plus, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { apiGet } from "@/lib/api";
 import {
   getBookingChatResourceId,
   getBookingCourtLabel,
-  groupBookingRows,
 } from "@/lib/bookingGroups";
+import { buildBookingHistory, formatBookingHistoryTime } from "@/lib/bookingHistory";
+import { useMyBookings } from "@/hooks/useMyBookings";
+import { BookingStatusChip } from "@/components/bookings/BookingStatusChip";
 import { useVenueStatusBySlug } from "@/lib/venueStatus";
 import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
@@ -24,29 +24,6 @@ type PicklaTopBarProps = {
   background?: string;
 };
 
-function useRecentBookings(userId?: string) {
-  return useQuery({
-    queryKey: ["topbar-recent-bookings", userId],
-    enabled: !!userId,
-    staleTime: 30000,
-    queryFn: async () => {
-      const response = await apiGet<{ items: any[] }>("api-bookings", "my-bookings");
-      const rows = (response.items || []).filter((booking: any) =>
-        ["confirmed", "pending"].includes(String(booking.status || ""))
-      );
-      return groupBookingRows(rows)
-        .sort((a: any, b: any) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
-        .slice(0, 5);
-    },
-  });
-}
-
-function formatBookingTime(booking: any) {
-  const start = new Date(booking.start_time);
-  const end = new Date(booking.end_time);
-  return `${start.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })} ${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}-${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
-}
-
 export function PicklaTopBar({
   slug = "pickla-arena-sthlm",
   venueName,
@@ -57,8 +34,8 @@ export function PicklaTopBar({
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
-  const { data: recentBookings = [] } = useRecentBookings(user?.id);
-  const visibleBookings = useMemo(() => recentBookings, [recentBookings]);
+  const { data: bookingRows = [] } = useMyBookings();
+  const visibleBookings = useMemo(() => buildBookingHistory(bookingRows), [bookingRows]);
   const { venue, status } = useVenueStatusBySlug(showVenue ? slug : undefined);
   const resolvedVenueName = venueName
     || venue?.name?.replace("Pickla Arena ", "Pickla ")
@@ -197,11 +174,11 @@ export function PicklaTopBar({
               {user && (
                 <section className="space-y-2">
                   <p className="px-1 text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    mina senaste bokningar
+                    mina bokningar
                   </p>
                   {visibleBookings.length > 0 ? (
-                    visibleBookings.map((booking: any) => {
-                      const ref = booking.primary_booking_ref || booking.booking_ref || booking.id || getBookingChatResourceId(booking);
+                    visibleBookings.map((booking) => {
+                      const ref = String(booking.primary_booking_ref || booking.booking_ref || booking.id || getBookingChatResourceId(booking));
                       return (
                         <button
                           key={getBookingChatResourceId(booking) || ref}
@@ -217,9 +194,10 @@ export function PicklaTopBar({
                               {getBookingCourtLabel(booking)}
                             </span>
                             <span className="block truncate text-[12px] text-neutral-500">
-                              {formatBookingTime(booking)}
+                              {formatBookingHistoryTime(booking)}
                             </span>
                           </span>
+                          <BookingStatusChip status={booking.history_status} />
                           <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
                         </button>
                       );

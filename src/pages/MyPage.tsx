@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut, UserCheck } from "lucide-react";
+import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, FileText, LogOut, UserCheck } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
@@ -19,17 +19,17 @@ import {
   getBookingCourtLabel,
   getBookingCourtNamesLabel,
   getBookingIds,
-  getLegacyDirectBookingTimeResourceId,
-  groupBookingRows,
-  stripBookingCodesFromText,
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
-import { ThreadRow } from "@/components/ui/ThreadRow";
 import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
 import { getDisplayName, getFirstName } from "@/lib/displayName";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@/components/bookings/BookingParticipantSummary";
+import { BookingStatusChip } from "@/components/bookings/BookingStatusChip";
+import { BookingConversationIndicator } from "@/components/bookings/BookingConversationIndicator";
+import { bookingHasConversation, buildBookingHistory, formatBookingHistoryTime } from "@/lib/bookingHistory";
+import { useMyBookings } from "@/hooks/useMyBookings";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -160,18 +160,6 @@ function usePlayerProfile() {
   });
 }
 
-function useMyBookings() {
-  const { user } = useAuth();
-  return useQuery({
-    queryKey: ["my-bookings", user?.id],
-    enabled: !!user,
-    queryFn: async () => {
-      const response = await apiGet<{ items: any[] }>("api-bookings", "my-bookings");
-      return response.items || [];
-    },
-  });
-}
-
 function useMySessionRegistrations() {
   const { user } = useAuth();
   return useQuery<MySessionRegistration[]>({
@@ -218,33 +206,6 @@ function useMyActivityThreads() {
       return ((data || []) as any[])
         .map((row) => ({ joined_at: row.joined_at, room: row.chat_rooms }))
         .filter((row) => row.room && row.room.room_type !== "daily") as ActivityThread[];
-    },
-  });
-}
-
-function useActivityThreadPreviews(roomIds: string[]) {
-  const key = roomIds.slice().sort().join(",");
-  return useQuery({
-    queryKey: ["activity-thread-previews", key],
-    enabled: roomIds.length > 0,
-    staleTime: 15000,
-    refetchInterval: 30000,
-    queryFn: async () => {
-      const { data: messages } = await supabase
-        .from("chat_messages")
-        .select("room_id, content, created_at")
-        .in("room_id", roomIds)
-        .order("created_at", { ascending: false });
-      const previews: Record<string, { content: string; created_at: string }> = {};
-      for (const msg of messages || []) {
-        if (!previews[msg.room_id]) {
-          previews[msg.room_id] = {
-            content: msg.content || "Meddelande raderat",
-            created_at: msg.created_at,
-          };
-        }
-      }
-      return previews;
     },
   });
 }
@@ -306,57 +267,13 @@ function getActivityRoomResourceId(registration: MySessionRegistration) {
   return `activity_session:${registration.activity_session_id}:${sessionDate}`;
 }
 
+function sessionRegistrationHasConversation(registration: MySessionRegistration, rooms: ActivityThreadRoom[]) {
+  const resourceId = getActivityRoomResourceId(registration);
+  return Boolean(resourceId && rooms.some((room) => room.resource_id === resourceId));
+}
+
 function getThreadPath(room: ActivityThreadRoom) {
   return `/chat/${encodeURIComponent(room.id)}`;
-}
-
-function getThreadInitials(title: string | null | undefined) {
-  const words = String(title || "Pickla")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  return (words.slice(0, 2).map((word) => word[0]).join("") || "P").toUpperCase();
-}
-
-function formatThreadTimestamp(value?: string | null) {
-  if (!value) return undefined;
-  const dt = DateTime.fromISO(value, { zone: "utc" }).setZone("Europe/Stockholm");
-  if (!dt.isValid) return undefined;
-  const today = DateTime.now().setZone("Europe/Stockholm");
-  return dt.hasSame(today, "day") ? dt.toFormat("HH:mm") : dt.toFormat("d MMM");
-}
-
-function isInternalThreadPreview(value: string) {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) return false;
-  if (["källa", "typ"].some((marker) => normalized.includes(`${marker}:`))) return true;
-  return normalized.includes("publik gruppboknings" + "förfrågan");
-}
-
-function getConsumerThreadPreview(content?: string | null) {
-  const cleaned = stripBookingCodesFromText(content || "")?.trim() || "";
-  if (!cleaned || isInternalThreadPreview(cleaned)) return undefined;
-  return cleaned;
-}
-
-function getOwnedBookingThreadKeys(bookings: any[]) {
-  const keys = new Set<string>();
-  for (const booking of bookings) {
-    const groupResourceId = getBookingChatResourceId(booking);
-    if (groupResourceId) keys.add(groupResourceId);
-    const legacyDirectResourceId = getLegacyDirectBookingTimeResourceId(booking);
-    if (legacyDirectResourceId) keys.add(legacyDirectResourceId);
-    if (booking.booking_ref) keys.add(booking.booking_ref);
-    for (const row of booking.bookings || []) {
-      if (row.booking_ref) keys.add(row.booking_ref);
-      const rowResourceId = getBookingChatResourceId(row);
-      if (rowResourceId) keys.add(rowResourceId);
-      const legacyRowResourceId = getLegacyDirectBookingTimeResourceId(row);
-      if (legacyRowResourceId) keys.add(legacyRowResourceId);
-    }
-  }
-  return keys;
 }
 
 function getBookingDrawerKey(booking: any) {
@@ -2452,22 +2369,17 @@ const MyPage = () => {
   const currentYear = new Date().getFullYear();
   const { data: currentYearReceipts } = useMyWellnessReceipts(currentYear);
   const { data: nextYearReceipts } = useMyWellnessReceipts(currentYear + 1);
-  const activityThreadIds = activityThreads.map((thread) => thread.room.id);
-  const { data: threadPreviews = {} } = useActivityThreadPreviews(activityThreadIds);
   const queryClient = useQueryClient();
 
   const [selectedBooking, setSelectedBooking] = useState<Record<string, unknown> | null>(null);
   const [selectedSessionRegistration, setSelectedSessionRegistration] = useState<MySessionRegistration | null>(null);
   const [showMembershipDetails, setShowMembershipDetails] = useState(false);
-  const [showPast, setShowPast] = useState(false);
+  const [showPast, setShowPast] = useState(true);
 
   useEffect(() => {
     const bookingRefParam = searchParams.get("booking");
     if (!bookingRefParam || selectedBooking || !bookings?.length) return;
-    const grouped = groupBookingRows((bookings || []).filter((booking) => {
-      const status = (booking as { status?: string }).status;
-      return status === "confirmed" || status === "pending";
-    }));
+    const grouped = buildBookingHistory(bookings || []);
     const match = grouped.find((booking) => {
       const bookingRecord = booking as Record<string, unknown>;
       const keys = new Set<string>();
@@ -2515,8 +2427,9 @@ const MyPage = () => {
   const displayName = getDisplayName({ playerProfile: profile, authUser: user, fallback: "Spelare" }) || "Spelare";
   const greetingName = getFirstName({ playerProfile: profile, authUser: user, fallback: displayName }) || displayName;
   const now = Date.now();
-  const activeBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() >= now));
-  const pastBookings = groupBookingRows((bookings || []).filter((b: any) => (b.status === "confirmed" || b.status === "pending") && new Date(b.end_time).getTime() < now));
+  const bookingHistory = buildBookingHistory(bookings || [], now);
+  const activeBookings = bookingHistory.filter((booking) => booking.history_status === "upcoming");
+  const pastBookings = bookingHistory.filter((booking) => booking.history_status !== "upcoming");
   const activeSessionRegistrations = (sessionRegistrations || []).filter((registration) => {
     const sessionEnd = getSessionRegistrationDateTime(registration, true);
     return sessionEnd ? sessionEnd.getTime() >= now : true;
@@ -2535,21 +2448,7 @@ const MyPage = () => {
   });
   const activeBookingCount = activeBookings.length + activeSessionRegistrations.length + activeEventRegistrations.length;
   const pastBookingCount = pastBookings.length + pastSessionRegistrations.length + pastEventRegistrations.length;
-  const ownedBookingThreadKeys = getOwnedBookingThreadKeys(activeBookings);
-  const visibleActivityThreads = activityThreads.filter(({ room }) =>
-    room.room_type !== "booking" || !room.resource_id || !ownedBookingThreadKeys.has(room.resource_id)
-  );
-  const visibleThreadRoomIds = visibleActivityThreads.map((thread) => thread.room.id);
-  const visibleThreadPreviews = Object.fromEntries(
-    Object.entries(threadPreviews).filter(([roomId]) => visibleThreadRoomIds.includes(roomId))
-  );
-  const visibleMessageThreads = visibleActivityThreads
-    .map(({ room, joined_at }) => {
-      const preview = visibleThreadPreviews[room.id];
-      const previewText = getConsumerThreadPreview(preview?.content);
-      return { room, joined_at, preview, previewText };
-    })
-    .filter((thread) => Boolean(thread.previewText));
+  const conversationRooms = activityThreads.map((thread) => thread.room);
   const receiptItems = [
     ...(currentYearReceipts?.items || []),
     ...(nextYearReceipts?.items || []),
@@ -2680,7 +2579,7 @@ const MyPage = () => {
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                {activeBookings.slice(0, 5).map((b: any) => (
+                {activeBookings.map((b: any) => (
                   <button
                     key={getBookingChatResourceId(b)}
                     onClick={() => openBookingDetails(b)}
@@ -2690,9 +2589,7 @@ const MyPage = () => {
                     <div className="min-w-0">
                       <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{getBookingCourtLabel(b)}</p>
                       <p className="text-xs" style={{ color: TEXT_MUTED }}>
-                        {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
-                        {" "}
-                        {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+                        {formatBookingHistoryTime(b)}
                       </p>
                       {b.court_count > 1 && (
                         <p className="text-[11px] mt-1 truncate" style={{ color: TEXT_MUTED }}>
@@ -2704,9 +2601,8 @@ const MyPage = () => {
                       </p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: b.status === "confirmed" ? GREEN_LIGHT : BLUE_LIGHT, color: b.status === "confirmed" ? GREEN : BLUE }}>
-                        {b.status === "confirmed" ? "Bekräftad" : "Väntande"}
-                      </span>
+                      <BookingConversationIndicator visible={bookingHasConversation(b, conversationRooms)} />
+                      <BookingStatusChip status={b.history_status} />
                       <span
                         role="button"
                         tabIndex={0}
@@ -2757,6 +2653,7 @@ const MyPage = () => {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
+                        <BookingConversationIndicator visible={sessionRegistrationHasConversation(registration, conversationRooms)} />
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: GREEN_LIGHT, color: GREEN }}>
                           Anmäld
                         </span>
@@ -2797,40 +2694,6 @@ const MyPage = () => {
               </div>
             )}
 
-            <div className="mt-4">
-              <div className="flex items-center gap-2 mb-2">
-                <MessageCircle className="w-4 h-4" style={{ color: BLUE }} />
-                <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Meddelanden</span>
-                {visibleMessageThreads.length > 0 && (
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{visibleMessageThreads.length}</span>
-                )}
-              </div>
-              {visibleMessageThreads.length > 0 ? (
-                <div className="flex flex-col gap-2">
-                  {visibleMessageThreads.slice(0, 6).map(({ room, joined_at, preview, previewText }) => (
-                    <button
-                      key={room.id}
-                      onClick={() => navigate(getThreadPath(room))}
-                      className="rounded-xl p-3 text-left active:scale-[0.98] transition-transform"
-                      style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
-                    >
-                      <ThreadRow
-                        avatarInitials={getThreadInitials(room.title)}
-                        avatarUrl={null}
-                        displayName={room.title || "Konversation"}
-                        lastMessagePreview={previewText}
-                        timestamp={formatThreadTimestamp(preview?.created_at || room.updated_at || joined_at)}
-                      />
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-xl p-3 text-sm" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}`, color: TEXT_SECONDARY }}>
-                  Inga konversationer än — de dyker upp när du anmäler dig till något.
-                </div>
-              )}
-            </div>
-
             {pastBookingCount > 0 && (
               <div className="mt-2">
                 <button
@@ -2857,13 +2720,15 @@ const MyPage = () => {
                             className="rounded-xl p-3 flex items-center justify-between text-left opacity-70 active:scale-[0.98] transition-transform"
                             style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}
                           >
-                            <div>
-                              <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{b.venue_courts?.name || "Bana"}</p>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium" style={{ color: TEXT_PRIMARY }}>{getBookingCourtLabel(b)}</p>
                               <p className="text-xs" style={{ color: TEXT_MUTED }}>
-                                {new Date(b.start_time).toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "short" })}
-                                {" "}
-                                {new Date(b.start_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–{new Date(b.end_time).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}
+                                {formatBookingHistoryTime(b)}
                               </p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <BookingConversationIndicator visible={bookingHasConversation(b, conversationRooms)} />
+                              <BookingStatusChip status={b.history_status} />
                             </div>
                           </button>
                         ))}
@@ -2892,9 +2757,12 @@ const MyPage = () => {
                                   Aktivitet · {session?.venues?.name || "Pickla"}
                                 </p>
                               </div>
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: PAGE_BG, color: TEXT_SECONDARY }}>
-                                Aktivitet
-                              </span>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <BookingConversationIndicator visible={sessionRegistrationHasConversation(registration, conversationRooms)} />
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: PAGE_BG, color: TEXT_SECONDARY }}>
+                                  Aktivitet
+                                </span>
+                              </div>
                             </button>
                           );
                         })}

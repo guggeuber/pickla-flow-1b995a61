@@ -14,6 +14,7 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/u
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { SessionScheduleRow } from "@/components/session";
 import { openBookingToPresentation } from "@/lib/sessionPresentation";
+import { groupTimesByDaypart, reconcileCourtSelection } from "@/lib/bookingSelection";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
@@ -23,8 +24,6 @@ const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
 type SportFilter = "pickleball" | "dart";
-type TimePeriod = "MORGON" | "LUNCH" | "EFTERMIDDAG" | "KVÄLL";
-const PERIOD_OPTIONS: TimePeriod[] = ["MORGON", "LUNCH", "EFTERMIDDAG", "KVÄLL"];
 
 function getStockholmTodayDate() {
   return DateTime.now().setZone("Europe/Stockholm").startOf("day").toJSDate();
@@ -58,14 +57,6 @@ function addMinutesToTime(time: string, minutesToAdd: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function getTimePeriod(time: string): TimePeriod {
-  const hour = Number(time.slice(0, 2));
-  if (hour < 12) return "MORGON";
-  if (hour < 15) return "LUNCH";
-  if (hour < 20) return "EFTERMIDDAG";
-  return "KVÄLL";
-}
-
 function formatDuration(minutes: number) {
   if (minutes === 60) return "1 tim";
   if (minutes === 90) return "1.5 tim";
@@ -73,7 +64,7 @@ function formatDuration(minutes: number) {
   return `${minutes} min`;
 }
 
-function formatPeriodLabel(period: TimePeriod) {
+function formatPeriodLabel(period: "MORGON" | "LUNCH" | "EFTERMIDDAG" | "KVÄLL") {
   if (period === "EFTERMIDDAG") return "Eftermiddag";
   return period.charAt(0) + period.slice(1).toLowerCase();
 }
@@ -221,7 +212,6 @@ export default function BookingPage() {
   const [showCourtList, setShowCourtList] = useState(false);
   const [showTimeList, setShowTimeList] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>("EFTERMIDDAG");
   const [name, setName] = useState(searchParams.get("name") || "");
   const [phone, setPhone] = useState(searchParams.get("phone") || "");
   const [email, setEmail] = useState(searchParams.get("email") || "");
@@ -425,14 +415,10 @@ export default function BookingPage() {
   }, [timeSlots, dateStr, todayStr, selectedDuration, openingHours?.close_time]);
 
   const groupedTimeSlots = useMemo(() => {
-    const groups: Record<string, string[]> = {};
-    filteredTimeSlots.forEach((slot) => {
-      const period = getTimePeriod(slot);
-      groups[period] = [...(groups[period] || []), slot];
-    });
-    return ["MORGON", "LUNCH", "EFTERMIDDAG", "KVÄLL"]
-      .map((label) => ({ label, slots: groups[label] || [] }))
-      .filter((group) => group.slots.length > 0);
+    return groupTimesByDaypart(filteredTimeSlots).map((group) => ({
+      ...group,
+      label: formatPeriodLabel(group.period),
+    }));
   }, [filteredTimeSlots]);
 
   // Check which courts are available for the selected time
@@ -466,39 +452,67 @@ export default function BookingPage() {
     [sportCourts, courtAvailability]
   );
 
-  const getFirstAvailableCourtForSlot = (slot: string) => {
+  const getAvailableCourtsForSlot = (slot: string) => {
     const startISO = DateTime.fromISO(`${dateStr}T${slot}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
     const endTime = addMinutesToTime(slot, selectedDuration);
     const endISO = DateTime.fromISO(`${dateStr}T${endTime}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
     const startMs = new Date(startISO).getTime();
     const endMs = new Date(endISO).getTime();
-    const court = sportCourts.find((c) => !existingBookings.some(
+    return sportCourts.filter((c) => !existingBookings.some(
       (b) => b.court_id === c.id && new Date(b.start).getTime() < endMs && new Date(b.end).getTime() > startMs
     ));
-    return court ? { court, endTime } : null;
   };
 
-  // Keep the main card on a real available recommendation as availability data changes.
-  useEffect(() => {
-    const periodSlots = filteredTimeSlots.filter((slot) => getTimePeriod(slot) === selectedPeriod);
-    const candidateSlots = periodSlots.length ? periodSlots : filteredTimeSlots;
+  const getFirstAvailableCourtForSlot = (slot: string) => {
+    const court = getAvailableCourtsForSlot(slot)[0];
+    return court ? { court, endTime: addMinutesToTime(slot, selectedDuration) } : null;
+  };
 
-    if (candidateSlots.length === 0) {
+  // Daypart is derived from the selected time. Reconcile the time and courts only
+  // against real availability, preserving every selected court that still fits.
+  useEffect(() => {
+    if (filteredTimeSlots.length === 0) {
       if (selectedTime !== null) setSelectedTime(null);
       setSelectedCourts((current) => current.length ? [] : current);
       return;
     }
 
-    const selectedHasAvailableCourt = selectedTime && getFirstAvailableCourtForSlot(selectedTime);
-    const selectedStillInScope = selectedTime && candidateSlots.includes(selectedTime);
-    if (selectedHasAvailableCourt && selectedStillInScope) return;
+    let nextTime = selectedTime;
+    let availableCourts = nextTime && filteredTimeSlots.includes(nextTime)
+      ? getAvailableCourtsForSlot(nextTime)
+      : [];
 
-    const nextSlot = candidateSlots.find((slot) => getFirstAvailableCourtForSlot(slot)) || candidateSlots[0];
-    const match = getFirstAvailableCourtForSlot(nextSlot);
-    const nextCourts = match ? [match.court.id] : [];
-    if (selectedTime !== nextSlot) setSelectedTime(nextSlot);
-    setSelectedCourts((current) => sameStringArray(current, nextCourts) ? current : nextCourts);
-  }, [dateStr, selectedPeriod, selectedDuration, sportFilter, filteredTimeSlots, existingBookings, sportCourts, selectedTime]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!nextTime || availableCourts.length === 0) {
+      nextTime = filteredTimeSlots.find((slot) => getAvailableCourtsForSlot(slot).length > 0)
+        || filteredTimeSlots[0];
+      availableCourts = getAvailableCourtsForSlot(nextTime);
+    }
+
+    const reconciliation = reconcileCourtSelection(
+      selectedCourts,
+      availableCourts.map((court) => court.id),
+    );
+
+    if (selectedTime !== nextTime) setSelectedTime(nextTime);
+    if (!sameStringArray(selectedCourts, reconciliation.nextCourtIds)) {
+      setSelectedCourts(reconciliation.nextCourtIds);
+    }
+
+    if (reconciliation.unavailableCourtIds.length > 0) {
+      const unavailableNames = reconciliation.unavailableCourtIds
+        .map((id) => courts.find((court) => court.id === id)?.name || sportCourtLabel)
+        .join(", ");
+      const replacementNames = reconciliation.replacementCourtIds
+        .map((id) => courts.find((court) => court.id === id)?.name || sportCourtLabel)
+        .join(", ");
+      const timeRange = `${nextTime}–${addMinutesToTime(nextTime, selectedDuration)}`;
+      if (replacementNames) {
+        toast.info(`${unavailableNames} är inte ledig ${timeRange}. Vi bytte automatiskt till ${replacementNames}.`);
+      } else {
+        toast.info(`${unavailableNames} är inte ledig ${timeRange}. Ingen annan ${sportCourtLabel} är ledig.`);
+      }
+    }
+  }, [dateStr, selectedDuration, sportFilter, filteredTimeSlots, existingBookings, sportCourts, selectedTime, selectedCourts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedCourtObjects = useMemo(
     () => selectedCourts.map((id) => courts.find((court) => court.id === id)).filter(Boolean) as CourtData[],
@@ -524,21 +538,6 @@ export default function BookingPage() {
       : selectedCourtObjects.length <= 2
       ? selectedCourtObjects.map((court) => court.name).join(", ")
       : `${selectedCourtObjects.length} ${sportCourtPluralLabel}`;
-
-  useEffect(() => {
-    if (!selectedTime || !firstAvailableCourt || selectedCourts.length > 0) return;
-    setSelectedCourts([firstAvailableCourt.id]);
-  }, [selectedTime, firstAvailableCourt, selectedCourts.length]);
-
-  useEffect(() => {
-    if (!selectedTime || selectedCourts.length === 0) return;
-    const validSelected = selectedCourts.filter((id) =>
-      courtAvailability[id] !== false && sportCourts.some((court) => court.id === id)
-    );
-    if (validSelected.length === selectedCourts.length) return;
-    const nextCourts = validSelected.length ? validSelected : firstAvailableCourt ? [firstAvailableCourt.id] : [];
-    setSelectedCourts((current) => sameStringArray(current, nextCourts) ? current : nextCourts);
-  }, [selectedTime, selectedCourts, courtAvailability, sportCourts, firstAvailableCourt]);
 
   const switchSport = (sport: SportFilter) => {
     if (sport === sportFilter) return;
@@ -906,7 +905,7 @@ export default function BookingPage() {
           <section className="space-y-4">
             <div className="-mx-6 overflow-x-auto px-6 pb-1" style={{ scrollbarWidth: "none" }}>
               <div className="flex gap-2">
-              {dates.slice(0, 7).map((date, index) => {
+              {dates.slice(0, 7).map((date) => {
                 const isSelected = date.toDateString() === selectedDate.toDateString();
                 const dateKey = format(date, "yyyy-MM-dd");
                 const label = dateKey === todayStr
@@ -963,15 +962,10 @@ export default function BookingPage() {
             )}
 
             <div className="min-h-[520px] rounded-[32px] border border-neutral-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    {selectedDateLabel}
-                  </p>
-                  <h2 className="mt-4 text-[72px] leading-none tracking-[-0.06em] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
-                    {format(selectedDate, "d/M")}
-                  </h2>
-                </div>
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-[18px] font-bold text-neutral-950" style={{ fontFamily: FONT_MONO }}>
+                  {selectedDateLabel} · {format(selectedDate, "d MMM", { locale: sv })}
+                </h2>
                 <div className="rounded-full border border-neutral-200 px-3 py-2 text-[11px] text-neutral-500" style={{ fontFamily: FONT_MONO }}>
                   {sportTitle}
                 </div>
@@ -1028,34 +1022,6 @@ export default function BookingPage() {
                 </div>
               )}
 
-              <div className="mt-12">
-                <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                  När på dagen?
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {PERIOD_OPTIONS.map((period) => {
-                    const hasSlots = filteredTimeSlots.some((slot) => getTimePeriod(slot) === period);
-                    return (
-                      <button
-                        key={period}
-                        type="button"
-                        disabled={!hasSlots || isClosed}
-                        onClick={() => {
-                          setSelectedPeriod(period);
-                          setSelectedCourts([]);
-                        }}
-                        className={`rounded-2xl px-4 py-4 text-left text-[13px] transition-all active:scale-[0.98] disabled:opacity-30 ${
-                          selectedPeriod === period ? "bg-[#32ef87] text-neutral-950" : "bg-neutral-100 text-neutral-500"
-                        }`}
-                        style={{ fontFamily: FONT_MONO }}
-                      >
-                        {formatPeriodLabel(period)}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
               {isClosed && (
                 <p className="mt-8 text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
                   stängt denna dag
@@ -1071,7 +1037,6 @@ export default function BookingPage() {
                         type="button"
                         onClick={() => {
                           setSelectedDuration(duration);
-                          setSelectedCourts([]);
                           setShowCourtList(false);
                         }}
                         className={`rounded-2xl px-5 py-3 text-[11px] transition-all active:scale-[0.98] ${
@@ -1099,6 +1064,7 @@ export default function BookingPage() {
                         <button
                           type="button"
                           onClick={() => setShowTimeList(true)}
+                          aria-label="Ändra tid"
                           className="rounded-full bg-neutral-950 px-6 py-2.5 text-[11px] text-white disabled:opacity-35"
                           disabled={filteredTimeSlots.length === 0}
                           style={{ fontFamily: FONT_MONO }}
@@ -1114,6 +1080,7 @@ export default function BookingPage() {
                         <button
                           type="button"
                           onClick={() => setShowCourtList(true)}
+                          aria-label={`Ändra ${sportCourtLabel}`}
                           className="rounded-full bg-neutral-950 px-6 py-2.5 text-[11px] text-white disabled:opacity-35"
                           disabled={availableSportCourts.length === 0}
                           style={{ fontFamily: FONT_MONO }}
@@ -1408,7 +1375,6 @@ export default function BookingPage() {
                         disabled={!match}
                         onClick={() => {
                           setSelectedTime(time);
-                          setSelectedCourts(match ? [match.court.id] : []);
                           setShowTimeList(false);
                         }}
                         className={`rounded-2xl border px-3 py-3 text-left transition-all active:scale-[0.99] disabled:opacity-35 ${
