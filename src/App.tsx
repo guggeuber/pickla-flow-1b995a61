@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import type { Location as RouterLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { AuthenticatedAppBootstrap } from "@/components/AuthenticatedAppBootstrap";
 import { Analytics } from "@vercel/analytics/react";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
@@ -216,7 +217,9 @@ const App = () => (
       <BrowserRouter>
         <CanonicalHostGuard />
         <AuthProvider>
-          <AppRoutes />
+          <AuthenticatedAppBootstrap>
+            <AppRoutes />
+          </AuthenticatedAppBootstrap>
         </AuthProvider>
       </BrowserRouter>
       <Analytics />
