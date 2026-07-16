@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, FileText, LogOut, UserCheck } from "lucide-react";
+import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut, UserCheck } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
@@ -86,8 +86,6 @@ type MyEventRegistration = {
   id: string;
   event_id: string;
   name: string;
-  email: string | null;
-  auth_user_id: string | null;
   created_at: string | null;
   events: MyEventSummary | null;
 };
@@ -287,42 +285,18 @@ function getBookingDrawerKey(booking: any) {
   );
 }
 
-function useMyEventRegistrations(profile?: PlayerProfileContact | null) {
+function useMyEventRegistrations() {
   const { user } = useAuth();
   return useQuery<MyEventRegistration[]>({
-    queryKey: ["my-event-registrations", user?.id, user?.email, profile?.phone],
+    queryKey: ["my-event-registrations", user?.id],
     enabled: !!user,
     queryFn: async () => {
-      const selectFields = "id, event_id, name, email, auth_user_id, created_at, events(id, name, display_name, slug, start_date, end_date, start_time, end_time, status, venues(name))";
-      const queries = [
-        supabase.from("players").select(selectFields).eq("auth_user_id", user!.id),
-      ];
-
-      if (user?.email) {
-        queries.push(supabase.from("players").select(selectFields).eq("email", user.email));
-      }
-
-      if (profile?.phone) {
-        queries.push(supabase.from("players").select(selectFields).eq("email", profile.phone));
-      }
-
-      const results = await Promise.all(queries);
-      const firstError = results.find((result) => result.error)?.error;
-      if (firstError) throw firstError;
-
-      const seen = new Set<string>();
-      return results
-        .flatMap((result) => (result.data || []) as unknown as MyEventRegistration[])
-        .filter((registration) => {
-          if (seen.has(registration.id)) return false;
-          seen.add(registration.id);
-          return true;
-        })
-        .sort((a, b) => {
-          const aTime = getEventDateTime(a.events)?.getTime() ?? 0;
-          const bTime = getEventDateTime(b.events)?.getTime() ?? 0;
-          return bTime - aTime;
-        });
+      const registrations = await apiGet<MyEventRegistration[]>("api-event-public", "my-registrations");
+      return registrations.sort((a, b) => {
+        const aTime = getEventDateTime(a.events)?.getTime() ?? 0;
+        const bTime = getEventDateTime(b.events)?.getTime() ?? 0;
+        return bTime - aTime;
+      });
     },
   });
 }
@@ -2362,7 +2336,7 @@ const MyPage = () => {
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
   const { data: sessionRegistrations } = useMySessionRegistrations();
-  const { data: eventRegistrations } = useMyEventRegistrations(profile);
+  const { data: eventRegistrations } = useMyEventRegistrations();
   const { data: activeMembership } = useActiveMembership();
   const { data: membershipBenefits } = useMyPasses();
   const { data: activityThreads = [] } = useMyActivityThreads();
