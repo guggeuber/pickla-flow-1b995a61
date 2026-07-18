@@ -3,6 +3,7 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
+import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -10,6 +11,12 @@ const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com
 const RESEND_REPLY_DOMAIN = (Deno.env.get('RESEND_INBOUND_DOMAIN') || 'playpickla.com')
   .replace(/^reply\.playpickla\.com$/i, 'playpickla.com');
 const COMMITTED_REGISTRATION_STATUSES = new Set(['confirmed', 'checked_in', 'no_show']);
+
+type PublicEventParticipantRow = {
+  [key: string]: unknown;
+  auth_user_id?: unknown;
+  email?: unknown;
+};
 
 function escapeHtml(value: unknown) {
   return String(value ?? '')
@@ -43,6 +50,77 @@ function stripHtml(html: string | null | undefined) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizedIdentity(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function verifiedAuthIdentifiers(user: any) {
+  return [...new Set([
+    user?.email_confirmed_at ? normalizedIdentity(user.email) : '',
+    user?.phone_confirmed_at ? normalizedIdentity(user.phone) : '',
+  ].filter(Boolean))];
+}
+
+function projectMyRegistration(registration: any) {
+  const event = registration?.events;
+  return {
+    id: registration.id,
+    event_id: registration.event_id,
+    name: registration.name ?? null,
+    created_at: registration.created_at ?? null,
+    events: event ? {
+      id: event.id,
+      name: event.name ?? null,
+      display_name: event.display_name ?? null,
+      slug: event.slug ?? null,
+      start_date: event.start_date ?? null,
+      end_date: event.end_date ?? null,
+      start_time: event.start_time ?? null,
+      end_time: event.end_time ?? null,
+      status: event.status ?? null,
+      venues: event.venues ? { name: event.venues.name ?? null } : null,
+    } : null,
+  };
+}
+
+function mergeMyRegistrationResults(results: any[]) {
+  const seen = new Set<string>();
+  return results
+    .flatMap((result) => Array.isArray(result?.data) ? result.data : [])
+    .filter((registration: any) => {
+      if (!registration?.id || seen.has(registration.id)) return false;
+      seen.add(registration.id);
+      return true;
+    })
+    .map(projectMyRegistration);
+}
+
+async function handleMyRegistrations(req: Request, client: any) {
+  const { userId, error: authError } = await getAuthenticatedClient(req);
+  if (authError || !userId) return errorResponse('Unauthorized', 401);
+
+  const { data: authUserData, error: authUserError } = await client.auth.admin.getUserById(userId);
+  if (authUserError) {
+    console.error('my-registrations auth identity lookup failed', authUserError.code || 'unknown');
+  }
+  const ownIdentifiers = verifiedAuthIdentifiers(authUserData?.user);
+  const selectFields = 'id, event_id, name, created_at, events(id, name, display_name, slug, start_date, end_date, start_time, end_time, status, venues(name))';
+  const queries = [
+    client.from('players').select(selectFields).eq('auth_user_id', userId).limit(500),
+    ...ownIdentifiers.map((identifier) =>
+      client.from('players').select(selectFields).eq('email', identifier).limit(500)
+    ),
+  ];
+  const results = await Promise.all(queries);
+  const queryError = results.find((result) => result.error)?.error;
+  if (queryError) {
+    console.error('my-registrations query failed', queryError.code || 'unknown');
+    return errorResponse('Could not load registrations', 500);
+  }
+
+  return jsonResponse(mergeMyRegistrationResults(results));
 }
 
 async function verifyResendWebhook(req: Request) {
@@ -762,6 +840,70 @@ Deno.serve(async (req) => {
 
   try {
     const client = getServiceClient();
+
+    // GET /api-event-public/event-participants?eventId=X
+    // Public, event-safe social proof. Never returns auth IDs or contact data.
+    if (req.method === 'GET' && path === 'event-participants') {
+      const eventId = url.searchParams.get('eventId');
+      if (!eventId) return errorResponse('Missing eventId');
+
+      const { data: event, error: eventErr } = await client
+        .from('events')
+        .select('id')
+        .eq('id', eventId)
+        .eq('is_public', true)
+        .maybeSingle();
+      if (eventErr) return errorResponse(eventErr.message, 500);
+      if (!event) return errorResponse('Event not found', 404);
+
+      const { data: playerRows, error: playerErr } = await client
+        .from('players')
+        .select('name, auth_user_id, email')
+        .eq('event_id', event.id)
+        .order('created_at', { ascending: true });
+      if (playerErr) return errorResponse(playerErr.message, 500);
+
+      const rows = (playerRows || []) as PublicEventParticipantRow[];
+      const previewUserIds = [...new Set<string>(
+        rows
+          .slice(0, 5)
+          .map((row) => row.auth_user_id)
+          .filter((value: unknown): value is string => typeof value === 'string' && value.length > 0),
+      )];
+      const avatarByUserId = new Map<string, string | null>();
+      if (previewUserIds.length > 0) {
+        const { data: profiles, error: profileErr } = await client
+          .from('player_profiles')
+          .select('auth_user_id, avatar_url')
+          .in('auth_user_id', previewUserIds);
+        if (profileErr) return errorResponse(profileErr.message, 500);
+        for (const profile of profiles || []) {
+          avatarByUserId.set(profile.auth_user_id, profile.avatar_url || null);
+        }
+      }
+
+      let currentUserRegistered = false;
+      const currentUserId = await getOptionalUserId(req);
+      if (currentUserId) {
+        const { data: authUserData } = await client.auth.admin.getUserById(currentUserId);
+        const ownIdentifiers = new Set(verifiedAuthIdentifiers(authUserData?.user));
+        currentUserRegistered = rows.some((row) =>
+          row.auth_user_id === currentUserId || ownIdentifiers.has(normalizedIdentity(row.email))
+        );
+      }
+
+      return jsonResponse({
+        count: rows.length,
+        participants: projectPublicEventParticipants(rows, avatarByUserId),
+        current_user_registered: currentUserRegistered,
+      });
+    }
+
+    // GET /api-event-public/my-registrations
+    // Authenticated lookup with no caller-controlled identity parameter.
+    if (req.method === 'GET' && path === 'my-registrations') {
+      return handleMyRegistrations(req, client);
+    }
 
     // POST /api-event-public/email-webhook — Resend inbound email webhook
     if (req.method === 'POST' && path === 'email-webhook') {
@@ -1634,9 +1776,10 @@ Deno.serve(async (req) => {
         if (existing) return errorResponse('Redan anmäld med detta namn');
       }
 
-      // Auto-create auth account with phone as identifier
-      let authUserId: string | null = null;
-      if (phone) {
+      // Bind authenticated registrations to the caller. Anonymous registrations
+      // retain the legacy phone/profile lookup and optional account creation path.
+      let authUserId: string | null = await getOptionalUserId(req);
+      if (!authUserId && phone) {
         const { data: existingProfile } = await client.from('player_profiles')
           .select('auth_user_id')
           .eq('phone', phone)
@@ -1667,19 +1810,17 @@ Deno.serve(async (req) => {
         }
       }
 
-      const { data: player, error: insErr } = await client.from('players')
+      const { error: insErr } = await client.from('players')
         .insert({
           event_id: eventId,
           name: name.trim(),
           email: phone?.trim() || email?.trim() || null,
           auth_user_id: authUserId,
-        })
-        .select()
-        .single();
+        });
 
       if (insErr) return errorResponse(insErr.message);
 
-      return jsonResponse({ success: true, player }, 201);
+      return jsonResponse({ success: true }, 201);
     }
 
     return errorResponse('Not found', 404);

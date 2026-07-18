@@ -2,6 +2,7 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail } from '../_shared/bookings.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
+import { projectPublicVenueDisplayQueue } from '../_shared/security_projections.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const STOCKHOLM_ZONE = 'Europe/Stockholm';
@@ -399,6 +400,35 @@ Deno.serve(async (req) => {
   const path = url.pathname.split('/').pop() || '';
 
   try {
+    // GET /api-checkins/public-display-queue?slug=X
+    // Public venue display projection: no table IDs, user IDs, contact data, or staff IDs.
+    if (req.method === 'GET' && path === 'public-display-queue') {
+      const slug = String(url.searchParams.get('slug') || '').trim();
+      if (!slug) return errorResponse('Missing slug');
+
+      const serviceClient = getServiceClient();
+      const { data: venue, error: venueErr } = await serviceClient
+        .from('venues')
+        .select('id')
+        .eq('slug', slug)
+        .maybeSingle();
+      if (venueErr) return errorResponse(venueErr.message, 500);
+      if (!venue) return errorResponse('Venue not found', 404);
+
+      const { today } = stockholmNow();
+      const { data: rows, error: rowsErr } = await serviceClient
+        .from('venue_checkins')
+        .select('player_name, checked_in_at, entry_type, entitlement_id')
+        .eq('venue_id', venue.id)
+        .eq('session_date', today)
+        .in('entry_type', ['open_play', 'manual'])
+        .is('checked_out_at', null)
+        .order('checked_in_at', { ascending: true });
+      if (rowsErr) return errorResponse(rowsErr.message, 500);
+
+      return jsonResponse({ queue: projectPublicVenueDisplayQueue(rows || []) }, 200, 5);
+    }
+
     // POST /api-checkins/booking — staff checks in a concrete booking/group.
     if (req.method === 'POST' && path === 'booking') {
       const { userId, error } = await getAuthenticatedClient(req);
@@ -1111,7 +1141,19 @@ Deno.serve(async (req) => {
       const eventId = url.searchParams.get('eventId');
       if (!eventId) return errorResponse('Missing eventId');
 
-      const { data, error: qErr } = await authClient.from('players')
+      const serviceClient = getServiceClient();
+      const { data: event, error: eventErr } = await serviceClient
+        .from('events')
+        .select('venue_id')
+        .eq('id', eventId)
+        .maybeSingle();
+      if (eventErr) return errorResponse(eventErr.message, 500);
+      if (!event?.venue_id) return errorResponse('Event not found', 404);
+
+      const canOperate = await canStaffOperateVenue(serviceClient, authUserId, event.venue_id);
+      if (!canOperate) return errorResponse('Forbidden', 403);
+
+      const { data, error: qErr } = await serviceClient.from('players')
         .select('*, team:teams(id, name, color)')
         .eq('event_id', eventId).order('name');
       if (qErr) return errorResponse(qErr.message);
