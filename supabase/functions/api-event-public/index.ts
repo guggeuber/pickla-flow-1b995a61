@@ -45,6 +45,77 @@ function stripHtml(html: string | null | undefined) {
     .trim();
 }
 
+function normalizedIdentity(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function verifiedAuthIdentifiers(user: any) {
+  return [...new Set([
+    user?.email_confirmed_at ? normalizedIdentity(user.email) : '',
+    user?.phone_confirmed_at ? normalizedIdentity(user.phone) : '',
+  ].filter(Boolean))];
+}
+
+function projectMyRegistration(registration: any) {
+  const event = registration?.events;
+  return {
+    id: registration.id,
+    event_id: registration.event_id,
+    name: registration.name ?? null,
+    created_at: registration.created_at ?? null,
+    events: event ? {
+      id: event.id,
+      name: event.name ?? null,
+      display_name: event.display_name ?? null,
+      slug: event.slug ?? null,
+      start_date: event.start_date ?? null,
+      end_date: event.end_date ?? null,
+      start_time: event.start_time ?? null,
+      end_time: event.end_time ?? null,
+      status: event.status ?? null,
+      venues: event.venues ? { name: event.venues.name ?? null } : null,
+    } : null,
+  };
+}
+
+function mergeMyRegistrationResults(results: any[]) {
+  const seen = new Set<string>();
+  return results
+    .flatMap((result) => Array.isArray(result?.data) ? result.data : [])
+    .filter((registration: any) => {
+      if (!registration?.id || seen.has(registration.id)) return false;
+      seen.add(registration.id);
+      return true;
+    })
+    .map(projectMyRegistration);
+}
+
+async function handleMyRegistrations(req: Request, client: any) {
+  const { userId, error: authError } = await getAuthenticatedClient(req);
+  if (authError || !userId) return errorResponse('Unauthorized', 401);
+
+  const { data: authUserData, error: authUserError } = await client.auth.admin.getUserById(userId);
+  if (authUserError) {
+    console.error('my-registrations auth identity lookup failed', authUserError.code || 'unknown');
+  }
+  const ownIdentifiers = verifiedAuthIdentifiers(authUserData?.user);
+  const selectFields = 'id, event_id, name, created_at, events(id, name, display_name, slug, start_date, end_date, start_time, end_time, status, venues(name))';
+  const queries = [
+    client.from('players').select(selectFields).eq('auth_user_id', userId).limit(500),
+    ...ownIdentifiers.map((identifier) =>
+      client.from('players').select(selectFields).eq('email', identifier).limit(500)
+    ),
+  ];
+  const results = await Promise.all(queries);
+  const queryError = results.find((result) => result.error)?.error;
+  if (queryError) {
+    console.error('my-registrations query failed', queryError.code || 'unknown');
+    return errorResponse('Could not load registrations', 500);
+  }
+
+  return jsonResponse(mergeMyRegistrationResults(results));
+}
+
 async function verifyResendWebhook(req: Request) {
   const raw = await req.text();
   const secret = Deno.env.get('RESEND_WEBHOOK_SECRET');
@@ -762,6 +833,12 @@ Deno.serve(async (req) => {
 
   try {
     const client = getServiceClient();
+
+    // GET /api-event-public/my-registrations
+    // Authenticated lookup with no caller-controlled identity parameter.
+    if (req.method === 'GET' && path === 'my-registrations') {
+      return handleMyRegistrations(req, client);
+    }
 
     // POST /api-event-public/email-webhook — Resend inbound email webhook
     if (req.method === 'POST' && path === 'email-webhook') {
