@@ -16,7 +16,6 @@ import {
   mergeBackendActivityPricing,
 } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
-import { getPublicProfileMap } from "@/lib/publicProfiles";
 import { MemberStrip } from "@/components/ui/MemberStrip";
 import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
@@ -26,10 +25,14 @@ const HUB_RED = "#CC2936";
 const HUB_NAVY = "#1a1f3a";
 
 type EventPlayer = {
-  id: string;
-  name: string | null;
-  auth_user_id: string | null;
-  avatar_url?: string | null;
+  display_name: string;
+  avatar_url: string | null;
+};
+
+type EventParticipantsResponse = {
+  count: number;
+  participants: EventPlayer[];
+  current_user_registered: boolean;
 };
 
 interface EventCardProps {
@@ -179,27 +182,15 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     },
   });
 
-  const { data: players = [] } = useQuery<EventPlayer[]>({
-    queryKey: ["hub-event-player-list", eventId],
-    enabled: !!event,
+  const { data: participantData } = useQuery<EventParticipantsResponse>({
+    queryKey: ["hub-event-participant-list", event?.id, user?.id],
+    enabled: !!event?.id,
     staleTime: 30000,
-    queryFn: async () => {
-      const { data: playerRows } = await supabase
-        .from("players")
-        .select("id, name, auth_user_id")
-        .eq("event_id", eventId)
-        .order("created_at", { ascending: true });
-
-      const authIds = (playerRows || []).map((p) => p.auth_user_id).filter(Boolean) as string[];
-      if (authIds.length === 0) return playerRows || [];
-
-      const profileByUser = await getPublicProfileMap(authIds);
-      return (playerRows || []).map((player) => ({
-        ...player,
-        avatar_url: player.auth_user_id ? profileByUser.get(player.auth_user_id)?.avatar_url || null : null,
-      }));
-    },
+    queryFn: () => apiGet<EventParticipantsResponse>("api-event-public", "event-participants", {
+      eventId: event!.id,
+    }),
   });
+  const players = participantData?.participants || [];
 
   if (!event && effectiveProgramSession) {
     if (isPublicActivityOverrideHidden(programOverride?.status)) return null;
@@ -566,8 +557,8 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     );
   }
 
-  const playerCount = players.length;
-  const isRegistered = success || (!!user && players.some((player) => player.auth_user_id === user.id));
+  const playerCount = participantData?.count ?? players.length;
+  const isRegistered = success || Boolean(participantData?.current_user_registered);
   const isFree = !event.entry_fee || event.entry_fee === 0 || event.entry_fee_type === "free";
   const price = event.entry_fee ?? 0;
   const maxP = event.max_participants;
@@ -712,8 +703,8 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
               <div style={{ display: "flex", paddingLeft: 4 }}>
                 {players.slice(0, 5).map((player, idx) => (
                   <div
-                    key={player.id}
-                    title={player.name || "Spelare"}
+                    key={`${event.id}-${idx}`}
+                    title={player.display_name || "Spelare"}
                     style={{
                       width: 24,
                       height: 24,
@@ -734,13 +725,13 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
                     {player.avatar_url ? (
                       <img src={player.avatar_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     ) : (
-                      (player.name || "?").charAt(0).toUpperCase()
+                      (player.display_name || "?").charAt(0).toUpperCase()
                     )}
                   </div>
                 ))}
               </div>
               <p style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", fontFamily: "Inter, sans-serif" }}>
-                {players.length} anmälda
+                {playerCount} anmälda
               </p>
             </div>
           )}

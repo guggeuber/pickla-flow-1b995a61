@@ -10,6 +10,10 @@ import { getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId } from '../_shared/bookings.ts';
 import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser, resolveOrCreateGuestCustomerByEmail } from '../_shared/customers.ts';
 import { canonicalPublicUrl } from '../_shared/canonical_origin.ts';
+import {
+  fulfillCommerceParticipation,
+  paidFulfillmentIncidentIdentity,
+} from './commerce_participation.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
@@ -344,81 +348,119 @@ async function handleCommerceOrder(
       .select('id, name, session_type')
       .eq('id', participation.activity_session_id)
       .maybeSingle();
-    const commit = await commitActivityRegistrationCapacity(serviceClient, {
-      p_venue_id: order.venue_id,
-      p_activity_session_id: participation.activity_session_id,
-      p_session_date: participation.session_date,
-      p_user_id: order.user_id,
-      p_customer_id: customerId,
-      p_status: 'confirmed',
-      p_price_paid_sek: Math.round(Number(participation.line_total_inc_vat_minor || 0)) / 100,
-      p_stripe_session_id: session.id,
-      p_source_type: 'commerce_order',
-      p_source_id: participation.id,
-      p_metadata: {
-        commerce_order_id: orderId,
-        commerce_order_line_id: participation.id,
-        pricing_reason: participation.resolver_snapshot?.pricing_reason || null,
-        session_type: activity?.session_type || 'open_play',
-        session_name: activity?.name || participation.product_name,
-      },
-      p_hold_id: participation.capacity_hold_id || null,
-    });
-
-    if (!commit.ok || !commit.registration_id) {
-      await serviceClient.from('commerce_orders').update({ status: 'attention' }).eq('id', orderId);
-      await serviceClient.from('commerce_order_lines')
-        .update({ fulfillment_status: 'attention' })
-        .eq('commerce_order_id', orderId)
-        .or(`id.eq.${participation.id},parent_line_id.eq.${participation.id}`);
-      await recordPaidCapacityConflict(serviceClient, {
-        venueId: order.venue_id,
-        scopeType: 'activity_session',
-        scopeId: participation.activity_session_id,
-        sessionDate: participation.session_date,
-        stripeSessionId: session.id,
-        paymentIntentId: stripeId(session.payment_intent),
-        receiptId: financial.receipt_id,
-        ledgerSourceType: 'commerce_order',
-        ledgerSourceId: orderId,
-        customerId,
-        userId: order.user_id,
-        title: `Betald commerce-order kunde inte leverera ${activity?.name || participation.product_name}`,
-        metadata: { commerce_order_id: orderId, commerce_order_line_id: participation.id },
-      });
-    } else {
-      await serviceClient.from('commerce_order_lines')
-        .update({ session_registration_id: commit.registration_id })
-        .eq('commerce_order_id', orderId)
-        .or(`id.eq.${participation.id},parent_line_id.eq.${participation.id}`);
-      await serviceClient.from('access_entitlements').upsert({
-        venue_id: order.venue_id,
-        user_id: order.user_id,
-        entitlement_type: 'session_ticket',
-        status: 'active',
-        source_type: 'session_ticket',
-        source_id: commit.registration_id,
-        activity_session_id: participation.activity_session_id,
-        session_date: participation.session_date,
-        valid_date: null,
-        includes_session_types: [activity?.session_type || 'open_play'],
-        metadata: {
+    const roomId = participation.metadata?.chat_room_id;
+    await fulfillCommerceParticipation({
+      lineTotalIncVatMinor: Number(participation.line_total_inc_vat_minor || 0),
+      commitArgs: {
+        p_venue_id: order.venue_id,
+        p_activity_session_id: participation.activity_session_id,
+        p_session_date: participation.session_date,
+        p_user_id: order.user_id,
+        p_customer_id: customerId,
+        p_status: 'confirmed',
+        p_stripe_session_id: session.id,
+        p_source_type: 'commerce_order',
+        p_source_id: participation.id,
+        p_metadata: {
           commerce_order_id: orderId,
           commerce_order_line_id: participation.id,
-          stripe_session_id: session.id,
+          pricing_reason: participation.resolver_snapshot?.pricing_reason || null,
+          session_type: activity?.session_type || 'open_play',
+          session_name: activity?.name || participation.product_name,
         },
-      }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
-      const roomId = participation.metadata?.chat_room_id;
-      if (roomId) {
-        await announceActivityRegistration(serviceClient, {
-          roomId,
-          userId: order.user_id,
+        p_hold_id: participation.capacity_hold_id || null,
+      },
+    }, {
+      commitRegistration: (args) => commitActivityRegistrationCapacity(serviceClient, args),
+      markOrderAttention: async () => {
+        const { error } = await serviceClient.from('commerce_orders')
+          .update({ status: 'attention' })
+          .eq('id', orderId);
+        if (error) throw new Error(error.message);
+      },
+      markLineAttention: async () => {
+        const { error } = await serviceClient.from('commerce_order_lines')
+          .update({ fulfillment_status: 'attention' })
+          .eq('commerce_order_id', orderId)
+          .or(`id.eq.${participation.id},parent_line_id.eq.${participation.id}`);
+        if (error) throw new Error(error.message);
+      },
+      recordIncident: async (failure) => {
+        if (failure.kind === 'commit_rejected') {
+          await recordPaidCapacityConflict(serviceClient, {
+            venueId: order.venue_id,
+            scopeType: 'activity_session',
+            scopeId: participation.activity_session_id,
+            sessionDate: participation.session_date,
+            stripeSessionId: session.id,
+            paymentIntentId: stripeId(session.payment_intent),
+            receiptId: financial.receipt_id,
+            ledgerSourceType: 'commerce_order',
+            ledgerSourceId: orderId,
+            customerId,
+            userId: order.user_id,
+            title: `Betald commerce-order kunde inte leverera ${activity?.name || participation.product_name}`,
+            metadata: {
+              commerce_order_id: orderId,
+              commerce_order_line_id: participation.id,
+              failure_category: failure.category,
+            },
+          });
+          return;
+        }
+        await recordPaidCommerceFulfillmentFailure(serviceClient, {
+          venueId: order.venue_id,
+          orderId,
+          orderLineId: participation.id,
           activitySessionId: participation.activity_session_id,
           sessionDate: participation.session_date,
           stripeSessionId: session.id,
+          errorCategory: failure.category,
+          errorMessage: failure.message,
         });
-      }
-    }
+      },
+      linkRegistration: async (registrationId) => {
+        const { error } = await serviceClient.from('commerce_order_lines')
+          .update({ session_registration_id: registrationId })
+          .eq('commerce_order_id', orderId)
+          .or(`id.eq.${participation.id},parent_line_id.eq.${participation.id}`);
+        if (error) throw new Error(error.message);
+      },
+      upsertEntitlement: async (registrationId) => {
+        const { error } = await serviceClient.from('access_entitlements').upsert({
+          venue_id: order.venue_id,
+          user_id: order.user_id,
+          entitlement_type: 'session_ticket',
+          status: 'active',
+          source_type: 'session_ticket',
+          source_id: registrationId,
+          activity_session_id: participation.activity_session_id,
+          session_date: participation.session_date,
+          valid_date: null,
+          includes_session_types: [activity?.session_type || 'open_play'],
+          metadata: {
+            commerce_order_id: orderId,
+            commerce_order_line_id: participation.id,
+            stripe_session_id: session.id,
+          },
+        }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
+        if (error) throw new Error(error.message);
+      },
+      announceRegistration: roomId
+        ? async () => {
+          await announceActivityRegistration(serviceClient, {
+            roomId,
+            userId: order.user_id,
+            activitySessionId: participation.activity_session_id,
+            sessionDate: participation.session_date,
+            stripeSessionId: session.id,
+          });
+        }
+        : undefined,
+      onFailureHandlingError: (error) => {
+        console.error('Commerce paid fulfillment failure handling failed:', error);
+      },
+    });
   }
 
   if (customerEmail) {
@@ -545,6 +587,51 @@ async function commitActivityRegistrationCapacity(serviceClient: any, args: Reco
 
 async function commitBookingParticipantCapacity(serviceClient: any, args: Record<string, unknown>) {
   return rpcSingle(serviceClient, 'commit_booking_participant_capacity', args);
+}
+
+async function recordPaidCommerceFulfillmentFailure(serviceClient: any, params: {
+  venueId: string;
+  orderId: string;
+  orderLineId: string;
+  activitySessionId: string;
+  sessionDate: string;
+  stripeSessionId: string;
+  errorCategory: string;
+  errorMessage: string;
+}) {
+  const { agentKey, incidentId } = await paidFulfillmentIncidentIdentity(
+    params.orderId,
+    params.orderLineId,
+  );
+  const incidentMetadata = {
+    type: 'paid_fulfillment_failure',
+    agent_key: agentKey,
+    commerce_order_id: params.orderId,
+    commerce_order_line_id: params.orderLineId,
+    activity_session_id: params.activitySessionId,
+    session_date: params.sessionDate,
+    stripe_session_id: params.stripeSessionId,
+    error_category: params.errorCategory,
+    error_message: params.errorMessage,
+  };
+  const { error } = await serviceClient.from('ops_incidents').upsert({
+    id: incidentId,
+    venue_id: params.venueId,
+    severity: 'P1',
+    title: 'Betald commerce-order kräver manuell åtgärd',
+    status: 'open',
+    owner_name: 'Desk',
+    impact: 'Betalning mottagen men deltagarregistrering eller spelrätt kunde inte levereras.',
+    containment: 'Verifiera betalningen, reservera platsen manuellt och återskapa spelrätten utan ny debitering.',
+    affected_ids: [
+      params.orderId,
+      params.orderLineId,
+      params.activitySessionId,
+      params.stripeSessionId,
+    ].join(','),
+    metadata: incidentMetadata,
+  }, { onConflict: 'id' });
+  if (error) throw new Error(error.message);
 }
 
 async function recordPaidCapacityConflict(serviceClient: any, params: {

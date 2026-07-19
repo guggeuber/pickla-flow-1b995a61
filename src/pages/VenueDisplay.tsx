@@ -21,6 +21,11 @@ interface CourtDisplay {
   startsAt?: string;
 }
 
+type PublicDisplayQueueRow = {
+  display_name: string;
+  checked_in_at: string;
+};
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SPORT_LABELS: Record<string, string> = {
@@ -290,30 +295,30 @@ export default function VenueDisplay() {
     staleTime: 10_000,
   });
 
-  // ── Active venue checkins (direct Supabase — public SELECT policy) ─────────
-  const { data: checkins } = useQuery({
-    queryKey: ["display-checkins", venueId, today],
-    enabled: !!venueId,
+  // ── Sanitized Open Play queue (public endpoint, polling only) ──────────────
+  const { data: checkins = [] } = useQuery<PublicDisplayQueueRow[]>({
+    queryKey: ["display-checkins", slug, today],
+    enabled: !!slug,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("venue_checkins")
-        .select("id, entry_type, entitlement_id, player_name, checked_in_at")
-        .eq("venue_id", venueId!)
-        .eq("session_date", today)
-        .is("checked_out_at", null);
-      return data ?? [];
+      const result = await apiGet<{ queue: PublicDisplayQueueRow[] }>(
+        "api-checkins",
+        "public-display-queue",
+        { slug },
+      );
+      setLastRefreshed(new Date());
+      return result.queue || [];
     },
     refetchInterval: 30_000,
     staleTime: 10_000,
   });
 
-  // ── Realtime: invalidate on any booking / checkin change ──────────────────
+  // ── Booking Realtime; the sanitized check-in queue polls every 30s ─────────
   useEffect(() => {
     if (!venueId) return;
 
     const refresh = () => {
       queryClient.invalidateQueries({ queryKey: ["display-courts", slug] });
-      queryClient.invalidateQueries({ queryKey: ["display-checkins", venueId] });
+      queryClient.invalidateQueries({ queryKey: ["display-checkins", slug] });
       setLastRefreshed(new Date());
     };
 
@@ -322,11 +327,6 @@ export default function VenueDisplay() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "bookings", filter: `venue_id=eq.${venueId}` },
-        refresh,
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "venue_checkins", filter: `venue_id=eq.${venueId}` },
         refresh,
       )
       .subscribe((status) => {
@@ -377,14 +377,7 @@ export default function VenueDisplay() {
     [courtsBySport],
   );
 
-  // ── Open Play queue: checkins without an entitlement (walkups) ────────────
-  const openPlayQueue = useMemo(
-    () =>
-      (checkins ?? []).filter(
-        (c: any) => c.entry_type === "open_play" || (c.entry_type === "manual" && !c.entitlement_id),
-      ),
-    [checkins],
-  );
+  const openPlayQueue = checkins;
 
   // ── No slug ───────────────────────────────────────────────────────────────
   if (!slug) {
@@ -504,9 +497,9 @@ export default function VenueDisplay() {
               </span>
             </div>
             <div className="flex flex-wrap gap-3">
-              {openPlayQueue.map((player: any, i: number) => (
+              {openPlayQueue.map((player, i) => (
                 <motion.div
-                  key={player.id}
+                  key={`${player.checked_in_at}-${i}`}
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ delay: i * 0.04 }}
@@ -522,7 +515,7 @@ export default function VenueDisplay() {
                     className="font-display font-semibold"
                     style={{ fontSize: "clamp(1rem, 1.5vw, 1.25rem)" }}
                   >
-                    {player.player_name ?? "Spelare"}
+                    {player.display_name || "Spelare"}
                   </span>
                   <span
                     className="text-muted-foreground"
