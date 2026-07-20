@@ -342,7 +342,7 @@ async function handleCommerceOrder(
 
   const participation = lines.find((line: any) => line.commerce_kind === 'participation');
   if (participation) {
-    if (!order.user_id) throw new Error('Commerce participation has no authenticated user');
+    if (!order.user_id && !customerId) throw new Error('Commerce participation has no owner');
     const { data: activity } = await serviceClient
       .from('activity_sessions')
       .select('id, name, session_type')
@@ -355,7 +355,7 @@ async function handleCommerceOrder(
         p_venue_id: order.venue_id,
         p_activity_session_id: participation.activity_session_id,
         p_session_date: participation.session_date,
-        p_user_id: order.user_id,
+        p_user_id: order.user_id || null,
         p_customer_id: customerId,
         p_status: 'confirmed',
         p_stripe_session_id: session.id,
@@ -398,7 +398,7 @@ async function handleCommerceOrder(
             ledgerSourceType: 'commerce_order',
             ledgerSourceId: orderId,
             customerId,
-            userId: order.user_id,
+            userId: order.user_id || null,
             title: `Betald commerce-order kunde inte leverera ${activity?.name || participation.product_name}`,
             metadata: {
               commerce_order_id: orderId,
@@ -427,9 +427,10 @@ async function handleCommerceOrder(
         if (error) throw new Error(error.message);
       },
       upsertEntitlement: async (registrationId) => {
-        const { error } = await serviceClient.from('access_entitlements').upsert({
+        const entitlement = {
           venue_id: order.venue_id,
-          user_id: order.user_id,
+          user_id: order.user_id || null,
+          customer_id: customerId,
           entitlement_type: 'session_ticket',
           status: 'active',
           source_type: 'session_ticket',
@@ -443,10 +444,18 @@ async function handleCommerceOrder(
             commerce_order_line_id: participation.id,
             stripe_session_id: session.id,
           },
-        }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
+        };
+        const { error } = await serviceClient.from('access_entitlements').upsert(
+          entitlement,
+          {
+            onConflict: order.user_id
+              ? 'source_type,source_id,user_id,entitlement_type'
+              : 'source_type,source_id,customer_id,entitlement_type',
+          },
+        );
         if (error) throw new Error(error.message);
       },
-      announceRegistration: roomId
+      announceRegistration: roomId && order.user_id
         ? async () => {
           await announceActivityRegistration(serviceClient, {
             roomId,

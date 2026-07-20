@@ -2,7 +2,11 @@ import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { requireVenueRole } from '../_shared/authorization.ts';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
-import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
+import {
+  resolveCustomerIdForUser,
+  resolveOrCreateCustomerIdForUser,
+  resolveOrCreateGuestCustomerByEmail,
+} from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { evaluateCommerceAvailability } from '../_shared/commerce_availability.ts';
 
@@ -10,6 +14,8 @@ const CART_TOKEN_BYTES = 32;
 const MAX_CART_LINES = 25;
 const MAX_QUANTITY = 100;
 const STRIPE_API_BASE = 'https://api.stripe.com/v1';
+const GUEST_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type StripeCheckoutSession = { id: string; url: string | null };
 
@@ -67,6 +73,20 @@ function newCartToken() {
   return base64Url(bytes);
 }
 
+function normalizeDraftScope(value: unknown) {
+  const normalized = String(value || 'default')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 160);
+  return normalized || 'default';
+}
+
+function guestDraftExpiry() {
+  return new Date(Date.now() + GUEST_DRAFT_TTL_MS).toISOString();
+}
+
 async function optionalUser(req: Request) {
   const header = req.headers.get('Authorization');
   if (!header?.startsWith('Bearer ')) return { userId: null as string | null };
@@ -75,18 +95,56 @@ async function optionalUser(req: Request) {
   return { userId: auth.userId };
 }
 
-async function loadOrderByToken(admin: any, token: string, userId?: string | null, allowReceiptToken = false) {
-  if (!token || token.length < 32) throw new Error('Invalid cart token');
-  const tokenHash = await sha256(token);
+async function loadOrderByReference(
+  admin: any,
+  reference: string,
+  userId?: string | null,
+  options: { editable?: boolean; allowReceiptToken?: boolean } = {},
+) {
+  const cleanReference = String(reference || '').trim();
+  if (!cleanReference || cleanReference.length > 256) throw new Error('Order not found');
+  const tokenHash = cleanReference.length >= 32 ? await sha256(cleanReference) : '';
   let query = admin.from('commerce_orders').select('*');
-  query = allowReceiptToken
-    ? query.or(`guest_token_hash.eq.${tokenHash},receipt_token_hash.eq.${tokenHash}`)
-    : query.eq('guest_token_hash', tokenHash);
+  if (userId && UUID_PATTERN.test(cleanReference)) {
+    query = query.eq('id', cleanReference);
+  } else if (options.allowReceiptToken) {
+    query = query.or(`guest_token_hash.eq.${tokenHash},receipt_token_hash.eq.${tokenHash}`);
+  } else {
+    query = query.eq('guest_token_hash', tokenHash);
+  }
   const { data: order, error } = await query.maybeSingle();
   if (error) throw new Error(error.message);
-  if (!order) throw new Error('Cart not found');
-  const receiptTokenMatches = allowReceiptToken && order.receipt_token_hash === tokenHash && ['paid', 'attention'].includes(order.status);
-  if (order.user_id && order.user_id !== userId && !receiptTokenMatches) throw new Error('Forbidden');
+  if (!order) throw new Error('Order not found');
+
+  const receiptTokenMatches = options.allowReceiptToken
+    && tokenHash
+    && order.receipt_token_hash === tokenHash
+    && ['paid', 'attention'].includes(order.status);
+  if (receiptTokenMatches) return order;
+
+  if (options.editable) {
+    const expired = order.status === 'draft'
+      && order.user_id === null
+      && order.expires_at
+      && new Date(order.expires_at).getTime() <= Date.now();
+    if (expired) {
+      await admin.from('commerce_orders')
+        .update({ status: 'expired', expires_at: order.expires_at })
+        .eq('id', order.id)
+        .eq('status', 'draft');
+      throw new Error('Order not found');
+    }
+    const ownerMatches = userId
+      ? order.user_id === userId
+      : order.user_id === null;
+    if (order.status !== 'draft' || !ownerMatches) throw new Error('Order not found');
+    return order;
+  }
+
+  const ownerMatches = userId
+    ? order.user_id === userId
+    : order.user_id === null && order.guest_token_hash === tokenHash;
+  if (!ownerMatches) throw new Error('Order not found');
   return order;
 }
 
@@ -101,7 +159,104 @@ async function loadOrderLines(admin: any, orderId: string) {
   return data || [];
 }
 
-async function cartResponse(admin: any, order: any, token?: string | null) {
+function projectOrderLine(line: any) {
+  return {
+    id: line.id,
+    product_id: line.product_id,
+    product_key: line.product_key,
+    product_name: line.product_name,
+    commerce_kind: line.commerce_kind,
+    quantity: line.quantity,
+    unit_price_minor: line.unit_price_minor,
+    discount_minor: line.discount_minor,
+    line_total_inc_vat_minor: line.line_total_inc_vat_minor ?? line.total_inc_vat_minor,
+    vat_rate: line.vat_rate,
+    vat_amount_minor: line.vat_amount_minor,
+    line_total_ex_vat_minor: line.line_total_ex_vat_minor ?? line.total_ex_vat_minor,
+    fulfillment_type: line.fulfillment_type,
+    fulfillment_status: line.fulfillment_status,
+    activity_session_id: line.activity_session_id,
+    session_date: line.session_date,
+    session_registration_id: line.session_registration_id,
+    parent_line_id: line.parent_line_id,
+  };
+}
+
+function projectCommerceOrder(order: any) {
+  return {
+    id: order.id,
+    venue_id: order.venue_id,
+    draft_scope: order.draft_scope,
+    status: order.status,
+    version: order.version,
+    currency: order.currency,
+    subtotal_minor: order.subtotal_minor,
+    discount_minor: order.discount_minor,
+    total_inc_vat_minor: order.total_inc_vat_minor,
+    total_ex_vat_minor: order.total_ex_vat_minor,
+    vat_amount_minor: order.vat_amount_minor,
+    contact_email_present: Boolean(order.guest_email),
+    paid_at: order.paid_at,
+    booking_receipt_id: order.booking_receipt_id,
+  };
+}
+
+function projectReceipt(receipt: any) {
+  if (!receipt) return null;
+  return {
+    id: receipt.id,
+    receipt_number: receipt.receipt_number,
+    currency: receipt.currency,
+    total_inc_vat_sek: receipt.total_inc_vat_sek,
+    total_ex_vat_sek: receipt.total_ex_vat_sek,
+    vat_amount_sek: receipt.vat_amount_sek,
+    vat_rate: receipt.vat_rate,
+    payment_status: receipt.payment_status,
+    issued_at: receipt.issued_at,
+  };
+}
+
+function projectReceiptLine(line: any) {
+  return {
+    id: line.id,
+    product_id: line.product_id,
+    product_key: line.product_key,
+    product_name: line.product_name,
+    commerce_kind: line.commerce_kind,
+    quantity: line.quantity,
+    unit_price_minor: line.unit_price_minor,
+    discount_minor: line.discount_minor,
+    line_total_inc_vat_minor: line.total_inc_vat_minor,
+    vat_rate: line.vat_rate,
+    vat_amount_minor: line.vat_amount_minor,
+    line_total_ex_vat_minor: line.total_ex_vat_minor,
+    fulfillment_type: line.fulfillment_type,
+  };
+}
+
+function resolvedOrderSummary(lines: any[]) {
+  return lines.reduce((summary, line) => {
+    const subtotal = Math.max(0, Number(line.unit_price_minor || 0) * Number(line.quantity || 1));
+    const discount = Math.max(0, Number(line.discount_minor || 0));
+    const total = Math.max(0, subtotal - discount);
+    const vatRate = Math.max(0, Number(line.vat_rate || 0));
+    const vat = Math.round(total * vatRate / (100 + vatRate));
+    summary.subtotal_minor += subtotal;
+    summary.discount_minor += discount;
+    summary.total_inc_vat_minor += total;
+    summary.vat_amount_minor += vat;
+    summary.total_ex_vat_minor += total - vat;
+    return summary;
+  }, {
+    subtotal_minor: 0,
+    discount_minor: 0,
+    total_inc_vat_minor: 0,
+    total_ex_vat_minor: 0,
+    vat_amount_minor: 0,
+  });
+}
+
+async function cartResponse(admin: any, order: any, reference?: string | null) {
   const lines = await loadOrderLines(admin, order.id);
   let receipt = null;
   let receiptLines: any[] = [];
@@ -120,27 +275,11 @@ async function cartResponse(admin: any, order: any, token?: string | null) {
     receiptLines = lineRows || [];
   }
   return {
-    order: {
-      id: order.id,
-      venue_id: order.venue_id,
-      status: order.status,
-      version: order.version,
-      currency: order.currency,
-      subtotal_minor: order.subtotal_minor,
-      discount_minor: order.discount_minor,
-      total_inc_vat_minor: order.total_inc_vat_minor,
-      total_ex_vat_minor: order.total_ex_vat_minor,
-      vat_amount_minor: order.vat_amount_minor,
-      guest_name: order.guest_name,
-      guest_email: order.guest_email,
-      paid_at: order.paid_at,
-      booking_receipt_id: order.booking_receipt_id,
-      metadata: order.metadata || {},
-    },
-    lines,
-    receipt,
-    receipt_lines: receiptLines,
-    ...(token ? { cart_token: token } : {}),
+    order: projectCommerceOrder(order),
+    lines: lines.map(projectOrderLine),
+    receipt: projectReceipt(receipt),
+    receipt_lines: receiptLines.map(projectReceiptLine),
+    ...(reference ? { draft_ref: reference } : {}),
   };
 }
 
@@ -157,7 +296,7 @@ async function venueContext(admin: any, venueId: string) {
 
 async function validateCartItems(admin: any, venueId: string, items: any[], userId?: string | null) {
   if (!Array.isArray(items) || items.length === 0 || items.length > MAX_CART_LINES) {
-    throw new Error('Cart must contain 1-25 items');
+    throw new Error('Order draft must contain 1-25 items');
   }
   const productIds = Array.from(new Set(items.map((item) => String(item.product_id || '')).filter(Boolean)));
   const { data: products, error: productError } = await admin
@@ -186,7 +325,7 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
 
   const participationItems = normalized.filter((item) => item.product.commerce_kind === 'participation');
   if (participationItems.length > 1) {
-    throw new Error('Release 1 supports one participation per cart');
+    throw new Error('Release 1 supports one participation per order');
   }
 
   for (const item of normalized) {
@@ -288,14 +427,15 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
   if (error) throw new Error(error.message);
   const productsById = new Map((products || []).map((product: any) => [product.id, product]));
   const venue = await venueContext(admin, order.venue_id);
-  const customerId = userId ? await resolveCustomerIdForUser(admin, userId) : null;
+  const customerId = order.customer_id
+    || (userId ? await resolveCustomerIdForUser(admin, userId) : null);
   const lineById = new Map(lines.map((line) => [line.id, line]));
   const resolved: any[] = [];
   for (const line of lines) {
     const product = productsById.get(line.product_id);
     if (!product) throw new Error('Product is no longer available');
     if (product.venue_id !== order.venue_id || product.commerce_kind !== line.commerce_kind) {
-      throw new Error('Product classification changed — review the cart again');
+      throw new Error('Product classification changed — review the purchase again');
     }
     if (line.commerce_kind !== 'participation' && line.parent_line_id) {
       const parent = lineById.get(line.parent_line_id);
@@ -310,7 +450,7 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
         .eq('is_active', true)
         .maybeSingle();
       if (relationshipError) throw new Error(relationshipError.message);
-      if (!relationship) throw new Error('Product relationship changed — review the cart again');
+      if (!relationship) throw new Error('Product relationship changed — review the purchase again');
       const availability = evaluateCommerceAvailability(product, {
         channel: 'activity_addon',
         venueCommerceEnabled: venue.commerce_enabled === true,
@@ -355,6 +495,11 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
         debug: decision.debug,
       };
     }
+    const subtotalMinor = unitPriceMinor * Number(line.quantity || 1);
+    const discountMinor = 0;
+    const lineTotalIncVatMinor = Math.max(0, subtotalMinor - discountMinor);
+    const vatRate = Number(product.vat_rate || 0);
+    const vatAmountMinor = Math.round(lineTotalIncVatMinor * vatRate / (100 + vatRate));
     resolved.push({
       id: line.id,
       product_key: product.product_key,
@@ -363,8 +508,11 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
       fulfillment_type: product.fulfillment_type,
       quantity: line.quantity,
       unit_price_minor: unitPriceMinor,
-      discount_minor: 0,
-      vat_rate: Number(product.vat_rate || 0),
+      discount_minor: discountMinor,
+      line_total_inc_vat_minor: lineTotalIncVatMinor,
+      line_total_ex_vat_minor: lineTotalIncVatMinor - vatAmountMinor,
+      vat_rate: vatRate,
+      vat_amount_minor: vatAmountMinor,
       beneficiary_user_id: line.commerce_kind === 'participation' ? userId || null : null,
       beneficiary_customer_id: line.commerce_kind === 'participation' ? customerId : null,
       resolver_snapshot: resolverSnapshot,
@@ -382,7 +530,13 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
   return resolved;
 }
 
-async function acquireParticipationHold(admin: any, order: any, line: any, userId: string, customerId: string | null) {
+async function acquireParticipationHold(
+  admin: any,
+  order: any,
+  line: any,
+  userId: string | null,
+  customerId: string | null,
+) {
   const { data, error } = await admin.rpc('acquire_capacity_hold', {
     p_venue_id: order.venue_id,
     p_scope_type: 'activity_session',
@@ -405,7 +559,16 @@ async function releaseHold(admin: any, holdId?: string | null, reason = 'commerc
   await admin.rpc('release_capacity_hold', { p_hold_id: holdId, p_reason: reason });
 }
 
-async function commitFreeParticipation(admin: any, order: any, line: any, resolvedLine: any, userId: string, customerId: string | null, holdId: string) {
+async function commitFreeParticipation(
+  admin: any,
+  order: any,
+  line: any,
+  resolvedLine: any,
+  userId: string | null,
+  customerId: string | null,
+  holdId: string,
+) {
+  if (!userId && !customerId) throw new Error('Participation owner is missing');
   const { data, error } = await admin.rpc('commit_activity_registration_capacity', {
     p_venue_id: order.venue_id,
     p_activity_session_id: line.activity_session_id,
@@ -423,9 +586,10 @@ async function commitFreeParticipation(admin: any, order: any, line: any, resolv
   if (error) throw new Error(error.message);
   if (!data?.ok || !data?.registration_id) throw new Error(data?.reason || 'capacity_full');
   await admin.from('commerce_order_lines').update({ session_registration_id: data.registration_id }).eq('id', line.id);
-  await admin.from('access_entitlements').upsert({
+  const entitlement = {
     venue_id: order.venue_id,
     user_id: userId,
+    customer_id: customerId,
     entitlement_type: 'session_ticket',
     status: 'active',
     source_type: 'session_ticket',
@@ -434,9 +598,76 @@ async function commitFreeParticipation(admin: any, order: any, line: any, resolv
     session_date: line.session_date,
     includes_session_types: ['open_play'],
     metadata: { commerce_order_id: order.id, commerce_order_line_id: line.id },
-  }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
-  await admin.from('commerce_orders').update({ status: 'paid', paid_at: new Date().toISOString(), customer_id: customerId, user_id: userId }).eq('id', order.id);
+  };
+  const { error: entitlementError } = await admin.from('access_entitlements').upsert(
+    entitlement,
+    {
+      onConflict: userId
+        ? 'source_type,source_id,user_id,entitlement_type'
+        : 'source_type,source_id,customer_id,entitlement_type',
+    },
+  );
+  if (entitlementError) throw new Error(entitlementError.message);
+  await admin.from('commerce_orders').update({
+    status: 'paid',
+    paid_at: new Date().toISOString(),
+    customer_id: customerId,
+    user_id: userId,
+  }).eq('id', order.id);
   return data.registration_id as string;
+}
+
+async function findAuthenticatedDraft(
+  admin: any,
+  venueId: string,
+  userId: string,
+  draftScope: string,
+) {
+  const { data, error } = await admin.from('commerce_orders')
+    .select('*')
+    .eq('venue_id', venueId)
+    .eq('user_id', userId)
+    .eq('draft_scope', draftScope)
+    .eq('status', 'draft')
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data || null;
+}
+
+async function insertCommerceDraft(
+  admin: any,
+  input: {
+    venue: any;
+    userId: string | null;
+    customerId: string | null;
+    tokenHash: string;
+    draftScope: string;
+    source: string;
+    guestName?: string | null;
+    guestEmail?: string | null;
+    guestPhone?: string | null;
+  },
+) {
+  const { data, error } = await admin.from('commerce_orders').insert({
+    organization_id: input.venue.organization_id,
+    venue_id: input.venue.id,
+    customer_id: input.customerId,
+    user_id: input.userId,
+    guest_token_hash: input.tokenHash,
+    guest_name: input.guestName || null,
+    guest_email: input.guestEmail
+      ? String(input.guestEmail).trim().toLowerCase()
+      : null,
+    guest_phone: input.guestPhone || null,
+    draft_scope: input.draftScope,
+    expires_at: input.userId ? null : guestDraftExpiry(),
+    metadata: {
+      source: input.source,
+      draft_scope: input.draftScope,
+    },
+  }).select('*').single();
+  if (error) throw new Error(error.message);
+  return data;
 }
 
 Deno.serve(async (req) => {
@@ -494,25 +725,70 @@ Deno.serve(async (req) => {
       }, 200, 0);
     }
 
+    if (req.method === 'GET' && path === 'draft') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      const draftScope = normalizeDraftScope(url.searchParams.get('scope'));
+      if (!venueId) return errorResponse('Missing venueId', 400);
+      const order = await findAuthenticatedDraft(admin, venueId, userId, draftScope);
+      if (!order) return errorResponse('Order not found', 404);
+      return jsonResponse(await cartResponse(admin, order, order.id), 200, 0);
+    }
+
     if (req.method === 'POST' && path === 'cart') {
       const body = await req.json();
       const venueId = String(body.venue_id || '').trim();
       const venue = await venueContext(admin, venueId);
-      const token = newCartToken();
-      const tokenHash = await sha256(token);
-      const customerId = userId ? await resolveOrCreateCustomerIdForUser(admin, userId, venueId, 'commerce_cart') : null;
-      const { data: order, error: orderError } = await admin.from('commerce_orders').insert({
-        organization_id: venue.organization_id,
-        venue_id: venueId,
-        customer_id: customerId,
-        user_id: userId,
-        guest_token_hash: tokenHash,
-        guest_name: body.guest_name || null,
-        guest_email: body.guest_email ? String(body.guest_email).trim().toLowerCase() : null,
-        guest_phone: body.guest_phone || null,
-        metadata: { source: body.source || 'commerce_cart' },
-      }).select('*').single();
-      if (orderError) throw new Error(orderError.message);
+      const source = String(body.source || 'commerce_order_draft').trim().slice(0, 80);
+      const draftScope = normalizeDraftScope(body.draft_scope || source);
+      const customerId = userId
+        ? await resolveOrCreateCustomerIdForUser(admin, userId, venueId, 'commerce_draft')
+        : null;
+      let order: any = null;
+      let draftReference = '';
+      let created = false;
+
+      if (userId) {
+        order = await findAuthenticatedDraft(admin, venueId, userId, draftScope);
+        draftReference = order?.id || '';
+      } else {
+        const suppliedReference = String(body.draft_ref || body.token || '').trim();
+        if (suppliedReference) {
+          try {
+            const candidate = await loadOrderByReference(
+              admin,
+              suppliedReference,
+              null,
+              { editable: true },
+            );
+            if (candidate.venue_id === venueId && candidate.draft_scope === draftScope) {
+              order = candidate;
+              draftReference = suppliedReference;
+            }
+          } catch {
+            // A missing, expired, revoked, or foreign guest reference starts a
+            // separate browser-session draft without revealing why it failed.
+          }
+        }
+      }
+
+      if (!order) {
+        const token = newCartToken();
+        order = await insertCommerceDraft(admin, {
+          venue,
+          userId,
+          customerId,
+          tokenHash: await sha256(token),
+          draftScope,
+          source,
+          guestName: body.guest_name,
+          guestEmail: body.guest_email,
+          guestPhone: body.guest_phone,
+        });
+        draftReference = userId ? order.id : token;
+        created = true;
+      }
+
       try {
         const lines = await validateCartItems(admin, venueId, body.items, userId);
         const { data: replaced, error: replaceError } = await admin.rpc('replace_commerce_cart_lines', {
@@ -525,16 +801,40 @@ Deno.serve(async (req) => {
         }).maybeSingle();
         if (replaceError) throw new Error(replaceError.message);
         order.version = replaced.version;
+        order.guest_name = body.guest_name || order.guest_name;
+        order.guest_email = body.guest_email
+          ? String(body.guest_email).trim().toLowerCase()
+          : order.guest_email;
+        order.guest_phone = body.guest_phone || order.guest_phone;
+        if (!userId) {
+          order.expires_at = guestDraftExpiry();
+          const { error: expiryError } = await admin.from('commerce_orders').update({
+            expires_at: order.expires_at,
+          }).eq('id', order.id).eq('status', 'draft');
+          if (expiryError) throw new Error(expiryError.message);
+        }
       } catch (error) {
-        await admin.from('commerce_orders').delete().eq('id', order.id).eq('status', 'draft');
+        if (created) {
+          await admin.from('commerce_orders').delete().eq('id', order.id).eq('status', 'draft');
+        }
         throw error;
       }
-      return jsonResponse(await cartResponse(admin, order, token), 201, 0);
+      return jsonResponse(
+        await cartResponse(admin, order, draftReference),
+        created ? 201 : 200,
+        0,
+      );
     }
 
     if (req.method === 'PUT' && path === 'cart') {
       const body = await req.json();
-      const order = await loadOrderByToken(admin, String(body.token || ''), userId);
+      const draftReference = String(body.draft_ref || body.token || '');
+      const order = await loadOrderByReference(
+        admin,
+        draftReference,
+        userId,
+        { editable: true },
+      );
       const lines = await validateCartItems(admin, order.venue_id, body.items, userId);
       const { data, error } = await admin.rpc('replace_commerce_cart_lines', {
         p_order_id: order.id,
@@ -546,30 +846,61 @@ Deno.serve(async (req) => {
       }).maybeSingle();
       if (error) throw new Error(error.message);
       order.version = data.version;
-      return jsonResponse(await cartResponse(admin, order, String(body.token || '')), 200, 0);
+      if (!userId) {
+        order.expires_at = guestDraftExpiry();
+        const { error: expiryError } = await admin.from('commerce_orders')
+          .update({ expires_at: order.expires_at })
+          .eq('id', order.id)
+          .eq('status', 'draft');
+        if (expiryError) throw new Error(expiryError.message);
+      }
+      return jsonResponse(await cartResponse(admin, order, draftReference), 200, 0);
     }
 
     if (req.method === 'GET' && path === 'order') {
-      const token = url.searchParams.get('token') || '';
-      const order = await loadOrderByToken(admin, token, userId, true);
+      const reference = url.searchParams.get('ref') || url.searchParams.get('token') || '';
+      const order = await loadOrderByReference(
+        admin,
+        reference,
+        userId,
+        { allowReceiptToken: true },
+      );
       return jsonResponse(await cartResponse(admin, order), 200, 0);
     }
 
     if (req.method === 'POST' && path === 'resolve') {
       const body = await req.json();
-      const order = await loadOrderByToken(admin, String(body.token || ''), userId);
-      if (order.status !== 'draft') return errorResponse('Cart is not editable', 409);
+      const order = await loadOrderByReference(
+        admin,
+        String(body.draft_ref || body.token || ''),
+        userId,
+        { editable: true },
+      );
       const lines = await loadOrderLines(admin, order.id);
       const resolved = await resolveLines(admin, order, lines, userId);
-      return jsonResponse({ order: { id: order.id, version: order.version, currency: order.currency }, lines: resolved }, 200, 0);
+      return jsonResponse({
+        order: {
+          id: order.id,
+          version: order.version,
+          currency: order.currency,
+          ...resolvedOrderSummary(resolved),
+        },
+        lines: resolved.map(projectOrderLine),
+      }, 200, 0);
     }
 
     if (req.method === 'POST' && path === 'checkout') {
       const body = await req.json();
-      const token = String(body.token || '');
-      const order = await loadOrderByToken(admin, token, userId);
-      if (order.status !== 'draft') return errorResponse('Cart is not editable', 409);
-      if (order.version !== Number(body.expected_version)) return errorResponse('Cart changed — review it again.', 409);
+      const draftReference = String(body.draft_ref || body.token || '');
+      const order = await loadOrderByReference(
+        admin,
+        draftReference,
+        userId,
+        { editable: true },
+      );
+      if (order.version !== Number(body.expected_version)) {
+        return errorResponse('Köpet ändrades — kontrollera det igen.', 409);
+      }
       const checkoutGuestEmail = body.guest_email ? String(body.guest_email).trim().toLowerCase() : order.guest_email;
       const checkoutGuestName = body.guest_name ? String(body.guest_name).trim() : order.guest_name;
       if (checkoutGuestEmail !== order.guest_email || checkoutGuestName !== order.guest_name) {
@@ -583,19 +914,42 @@ Deno.serve(async (req) => {
       }
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.filter((line) => line.commerce_kind === 'participation');
-      if (participation.length > 0 && !userId) return errorResponse('Logga in för att boka plats.', 401);
-      if (participation.length > 1) return errorResponse('Release 1 supports one participation per cart', 409);
+      if (participation.length > 1) {
+        return errorResponse('Release 1 supports one participation per order', 409);
+      }
 
       let customerId = order.customer_id || null;
       if (userId) {
-        if (order.user_id && order.user_id !== userId) return errorResponse('Forbidden', 403);
         customerId = await resolveOrCreateCustomerIdForUser(admin, userId, order.venue_id, 'commerce_checkout');
         await admin.from('commerce_orders').update({ user_id: userId, customer_id: customerId }).eq('id', order.id).eq('status', 'draft');
+      } else if (participation.length > 0) {
+        if (!checkoutGuestEmail) {
+          return errorResponse('E-post krävs för kvitto och biljett.', 400);
+        }
+        customerId = await resolveOrCreateGuestCustomerByEmail(admin, {
+          venueId: order.venue_id,
+          email: checkoutGuestEmail,
+          displayName: checkoutGuestName,
+          source: 'commerce_guest_participation',
+        });
+        const { error: ownerUpdateError } = await admin.from('commerce_orders')
+          .update({ customer_id: customerId })
+          .eq('id', order.id)
+          .eq('status', 'draft')
+          .is('user_id', null);
+        if (ownerUpdateError) throw new Error(ownerUpdateError.message);
       }
+      order.customer_id = customerId;
       const resolved = await resolveLines(admin, order, lines, userId);
       let holdId: string | null = null;
       if (participation[0]) {
-        holdId = await acquireParticipationHold(admin, order, participation[0], userId!, customerId);
+        holdId = await acquireParticipationHold(
+          admin,
+          order,
+          participation[0],
+          userId || null,
+          customerId,
+        );
         const resolvedParticipation = resolved.find((line) => line.id === participation[0].id);
         if (resolvedParticipation) resolvedParticipation.capacity_hold_id = holdId;
       }
@@ -612,9 +966,19 @@ Deno.serve(async (req) => {
 
       if (Number(frozen.total_inc_vat_minor || 0) === 0) {
         try {
-          if (!participation[0] || !holdId || !userId) throw new Error('Free order has no participation');
+          if (!participation[0] || !holdId || (!userId && !customerId)) {
+            throw new Error('Free order has no participation owner');
+          }
           const resolvedParticipation = resolved.find((line) => line.id === participation[0].id);
-          const registrationId = await commitFreeParticipation(admin, order, participation[0], resolvedParticipation, userId, customerId, holdId);
+          const registrationId = await commitFreeParticipation(
+            admin,
+            order,
+            participation[0],
+            resolvedParticipation,
+            userId || null,
+            customerId,
+            holdId,
+          );
           return jsonResponse({ free: true, order_id: order.id, registration_id: registrationId, redirect: safeLocalPath(body.success_path, '/my') });
         } catch (error) {
           await admin.from('commerce_orders').update({ status: 'attention' }).eq('id', order.id);
@@ -636,8 +1000,8 @@ Deno.serve(async (req) => {
       }
 
       const origin = canonicalPublicOrigin(req);
-      const successPath = safeLocalPath(body.success_path, `/commerce/confirmed?token=${encodeURIComponent(token)}`);
-      const cancelPath = safeLocalPath(body.cancel_path, `/today`);
+      const successPath = safeLocalPath(body.success_path, '/commerce/confirmed');
+      const cancelPath = safeLocalPath(body.cancel_path, '/cart');
       let stripeSession: StripeCheckoutSession;
       try {
         stripeSession = await createStripeCheckoutSession(stripeKey, {
@@ -683,6 +1047,22 @@ Deno.serve(async (req) => {
         if (holdAttachError) throw new Error(holdAttachError.message);
       }
       return jsonResponse({ url: stripeSession.url, order_id: order.id, version: frozen.version });
+    }
+
+    if (req.method === 'DELETE' && path === 'draft') {
+      const reference = url.searchParams.get('ref') || '';
+      const order = await loadOrderByReference(
+        admin,
+        reference,
+        userId,
+        { editable: true },
+      );
+      const { error } = await admin.from('commerce_orders').update({
+        status: 'expired',
+        expires_at: new Date().toISOString(),
+      }).eq('id', order.id).eq('status', 'draft');
+      if (error) throw new Error(error.message);
+      return jsonResponse({ revoked: true }, 200, 0);
     }
 
     if (req.method === 'GET' && path === 'my-orders') {
@@ -778,7 +1158,9 @@ Deno.serve(async (req) => {
     console.error('api-commerce', path, message);
     if (message === 'Unauthorized') return errorResponse(message, 401);
     if (message === 'Forbidden') return errorResponse(message, 403);
-    if (message.includes('stale_cart_version')) return errorResponse('Cart changed — review it again.', 409);
+    if (message.includes('stale_cart_version')) {
+      return errorResponse('Köpet ändrades — kontrollera det igen.', 409);
+    }
     if (message.includes('not found') || message.includes('not_found')) return errorResponse(message, 404);
     if (message.includes('Platsen hann tas')) return errorResponse(message, 409);
     return errorResponse(message, 400);

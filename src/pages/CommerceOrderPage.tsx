@@ -1,13 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, PackageCheck, ReceiptText } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { fetchCommerceOrder, formatCommerceMoney } from "@/lib/commerce";
+import {
+  fetchCommerceOrder,
+  formatCommerceMoney,
+  readCommerceDraftReference,
+} from "@/lib/commerce";
 
 export default function CommerceOrderPage() {
   const [params] = useSearchParams();
   const routeParams = useParams<{ token?: string }>();
-  const token = routeParams.token || params.get("token") || "";
-  const query = useQuery({ queryKey: ["commerce-order", token], queryFn: () => fetchCommerceOrder(token), enabled: token.length >= 32, refetchInterval: (state) => state.state.data?.order.status === "checkout_pending" ? 1200 : false });
+  const reference = routeParams.token
+    || params.get("ref")
+    || params.get("token")
+    || readCommerceDraftReference();
+  const query = useQuery({ queryKey: ["commerce-order", reference], queryFn: () => fetchCommerceOrder(reference), enabled: reference.length >= 32, refetchInterval: (state) => state.state.data?.order.status === "checkout_pending" ? 1200 : false });
   if (query.isLoading) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
   if (!query.data) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center px-6 text-center">Ordern kunde inte öppnas.</div>;
   const { order, lines, receipt } = query.data;

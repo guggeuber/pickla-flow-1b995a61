@@ -104,6 +104,50 @@ describe("commerce participation webhook fulfillment", () => {
     expect(harness.linkedLines.size).toBe(1);
   });
 
+  it("creates one customer-owned guest registration and ticket across replay", async () => {
+    const registrations = new Map<string, string>();
+    const entitlements = new Set<string>();
+    const dependencies: CommerceParticipationDependencies = {
+      commitRegistration: async (args) => {
+        const key = [
+          args.p_activity_session_id,
+          args.p_session_date,
+          args.p_customer_id,
+        ].join(":");
+        const registrationId = registrations.get(key) || "guest-registration-1";
+        registrations.set(key, registrationId);
+        return { ok: true, registration_id: registrationId };
+      },
+      markOrderAttention: async () => undefined,
+      markLineAttention: async () => undefined,
+      recordIncident: async () => undefined,
+      linkRegistration: async () => undefined,
+      upsertEntitlement: async (registrationId) => {
+        entitlements.add(
+          `session_ticket:${registrationId}:customer:customer-1`,
+        );
+      },
+    };
+    const guestInput = {
+      ...participationInput,
+      commitArgs: {
+        ...participationInput.commitArgs,
+        p_user_id: null,
+        p_customer_id: "customer-1",
+      },
+    };
+
+    await fulfillCommerceParticipation(guestInput, dependencies);
+    await fulfillCommerceParticipation(guestInput, dependencies);
+
+    expect(registrations.size).toBe(1);
+    expect(entitlements).toEqual(
+      new Set([
+        "session_ticket:guest-registration-1:customer:customer-1",
+      ]),
+    );
+  });
+
   it("marks attention, records one sanitized incident, and rethrows an RPC failure for retry", async () => {
     const rpcError = new Error(
       'invalid input syntax for type integer: "59.4"; buyer@example.test; +46701234567; sk_live_secret',

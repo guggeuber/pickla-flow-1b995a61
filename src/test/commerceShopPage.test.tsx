@@ -20,7 +20,8 @@ describe("CommerceShopPage", () => {
   beforeEach(() => {
     api.get.mockReset();
     api.post.mockReset();
-    api.post.mockResolvedValue({ cart_token: "cart-token" });
+    window.sessionStorage.clear();
+    api.post.mockResolvedValue({ draft_ref: "opaque-draft-reference" });
     api.get.mockImplementation((_fn: string, endpoint: string, params: Record<string, string>) => {
       if (endpoint === "public-venue") {
         return Promise.resolve({ venue: { id: venueId, slug: "pickla-arena-sthlm" } });
@@ -75,6 +76,10 @@ describe("CommerceShopPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /Granska köp/ }));
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-commerce", "cart", expect.objectContaining({
       venue_id: venueId,
+      draft_scope: `shop:${venueId}`,
     })));
+    expect(window.sessionStorage.getItem("pickla:commerce:draft-ref")).toBe(
+      "opaque-draft-reference",
+    );
   });
 });

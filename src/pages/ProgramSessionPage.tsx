@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, ShoppingBag, Star, Ticket, UserCheck } from "lucide-react";
@@ -16,7 +16,15 @@ import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { activityCheckInAvailable, useActivityNow } from "@/lib/activityTiming";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { activitySessionToPresentation } from "@/lib/sessionPresentation";
-import { createCommerceCart, fetchCommerceCatalog, formatCommerceMoney } from "@/lib/commerce";
+import {
+  createCommerceCart,
+  fetchCommerceCatalog,
+  fetchCommerceOrder,
+  formatCommerceMoney,
+  readCommerceDraftReference,
+  rememberCommerceDraftReference,
+  resumeCommerceDraft,
+} from "@/lib/commerce";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -95,7 +103,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(false);
   const [interestLoading, setInterestLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState(false);
@@ -187,6 +195,52 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     && offeredRentalIds.has(product.id)
   ));
   const commercePilotEnabled = Boolean(commerceParticipationProduct);
+  const commerceDraftScope = sessionId && occurrenceDate
+    ? `activity:${sessionId}:${occurrenceDate}`
+    : "";
+  const guestDraftReference = useMemo(() => readCommerceDraftReference(), []);
+  const hydratedCommerceDraft = useRef("");
+  const commerceDraft = useQuery({
+    queryKey: [
+      "commerce-draft",
+      venueId,
+      commerceDraftScope,
+      user?.id || guestDraftReference || "guest",
+    ],
+    enabled: commercePilotEnabled
+      && !authLoading
+      && !!venueId
+      && !!commerceDraftScope
+      && (!!user?.id || guestDraftReference.length >= 32),
+    retry: false,
+    queryFn: () => user?.id
+      ? resumeCommerceDraft(venueId!, commerceDraftScope)
+      : fetchCommerceOrder(guestDraftReference),
+  });
+  useEffect(() => {
+    const draft = commerceDraft.data;
+    if (
+      !draft
+      || draft.order.draft_scope !== commerceDraftScope
+      || hydratedCommerceDraft.current === draft.order.id
+    ) return;
+    const participationLine = draft.lines.find((line) => (
+      line.commerce_kind === "participation"
+      && line.activity_session_id === sessionId
+      && line.session_date === occurrenceDate
+    ));
+    if (!participationLine) return;
+    hydratedCommerceDraft.current = draft.order.id;
+    setSelectedCommerceProductIds(
+      draft.lines
+        .filter((line) => (
+          line.parent_line_id === participationLine.id
+          && line.commerce_kind !== "participation"
+          && line.product_id
+        ))
+        .map((line) => line.product_id as string),
+    );
+  }, [commerceDraft.data, commerceDraftScope, occurrenceDate, sessionId]);
   const sessionCourtIds = useMemo(() => (
     Array.isArray(session?.court_ids) ? session.court_ids.filter(Boolean) : []
   ), [session?.court_ids]);
@@ -380,9 +434,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         : "Biljett klar"
     : isFull
       ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
-      : pricingPending
+      : pricingPending || (!user?.id && commerceCatalog.isLoading)
         ? "Hämtar ditt pris..."
-        : `${user?.id ? (pricingIsIncluded ? "Boka plats" : "Betala och boka plats") : "Logga in och boka plats"} · ${checkoutLabel}`;
+        : `${commercePilotEnabled || user?.id
+          ? (pricingIsIncluded ? "Boka plats" : "Betala och boka plats")
+          : "Logga in och boka plats"} · ${checkoutLabel}`;
 
   const sessionPresentation = session
     ? activitySessionToPresentation({
@@ -499,10 +555,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (isRegistered || !session || !occurrenceDate) return;
-    if (!user?.id) {
-      navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
-      return;
-    }
     if (!backendPricing || pricingPending) {
       toast.info("Hämtar ditt pris...");
       return;
@@ -515,6 +567,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         const cart = await createCommerceCart({
           venueId: session.venue_id,
           source: "activity_drawer",
+          draftScope: commerceDraftScope,
+          draftRef: user?.id
+            ? commerceDraft.data?.draft_ref || commerceDraft.data?.order.id
+            : readCommerceDraftReference(),
           items: [
             {
               product_id: commerceParticipationProduct.id,
@@ -529,8 +585,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             })),
           ],
         });
-        if (!cart.cart_token) throw new Error("Varukorgen kunde inte skapas");
-        navigate(`/cart?token=${encodeURIComponent(cart.cart_token)}`);
+        if (!cart.draft_ref) throw new Error("Köpet kunde inte sparas");
+        rememberCommerceDraftReference(cart.draft_ref);
+        navigate("/cart");
+        return;
+      }
+      if (!user?.id) {
+        navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
         return;
       }
       const result = await apiPost("api-bookings", "create-checkout", {
@@ -753,7 +814,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   key: "primary",
                   label: ctaLabel,
                   onClick: isRegistered ? checkInTicket : startSignup,
-                  disabled: loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow),
+                  disabled: loading || queueLoading || checkinLoading || pricingPending || (!user?.id && commerceCatalog.isLoading) || (isRegistered && !canCheckInNow),
                   icon: loading || queueLoading || checkinLoading ? (
                     <Loader2 className="h-5 w-5 animate-spin" />
                   ) : isRegistered ? (
@@ -829,7 +890,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           ) : ticketMode ? (
             <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
               <p className="text-[13px] font-semibold text-neutral-600">
-                Logga in så visar vi din biljett här direkt efter bokning.
+                Din biljett visas i den säkra orderlänken efter bokning.
               </p>
             </div>
           ) : null}
