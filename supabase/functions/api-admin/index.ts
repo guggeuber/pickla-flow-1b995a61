@@ -2366,6 +2366,59 @@ function cleanBlockMetadata(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function cleanResourceBlockCustomerId(value: unknown) {
+  const customerId = String(value || '').trim();
+  return customerId || null;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function cleanBillingRateMinor(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const rate = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isSafeInteger(rate) || rate < 0) throw new Error('Invalid billing rate');
+  return rate;
+}
+
+function resourceBlockCustomerName(customer: Record<string, any>) {
+  return String(customer.display_name || [customer.first_name, customer.last_name].filter(Boolean).join(' ') || 'Kund').trim();
+}
+
+async function validateResourceBlockCustomer(admin: any, venueId: string, customerId: string) {
+  const [{ data: venue, error: venueError }, { data: customer, error: customerError }, { data: venueProfile, error: venueProfileError }] = await Promise.all([
+    admin.from('venues').select('id, organization_id').eq('id', venueId).maybeSingle(),
+    admin.from('customers').select('id, organization_id, status').eq('id', customerId).maybeSingle(),
+    admin.from('customer_venue_profiles').select('id').eq('venue_id', venueId).eq('customer_id', customerId).maybeSingle(),
+  ]);
+  const queryError = venueError || customerError || venueProfileError;
+  if (queryError) throw new Error(queryError.message);
+  if (!venue || !customer || customer.status !== 'active' || !venue.organization_id || customer.organization_id !== venue.organization_id || !venueProfile) {
+    throw new Error('Customer is not available for this venue');
+  }
+}
+
+async function attachResourceBlockCustomers(admin: any, rows: any[]) {
+  const customerIds = uniqueStrings(rows.map((row: any) => cleanBlockMetadata(row.metadata).customer_id));
+  if (!customerIds.length) return rows;
+
+  const { data: customers, error } = await admin
+    .from('customers')
+    .select('id, display_name, first_name, last_name')
+    .in('id', customerIds);
+  if (error) throw new Error(error.message);
+
+  const byId = new Map((customers || []).map((customer: any) => [customer.id, {
+    id: customer.id,
+    display_name: resourceBlockCustomerName(customer),
+  }]));
+  return rows.map((row: any) => {
+    const customerId = cleanResourceBlockCustomerId(cleanBlockMetadata(row.metadata).customer_id);
+    return customerId && byId.has(customerId) ? { ...row, customer: byId.get(customerId) } : row;
+  });
+}
+
 function operationRangeFromBody(body: Record<string, any>) {
   if (body.starts_at && body.ends_at) {
     const startsAt = DateTime.fromISO(String(body.starts_at));
@@ -4589,6 +4642,11 @@ Deno.serve(async (req) => {
 
     // ── EVENT RESOURCE BLOCKS ──
     if (req.method === 'GET' && path === 'resource-blocks') {
+      try {
+        await requireVenueRole(admin, userId, venueId, ['venue_admin']);
+      } catch (authorizationError) {
+        return errorResponse(authorizationError instanceof Error ? authorizationError.message : 'Forbidden', 403);
+      }
       const from = url.searchParams.get('from');
       const to = url.searchParams.get('to');
       let query = admin
@@ -4601,7 +4659,11 @@ Deno.serve(async (req) => {
 
       const { data, error: e } = await query;
       if (e) return errorResponse(e.message);
-      return jsonResponse(data || [], 200, 10);
+      try {
+        return jsonResponse(await attachResourceBlockCustomers(admin, data || []), 200, 10);
+      } catch (customerProjectionError) {
+        return errorResponse(customerProjectionError instanceof Error ? customerProjectionError.message : 'Could not load block customers', 500);
+      }
     }
 
     if (req.method === 'POST' && path === 'resource-blocks') {
@@ -4617,12 +4679,64 @@ Deno.serve(async (req) => {
         ? body.resource_catalog_ids.map((id: unknown) => String(id)).filter(Boolean)
         : [];
       const groupId = String(body.group_id || body.metadata?.group_id || crypto.randomUUID());
-      const blockRef = String(body.block_ref || body.metadata?.block_ref || createBlockRef());
+      let blockRef = String(body.block_ref || body.metadata?.block_ref || createBlockRef());
       const note = String(body.note || body.metadata?.note || '').trim().slice(0, 1000);
+      let customerId = cleanResourceBlockCustomerId(body.customer_id ?? body.metadata?.customer_id);
+      let billingRateMinor;
+
+      try {
+        billingRateMinor = cleanBillingRateMinor(body.billing_rate_minor ?? body.metadata?.billing_rate_minor);
+      } catch (billingError) {
+        return errorResponse(billingError instanceof Error ? billingError.message : 'Invalid billing rate', 400);
+      }
 
       if (!title) return errorResponse('Missing title');
       if (!['manual', 'event', 'maintenance', 'private', 'internal'].includes(reason)) return errorResponse('Invalid reason', 400);
       if (!['hold', 'confirmed', 'released', 'cancelled'].includes(status)) return errorResponse('Invalid status', 400);
+
+      if (body.group_id || body.metadata?.group_id) {
+        let { data: existingGroup, error: groupError } = await admin
+          .from('event_resource_blocks')
+          .select('id, metadata')
+          .eq('venue_id', venueId)
+          .contains('metadata', { group_id: groupId });
+        if (groupError) return errorResponse(groupError.message);
+        if (!(existingGroup || []).length && blockRef) {
+          const fallbackGroup = await admin
+            .from('event_resource_blocks')
+            .select('id, metadata')
+            .eq('venue_id', venueId)
+            .contains('metadata', { block_ref: blockRef });
+          if (fallbackGroup.error) return errorResponse(fallbackGroup.error.message);
+          existingGroup = fallbackGroup.data;
+        }
+        if ((existingGroup || []).length) {
+          const groupCustomerIds = Array.from(new Set((existingGroup || []).map((row: any) =>
+            cleanResourceBlockCustomerId(cleanBlockMetadata(row.metadata).customer_id)
+          )));
+          const groupRates = Array.from(new Set((existingGroup || []).map((row: any) => {
+            const rawRate = cleanBlockMetadata(row.metadata).billing_rate_minor;
+            return rawRate === undefined || rawRate === null ? null : cleanBillingRateMinor(rawRate);
+          })));
+          if (groupCustomerIds.length > 1 || groupRates.length > 1) {
+            return errorResponse('Block group has inconsistent billing metadata', 409);
+          }
+          customerId = groupCustomerIds[0] ?? null;
+          billingRateMinor = groupRates[0] ?? null;
+          const existingRef = cleanBlockMetadata((existingGroup || [])[0]?.metadata).block_ref;
+          if (existingRef) blockRef = String(existingRef);
+        }
+      }
+
+      if (customerId) {
+        if (!isUuid(customerId)) return errorResponse('Customer is not available for this venue', 400);
+        try {
+          await validateResourceBlockCustomer(admin, venueId, customerId);
+        } catch (customerError) {
+          const message = customerError instanceof Error ? customerError.message : 'Customer is not available for this venue';
+          return errorResponse(message, message === 'Customer is not available for this venue' ? 400 : 500);
+        }
+      }
 
       let range;
       try {
@@ -4688,7 +4802,11 @@ Deno.serve(async (req) => {
         resourceIds = Array.from(new Set(resourceIds.filter((id: string) => validIds.has(id))));
       }
 
-      const rows = scope === 'venue'
+      const billingMetadata = {
+        ...(customerId ? { customer_id: customerId } : {}),
+        ...(billingRateMinor !== null ? { billing_rate_minor: billingRateMinor } : {}),
+      };
+      const rows: any[] = scope === 'venue'
         ? [{
           venue_id: venueId,
           resource_catalog_id: null,
@@ -4699,7 +4817,7 @@ Deno.serve(async (req) => {
           ends_at: range.ends_at,
           blocks_public_booking: body.blocks_public_booking !== false,
           created_by: userId,
-          metadata: { scope: 'venue', group_id: groupId, block_ref: blockRef, note },
+          metadata: { scope: 'venue', group_id: groupId, block_ref: blockRef, note, ...billingMetadata },
         }]
         : resourceIds.map((resourceId: string) => ({
           venue_id: venueId,
@@ -4711,7 +4829,7 @@ Deno.serve(async (req) => {
           ends_at: range.ends_at,
           blocks_public_booking: body.blocks_public_booking !== false,
           created_by: userId,
-          metadata: { group_id: groupId, block_ref: blockRef, note },
+          metadata: { group_id: groupId, block_ref: blockRef, note, ...billingMetadata },
         }));
 
       const { data, error: e } = await admin
@@ -4760,7 +4878,9 @@ Deno.serve(async (req) => {
           .in('id', blockIds);
         if (currentError) return errorResponse(currentError.message);
         const note = body.note !== undefined ? String(body.note || '').trim().slice(0, 1000) : undefined;
-        const metadataPatch = cleanBlockMetadata(body.metadata);
+        const metadataPatch = { ...cleanBlockMetadata(body.metadata) };
+        delete metadataPatch.customer_id;
+        delete metadataPatch.billing_rate_minor;
 
         for (const row of currentRows || []) {
           const nextMetadata = {

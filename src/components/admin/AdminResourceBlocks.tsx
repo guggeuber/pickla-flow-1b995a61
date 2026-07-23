@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { Ban, CalendarClock, CheckCircle2, ChevronDown, CircleSlash, Loader2, MapPin, Pencil, ShieldCheck } from "lucide-react";
+import { Ban, CalendarClock, CheckCircle2, ChevronDown, CircleSlash, ClipboardCopy, Loader2, MapPin, Pencil, Search, ShieldCheck, X } from "lucide-react";
 import { toast } from "sonner";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { copyWithFallback } from "@/lib/share";
 
 interface Court {
   id: string;
@@ -20,7 +21,7 @@ interface ResourceCatalog {
   venue_court_id?: string | null;
 }
 
-interface ResourceBlock {
+export interface ResourceBlock {
   id: string;
   title: string;
   reason: string;
@@ -30,6 +31,7 @@ interface ResourceBlock {
   blocks_public_booking: boolean;
   metadata?: Record<string, unknown> | null;
   event_resource_catalog?: ResourceCatalog | ResourceCatalog[] | null;
+  customer?: { id: string; display_name: string } | null;
 }
 
 interface ResourceBlockGroup {
@@ -46,6 +48,28 @@ interface ResourceBlockGroup {
   isAdjusted: boolean;
   hasConfirmed: boolean;
   hasHold: boolean;
+  customerId: string | null;
+  customerName: string | null;
+  billingRateMinor: number | null;
+}
+
+interface CustomerOption {
+  id?: string;
+  customer_id?: string | null;
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  full_name?: string | null;
+  identity_title?: string | null;
+}
+
+export interface ResourceBlockBillingSummary {
+  text: string;
+  courtCount: number;
+  courtMinutes: number | null;
+  billingRateMinor: number | null;
+  totalMinor: number | null;
+  isWholeVenue: boolean;
 }
 
 const REASONS = [
@@ -107,6 +131,83 @@ function noteFor(block: ResourceBlock) {
   return typeof metadata.note === "string" ? metadata.note : "";
 }
 
+function customerIdFor(block: ResourceBlock) {
+  const customerId = groupMetadata(block).customer_id;
+  return typeof customerId === "string" && customerId.trim() ? customerId.trim() : null;
+}
+
+function billingRateMinorFor(block: ResourceBlock) {
+  const rate = groupMetadata(block).billing_rate_minor;
+  return typeof rate === "number" && Number.isSafeInteger(rate) && rate >= 0 ? rate : null;
+}
+
+function customerOptionId(customer: CustomerOption) {
+  return String(customer.customer_id || customer.id || "").trim();
+}
+
+function customerOptionName(customer: CustomerOption) {
+  return String(customer.display_name || customer.full_name || customer.identity_title || [customer.first_name, customer.last_name].filter(Boolean).join(" ") || "Kund").trim();
+}
+
+export function parseBillingRateMinor(input: string): number | null | undefined {
+  const normalized = input.trim().replace(",", ".");
+  if (!normalized) return null;
+  const match = normalized.match(/^(\d+)(?:\.(\d{1,2}))?$/);
+  if (!match) return undefined;
+  const whole = Number(match[1]);
+  const minor = Number((match[2] || "").padEnd(2, "0"));
+  const value = whole * 100 + minor;
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+function formatMinorSek(value: number) {
+  const whole = Math.floor(value / 100).toLocaleString("sv-SE");
+  return `${whole},${String(value % 100).padStart(2, "0")} kr`;
+}
+
+function formatCourtHours(minutes: number) {
+  if (minutes % 60 === 0) return String(minutes / 60);
+  return (minutes / 60).toLocaleString("sv-SE", { maximumFractionDigits: 2 });
+}
+
+export function buildResourceBlockBillingSummary(group: ResourceBlockGroup): ResourceBlockBillingSummary {
+  const activeRows = group.blocks.filter((block) => block.status === "hold" || block.status === "confirmed");
+  const wholeVenue = activeRows.some((block) => groupMetadata(block).scope === "venue" || !resourceFor(block));
+  const courtRows = activeRows.filter((block) => resourceFor(block)?.resource_type === "court");
+  const customerName = activeRows.find((block) => block.customer?.display_name)?.customer?.display_name || group.customerName || "Ej vald";
+  const rate = group.billingRateMinor;
+  const status = group.hasConfirmed && !group.hasHold ? "Bekräftad" : group.hasConfirmed ? "Delvis" : "Hold";
+  const lines = [
+    `Blockreferens: ${group.blockRef}`,
+    `Kund: ${customerName}`,
+    `Titel: ${group.title}`,
+    `Kommentar: ${group.note || "–"}`,
+    "Banor:",
+    ...courtRows.map((block) => `- ${resourceFor(block)?.name || "Bana"}: ${formatBlockTime(block)}`),
+    `Antal banor: ${courtRows.length}`,
+  ];
+
+  if (wholeVenue) {
+    lines.push("Bantimmar kan inte beräknas för hela lokalen");
+    if (rate !== null) lines.push(`Manuellt pris per bantimme: ${formatMinorSek(rate)}`);
+    lines.push(`Status: ${status}`);
+    return { text: lines.join("\n"), courtCount: courtRows.length, courtMinutes: null, billingRateMinor: rate, totalMinor: null, isWholeVenue: true };
+  }
+
+  const courtMinutes = courtRows.reduce((sum, block) => {
+    const start = DateTime.fromISO(block.starts_at, { zone: "utc" });
+    const end = DateTime.fromISO(block.ends_at, { zone: "utc" });
+    if (!start.isValid || !end.isValid || end <= start) return sum;
+    return sum + Math.round(end.diff(start, "minutes").minutes);
+  }, 0);
+  const totalMinor = rate === null ? null : Math.round((courtMinutes * rate) / 60);
+  lines.push(`Totalt antal bantimmar: ${formatCourtHours(courtMinutes)}`);
+  lines.push(`Manuellt pris per bantimme: ${rate === null ? "Ej angivet" : formatMinorSek(rate)}`);
+  lines.push(`Beräknat totalt exkl. moms: ${totalMinor === null ? "Kan inte beräknas" : formatMinorSek(totalMinor)}`);
+  lines.push(`Status: ${status}`);
+  return { text: lines.join("\n"), courtCount: courtRows.length, courtMinutes, billingRateMinor: rate, totalMinor, isWholeVenue: false };
+}
+
 function localPartsFor(block: ResourceBlock) {
   const start = DateTime.fromISO(block.starts_at, { zone: "utc" }).setZone("Europe/Stockholm");
   const end = DateTime.fromISO(block.ends_at, { zone: "utc" }).setZone("Europe/Stockholm");
@@ -130,11 +231,15 @@ function buildGroups(blocks: ResourceBlock[]): ResourceBlockGroup[] {
     const firstStatus = first.status;
     const firstTitle = first.title;
     const firstNote = noteFor(first);
+    const firstCustomerId = customerIdFor(first);
+    const firstBillingRateMinor = billingRateMinorFor(first);
     const isAdjusted = rows.some((row) =>
       `${row.starts_at}|${row.ends_at}` !== firstTime ||
       row.status !== firstStatus ||
       row.title !== firstTitle ||
-      noteFor(row) !== firstNote
+      noteFor(row) !== firstNote ||
+      customerIdFor(row) !== firstCustomerId ||
+      billingRateMinorFor(row) !== firstBillingRateMinor
     );
 
     return {
@@ -151,6 +256,9 @@ function buildGroups(blocks: ResourceBlock[]): ResourceBlockGroup[] {
       isAdjusted,
       hasConfirmed: rows.some((row) => row.status === "confirmed"),
       hasHold: rows.some((row) => row.status === "hold"),
+      customerId: firstCustomerId,
+      customerName: first.customer?.display_name || null,
+      billingRateMinor: firstBillingRateMinor,
     };
   }).sort((a, b) => a.starts_at.localeCompare(b.starts_at));
 }
@@ -167,6 +275,9 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
   const [scope, setScope] = useState<"courts" | "venue">("courts");
   const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
+  const [billingRateInput, setBillingRateInput] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [editingGroups, setEditingGroups] = useState<Record<string, boolean>>({});
   const [groupDrafts, setGroupDrafts] = useState<Record<string, { date: string; startTime: string; endTime: string; note: string; courtIds: string[] }>>({});
@@ -184,6 +295,19 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
     queryFn: () => apiGet("api-admin", "resource-blocks", { venueId, from }),
     enabled: Boolean(venueId),
   });
+
+  const normalizedCustomerSearch = customerSearch.trim();
+  const { data: customerSearchResults = [], isFetching: customerSearchLoading } = useQuery<CustomerOption[]>({
+    queryKey: ["admin-resource-block-customer-search", venueId, normalizedCustomerSearch],
+    queryFn: () => apiGet("api-customers", "list", { venueId, search: normalizedCustomerSearch, limit: "8" }),
+    enabled: Boolean(venueId) && !selectedCustomer && normalizedCustomerSearch.length >= 2,
+  });
+
+  const selectableCustomers = useMemo(
+    () => customerSearchResults.filter((customer) => Boolean(customer.customer_id)),
+    [customerSearchResults],
+  );
+  const billingRateMinor = useMemo(() => parseBillingRateMinor(billingRateInput), [billingRateInput]);
 
   const sortedCourts = useMemo(
     () => [...courts].sort((a, b) => (a.sport_type || "").localeCompare(b.sport_type || "") || a.court_number - b.court_number),
@@ -204,23 +328,32 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
   };
 
   const createBlock = useMutation({
-    mutationFn: () => apiPost("api-admin", "resource-blocks", {
-      venueId,
-      title: title.trim(),
-      reason,
-      status,
-      date,
-      start_time: startTime,
-      end_time: endTime,
-      scope,
-      venue_court_ids: scope === "courts" ? selectedCourtIds : [],
-      blocks_public_booking: true,
-      note,
-    }),
+    mutationFn: () => {
+      if (billingRateMinor === undefined) throw new Error("Ange pris i kronor med högst två decimaler");
+      const customerId = selectedCustomer ? customerOptionId(selectedCustomer) : "";
+      return apiPost("api-admin", "resource-blocks", {
+        venueId,
+        title: title.trim(),
+        reason,
+        status,
+        date,
+        start_time: startTime,
+        end_time: endTime,
+        scope,
+        venue_court_ids: scope === "courts" ? selectedCourtIds : [],
+        blocks_public_booking: true,
+        note,
+        ...(customerId ? { customer_id: customerId } : {}),
+        ...(billingRateMinor !== null ? { billing_rate_minor: billingRateMinor } : {}),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin-resource-blocks", venueId] });
       setSelectedCourtIds([]);
       setNote("");
+      setSelectedCustomer(null);
+      setCustomerSearch("");
+      setBillingRateInput("");
       toast.success("Blockering skapad");
     },
     onError: (err: Error) => toast.error(err.message),
@@ -285,6 +418,8 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
       group_id: group.key,
       block_ref: group.blockRef,
       note: draft.note,
+      ...(group.customerId ? { customer_id: group.customerId } : {}),
+      ...(group.billingRateMinor !== null ? { billing_rate_minor: group.billingRateMinor } : {}),
     }),
     onSuccess: (_, variables) => {
       qc.invalidateQueries({ queryKey: ["admin-resource-blocks", venueId] });
@@ -297,7 +432,7 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const canCreate = title.trim() && date && startTime && endTime && (scope === "venue" || selectedCourtIds.length > 0);
+  const canCreate = title.trim() && date && startTime && endTime && billingRateMinor !== undefined && (scope === "venue" || selectedCourtIds.length > 0);
 
   const toggleGroup = (key: string) => {
     setExpandedGroups((current) => ({ ...current, [key]: !current[key] }));
@@ -351,6 +486,70 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
           className="min-h-20 w-full rounded-xl bg-muted/40 border border-border px-4 py-3 text-sm outline-none focus:border-primary/60"
           placeholder="Kommentar, t.ex. Softtronic AW eller preliminärt hold"
         />
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="relative space-y-2">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Kund (valfritt)</label>
+            {selectedCustomer ? (
+              <div className="flex items-center justify-between rounded-xl border border-border bg-muted/40 px-4 py-3">
+                <span className="text-sm font-semibold text-foreground">{customerOptionName(selectedCustomer)}</span>
+                <button
+                  type="button"
+                  aria-label="Ta bort vald kund"
+                  onClick={() => { setSelectedCustomer(null); setCustomerSearch(""); }}
+                  className="rounded-full p-1 text-muted-foreground hover:bg-muted"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    value={customerSearch}
+                    onChange={(event) => setCustomerSearch(event.target.value)}
+                    className="w-full rounded-xl border border-border bg-muted/40 py-3 pl-10 pr-4 text-sm outline-none focus:border-primary/60"
+                    placeholder="Sök kund"
+                  />
+                </div>
+                {normalizedCustomerSearch.length >= 2 && (
+                  <div className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-xl border border-border bg-background p-1 shadow-xl">
+                    {customerSearchLoading ? (
+                      <p className="px-3 py-2 text-xs text-muted-foreground">Söker…</p>
+                    ) : selectableCustomers.length ? selectableCustomers.map((customer) => (
+                      <button
+                        key={customerOptionId(customer)}
+                        type="button"
+                        onClick={() => { setSelectedCustomer(customer); setCustomerSearch(""); }}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-muted"
+                      >
+                        {customerOptionName(customer)}
+                      </button>
+                    )) : (
+                      <p className="px-3 py-2 text-xs text-muted-foreground">Ingen kund hittades</p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="resource-block-billing-rate" className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              Manuellt pris per bantimme (valfritt)
+            </label>
+            <input
+              id="resource-block-billing-rate"
+              inputMode="decimal"
+              value={billingRateInput}
+              onChange={(event) => setBillingRateInput(event.target.value)}
+              className={`w-full rounded-xl border bg-muted/40 px-4 py-3 text-sm outline-none focus:border-primary/60 ${billingRateMinor === undefined ? "border-destructive" : "border-border"}`}
+              placeholder="SEK exkl. moms, t.ex. 500"
+            />
+            {billingRateMinor === undefined && <p className="text-[11px] text-destructive">Ange kronor med högst två decimaler.</p>}
+          </div>
+        </div>
 
         <div className="grid grid-cols-2 gap-2">
           <button
@@ -483,6 +682,7 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
               const draft = groupDrafts[group.key];
               const usedCourtIds = new Set(group.blocks.map((block) => resourceFor(block)?.venue_court_id).filter(Boolean));
               const addableCourts = sortedCourts.filter((court) => !usedCourtIds.has(court.id));
+              const billingSummary = buildResourceBlockBillingSummary(group);
               return (
                 <div key={group.key} className="rounded-2xl border border-border bg-muted/20 p-4 space-y-3">
                   <div className="flex items-start gap-3">
@@ -546,6 +746,28 @@ export default function AdminResourceBlocks({ venueId }: { venueId: string }) {
 
                   {isExpanded && (
                     <div className="space-y-3 rounded-2xl border border-border bg-background/30 p-3">
+                      <div className="space-y-2 rounded-xl border border-border bg-muted/20 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Fakturaunderlag</p>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await copyWithFallback(billingSummary.text);
+                                toast.success("Fakturaunderlag kopierat");
+                              } catch {
+                                toast.error("Kunde inte kopiera fakturaunderlaget");
+                              }
+                            }}
+                            className="rounded-full bg-muted/60 px-3 py-1.5 text-[11px] font-bold text-foreground"
+                          >
+                            <ClipboardCopy className="mr-1 inline h-3 w-3" />
+                            Kopiera fakturaunderlag
+                          </button>
+                        </div>
+                        <pre className="whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-muted-foreground">{billingSummary.text}</pre>
+                      </div>
+
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Resurser</p>
                         <button
