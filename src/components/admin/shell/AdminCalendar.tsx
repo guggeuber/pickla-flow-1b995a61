@@ -24,6 +24,7 @@ import { useAdminCalendar, type AdminCalendarItem } from "@/hooks/useAdmin";
 import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
 import { ax, AX_GRID_BG } from "./axTheme";
 import { AX_TYPE, AxCard, AxChip, AxSectionLabel } from "./axPrimitives";
+import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
 
 interface Props {
   venueId: string | undefined;
@@ -649,8 +650,11 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
   });
 
   const createActivity = useMutation({
-    mutationFn: () =>
-      apiPost("api-admin", "activity-sessions", {
+    mutationFn: () => {
+      if (!isValidActivitySessionTimeOrder(activityStart, activityEnd)) {
+        throw new Error("Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.");
+      }
+      return apiPost("api-admin", "activity-sessions", {
         venueId,
         name: activityTitle.trim(),
         session_type: activityType,
@@ -681,7 +685,8 @@ export default function AdminCalendar({ venueId, onOpenModule }: Props) {
           desk_price_sek: parseSek(activityDeskPrice || deskPriceForOnline(activityPrice)),
           pricing_channel_mode: "online_discount",
         },
-      }),
+      });
+    },
     onSuccess: () => {
       toast.success("Specialpass publicerat");
       setSelectedDate(activityDate);

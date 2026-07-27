@@ -2,6 +2,10 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient } from '../_shared/auth.ts';
 import { auditMutation, requireSuperAdmin, requireVenueRole, writeAuditLog } from '../_shared/authorization.ts';
 import { deriveCommerceCompatibilityFields, evaluateCommerceAvailability } from '../_shared/commerce_availability.ts';
+import {
+  activitySessionOccurrenceInterval,
+  isValidActivitySessionTimeOrder,
+} from '../_shared/activity_session_time.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -246,18 +250,7 @@ function activitySessionOccursOnDate(session: Record<string, any>, date: string)
 }
 
 function activitySessionOccurrenceRangeUtc(session: Record<string, any>, date: string) {
-  const startTime = cleanTime(session.start_time);
-  const endTime = cleanTime(session.end_time);
-  if (!startTime || !endTime) return null;
-  const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' });
-  const end = DateTime.fromISO(`${date}T${endTime}:00`, { zone: 'Europe/Stockholm' });
-  if (!start.isValid || !end.isValid || end <= start) return null;
-  return {
-    start,
-    end,
-    startISO: start.toUTC().toISO()!,
-    endISO: end.toUTC().toISO()!,
-  };
+  return activitySessionOccurrenceInterval(date, session.start_time, session.end_time);
 }
 
 function rangesOverlap(startA: DateTime, endA: DateTime, startB: DateTime, endB: DateTime) {
@@ -2799,10 +2792,9 @@ async function analyzeOperationImpact(
         && session.recurrence_days.includes(DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7);
       if (!isConcrete && !isRecurring) continue;
 
-      const occurrenceStart = DateTime.fromISO(`${date}T${String(session.start_time).slice(0, 5)}:00`, { zone: 'Europe/Stockholm' }).toUTC();
-      const occurrenceEnd = DateTime.fromISO(`${date}T${String(session.end_time).slice(0, 5)}:00`, { zone: 'Europe/Stockholm' }).toUTC();
-      if (!occurrenceStart.isValid || !occurrenceEnd.isValid) continue;
-      if (occurrenceStart.toMillis() < endMs && occurrenceEnd.toMillis() > startMs) {
+      const occurrence = activitySessionOccurrenceInterval(date, session.start_time, session.end_time);
+      if (!occurrence) continue;
+      if (occurrence.start.toMillis() < endMs && occurrence.end.toMillis() > startMs) {
         activityCount += 1;
         if (activitySamples.length < 8) {
           activitySamples.push({
@@ -5250,12 +5242,16 @@ Deno.serve(async (req) => {
       const hostCustomerIds = normalizeHostCustomerIds(body.host_customer_ids);
       const normalized = normalizeActivitySessionPayload(body);
       const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days : null;
+      const draft = effectiveActivitySessionDraft(null, { ...normalized, recurrence_days: recurrenceDays }, venueId);
+      if (!isValidActivitySessionTimeOrder(draft.start_time, draft.end_time)) {
+        return errorResponse('Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.', 400);
+      }
       const hostValidation = await validateActivitySessionHostCustomers(admin, hostCustomerIds);
       if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
       const courtValidation = await validateActivitySessionCourtAvailability(
         admin,
         venueId,
-        effectiveActivitySessionDraft(null, { ...normalized, recurrence_days: recurrenceDays }, venueId),
+        draft,
       );
       if (!courtValidation.ok) return errorResponse(courtValidation.message, courtValidation.status);
       const { data, error: e } = await admin.from('activity_sessions').insert({
@@ -5306,10 +5302,14 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (existingError) return errorResponse(existingError.message);
       if (!existingSession?.id) return errorResponse('Activity session not found', 404);
+      const draft = effectiveActivitySessionDraft(existingSession, normalized, venueId);
+      if (!isValidActivitySessionTimeOrder(draft.start_time, draft.end_time)) {
+        return errorResponse('Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.', 400);
+      }
       const courtValidation = await validateActivitySessionCourtAvailability(
         admin,
         venueId,
-        effectiveActivitySessionDraft(existingSession, normalized, venueId),
+        draft,
         sessionId,
       );
       if (!courtValidation.ok) return errorResponse(courtValidation.message, courtValidation.status);

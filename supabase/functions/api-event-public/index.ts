@@ -4,6 +4,7 @@ import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadIn
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
+import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -270,9 +271,8 @@ function nextActivityOccurrence(session: any, requestedDate?: string | null) {
     const jsDow = date.weekday % 7;
     if (!recurrenceDays.includes(jsDow)) continue;
     if (offset === 0 && session?.end_time) {
-      const [endHour = 0, endMinute = 0] = String(session.end_time).slice(0, 5).split(':').map(Number);
-      const endAt = date.set({ hour: endHour, minute: endMinute, second: 0, millisecond: 0 });
-      if (now > endAt) continue;
+      const occurrence = activitySessionOccurrenceInterval(date.toISODate(), session.start_time, session.end_time);
+      if (!occurrence || now >= occurrence.end) continue;
     }
     return date;
   }

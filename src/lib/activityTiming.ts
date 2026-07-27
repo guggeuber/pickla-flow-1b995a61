@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { DateTime } from "luxon";
+import { ACTIVITY_SESSION_TIMEZONE, activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 
-export const STOCKHOLM_ZONE = "Europe/Stockholm";
+export const STOCKHOLM_ZONE = ACTIVITY_SESSION_TIMEZONE;
 
 type ActivityTimingInput = {
   sessionDate?: string | null;
@@ -48,12 +49,12 @@ export function activityTimingStatus({
   };
   if (!date || !start || !end) return fallback;
 
-  const startsAt = DateTime.fromISO(`${date}T${start}:00`, { zone: STOCKHOLM_ZONE });
-  const endsAt = DateTime.fromISO(`${date}T${end}:00`, { zone: STOCKHOLM_ZONE });
+  const interval = activitySessionOccurrenceInterval(date, start, end);
   const stockholmNow = now.setZone(STOCKHOLM_ZONE);
-  if (!startsAt.isValid || !endsAt.isValid) return fallback;
+  if (!interval) return fallback;
+  const { start: startsAt, end: endsAt } = interval;
 
-  if (stockholmNow > endsAt) {
+  if (stockholmNow >= endsAt) {
     return {
       stateLabel: "AVSLUTAD",
       detailLabel: rangeLabel,
@@ -63,7 +64,7 @@ export function activityTimingStatus({
     };
   }
 
-  if (stockholmNow >= startsAt && stockholmNow <= endsAt) {
+  if (stockholmNow >= startsAt && stockholmNow < endsAt) {
     return {
       stateLabel: "PÅGÅR",
       detailLabel: `Slutar om ${formatDuration(endsAt.diff(stockholmNow, "minutes").minutes)}`,
@@ -142,13 +143,13 @@ export function activityTimingLabel({
   const end = String(endTime || "").slice(0, 5);
   if (!date || !start || !end) return "";
 
-  const startsAt = DateTime.fromISO(`${date}T${start}:00`, { zone: STOCKHOLM_ZONE });
-  const endsAt = DateTime.fromISO(`${date}T${end}:00`, { zone: STOCKHOLM_ZONE });
-  if (!startsAt.isValid || !endsAt.isValid) return "";
+  const interval = activitySessionOccurrenceInterval(date, start, end);
+  if (!interval) return "";
+  const { start: startsAt, end: endsAt } = interval;
 
-  if (now > endsAt) return "Avslutad";
+  if (now >= endsAt) return "Avslutad";
   if (checkInAvailable) return "Check-in öppen";
-  if (now >= startsAt && now <= endsAt) {
+  if (now >= startsAt && now < endsAt) {
     return `Pågår · ${formatDuration(endsAt.diff(now, "minutes").minutes)} kvar`;
   }
   if (startsAt.hasSame(now, "day")) {
@@ -170,8 +171,7 @@ export function activityCheckInAvailable({
   const start = String(startTime || "").slice(0, 5);
   const end = String(endTime || "").slice(0, 5);
   if (!date || !start || !end) return false;
-  const startsAt = DateTime.fromISO(`${date}T${start}:00`, { zone: STOCKHOLM_ZONE });
-  const endsAt = DateTime.fromISO(`${date}T${end}:00`, { zone: STOCKHOLM_ZONE });
-  if (!startsAt.isValid || !endsAt.isValid) return false;
-  return now >= startsAt.minus({ minutes: 30 }) && now <= endsAt;
+  const interval = activitySessionOccurrenceInterval(date, start, end);
+  if (!interval) return false;
+  return now >= interval.start.minus({ minutes: 30 }) && now < interval.end;
 }

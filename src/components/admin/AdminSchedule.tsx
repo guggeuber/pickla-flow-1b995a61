@@ -5,6 +5,7 @@ import { AlertTriangle, CalendarDays, Edit3, Loader2, Plus, Save, Search, Trash2
 import { toast } from "sonner";
 import { formatSek } from "@/lib/activityPricing";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
 
 const DAYS = [
   { key: 1, label: "Mån" },
@@ -363,6 +364,8 @@ const draftWarnings = (draft: {
   court_ids?: string[] | null;
   publish_status?: string;
   is_active?: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
 }) => {
   const warnings: { message: string; blocking?: boolean }[] = [];
   const soldAs = draft.sold_as || "activity_ticket";
@@ -370,6 +373,10 @@ const draftWarnings = (draft: {
   const price = Number(draft.price_sek || 0);
   const capacity = draft.capacity === "" || draft.capacity == null ? null : Number(draft.capacity);
   const isPublished = (draft.publish_status || "published") === "published" && draft.is_active !== false;
+
+  if (draft.start_time && draft.end_time && !isValidActivitySessionTimeOrder(draft.start_time, draft.end_time)) {
+    warnings.push({ message: "Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.", blocking: true });
+  }
 
   if (isPublished && soldAs === "activity_ticket" && price <= 0) {
     warnings.push({ message: "Lägg in ett onlinepris innan passet publiceras.", blocking: true });
@@ -403,6 +410,8 @@ const sessionWarnings = (session: any) => draftWarnings({
   court_ids: session.court_ids || [],
   publish_status: session.publish_status || "published",
   is_active: session.is_active,
+  start_time: session.start_time,
+  end_time: session.end_time,
 });
 
 const memberPriceForProduct = ({
@@ -729,6 +738,8 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       court_ids: sessionCourtIds,
       publish_status: "published",
       is_active: true,
+      start_time: startTime,
+      end_time: endTime,
     });
     const blocker = warnings.find((warning) => warning.blocking);
     if (blocker) {
@@ -923,6 +934,8 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     court_ids: sessionCourtIds,
     publish_status: "published",
     is_active: true,
+    start_time: startTime,
+    end_time: endTime,
   });
   const createPreview = pricingPreview({
     onlinePrice: createOnlinePrice,

@@ -18,6 +18,7 @@ import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { activitySessionToPresentation } from "@/lib/sessionPresentation";
 import { createCommerceCart, fetchCommerceCatalog, formatCommerceMoney } from "@/lib/commerce";
 import { purchaseErrorMessage, withPurchaseSessionRecovery } from "@/lib/purchaseSessionRecovery";
+import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -357,11 +358,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     ? Math.round((basePrice - effectivePrice) * 100) / 100
     : 0;
   const now = useActivityNow();
-  const checkinWindow = occurrenceDate && session?.start_time && session?.end_time
-    ? {
-        opens: DateTime.fromISO(`${occurrenceDate}T${String(session.start_time).slice(0, 5)}:00`, { zone: "Europe/Stockholm" }).minus({ minutes: 30 }),
-        closes: DateTime.fromISO(`${occurrenceDate}T${String(session.end_time).slice(0, 5)}:00`, { zone: "Europe/Stockholm" }),
-      }
+  const occurrenceInterval = occurrenceDate && session?.start_time && session?.end_time
+    ? activitySessionOccurrenceInterval(occurrenceDate, session.start_time, session.end_time)
+    : null;
+  const checkinWindow = occurrenceInterval
+    ? { opens: occurrenceInterval.start.minus({ minutes: 30 }), closes: occurrenceInterval.end }
     : null;
   const canCheckInNow = Boolean(
     isRegistered &&

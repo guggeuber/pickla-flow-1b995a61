@@ -2,6 +2,7 @@ import { DateTime } from "luxon";
 
 import type { PeopleRowPerson } from "@/components/ui/PeopleRow";
 import { activityTimingLabel, activityTimingStatus } from "@/lib/activityTiming";
+import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 
 const STOCKHOLM_ZONE = "Europe/Stockholm";
 
@@ -132,8 +133,9 @@ function timingFor(startsAt: string, endsAt: string, now?: DateTime) {
 }
 
 export function activitySessionToPresentation(input: ActivitySessionPresentationInput): SessionPresentation {
-  const startsAt = stockholmSessionIso(input.sessionDate, input.startTime);
-  const endsAt = stockholmSessionIso(input.sessionDate, input.endTime);
+  const interval = activitySessionOccurrenceInterval(input.sessionDate, input.startTime, input.endTime);
+  const startsAt = interval?.startsAt || stockholmSessionIso(input.sessionDate, input.startTime);
+  const endsAt = interval?.endsAt || stockholmSessionIso(input.sessionDate, input.endTime);
   const timing = timingFor(startsAt, endsAt, input.now);
 
   return {

@@ -11,6 +11,7 @@ import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurren
 import { activitySessionToPresentation, openBookingToPresentation, type SessionPresentation } from "@/lib/sessionPresentation";
 import { supabase } from "@/integrations/supabase/client";
 import { useVenueWithHours } from "@/lib/venueStatus";
+import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 
 const PAGE_BG = "#fffaf7";
 const TEXT = "#111111";
@@ -87,11 +88,10 @@ function dayHeading(dateKey: string, now: DateTime) {
   return date.setLocale("sv").toFormat("cccc d MMM");
 }
 
-function isPastOccurrence(date: DateTime, endTime: string | null | undefined, now: DateTime) {
+function isPastOccurrence(date: DateTime, startTime: string | null | undefined, endTime: string | null | undefined, now: DateTime) {
   if (!date.hasSame(now, "day") || !endTime) return false;
-  const [hour = 0, minute = 0] = String(endTime).slice(0, 5).split(":").map(Number);
-  const endsAt = date.set({ hour, minute, second: 0, millisecond: 0 });
-  return endsAt <= now;
+  const interval = activitySessionOccurrenceInterval(date.toISODate(), startTime, endTime);
+  return !interval || interval.end <= now;
 }
 
 function occurrenceHref(session: ActivitySessionOccurrence, slug: string) {
@@ -140,7 +140,7 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
           const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
           if (date >= now.startOf("day") && date < now.plus({ days: WEEK_DAYS }).startOf("day")) {
             const occurrenceDate = date.toISODate();
-            if (occurrenceDate && !isPastOccurrence(date, session.end_time, now)) {
+            if (occurrenceDate && !isPastOccurrence(date, session.start_time, session.end_time, now)) {
               sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
             }
           }
@@ -151,7 +151,7 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
           const date = now.plus({ days: offset });
           if ((session.recurrence_days || []).includes(date.weekday % 7)) {
             const occurrenceDate = date.toISODate();
-            if (occurrenceDate && !isPastOccurrence(date, session.end_time, now)) {
+            if (occurrenceDate && !isPastOccurrence(date, session.start_time, session.end_time, now)) {
               sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
             }
           }

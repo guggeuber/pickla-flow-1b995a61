@@ -8,6 +8,7 @@ import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { auditMutation, canOperateVenue } from '../_shared/authorization.ts';
 import { canonicalPublicOrigin, canonicalPublicUrl } from '../_shared/canonical_origin.ts';
+import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -121,12 +122,8 @@ function activityOccurrenceMatchesDate(session: any, date: string) {
 }
 
 function activityOccurrenceRangeUtc(session: any, date: string) {
-  const startTime = String(session.start_time || '').slice(0, 5);
-  const endTime = String(session.end_time || '').slice(0, 5);
-  const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' }).toUTC();
-  const end = DateTime.fromISO(`${date}T${endTime}:00`, { zone: 'Europe/Stockholm' }).toUTC();
-  if (!start.isValid || !end.isValid) return null;
-  return { start: start.toISO()!, end: end.toISO()! };
+  const interval = activitySessionOccurrenceInterval(date, session.start_time, session.end_time);
+  return interval ? { start: interval.startISO, end: interval.endISO } : null;
 }
 
 async function getActivityCourtBlocks(
@@ -1069,12 +1066,6 @@ async function bookingParticipantLedgerReceipt(admin: any, participant: any, boo
   }
 
   return receipt;
-}
-
-function stockholmSessionIso(sessionDate: string, time?: string | null, end = false) {
-  const cleanDate = String(sessionDate || '').slice(0, 10);
-  const cleanTime = String(time || (end ? '23:59' : '00:00')).slice(0, 5);
-  return DateTime.fromISO(`${cleanDate}T${cleanTime}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO();
 }
 
 function profileDisplayName(profile: any) {
@@ -4459,8 +4450,9 @@ Deno.serve(async (req) => {
 
         activityRegistrations = (registrations || []).map((registration: any) => {
           const session = registration.activity_sessions || {};
-          const startTime = stockholmSessionIso(registration.session_date, session.start_time, false);
-          const endTime = stockholmSessionIso(registration.session_date, session.end_time, true);
+          const occurrence = activitySessionOccurrenceInterval(registration.session_date, session.start_time, session.end_time);
+          const startTime = occurrence?.startISO || null;
+          const endTime = occurrence?.endISO || null;
           const profile = profilesByUserId.get(registration.user_id);
           const customerId = registration.customer_id || profile?.customer_id || null;
           const customer = customerId ? customersById.get(customerId) : null;

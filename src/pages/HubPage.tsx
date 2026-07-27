@@ -41,6 +41,7 @@ import { EventCard } from "@/components/hub/EventCard";
 import { PeopleRow } from "@/components/ui/PeopleRow";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { toast } from "sonner";
+import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const HUB_BG = "#faf8f5";
@@ -545,7 +546,10 @@ function useWeeklyProgram(venueId: string | undefined, venueSlug: string) {
           const date = now.plus({ days: offset });
           const jsDow = date.weekday % 7;
           if (!recurrenceDays.includes(jsDow)) continue;
-          if (offset === 0 && session.end_time && now.toFormat("HH:mm") >= String(session.end_time).slice(0, 5)) continue;
+          if (offset === 0 && session.end_time) {
+            const occurrence = activitySessionOccurrenceInterval(date.toISODate(), session.start_time, session.end_time);
+            if (!occurrence || now >= occurrence.end) continue;
+          }
           items.push({ ...session, occurrence_date: date.toISODate(), daysOffset: offset });
           break;
         }

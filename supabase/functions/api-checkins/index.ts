@@ -3,6 +3,7 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail } from '../_shared/bookings.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { projectPublicVenueDisplayQueue } from '../_shared/security_projections.ts';
+import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const STOCKHOLM_ZONE = 'Europe/Stockholm';
@@ -150,11 +151,10 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
   const registration = (registrations || []).find((row: any) => {
     const session = row.activity_sessions;
     if (!session?.start_time || !session?.end_time) return true;
-    const start = DateTime.fromISO(`${today}T${String(session.start_time).slice(0, 5)}:00`, { zone: STOCKHOLM_ZONE });
-    const end = DateTime.fromISO(`${today}T${String(session.end_time).slice(0, 5)}:00`, { zone: STOCKHOLM_ZONE });
-    if (!start.isValid || !end.isValid) return true;
+    const occurrence = activitySessionOccurrenceInterval(today, session.start_time, session.end_time);
+    if (!occurrence) return true;
     const now = DateTime.now().setZone(STOCKHOLM_ZONE);
-    return now >= start.minus({ minutes: 30 }) && now <= end;
+    return now >= occurrence.start.minus({ minutes: 30 }) && now < occurrence.end;
   });
 
   if (registration) {
@@ -316,8 +316,8 @@ async function purchaseOptionsForVenue(serviceClient: any, venue: any) {
     if (row.session_date && row.session_date !== today) return false;
     if (!row.session_date && (!Array.isArray(row.recurrence_days) || !row.recurrence_days.includes(weekday))) return false;
     if (!row.end_time) return true;
-    const [hour = 0, minute = 0] = String(row.end_time).slice(0, 5).split(':').map(Number);
-    return now.set({ hour, minute, second: 0, millisecond: 0 }) > now;
+    const occurrence = activitySessionOccurrenceInterval(today, row.start_time, row.end_time);
+    return Boolean(occurrence && occurrence.end > now);
   });
 
   if (session) {
