@@ -15,6 +15,12 @@ import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { SessionScheduleRow } from "@/components/session";
 import { openBookingToPresentation } from "@/lib/sessionPresentation";
 import { groupTimesByDaypart, reconcileCourtSelection } from "@/lib/bookingSelection";
+import {
+  addMinutesToTime,
+  bookingDurationFits,
+  courtIsAvailableForInterval,
+  generateBookingTimeSlots,
+} from "@/lib/bookingAvailability";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
@@ -33,28 +39,6 @@ function generateDates(startDate: Date, count = 7) {
   const dates: Date[] = [];
   for (let i = 0; i < count; i++) dates.push(addDays(startDate, i));
   return dates;
-}
-
-function generateTimeSlots(openTime?: string, closeTime?: string) {
-  const start = openTime ? parseInt(openTime.slice(0, 2)) : 7;
-  const end = closeTime ? parseInt(closeTime.slice(0, 2)) : 22;
-  const slots: string[] = [];
-  for (let h = start; h < end; h++) {
-    slots.push(`${String(h).padStart(2, "0")}:00`);
-  }
-  return slots;
-}
-
-function timeToMinutes(time: string): number {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-}
-
-function addMinutesToTime(time: string, minutesToAdd: number): string {
-  const totalMinutes = timeToMinutes(time) + minutesToAdd;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function formatDuration(minutes: number) {
@@ -391,7 +375,7 @@ export default function BookingPage() {
 
   const timeSlots = useMemo(
     () =>
-      generateTimeSlots(
+      generateBookingTimeSlots(
         openingHours?.is_closed ? undefined : openingHours?.open_time,
         openingHours?.is_closed ? undefined : openingHours?.close_time
       ),
@@ -400,9 +384,8 @@ export default function BookingPage() {
 
   // For today: filter out time slots whose start time has already passed
   const filteredTimeSlots = useMemo(() => {
-    const closeTime = openingHours?.close_time ? openingHours.close_time.slice(0, 5) : null;
     const durationFits = (slot: string) =>
-      !closeTime || timeToMinutes(slot) + selectedDuration <= timeToMinutes(closeTime);
+      bookingDurationFits(slot, selectedDuration, openingHours?.open_time, openingHours?.close_time);
 
     const slotsWithinHours = timeSlots.filter(durationFits);
     if (dateStr !== todayStr) return slotsWithinHours;
@@ -431,13 +414,7 @@ export default function BookingPage() {
 
     const avail: Record<string, boolean> = {};
     courts.forEach((c) => {
-      const isBooked = existingBookings.some(
-        (b) =>
-          b.court_id === c.id &&
-          new Date(b.start).getTime() < endMs &&
-          new Date(b.end).getTime() > startMs
-      );
-      avail[c.id] = !isBooked;
+      avail[c.id] = courtIsAvailableForInterval(c.id, existingBookings, startMs, endMs);
     });
     return avail;
   }, [courts, existingBookings, selectedTime, selectedDuration, dateStr]);
@@ -458,9 +435,9 @@ export default function BookingPage() {
     const endISO = DateTime.fromISO(`${dateStr}T${endTime}:00`, { zone: "Europe/Stockholm" }).toUTC().toISO()!;
     const startMs = new Date(startISO).getTime();
     const endMs = new Date(endISO).getTime();
-    return sportCourts.filter((c) => !existingBookings.some(
-      (b) => b.court_id === c.id && new Date(b.start).getTime() < endMs && new Date(b.end).getTime() > startMs
-    ));
+    return sportCourts.filter((court) =>
+      courtIsAvailableForInterval(court.id, existingBookings, startMs, endMs)
+    );
   };
 
   const getFirstAvailableCourtForSlot = (slot: string) => {
