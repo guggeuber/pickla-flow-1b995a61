@@ -1,5 +1,5 @@
-import { supabase } from "@/integrations/supabase/client";
 import { errorMessage, isStaleChunkError, showChunkRecovery } from "@/lib/appRecovery";
+import { getSessionSingleFlight } from "@/lib/authSessionSingleFlight";
 
 declare const __BUILD_TIME__: string;
 
@@ -66,7 +66,7 @@ export async function reportClientEvent(event: ClientEvent) {
   const fingerprint = event.fingerprint || `${event.event_type}:${event.message}:${window.location.pathname}`;
   if (!shouldSend(fingerprint)) return;
 
-  const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+  const { data } = await getSessionSingleFlight().catch(() => ({ data: { session: null } }));
   const anonymousUserId = await anonymizedUserId(data.session?.user?.id);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

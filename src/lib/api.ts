@@ -1,18 +1,37 @@
-import { supabase } from "@/integrations/supabase/client";
+import { getSessionSingleFlight } from "@/lib/authSessionSingleFlight";
 import { reportApiFailure } from "@/lib/clientObservability";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
 const SLOW_API_MS = 700;
 
-async function getAuthHeaders(includeJsonContentType = true): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession();
+export class ApiRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+export type ApiRequestOptions = {
+  auth?: "session" | "omit";
+};
+
+async function getAuthHeaders(
+  includeJsonContentType = true,
+  authMode: ApiRequestOptions["auth"] = "session",
+): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   if (includeJsonContentType) {
     headers["Content-Type"] = "application/json";
   }
-  if (session?.access_token) {
-    headers["Authorization"] = `Bearer ${session.access_token}`;
+  if (authMode === "session") {
+    const { data: { session } } = await getSessionSingleFlight();
+    if (session?.access_token) {
+      headers["Authorization"] = `Bearer ${session.access_token}`;
+    }
   }
   return headers;
 }
@@ -39,9 +58,10 @@ async function readErrorBody(res: Response) {
 export async function apiGet<T = unknown>(
   fn: string,
   endpoint: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  options: ApiRequestOptions = {},
 ): Promise<T> {
-  const headers = await getAuthHeaders(false);
+  const headers = await getAuthHeaders(false, options.auth);
   const url = new URL(`${BASE_URL}/${fn}/${endpoint}`);
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
@@ -60,7 +80,7 @@ export async function apiGet<T = unknown>(
       message,
       duration_ms: Math.round(performance.now() - startedAt),
     });
-    throw new Error(message);
+    throw new ApiRequestError(message, res.status);
   }
   return res.json();
 }
@@ -68,9 +88,10 @@ export async function apiGet<T = unknown>(
 export async function apiPost<T = unknown>(
   fn: string,
   endpoint: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  options: ApiRequestOptions = {},
 ): Promise<T> {
-  const headers = await getAuthHeaders();
+  const headers = await getAuthHeaders(true, options.auth);
   const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
   const startedAt = performance.now();
   const res = await fetch(requestUrl, {
@@ -89,7 +110,7 @@ export async function apiPost<T = unknown>(
       message,
       duration_ms: Math.round(performance.now() - startedAt),
     });
-    throw new Error(message);
+    throw new ApiRequestError(message, res.status);
   }
   return res.json();
 }

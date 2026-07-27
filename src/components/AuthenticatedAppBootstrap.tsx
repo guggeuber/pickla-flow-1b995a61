@@ -39,6 +39,7 @@ export function AuthenticatedBootstrapGate({
     retry: 2,
     retryDelay: (attempt) => Math.min(300 * 2 ** attempt, 1200),
     staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {

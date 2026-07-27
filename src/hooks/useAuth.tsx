@@ -5,6 +5,7 @@ import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { canonicalAppOrigin } from "@/lib/canonicalOrigin";
+import { getSessionSingleFlight } from "@/lib/authSessionSingleFlight";
 
 interface AuthContextType {
   user: User | null;
@@ -56,11 +57,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     );
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    getSessionSingleFlight()
+      .then(({ data: { session } }) => {
+        setSession(session);
+        setUser(session?.user ?? null);
+        setLoading(false);
+      })
+      .catch(() => {
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+      });
 
     return () => subscription.unsubscribe();
   }, []);

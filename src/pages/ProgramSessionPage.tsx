@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, ShoppingBag, Star, Ticket, UserCheck } from "lucide-react";
@@ -17,6 +17,7 @@ import { activityCheckInAvailable, useActivityNow } from "@/lib/activityTiming";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { activitySessionToPresentation } from "@/lib/sessionPresentation";
 import { createCommerceCart, fetchCommerceCatalog, formatCommerceMoney } from "@/lib/commerce";
+import { purchaseErrorMessage, withPurchaseSessionRecovery } from "@/lib/purchaseSessionRecovery";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -95,8 +96,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(false);
+  const purchaseInFlight = useRef(false);
   const [interestLoading, setInterestLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState(false);
   const [selectedCommerceProductIds, setSelectedCommerceProductIds] = useState<string[]>([]);
@@ -139,7 +141,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       venueSlug,
       accessSnapshot.version,
     ],
-    enabled: !!sessionId && !waitForAccessSnapshot,
+    enabled: !!sessionId && !authLoading && !waitForAccessSnapshot,
     staleTime: user?.id ? 0 : 15000,
     queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
       sessionId: sessionId!,
@@ -372,7 +374,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     })
   );
   const checkinOpensLabel = checkinWindow?.opens?.isValid ? checkinWindow.opens.toFormat("HH:mm") : null;
-  const ctaLabel = isRegistered
+  const ctaLabel = authLoading
+    ? "Hämtar..."
+    : isRegistered
     ? isCheckedIn
       ? "✓ Incheckad"
       : canCheckInNow
@@ -490,6 +494,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   };
 
   const startSignup = async () => {
+    if (authLoading || purchaseInFlight.current) return;
     if (isFull) {
       await toggleInterest("primary");
       return;
@@ -508,11 +513,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (loading) return;
+    purchaseInFlight.current = true;
     setLoading(true);
     try {
       if (commercePilotEnabled && commerceParticipationProduct) {
         const extras = commerceExtras.filter((product) => selectedCommerceProductIds.includes(product.id));
-        const cart = await createCommerceCart({
+        const cart = await withPurchaseSessionRecovery(() => createCommerceCart({
           venueId: session.venue_id,
           source: "activity_drawer",
           items: [
@@ -528,12 +534,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               parent_product_id: commerceParticipationProduct.id,
             })),
           ],
-        });
+        }));
         if (!cart.cart_token) throw new Error("Varukorgen kunde inte skapas");
         navigate(`/cart?token=${encodeURIComponent(cart.cart_token)}`);
         return;
       }
-      const result = await apiPost("api-bookings", "create-checkout", {
+      const result = await withPurchaseSessionRecovery(() => apiPost("api-bookings", "create-checkout", {
         product_type: "activity_ticket",
         amount_sek: backendPricing.effectivePriceSek ?? backendPricing.finalAmountSek ?? 0,
         venue_id: session.venue_id,
@@ -551,7 +557,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           redirect_path: safeLocalPath(ticketPath),
           success_path: `/booking/confirmed?type=session_ticket&next=${encodeURIComponent(safeLocalPath(ticketPath))}`,
         },
-      });
+      }));
       if (result.free) {
         await announceJoin();
         queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
@@ -564,9 +570,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       }
       if (!result.url) throw new Error("Kunde inte starta betalning");
       window.location.href = result.url;
-    } catch (err: any) {
-      toast.error(err.message || "Kunde inte starta anmälan");
+    } catch (err: unknown) {
+      toast.error(purchaseErrorMessage(err, "Kunde inte starta anmälan"));
     } finally {
+      purchaseInFlight.current = false;
       setLoading(false);
     }
   };
@@ -753,7 +760,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   key: "primary",
                   label: ctaLabel,
                   onClick: isRegistered ? checkInTicket : startSignup,
-                  disabled: loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow),
+                  disabled: authLoading || loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow),
                   icon: loading || queueLoading || checkinLoading ? (
                     <Loader2 className="h-5 w-5 animate-spin" />
                   ) : isRegistered ? (

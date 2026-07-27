@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, LockKeyhole, PackageCheck, ShoppingBag } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -7,6 +7,15 @@ import { useAuth } from "@/hooks/useAuth";
 import { apiPost } from "@/lib/api";
 import { fetchCommerceOrder, formatCommerceMoney, type CommerceOrderLine } from "@/lib/commerce";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import {
+  CHECKOUT_EMAIL_REQUIRED_MESSAGE,
+  PURCHASE_SESSION_ERROR_MESSAGE,
+  PurchaseSessionError,
+  isCartVersionConflict,
+  isCheckoutEmailRequired,
+  purchaseErrorMessage,
+  withPurchaseSessionRecovery,
+} from "@/lib/purchaseSessionRecovery";
 
 type ResolvedLine = CommerceOrderLine & { unit_price_minor: number; product_name: string };
 
@@ -15,12 +24,26 @@ export default function CommerceCartPage() {
   const token = params.get("token") || "";
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
+  const checkoutInFlight = useRef<Promise<{ url?: string; free?: boolean; redirect?: string }> | null>(null);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const [guestSessionFallback, setGuestSessionFallback] = useState(false);
+  const [forceEmailEntry, setForceEmailEntry] = useState(false);
+
+  const runAsGuest = guestSessionFallback || !user;
 
   const orderQuery = useQuery({
     queryKey: ["commerce-order", token, user?.id || "guest"],
-    queryFn: () => fetchCommerceOrder(token),
+    queryFn: () => runAsGuest
+      ? fetchCommerceOrder(token, { auth: "omit" })
+      : withPurchaseSessionRecovery(
+        () => fetchCommerceOrder(token),
+        undefined,
+        async () => {
+          setGuestSessionFallback(true);
+          return fetchCommerceOrder(token, { auth: "omit" });
+        },
+      ),
     enabled: token.length >= 32 && !authLoading,
   });
   useEffect(() => {
@@ -31,38 +54,85 @@ export default function CommerceCartPage() {
   const resolveQuery = useQuery({
     queryKey: ["commerce-resolve", token, orderQuery.data?.order.version, user?.id || "guest"],
     enabled: orderQuery.data?.order.status === "draft",
-    queryFn: () => apiPost<{ order: { id: string; version: number; currency: string }; lines: ResolvedLine[] }>("api-commerce", "resolve", { token }),
+    queryFn: () => runAsGuest
+      ? apiPost<{ order: { id: string; version: number; currency: string }; lines: ResolvedLine[] }>("api-commerce", "resolve", { token }, { auth: "omit" })
+      : withPurchaseSessionRecovery(
+        () => apiPost<{ order: { id: string; version: number; currency: string }; lines: ResolvedLine[] }>("api-commerce", "resolve", { token }),
+        undefined,
+        async () => {
+          setGuestSessionFallback(true);
+          return apiPost<{ order: { id: string; version: number; currency: string }; lines: ResolvedLine[] }>("api-commerce", "resolve", { token }, { auth: "omit" });
+        },
+      ),
   });
   const lines = resolveQuery.data?.lines || orderQuery.data?.lines || [];
   const total = useMemo(() => lines.reduce((sum, line) => sum + Number(line.unit_price_minor || 0) * Number(line.quantity || 1), 0), [lines]);
   const hasParticipation = lines.some((line) => line.commerce_kind === "participation");
 
   const checkout = useMutation({
-    mutationFn: () => apiPost<{ url?: string; free?: boolean; redirect?: string }>("api-commerce", "checkout", {
-      token,
-      expected_version: orderQuery.data?.order.version,
-      guest_email: email.trim() || null,
-      guest_name: name.trim() || null,
-      success_path: `/commerce/confirmed?token=${encodeURIComponent(token)}`,
-      cancel_path: `/cart?token=${encodeURIComponent(token)}`,
-    }),
+    mutationFn: () => {
+      if (checkoutInFlight.current) return checkoutInFlight.current;
+      const sendCheckout = (auth: "session" | "omit") => apiPost<{ url?: string; free?: boolean; redirect?: string }>("api-commerce", "checkout", {
+        token,
+        expected_version: orderQuery.data?.order.version,
+        guest_email: email.trim() || null,
+        guest_name: name.trim() || null,
+        success_path: `/commerce/confirmed?token=${encodeURIComponent(token)}`,
+        cancel_path: `/cart?token=${encodeURIComponent(token)}`,
+      }, { auth });
+      const request = runAsGuest
+        ? sendCheckout("omit")
+        : withPurchaseSessionRecovery(
+          () => sendCheckout("session"),
+          undefined,
+          hasParticipation ? undefined : async () => {
+            setGuestSessionFallback(true);
+            if (!email.trim()) {
+              setForceEmailEntry(true);
+              throw new Error(CHECKOUT_EMAIL_REQUIRED_MESSAGE);
+            }
+            return sendCheckout("omit");
+          },
+        );
+      checkoutInFlight.current = request;
+      const clearRequest = () => {
+        if (checkoutInFlight.current === request) checkoutInFlight.current = null;
+      };
+      void request.then(clearRequest, clearRequest);
+      return request;
+    },
     onSuccess: (result) => {
       if (result.free && result.redirect) navigate(result.redirect, { replace: true });
       else if (result.url) window.location.assign(result.url);
       else toast.error("Kassan kunde inte öppnas");
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: async (error: Error) => {
+      if (isCheckoutEmailRequired(error)) {
+        setForceEmailEntry(true);
+        await orderQuery.refetch();
+        toast.error(CHECKOUT_EMAIL_REQUIRED_MESSAGE);
+        return;
+      }
+      if (isCartVersionConflict(error)) {
+        await orderQuery.refetch();
+        toast.info("Köpet uppdaterades. Kontrollera och försök igen.");
+        return;
+      }
+      toast.error(purchaseErrorMessage(error, "Kassan kunde inte öppnas"));
+    },
   });
 
   if (orderQuery.isLoading || authLoading) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
-  if (!token || orderQuery.error || !orderQuery.data) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center px-6 text-center"><p>Varukorgen kunde inte öppnas.</p></div>;
+  if (!token || orderQuery.error || !orderQuery.data) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center px-6 text-center"><p>{orderQuery.error instanceof PurchaseSessionError ? PURCHASE_SESSION_ERROR_MESSAGE : "Varukorgen kunde inte öppnas."}</p></div>;
   if (orderQuery.data.order.status !== "draft") {
     navigate(`/commerce/confirmed?token=${encodeURIComponent(token)}`, { replace: true });
     return null;
   }
 
-  const needsLogin = hasParticipation && !user;
-  const needsEmail = !user && !email.trim();
+  const needsLogin = hasParticipation && runAsGuest;
+  const showGuestDetails = !hasParticipation && runAsGuest;
+  const showEmailRecovery = forceEmailEntry && !showGuestDetails;
+  const needsEmail = (showGuestDetails || showEmailRecovery) && !email.trim();
 
   return (
     <div className="min-h-[100dvh] bg-[#fbf7f2] text-slate-950">
@@ -82,10 +152,10 @@ export default function CommerceCartPage() {
             </div>
           ))}
         </section>
-        {!user && !hasParticipation ? (
+        {showGuestDetails || showEmailRecovery ? (
           <section className="grid gap-3 rounded-2xl border border-black/10 bg-white p-4">
             <div><h2 className="font-black">Kvitto och uthämtning</h2><p className="text-sm text-slate-500">Vi skickar din säkra orderlänk till e-postadressen.</p></div>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Namn" className="h-12 rounded-xl border border-black/15 px-3 text-base" />
+            {showGuestDetails ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Namn" className="h-12 rounded-xl border border-black/15 px-3 text-base" /> : null}
             <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-post" type="email" className="h-12 rounded-xl border border-black/15 px-3 text-base" />
           </section>
         ) : null}

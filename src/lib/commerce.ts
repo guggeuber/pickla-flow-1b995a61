@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, type ApiRequestOptions } from "@/lib/api";
 
 export type CommerceKind = "participation" | "rental" | "merchandise";
 
@@ -109,6 +109,6 @@ export function createCommerceCart(input: {
   });
 }
 
-export function fetchCommerceOrder(token: string) {
-  return apiGet<CommerceOrderResponse>("api-commerce", "order", { token });
+export function fetchCommerceOrder(token: string, options: ApiRequestOptions = {}) {
+  return apiGet<CommerceOrderResponse>("api-commerce", "order", { token }, options);
 }
