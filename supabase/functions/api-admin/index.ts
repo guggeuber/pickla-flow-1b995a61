@@ -6,6 +6,15 @@ import {
   activitySessionOccurrenceInterval,
   isValidActivitySessionTimeOrder,
 } from '../_shared/activity_session_time.ts';
+import {
+  buildCapacityProjection,
+  buildOpeningIntervals,
+  capacityDates,
+  capacityDatesWithinOperationalWindow,
+  capacityRangeUtc,
+  type CapacityIntervalInput,
+  type CapacityResource,
+} from '../_shared/capacity.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -2744,6 +2753,289 @@ async function resourceIdsForCourtIds(admin: any, venueId: string, courtIds: str
   return courtIds.map((courtId: string) => existingByCourt.get(courtId)).filter(Boolean);
 }
 
+const CAPACITY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function safeCapacityLabel(value: unknown, fallback: string) {
+  const text = String(value || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+  if (!text || CAPACITY_UUID.test(text) || text.includes('@') || /(?:\+?\d[\s()-]*){7,}/.test(text)) return fallback;
+  return text;
+}
+
+function capacityBookingGroupKey(row: any) {
+  if (row.stripe_session_id) return `stripe:${row.stripe_session_id}`;
+  if (row.access_code) return `code:${row.access_code}:${row.start_time}:${row.end_time}`;
+  return `booking:${row.id}`;
+}
+
+function capacityBlockCourtIds(block: any, courtIds: string[]) {
+  const resource = resourceForBlockRow(block);
+  const metadata = cleanBlockMetadata(block.metadata);
+  const resourceType = String(resource?.resource_type || '').toLowerCase();
+  if (metadata.scope === 'venue' || resourceType === 'venue' || resourceType === 'whole_venue') return courtIds;
+  const courtId = String(resource?.venue_court_id || metadata.venue_court_id || '');
+  return courtId && courtIds.includes(courtId) ? [courtId] : [];
+}
+
+async function capacityResponse(
+  admin: any,
+  venueId: string,
+  fromDate: string,
+  toDate: string,
+  filters: { resourceId?: string | null; group?: string | null } = {},
+) {
+  const dates = capacityDates(fromDate, toDate);
+  const range = capacityRangeUtc(dates);
+  if (!dates.length || !range) return { error: 'Invalid date range. Capacity supports 1–7 days.', status: 400 } as const;
+  if (!capacityDatesWithinOperationalWindow(dates)) {
+    return { error: 'Date range is outside the Capacity operational window.', status: 400 } as const;
+  }
+
+  const [venueResult, courtsResult, hoursResult, bookingsResult, sessionsResult, activityOverridesResult, blocksResult, operationOverridesResult] = await Promise.all([
+    admin.from('venues').select('id').eq('id', venueId).maybeSingle(),
+    admin.from('venue_courts')
+      .select('id, name, court_number, sport_type, is_available')
+      .eq('venue_id', venueId)
+      .eq('is_available', true)
+      .order('sport_type', { ascending: true })
+      .order('court_number', { ascending: true }),
+    admin.from('opening_hours')
+      .select('day_of_week, open_time, close_time, is_closed')
+      .eq('venue_id', venueId)
+      .order('day_of_week', { ascending: true }),
+    admin.from('bookings')
+      .select('id, stripe_session_id, access_code, venue_id, venue_court_id, booked_by, start_time, end_time, status', { count: 'exact' })
+      .eq('venue_id', venueId)
+      .neq('status', 'cancelled')
+      .lt('start_time', range.end)
+      .gt('end_time', range.start)
+      .order('start_time', { ascending: true })
+      .limit(5000),
+    admin.from('activity_sessions')
+      .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status', { count: 'exact' })
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .eq('publish_status', 'published')
+      .or(`session_date.is.null,and(session_date.gte.${dates[0]},session_date.lte.${dates[dates.length - 1]})`)
+      .limit(1000),
+    admin.from('activity_session_overrides')
+      .select('id, activity_session_id, session_date, status, venue_operation_override_id', { count: 'exact' })
+      .eq('venue_id', venueId)
+      .gte('session_date', dates[0])
+      .lte('session_date', dates[dates.length - 1])
+      .limit(2000),
+    admin.from('event_resource_blocks')
+      .select('id, event_id, title, reason, status, starts_at, ends_at, blocks_public_booking, metadata, resource_catalog_id, event_resource_catalog(id, name, resource_type, venue_court_id)', { count: 'exact' })
+      .eq('venue_id', venueId)
+      .eq('blocks_public_booking', true)
+      .in('status', ['hold', 'confirmed'])
+      .lt('starts_at', range.end)
+      .gt('ends_at', range.start)
+      .order('starts_at', { ascending: true })
+      .limit(5000),
+    admin.from('venue_operation_overrides')
+      .select('id, title, reason, override_type, starts_at, ends_at, affects_entire_venue, status, metadata', { count: 'exact' })
+      .eq('venue_id', venueId)
+      .eq('status', 'active')
+      .lt('starts_at', range.end)
+      .gt('ends_at', range.start)
+      .order('starts_at', { ascending: true })
+      .limit(1000),
+  ]);
+
+  if (venueResult.error || !venueResult.data) {
+    console.error('capacity venue lookup failed', { venueId, message: venueResult.error?.message || 'not found' });
+    return { error: 'Venue unavailable', status: venueResult.data ? 500 : 404 } as const;
+  }
+  if (courtsResult.error || hoursResult.error) {
+    console.error('capacity structural source failed', {
+      venueId,
+      courts: courtsResult.error?.message || null,
+      hours: hoursResult.error?.message || null,
+    });
+    return { error: 'Capacity structure unavailable', status: 500 } as const;
+  }
+
+  const allResources: CapacityResource[] = (courtsResult.data || []).map((court: any) => ({
+    id: court.id,
+    name: safeCapacityLabel(court.name, `Bana ${court.court_number || ''}`.trim() || 'Bana'),
+    court_number: court.court_number == null ? null : Number(court.court_number),
+    sport_type: court.sport_type || null,
+    group: String(court.sport_type || 'other'),
+  }));
+  if (filters.resourceId && !allResources.some((resource) => resource.id === filters.resourceId)) {
+    return { error: 'Resource is not available for this venue.', status: 400 } as const;
+  }
+  const resources = allResources.filter((resource) =>
+    (!filters.resourceId || resource.id === filters.resourceId) &&
+    (!filters.group || resource.group === filters.group)
+  );
+  const courtIds = resources.map((resource) => resource.id);
+  const courtById = new Map(resources.map((resource) => [resource.id, resource]));
+  const sourceStatus: Record<string, { status: 'ok' | 'error'; message?: string }> = {};
+  const sourceRows = [
+    ['bookings', bookingsResult, 5000],
+    ['activities', sessionsResult, 1000],
+    ['activity_overrides', activityOverridesResult, 2000],
+    ['resource_blocks', blocksResult, 5000],
+    ['closures', operationOverridesResult, 1000],
+  ] as const;
+  for (const [source, result, rowLimit] of sourceRows) {
+    if (result.error) {
+      console.error('capacity source failed', { venueId, source, message: result.error.message });
+      sourceStatus[source] = { status: 'error', message: 'Källan kunde inte läsas' };
+    } else if (typeof result.count === 'number' && result.count > rowLimit) {
+      console.error('capacity source row limit exceeded', { venueId, source, count: result.count, rowLimit });
+      sourceStatus[source] = { status: 'error', message: 'Källan överskred säkert radtak' };
+    } else {
+      sourceStatus[source] = { status: 'ok' };
+    }
+  }
+
+  const inputs: CapacityIntervalInput[] = [];
+  const bookingGroups = new Map<string, any[]>();
+  for (const booking of bookingsResult.data || []) {
+    if (!courtById.has(String(booking.venue_court_id || ''))) continue;
+    const key = capacityBookingGroupKey(booking);
+    const group = bookingGroups.get(key) || [];
+    group.push(booking);
+    bookingGroups.set(key, group);
+  }
+  for (const group of bookingGroups.values()) {
+    const first = group[0];
+    const customerLabel = safeCapacityLabel(first.booked_by, 'Privat bokning');
+    const courts = group.map((row: any) => courtById.get(row.venue_court_id)).filter(Boolean);
+    const detail = {
+      id: `capacity-booking-${first.id}`,
+      source_id: first.id,
+      venue_id: venueId,
+      title: `${customerLabel} · ${courts.map((court: any) => court.name).join(', ')}`,
+      customer_name: customerLabel,
+      courts,
+      court_name: courts.map((court: any) => court.name).join(', '),
+      starts_at: first.start_time,
+      ends_at: first.end_time,
+      start_time: first.start_time,
+      end_time: first.end_time,
+      status: group.every((row: any) => row.status === first.status) ? first.status : 'mixed',
+    };
+    for (const booking of group) {
+      inputs.push({
+        source_type: 'booking',
+        source_id: booking.id,
+        venue_id: venueId,
+        resource_id: booking.venue_court_id,
+        starts_at: booking.start_time,
+        ends_at: booking.end_time,
+        status: booking.status || 'active',
+        classification: 'booking',
+        title: customerLabel,
+        detail_target: { kind: 'booking_drawer', booking: detail },
+      });
+    }
+  }
+
+  const overrideByOccurrence = new Map<string, any>();
+  for (const override of activityOverridesResult.data || []) {
+    overrideByOccurrence.set(`${override.activity_session_id}:${String(override.session_date).slice(0, 10)}`, override);
+  }
+  for (const session of sessionsResult.data || []) {
+    const sessionCourtIds = Array.isArray(session.court_ids)
+      ? session.court_ids.map(String).filter((id: string) => courtById.has(id))
+      : [];
+    if (!sessionCourtIds.length) continue;
+    for (const date of dates) {
+      if (!activitySessionOccursOnDate(session, date)) continue;
+      const interval = activitySessionOccurrenceRangeUtc(session, date);
+      if (!interval || interval.startISO >= range.end || interval.endISO <= range.start) continue;
+      const override = overrideByOccurrence.get(`${session.id}:${date}`);
+      if (override?.status === 'cancelled') continue;
+      for (const courtId of sessionCourtIds) {
+        inputs.push({
+          source_type: 'activity_session',
+          source_id: session.id,
+          venue_id: venueId,
+          resource_id: courtId,
+          starts_at: interval.startISO,
+          ends_at: interval.endISO,
+          status: override?.status || 'published',
+          classification: 'activity',
+          title: safeCapacityLabel(session.name, 'Aktivitet'),
+          detail_target: { kind: 'module', module_id: 'schedule', source_id: session.id, session_date: date },
+        });
+      }
+    }
+  }
+
+  const linkedOperationOverrideIds = new Set<string>();
+  for (const block of blocksResult.data || []) {
+    const metadata = cleanBlockMetadata(block.metadata);
+    if (metadata.venue_operation_override_id) linkedOperationOverrideIds.add(String(metadata.venue_operation_override_id));
+    const targetCourtIds = capacityBlockCourtIds(block, courtIds);
+    const isClosure = Boolean(metadata.venue_operation_override_id);
+    const isEvent = Boolean(block.event_id) || block.reason === 'event';
+    const sourceType = isClosure ? 'venue_closure' : isEvent ? 'event_reservation' : 'resource_block';
+    const classification = isClosure ? 'closure' : isEvent ? 'event' : 'resource_block';
+    const moduleId = isClosure ? 'operations' : isEvent ? 'events' : 'resourceBlocks';
+    for (const courtId of targetCourtIds) {
+      inputs.push({
+        source_type: sourceType,
+        source_id: block.id,
+        venue_id: venueId,
+        resource_id: courtId,
+        starts_at: block.starts_at,
+        ends_at: block.ends_at,
+        status: block.status,
+        classification,
+        title: safeCapacityLabel(block.title, isClosure ? 'Driftstopp' : isEvent ? 'Event' : 'Resursblockering'),
+        detail_target: { kind: 'module', module_id: moduleId, source_id: isClosure ? metadata.venue_operation_override_id : block.event_id || block.id },
+      });
+    }
+  }
+
+  for (const override of operationOverridesResult.data || []) {
+    if (linkedOperationOverrideIds.has(String(override.id))) continue;
+    const metadata = cleanBlockMetadata(override.metadata);
+    const requestedCourtIds = Array.isArray(metadata.venue_court_ids) ? metadata.venue_court_ids.map(String) : [];
+    const targetCourtIds = override.affects_entire_venue
+      ? courtIds
+      : requestedCourtIds.filter((courtId: string) => courtById.has(courtId));
+    for (const courtId of targetCourtIds) {
+      inputs.push({
+        source_type: 'venue_closure',
+        source_id: override.id,
+        venue_id: venueId,
+        resource_id: courtId,
+        starts_at: override.starts_at,
+        ends_at: override.ends_at,
+        status: override.status,
+        classification: 'closure',
+        title: safeCapacityLabel(override.title, 'Driftstopp'),
+        detail_target: { kind: 'module', module_id: 'operations', source_id: override.id },
+      });
+    }
+  }
+
+  const openingIntervals = buildOpeningIntervals(resources, dates, hoursResult.data || []);
+  const projection = buildCapacityProjection(resources, dates, openingIntervals, inputs, venueId);
+  const partial = Object.values(sourceStatus).some((source) => source.status === 'error');
+  return {
+    data: {
+      venue_id: venueId,
+      timezone: 'Europe/Stockholm',
+      from: dates[0],
+      to: dates[dates.length - 1],
+      dates,
+      resources,
+      opening_intervals: openingIntervals,
+      intervals: projection.intervals,
+      summary: projection.summary,
+      source_status: sourceStatus,
+      partial,
+    },
+    status: partial ? 206 : 200,
+  } as const;
+}
+
 async function analyzeOperationImpact(
   admin: any,
   venueId: string,
@@ -3714,6 +4006,37 @@ Deno.serve(async (req) => {
           month,
         },
       }, 200, 10);
+    }
+
+    // ── ADMIN OS CAPACITY (READ-ONLY) ──
+    if (req.method === 'GET' && path === 'capacity') {
+      const scopedVenueId = venueId!;
+      const requestedView = url.searchParams.get('view') || 'day';
+      const requestedTimezone = url.searchParams.get('timezone');
+      const resourceId = url.searchParams.get('resourceId');
+      const group = url.searchParams.get('group');
+      if (!CAPACITY_UUID.test(scopedVenueId)) return errorResponse('Invalid venueId', 400);
+      if (!['day', 'week'].includes(requestedView)) return errorResponse('Invalid Capacity view', 400);
+      if (requestedTimezone && requestedTimezone !== 'Europe/Stockholm') return errorResponse('Unsupported timezone', 400);
+      if (resourceId && !CAPACITY_UUID.test(resourceId)) return errorResponse('Invalid resourceId', 400);
+      if (group && !/^[a-z0-9_-]{1,40}$/i.test(group)) return errorResponse('Invalid resource group', 400);
+      try {
+        await requireVenueRole(admin, userId, scopedVenueId, ['venue_admin']);
+      } catch (_) {
+        return errorResponse('Forbidden: venue role required', 403);
+      }
+
+      const fromDate = url.searchParams.get('from') || stockholmToday();
+      const toDate = url.searchParams.get('to') || fromDate;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+        return errorResponse('Invalid operational date', 400);
+      }
+      const dates = capacityDates(fromDate, toDate);
+      if (requestedView === 'day' && dates.length !== 1) return errorResponse('Day view requires one operational date', 400);
+      if (requestedView === 'week' && dates.length !== 7) return errorResponse('Week view requires seven operational dates', 400);
+      const result = await capacityResponse(admin, scopedVenueId, fromDate, toDate, { resourceId, group });
+      if ('error' in result) return errorResponse(result.error || 'Capacity unavailable', result.status);
+      return jsonResponse(result.data, result.status);
     }
 
     // ── ADMIN OS CALENDAR ──

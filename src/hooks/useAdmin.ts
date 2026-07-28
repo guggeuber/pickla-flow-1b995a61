@@ -403,6 +403,89 @@ export function useAdminCalendar(venueId: string | undefined, from: string | und
   });
 }
 
+export type AdminCapacityResource = {
+  id: string;
+  name: string;
+  court_number: number | null;
+  sport_type: string | null;
+  group: string;
+};
+
+export type AdminCapacityOpeningInterval = {
+  id: string;
+  resource_id: string;
+  venue_date: string;
+  starts_at: string;
+  ends_at: string;
+};
+
+export type AdminCapacityInterval = {
+  id: string;
+  source_type: "booking" | "activity_session" | "resource_block" | "venue_closure" | "event_reservation" | "free";
+  source_id: string;
+  venue_id: string;
+  resource_id: string;
+  starts_at: string;
+  ends_at: string;
+  venue_date: string;
+  status: string;
+  classification: "booking" | "activity" | "resource_block" | "closure" | "event" | "free";
+  title: string;
+  detail_target?: {
+    kind: "booking_drawer" | "module";
+    booking?: Record<string, unknown>;
+    module_id?: string;
+    source_id?: string;
+    session_date?: string;
+  } | null;
+  outside_opening_hours: boolean;
+  conflict: {
+    is_conflict: boolean;
+    with: Array<{ source_type: string; source_id: string; title: string }>;
+  };
+};
+
+export type AdminCapacityResponse = {
+  venue_id: string;
+  timezone: "Europe/Stockholm";
+  from: string;
+  to: string;
+  dates: string[];
+  resources: AdminCapacityResource[];
+  opening_intervals: AdminCapacityOpeningInterval[];
+  intervals: AdminCapacityInterval[];
+  summary: {
+    open_resource_minutes: number;
+    occupied_resource_minutes: number;
+    available_resource_minutes: number;
+    utilization_percentage: number;
+    conflict_count: number;
+  };
+  source_status: Record<string, { status: "ok" | "error"; message?: string }>;
+  partial: boolean;
+};
+
+export function useAdminCapacity(
+  venueId: string | undefined,
+  from: string | undefined,
+  to: string | undefined,
+  view: "day" | "week",
+) {
+  return useQuery({
+    queryKey: ["admin-capacity", venueId, from, to, view],
+    enabled: !!venueId && !!from && !!to,
+    queryFn: () => apiGet<AdminCapacityResponse>("api-admin", "capacity", {
+      venueId: venueId!,
+      from: from!,
+      to: to!,
+      view,
+      timezone: "Europe/Stockholm",
+    }),
+    refetchInterval: 60_000,
+    retry: 1,
+  });
+}
+
 export type AdminAttentionItem = {
   id: string;
   kind: "lead" | "drift" | "event" | "block";

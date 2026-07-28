@@ -209,10 +209,12 @@ export function OperationsBookingDrawer({
   open,
   onClose,
   booking,
+  readOnly = false,
 }: {
   open: boolean;
   onClose: () => void;
   booking: OperationsBookingDetail | null;
+  readOnly?: boolean;
 }) {
   const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const [localCheckedInAt, setLocalCheckedInAt] = useState<string | null>(null);
@@ -228,13 +230,13 @@ export function OperationsBookingDrawer({
   const courts = booking?.courts?.length ? booking.courts : booking?.court_name ? [{ name: booking.court_name }] : [];
   const bookingCustomerUserId = booking?.customer_user_id || booking?.user_id || null;
   const bookingCustomerId = booking?.customer_id || null;
-  const canOpenCustomer = Boolean(booking?.venue_id && (bookingCustomerId || bookingCustomerUserId));
-  const canCheckIn = !effectiveCheckedIn && deskBookingCheckinEligibility(booking).ok;
+  const canOpenCustomer = !readOnly && Boolean(booking?.venue_id && (bookingCustomerId || bookingCustomerUserId));
+  const canCheckIn = !readOnly && !effectiveCheckedIn && deskBookingCheckinEligibility(booking).ok;
   const participants = Array.isArray(booking?.participants) ? booking.participants : [];
   const manualSearch = (manualEmail.trim() || manualPhone.trim() || manualName.trim()).trim();
   const customerSuggestions = useQuery<any[]>({
     queryKey: ["booking-drawer-manual-customer-search", booking?.venue_id, manualSearch],
-    enabled: open && manualOpen && !!booking?.venue_id && manualSearch.length >= 2,
+    enabled: !readOnly && open && manualOpen && !!booking?.venue_id && manualSearch.length >= 2,
     queryFn: () => apiGet("api-customers", "list", { venueId: booking!.venue_id!, search: manualSearch, limit: "5" }),
     staleTime: 15_000,
   });
@@ -259,6 +261,7 @@ export function OperationsBookingDrawer({
 
   const checkInMutation = useMutation({
     mutationFn: async () => {
+      if (readOnly) throw new Error("Skrivskyddad vy");
       if (!booking?.venue_id || !booking.source_ids?.length) throw new Error("Bokningsdata saknas");
       return checkInDeskBooking(booking);
     },
@@ -280,6 +283,7 @@ export function OperationsBookingDrawer({
 
   const manualParticipantMutation = useMutation({
     mutationFn: async () => {
+      if (readOnly) throw new Error("Skrivskyddad vy");
       if (!booking) throw new Error("Bokningsdata saknas");
       const displayName = manualName.trim();
       if (!displayName) throw new Error("Skriv spelarens namn");
@@ -337,14 +341,16 @@ export function OperationsBookingDrawer({
 
             <div className="space-y-4">
               <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${statusTone(booking.payment_status)}`}>
-                    {paymentLabel(booking.payment_status)}
-                  </span>
-                  <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${effectiveCheckedIn ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
-                    {effectiveCheckedIn ? `Incheckad${checkedAt ? ` ${checkedAt}` : ""}` : "Ej incheckad"}
-                  </span>
-                </div>
+                {!readOnly && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${statusTone(booking.payment_status)}`}>
+                      {paymentLabel(booking.payment_status)}
+                    </span>
+                    <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${effectiveCheckedIn ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
+                      {effectiveCheckedIn ? `Incheckad${checkedAt ? ` ${checkedAt}` : ""}` : "Ej incheckad"}
+                    </span>
+                  </div>
+                )}
                 {canOpenCustomer ? (
                   <button
                     type="button"
@@ -375,15 +381,21 @@ export function OperationsBookingDrawer({
               <div className="grid grid-cols-2 gap-2">
                 <Field icon={UserRound} label="Kund" value={booking.customer_name || "Okänd"} />
                 <Field icon={CalendarClock} label="Tid" value={formatTimeRange(booking)} />
-                <Field icon={Phone} label="Telefon" value={booking.customer_phone} />
-                <Field icon={Mail} label="E-post" value={booking.customer_email} />
                 <Field icon={MapPin} label="Bana" value={courts.map((court) => court.name).filter(Boolean).join(", ")} />
-                <Field icon={CreditCard} label="Belopp" value={`${Math.round(amount).toLocaleString("sv-SE")} kr`} />
-                <Field icon={ReceiptText} label="Kvitto" value={booking.receipt_number} />
-                <Field icon={CheckCircle2} label="Check-in" value={effectiveCheckedIn ? `Ja${checkedAt ? `, ${checkedAt}` : ""}` : "Nej"} />
+                {readOnly ? (
+                  <Field icon={FileText} label="Status" value={booking.status || "Okänd"} />
+                ) : (
+                  <>
+                    <Field icon={Phone} label="Telefon" value={booking.customer_phone} />
+                    <Field icon={Mail} label="E-post" value={booking.customer_email} />
+                    <Field icon={CreditCard} label="Belopp" value={`${Math.round(amount).toLocaleString("sv-SE")} kr`} />
+                    <Field icon={ReceiptText} label="Kvitto" value={booking.receipt_number} />
+                    <Field icon={CheckCircle2} label="Check-in" value={effectiveCheckedIn ? `Ja${checkedAt ? `, ${checkedAt}` : ""}` : "Nej"} />
+                  </>
+                )}
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              {!readOnly && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
                     <UserRound className="h-3.5 w-3.5" />
@@ -535,9 +547,9 @@ export function OperationsBookingDrawer({
                 ) : (
                   <p className="mt-3 text-sm font-semibold text-white/45">Inga personliga platser är kopplade än.</p>
                 )}
-              </div>
+              </div>}
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              {!readOnly && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
                   <FileText className="h-3.5 w-3.5" />
                   Notes / references
@@ -548,14 +560,14 @@ export function OperationsBookingDrawer({
                   {booking.payment_method ? <p>Betalning: {booking.payment_method}</p> : null}
                   {booking.notes ? <p className="break-words">Notes: {booking.notes}</p> : null}
                 </div>
-              </div>
+              </div>}
             </div>
             </motion.div>
           </>
         )}
       </AnimatePresence>
       <Customer360Drawer
-        open={!!customerTarget}
+        open={!readOnly && !!customerTarget}
         venueId={booking?.venue_id}
         customerId={customerTarget?.customerId}
         userId={customerTarget?.userId}

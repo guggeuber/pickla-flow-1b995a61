@@ -61,6 +61,7 @@ import CustomersScreen from "@/screens/CustomersScreen";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
 import AdminToday from "@/components/admin/shell/AdminToday";
 import AdminCalendar from "@/components/admin/shell/AdminCalendar";
+import AdminCapacity from "@/components/admin/shell/AdminCapacity";
 import AdminSettings from "@/components/admin/shell/AdminSettings";
 import AdminSoon from "@/components/admin/shell/AdminSoon";
 import {
@@ -374,17 +375,7 @@ const AdminPage = () => {
               />
             )}
             {active === "capacity" && (
-              <AdminSoon
-                icon={Gauge}
-                phase="Phase 4"
-                title="Capacity"
-                tagline="Vad säljer? Vad är tomt? Var krockar saker?"
-                bullets={[
-                  { title: "Heatmap", desc: "Timme × dag, per sport / resurs. Fill rate i siffror." },
-                  { title: "Konfliktlista", desc: "Överbokningar, dubbletter, drift som krockar med events." },
-                  { title: "Revenue overlay", desc: "Read-only intäkt per tidsblock — beslutsstöd, ingen edit." },
-                ]}
-              />
+              <AdminCapacity venueId={venueId} onOpenModule={openSettingsModule} />
             )}
             {active === "people" && (
               <CustomersScreen venueId={venueId} />
