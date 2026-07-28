@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,8 @@ const authRuntime = vi.hoisted(() => {
     set listener(value) { listener = value; },
     get currentSession() { return currentSession; },
     set currentSession(value) { currentSession = value; },
+    listenerRegistrations: 0,
+    getSession: vi.fn(),
     signUp: vi.fn(),
     signIn: vi.fn(),
     signOut: vi.fn(),
@@ -23,10 +25,11 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
     auth: {
       onAuthStateChange: (callback: (event: string, session: unknown) => void) => {
+        authRuntime.listenerRegistrations += 1;
         authRuntime.listener = callback;
         return { data: { subscription: { unsubscribe: vi.fn() } } };
       },
-      getSession: vi.fn(async () => ({ data: { session: authRuntime.currentSession } })),
+      getSession: authRuntime.getSession,
       signUp: authRuntime.signUp,
       signInWithPassword: authRuntime.signIn,
       signOut: authRuntime.signOut,
@@ -81,11 +84,33 @@ function AuthFlow() {
   );
 }
 
+function AuthStatus() {
+  const { loading, user } = useAuth();
+  if (loading) return <p>Loading session</p>;
+  return <p>{user?.email ?? "Signed out"}</p>;
+}
+
+function renderAuthStatus() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <AuthStatus />
+      </AuthProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("signup to authenticated landing", () => {
   beforeEach(() => {
     Object.defineProperty(navigator, "language", { configurable: true, value: "en-US" });
     authRuntime.currentSession = null;
     authRuntime.listener = null;
+    authRuntime.listenerRegistrations = 0;
+    authRuntime.getSession.mockReset().mockImplementation(async () => ({
+      data: { session: authRuntime.currentSession },
+      error: null,
+    }));
     authRuntime.signUp.mockReset().mockResolvedValue({ data: { user: testSession.user }, error: null });
     authRuntime.signOut.mockReset().mockResolvedValue({ error: null });
     authRuntime.signIn.mockReset().mockImplementation(async () => {
@@ -148,5 +173,50 @@ describe("signup to authenticated landing", () => {
     });
     await waitFor(() => expect(authRuntime.from).toHaveBeenCalledWith("player_profiles"));
     expect(authRuntime.from).toHaveBeenCalledWith("customers");
+  });
+
+  it("restores one valid persisted session through one provider listener", async () => {
+    authRuntime.currentSession = testSession;
+
+    renderAuthStatus();
+
+    expect(await screen.findByText("new-player@example.test")).toBeInTheDocument();
+    expect(authRuntime.getSession).toHaveBeenCalledTimes(1);
+    expect(authRuntime.listenerRegistrations).toBe(1);
+  });
+
+  it("finishes bootstrap without a persisted session", async () => {
+    renderAuthStatus();
+
+    expect(await screen.findByText("Signed out")).toBeInTheDocument();
+    expect(authRuntime.getSession).toHaveBeenCalledTimes(1);
+    expect(authRuntime.listenerRegistrations).toBe(1);
+  });
+
+  it("waits for a slow session bootstrap", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    authRuntime.getSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+
+    renderAuthStatus();
+    expect(screen.getByText("Loading session")).toBeInTheDocument();
+
+    finish({ data: { session: testSession }, error: null });
+    expect(await screen.findByText("new-player@example.test")).toBeInTheDocument();
+    expect(authRuntime.listenerRegistrations).toBe(1);
+  });
+
+  it("applies sign-in, refresh and sign-out events without registering another listener", async () => {
+    renderAuthStatus();
+    expect(await screen.findByText("Signed out")).toBeInTheDocument();
+
+    act(() => { authRuntime.listener?.("SIGNED_IN", testSession); });
+    expect(await screen.findByText("new-player@example.test")).toBeInTheDocument();
+
+    act(() => { authRuntime.listener?.("TOKEN_REFRESHED", testSession); });
+    expect(await screen.findByText("new-player@example.test")).toBeInTheDocument();
+
+    act(() => { authRuntime.listener?.("SIGNED_OUT", null); });
+    expect(await screen.findByText("Signed out")).toBeInTheDocument();
+    expect(authRuntime.listenerRegistrations).toBe(1);
   });
 });
