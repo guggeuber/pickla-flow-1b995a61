@@ -161,7 +161,9 @@ describe("Commerce R1 confirmed purchase state", () => {
     renderOrder();
 
     const ticketHeading = await screen.findByText("Din biljett");
-    expect(ticketHeading.closest("section")).toHaveClass("bg-white", "border-black/10");
-    expect(ticketHeading.closest("section")).not.toHaveClass("bg-success", "border-success", "bg-emerald-50");
+    expect(ticketHeading.closest("section")).toHaveClass("border-y", "border-black/10");
+    expect(ticketHeading.closest("section")).not.toHaveClass("bg-success", "border-success", "bg-emerald-50", "rounded-[24px]");
+    expect(screen.getByTestId("commerce-success-check").parentElement).not.toHaveClass("rounded-full", "bg-slate-100");
+    expect(screen.getByTestId("commerce-ticket-icon").parentElement).not.toHaveClass("bg-slate-950", "text-white");
   });
 });

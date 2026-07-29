@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, PackageCheck, ShoppingBag } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -197,28 +197,33 @@ export default function CommerceCartPage() {
         <button type="button" onClick={() => navigate(-1)} className="grid h-11 w-11 place-items-center rounded-full border border-black/10 bg-white" aria-label="Tillbaka"><ArrowLeft className="h-5 w-5" /></button>
         <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Pickla</p><h1 className="text-xl font-black">Ordersammanfattning</h1></div>
       </header>
-      <main className="mx-auto grid w-full max-w-xl gap-4 px-4 py-5 pb-52">
+      <main className="mx-auto w-full max-w-xl px-5 py-6 pb-52">
         {activity ? (
-          <section className="rounded-2xl border border-black/10 bg-white p-4">
+          <section className="pb-6">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Aktivitet</p>
             <h2 className="mt-1 text-lg font-black">{activity.name}</h2>
             <p className="mt-2 text-sm font-semibold text-slate-600">{activityDate} · {String(activity.start_time || "").slice(0, 5)}–{String(activity.end_time || "").slice(0, 5)}</p>
             {activity.venue_name ? <p className="mt-1 text-sm text-slate-500">{activity.venue_name}</p> : null}
           </section>
         ) : null}
-        <section className="overflow-hidden rounded-2xl border border-black/10 bg-white">
+        <section className={activity ? "border-t border-black/10" : ""}>
           {lines.map((line) => {
             const isRacketLine = commerceRacketPickupQuantity([line]) > 0;
+            const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
+            const lineName = isActivityParticipationLine ? "Personlig plats" : line.product_name;
+            const lineMetadata = isRacketLine && racketInstruction
+              ? `Antal ${line.quantity} · ${racketInstruction}`
+              : line.fulfillment_type === "desk_pickup"
+                ? `Antal ${line.quantity} · Hämtas ut i desken`
+                : isActivityParticipationLine
+                  ? null
+                  : "Personlig plats";
             return (
-              <div key={line.id} className="flex items-start justify-between gap-4 border-b border-black/10 px-4 py-4 last:border-0">
-                <div className="flex min-w-0 gap-3">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100">{line.commerce_kind === "participation" ? <PackageCheck className="h-5 w-5" /> : <ShoppingBag className="h-5 w-5" />}</span>
-                  <div>
-                    <p className="font-bold">{line.product_name}</p>
-                    <p className="mt-0.5 text-xs text-slate-600">{line.fulfillment_type === "desk_pickup" ? `Antal ${line.quantity} · Hämtas ut i desken` : "Personlig plats"}</p>
-                    <p className="mt-1 text-[11px] font-semibold text-slate-400">Varav moms {formatCommerceMoney(lineVatMinor(line))}</p>
-                    {isRacketLine && racketInstruction ? <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-700">{racketInstruction}</p> : null}
-                  </div>
+              <div key={line.id} className="flex items-start justify-between gap-4 border-b border-black/10 py-5 last:border-b-0">
+                <div className="min-w-0">
+                  <p className="font-bold">{lineName}</p>
+                  {lineMetadata ? <p className="mt-1 text-xs leading-relaxed text-slate-600">{lineMetadata}</p> : null}
+                  <p className="mt-1 text-[11px] font-semibold text-slate-400">Varav moms {formatCommerceMoney(lineVatMinor(line))}</p>
                 </div>
                 <div className="shrink-0 text-right">
                   <p className="font-black">{includedLineLabel(line) || formatCommerceMoney(lineTotalMinor(line))}</p>
@@ -229,13 +234,13 @@ export default function CommerceCartPage() {
           })}
         </section>
         {showGuestDetails || showEmailRecovery ? (
-          <section className="grid gap-3 rounded-2xl border border-black/10 bg-white p-4">
+          <section className="grid gap-3 border-t border-black/10 pt-6">
             <div><h2 className="font-black">Dina uppgifter</h2><p className="text-sm text-slate-500">Vi skickar kvitto och orderinformation till din e-postadress.</p></div>
-            {showGuestDetails ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Namn" className="h-12 rounded-xl border border-black/15 px-3 text-base" /> : null}
-            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-post" type="email" className="h-12 rounded-xl border border-black/15 px-3 text-base" />
+            {showGuestDetails ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Namn" className="h-12 rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" /> : null}
+            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-post" type="email" className="h-12 rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" />
           </section>
         ) : null}
-        {resolveQuery.isError ? <p className="rounded-2xl border border-black/15 bg-white p-4 text-sm font-semibold text-slate-700">Priset eller platsen kunde inte bekräftas. Gå tillbaka och försök igen.</p> : null}
+        {resolveQuery.isError ? <p className="mt-6 border-t border-black/15 pt-5 text-sm font-semibold text-slate-700">Priset eller platsen kunde inte bekräftas. Gå tillbaka och försök igen.</p> : null}
       </main>
       <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
         <div className="mx-auto max-w-xl">
@@ -243,7 +248,7 @@ export default function CommerceCartPage() {
           <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-500"><span>Varav moms</span><span>{serverPricingReady ? formatCommerceMoney(totalVat) : "—"}</span></div>
           {totalSavings > 0 ? <p className="mb-3 text-sm font-bold text-slate-700">Du sparar {formatCommerceMoney(totalSavings)}</p> : null}
           <p className="mb-3 text-center text-xs font-semibold text-slate-500">Platsen bekräftas direkt efter betalning.</p>
-          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || !serverPricingReady || needsEmail} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white disabled:opacity-40">{checkout.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
+          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || !serverPricingReady || needsEmail} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
         </div>
       </footer>
     </div>

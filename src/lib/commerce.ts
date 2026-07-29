@@ -134,7 +134,7 @@ export function commerceRacketPickupQuantity(
 
 export function commerceRacketOrderSummaryInstruction(quantity: number) {
   if (quantity <= 0) return null;
-  return "Uppge ditt namn i desken så hjälper vi dig.";
+  return "Hämtas ut i desken genom att uppge ditt namn.";
 }
 
 export function commerceRacketSuccessInstruction(quantity: number) {

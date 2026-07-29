@@ -35,7 +35,7 @@ describe("Commerce R1 pickup instructions", () => {
   it("uses singular order-summary and success copy for one racket", () => {
     expect(commerceRacketPickupQuantity([racketLine(1)])).toBe(1);
     expect(commerceRacketOrderSummaryInstruction(1)).toBe(
-      "Uppge ditt namn i desken så hjälper vi dig.",
+      "Hämtas ut i desken genom att uppge ditt namn.",
     );
     expect(commerceRacketSuccessInstruction(1)).toEqual({
       summary: "Du har hyrt 1 rack.",
@@ -46,7 +46,7 @@ describe("Commerce R1 pickup instructions", () => {
   it("uses plural order-summary and success copy for multiple rackets", () => {
     expect(commerceRacketPickupQuantity([racketLine(2)])).toBe(2);
     expect(commerceRacketOrderSummaryInstruction(2)).toBe(
-      "Uppge ditt namn i desken så hjälper vi dig.",
+      "Hämtas ut i desken genom att uppge ditt namn.",
     );
     expect(commerceRacketSuccessInstruction(2)).toEqual({
       summary: "Du har hyrt 2 rack.",

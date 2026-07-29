@@ -32,7 +32,7 @@ vi.mock("@/lib/commerce", () => ({
   ), 0),
   commerceRacketOrderSummaryInstruction: (quantity: number) => quantity <= 0
     ? null
-    : "Uppge ditt namn i desken så hjälper vi dig.",
+    : "Hämtas ut i desken genom att uppge ditt namn.",
   fetchCommerceOrder: mocks.fetchOrder,
   formatCommerceMoney: (minor: number) => `${minor / 100} kr`,
   isCommerceOrderIdReference: () => false,
@@ -163,6 +163,32 @@ describe("program purchase request UI guard", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Betala 59.4 kr" })).toBeEnabled());
   });
 
+  it("keeps the activity details once and simplifies its purchase line", async () => {
+    const initialOrder = await mocks.fetchOrder();
+    const orderWithActivity = {
+      ...initialOrder,
+      activity_access: {
+        activity_session_id: "activity-1",
+        session_date: "2026-07-30",
+        name: "Open Play",
+        start_time: "18:00",
+        end_time: "20:00",
+        venue_name: "Pickla Solna",
+      },
+    };
+    mocks.fetchOrder.mockResolvedValue(orderWithActivity);
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: { id: "order-1", version: 1, currency: "SEK" }, lines: initialOrder.lines, checkout_ready: true };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+
+    expect(await screen.findByRole("heading", { name: "Open Play" })).toBeInTheDocument();
+    expect(screen.getAllByText("Open Play")).toHaveLength(1);
+    expect(screen.getByText("Personlig plats")).toBeInTheDocument();
+  });
+
   it("keeps guest contact details separate from pickup guidance", async () => {
     mocks.auth.user = null;
     const initialOrder = await mocks.fetchOrder();
@@ -208,10 +234,32 @@ describe("program purchase request UI guard", () => {
 
     renderCart();
 
-    expect(await screen.findByText("Uppge ditt namn i desken så hjälper vi dig.")).toBeInTheDocument();
-    expect(screen.getByText(`Antal ${quantity} · Hämtas ut i desken`)).toBeInTheDocument();
-    expect(screen.getByText("Uppge ditt namn i desken så hjälper vi dig.").closest("div")?.parentElement).toHaveTextContent("Hyrrack");
+    const pickupCopy = `Antal ${quantity} · Hämtas ut i desken genom att uppge ditt namn.`;
+    expect(await screen.findByText(pickupCopy)).toBeInTheDocument();
+    expect(screen.getByText(pickupCopy).parentElement).toHaveTextContent("Hyrrack");
+    expect(screen.queryByText("Uppge ditt namn i desken så hjälper vi dig.")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: paymentLabel })).toBeEnabled());
+  });
+
+  it("uses explicit neutral disabled and enabled payment states", async () => {
+    mocks.auth.user = null;
+    const initialOrder = await mocks.fetchOrder();
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: { id: "order-1", version: 1, currency: "SEK" }, lines: initialOrder.lines, checkout_ready: true };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+
+    const paymentButton = await screen.findByRole("button", { name: "Betala 59.4 kr" });
+    expect(paymentButton).toBeDisabled();
+    expect(paymentButton).toHaveClass("bg-slate-950", "disabled:bg-slate-300", "disabled:opacity-100");
+
+    fireEvent.change(screen.getByPlaceholderText("Namn"), { target: { value: "Ada Andersson" } });
+    fireEvent.change(screen.getByPlaceholderText("E-post"), { target: { value: "ada@example.com" } });
+
+    await waitFor(() => expect(paymentButton).toBeEnabled());
+    expect(paymentButton).toHaveClass("bg-slate-950", "text-white");
   });
 
   it("waits for auth initialization before loading the purchase", async () => {

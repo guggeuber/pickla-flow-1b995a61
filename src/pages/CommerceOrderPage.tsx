@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, CheckCircle2, Loader2, PackageCheck, ReceiptText, Ticket, XCircle } from "lucide-react";
+import { Check, Loader2, ReceiptText, Ticket, XCircle } from "lucide-react";
 import { DateTime } from "luxon";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -113,9 +113,9 @@ export default function CommerceOrderPage() {
   return (
     <div className="min-h-[100dvh] bg-white px-4 pb-12 pt-[calc(env(safe-area-inset-top,0px)+36px)] text-slate-950">
       <main className="mx-auto max-w-lg">
-        <div className="mb-7 text-center"><span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-slate-100 text-slate-700">{waiting ? <Loader2 className="h-7 w-7 animate-spin" /> : purchaseConfirmed ? <CheckCircle2 className="h-7 w-7" /> : <XCircle className="h-7 w-7" />}</span><h1 className="mt-4 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
+        <div className="mb-9 text-center">{waiting ? <Loader2 className="mx-auto h-7 w-7 animate-spin text-slate-600" /> : purchaseConfirmed ? <Check data-testid="commerce-success-check" className="mx-auto h-8 w-8 stroke-[1.75] text-slate-950" /> : <XCircle className="mx-auto h-7 w-7 text-slate-600" />}<h1 className="mt-5 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
         {purchaseConfirmed && activity ? (
-          <section className="mb-4 rounded-[24px] border border-black/10 bg-white p-5">
+          <section className="mb-6 px-1">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din aktivitet</p>
             <h2 className="mt-1 text-xl font-black">{activity.name}</h2>
             <p className="mt-3 text-sm font-semibold">{activityDate} · {String(activity.start_time || "").slice(0, 5)}–{String(activity.end_time || "").slice(0, 5)}</p>
@@ -125,18 +125,18 @@ export default function CommerceOrderPage() {
             {!requiresGuestClaim ? <a href="#ticket" className="mt-4 inline-flex text-sm font-black text-slate-950 underline underline-offset-4">Visa biljett</a> : null}
           </section>
         ) : null}
-        {racketInstruction ? <section className="mb-4 rounded-2xl border border-black/10 bg-white p-4"><h2 className="font-black">Hyrrack</h2><p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{racketInstruction.summary} {racketInstruction.pickup}</p></section> : null}
+        {racketInstruction ? <section className="mb-6 border-t border-black/10 px-1 pt-5"><h2 className="font-black">Hyrrack</h2><p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{racketInstruction.summary} {racketInstruction.pickup}</p></section> : null}
         {purchaseConfirmed && hasParticipation && requiresGuestClaim && !isCancelled ? (
-          <section className="mb-4 rounded-[24px] border border-black/10 bg-white p-5">
-            <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-950 text-white"><Ticket className="h-5 w-5" /></span><div><h2 className="font-black">Vem ska spela?</h2><p className="text-sm text-slate-500">Namnet visas på din biljett.</p></div></div>
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="För- och efternamn" className="mt-4 h-12 w-full rounded-xl border border-black/15 px-3 text-base" />
+          <section className="mb-6 border-y border-black/10 py-5">
+            <div><h2 className="font-black">Vem ska spela?</h2><p className="text-sm text-slate-500">Namnet visas på din biljett.</p></div>
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="För- och efternamn" className="mt-4 h-12 w-full rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" />
             <button type="button" onClick={() => confirmIdentity.mutate()} disabled={!displayName.trim() || confirmIdentity.isPending} className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{confirmIdentity.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Bekräfta namn och visa biljett</button>
           </section>
         ) : null}
         {purchaseConfirmed && hasParticipation && !requiresGuestClaim ? (
-          <section id="ticket" className="mb-4 rounded-[24px] border border-black/10 bg-white p-5 text-slate-950">
-            <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-950 text-white"><Ticket className="h-5 w-5" /></span><div><p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din biljett</p><h2 className="text-xl font-black">{activity?.name}</h2></div></div>
-            <p className="mt-4 text-sm font-semibold">{activityDate} · {String(activity?.start_time || "").slice(0, 5)}–{String(activity?.end_time || "").slice(0, 5)}</p>
+          <section id="ticket" className="mb-6 border-y border-black/10 py-5 text-slate-950">
+            <div className="flex items-start gap-3"><Ticket data-testid="commerce-ticket-icon" className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" /><div><p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din biljett</p><h2 className="mt-0.5 text-xl font-black">{activity?.name}</h2></div></div>
+            <p className="mt-3 text-sm font-semibold">{activityDate} · {String(activity?.start_time || "").slice(0, 5)}–{String(activity?.end_time || "").slice(0, 5)}</p>
             <button type="button" onClick={() => checkIn.mutate()} disabled={checkedIn || !checkInAvailable || checkIn.isPending || isCancelled} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{checkIn.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}{checkedIn ? "Incheckad" : "Checka in"}</button>
             {!order.account_claimed ? user ? (
               <button type="button" onClick={() => claimAccount.mutate()} disabled={claimAccount.isPending} className="mt-3 h-11 w-full rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950 disabled:opacity-40">Koppla köpet till mitt konto</button>
@@ -147,10 +147,13 @@ export default function CommerceOrderPage() {
             {!checkedIn && !isCancelled ? <button type="button" onClick={() => { if (window.confirm("Avboka platsen och återbetala köpet?")) cancelOrder.mutate(); }} disabled={cancelOrder.isPending || cancellationPending} className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold text-slate-950/70 disabled:opacity-40">{cancelOrder.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}{cancellationPending ? "Återbetalning behandlas" : "Avboka"}</button> : null}
           </section>
         ) : null}
-        <section className="overflow-hidden rounded-2xl border border-black/10 bg-white">
-          {lines.map((line) => <div key={line.id} className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-4 last:border-0"><div className="flex items-center gap-3"><PackageCheck className="h-5 w-5 text-slate-500" /><div><p className="font-bold">{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-xs text-slate-500">{line.fulfillment_type === "desk_pickup" ? fulfillmentLabel(line.fulfillment_status, isCancelled) : "Din plats"}</p></div></div><p className="font-black">{formatCommerceMoney(line.line_total_inc_vat_minor || line.unit_price_minor * line.quantity)}</p></div>)}
+        <section className="divide-y divide-black/10 border-y border-black/10">
+          {lines.map((line) => {
+            const lineName = activity && line.commerce_kind === "participation" ? "Personlig plats" : line.product_name;
+            return <div key={line.id} className="flex items-center justify-between gap-3 py-4"><div><p className="font-bold">{lineName}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-xs text-slate-500">{line.fulfillment_type === "desk_pickup" ? fulfillmentLabel(line.fulfillment_status, isCancelled) : "Din plats"}</p></div><p className="font-black">{formatCommerceMoney(line.line_total_inc_vat_minor || line.unit_price_minor * line.quantity)}</p></div>;
+          })}
         </section>
-        <section className="mt-4 rounded-2xl border border-black/10 bg-white p-4"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receiptNumber ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {receiptNumber}</p> : null}</section>
+        <section className="py-5"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receiptNumber ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {receiptNumber}</p> : null}</section>
         <div className="mt-6 grid gap-2"><Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link><Link to="/shop" className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div>
       </main>
     </div>
