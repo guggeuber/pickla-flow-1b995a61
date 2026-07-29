@@ -79,9 +79,16 @@ export interface CommerceOrderResponse {
     total_inc_vat_minor: number;
     total_ex_vat_minor: number;
     vat_amount_minor: number;
-    guest_name?: string | null;
-    guest_email?: string | null;
+    draft_scope?: string | null;
+    contact_email_present?: boolean;
+    guest_claimed?: boolean;
+    requires_guest_claim?: boolean;
+    account_claimed?: boolean;
+    claim_expires_at?: string | null;
+    cancellation_pending?: boolean;
     paid_at?: string | null;
+    booking_receipt_id?: string | null;
+    customer_name?: string | null;
   };
   lines: CommerceOrderLine[];
   receipt?: Record<string, unknown> | null;

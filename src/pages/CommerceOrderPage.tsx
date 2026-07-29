@@ -1,23 +1,154 @@
-import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, PackageCheck, ReceiptText } from "lucide-react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
-import { fetchCommerceOrder, formatCommerceMoney } from "@/lib/commerce";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Check, CheckCircle2, Loader2, PackageCheck, ReceiptText, Ticket, XCircle } from "lucide-react";
+import { DateTime } from "luxon";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
+import { activityCheckInAvailable } from "@/lib/activityTiming";
+import { preserveIntendedRoute } from "@/lib/entryResolver";
+import {
+  checkInCommerceGuest,
+  cancelCommerceActivityOrder,
+  claimCommerceOrderAccount,
+  commerceRacketPickupQuantity,
+  commerceRacketSuccessInstruction,
+  confirmCommerceGuestIdentity,
+  fetchCommerceOrder,
+  formatCommerceMoney,
+} from "@/lib/commerce";
+
+function fulfillmentLabel(status: string, cancelled: boolean) {
+  if (cancelled || status === "not_collected") return "Ej längre tillgänglig för uthämtning";
+  if (status === "collected") return "Uthämtad";
+  if (status === "attention") return "Kontakta Pickla";
+  return "Hämtas vid desken";
+}
 
 export default function CommerceOrderPage() {
   const [params] = useSearchParams();
   const routeParams = useParams<{ token?: string }>();
+  const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
+  const [displayName, setDisplayName] = useState("");
   const token = routeParams.token || params.get("token") || "";
-  const query = useQuery({ queryKey: ["commerce-order", token], queryFn: () => fetchCommerceOrder(token), enabled: token.length >= 32, refetchInterval: (state) => state.state.data?.order.status === "checkout_pending" ? 1200 : false });
-  if (query.isLoading) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
+  const query = useQuery({ queryKey: ["commerce-order", token, user?.id || "guest"], queryFn: () => fetchCommerceOrder(token), enabled: token.length >= 32 && !authLoading, refetchInterval: (state) => state.state.data?.order.status === "checkout_pending" ? 1200 : false });
+  const confirmIdentity = useMutation({
+    mutationFn: () => confirmCommerceGuestIdentity(token, displayName.trim()),
+    onSuccess: async () => { toast.success("Din biljett är klar"); await query.refetch(); },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte spara namnet"),
+  });
+  const claimAccount = useMutation({
+    mutationFn: () => claimCommerceOrderAccount(token),
+    onSuccess: async () => { toast.success("Köpet är kopplat till ditt konto"); await query.refetch(); },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte koppla köpet"),
+  });
+  const checkIn = useMutation({
+    mutationFn: () => checkInCommerceGuest(token),
+    onSuccess: async () => { toast.success("Du är incheckad"); await query.refetch(); },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte checka in"),
+  });
+  const cancelOrder = useMutation({
+    mutationFn: () => cancelCommerceActivityOrder(token, user ? {} : { auth: "omit" }),
+    onSuccess: async (result) => {
+      toast.success(result.cancellation_pending ? "Återbetalningen behandlas" : "Aktiviteten är avbokad");
+      await query.refetch();
+    },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte avboka"),
+  });
+  const activity = query.data?.activity_access;
+  const checkInAvailable = useMemo(() => activity ? activityCheckInAvailable({
+    sessionDate: activity.session_date,
+    startTime: activity.start_time,
+    endTime: activity.end_time,
+  }) : false, [activity]);
+  const activityDate = activity
+    ? DateTime.fromISO(activity.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("cccc d MMM")
+    : "";
+  const startAuth = () => {
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    preserveIntendedRoute(currentPath);
+    navigate(`/auth?redirect=${encodeURIComponent(currentPath)}`);
+  };
+  if (query.isLoading || authLoading) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
   if (!query.data) return <div className="min-h-[100dvh] bg-[#fbf7f2] grid place-items-center px-6 text-center">Ordern kunde inte öppnas.</div>;
   const { order, lines, receipt } = query.data;
+  const hasParticipation = Boolean(activity);
+  const isCancelled = order.status === "cancelled" || activity?.registration_status === "cancelled";
+  const checkedIn = activity?.registration_status === "checked_in";
+  const cancellationPending = Boolean(order.cancellation_pending);
+  const requiresGuestClaim = order.requires_guest_claim === true;
+  const participantConfirmed = !hasParticipation || ["confirmed", "checked_in", "no_show"].includes(String(activity?.registration_status || ""));
+  const purchaseConfirmed = order.status === "paid" && participantConfirmed;
   const waiting = order.status === "checkout_pending";
+  const needsReview = order.status === "attention" || (order.status === "paid" && !participantConfirmed);
+  const racketQuantity = purchaseConfirmed && !cancellationPending
+    ? commerceRacketPickupQuantity(lines, { confirmed: true })
+    : 0;
+  const racketInstruction = commerceRacketSuccessInstruction(racketQuantity);
+  const receiptNumber = String((receipt as { receipt_number?: string } | null)?.receipt_number || "");
+  const purchaseReference = receiptNumber || order.id.slice(0, 8).toUpperCase();
+  const heading = waiting
+    ? "Vi bekräftar ditt köp"
+    : isCancelled
+      ? "Köpet är avbokat"
+      : purchaseConfirmed && hasParticipation
+        ? "Platsen är din"
+        : purchaseConfirmed
+          ? "Köpet är klart"
+          : order.status === "draft"
+            ? "Köpet är inte betalt"
+            : "Vi kontrollerar ditt köp";
+  const supportingCopy = waiting
+    ? "Det tar vanligtvis bara några sekunder."
+    : purchaseConfirmed && hasParticipation
+      ? `Du är anmäld till ${activity?.name}.`
+      : purchaseConfirmed
+        ? "Spara den här sidan för kvitto och uthämtning."
+        : needsReview
+          ? "Vi behöver kontrollera köpet innan plats eller uthämtning kan bekräftas."
+          : isCancelled
+            ? "Platsen och eventuella uthämtningsprodukter är återkallade."
+            : "Gå tillbaka till ordersammanfattningen för att slutföra betalningen.";
   return (
     <div className="min-h-[100dvh] bg-[#fbf7f2] px-4 pb-12 pt-[calc(env(safe-area-inset-top,0px)+36px)] text-slate-950">
       <main className="mx-auto max-w-lg">
-        <div className="mb-7 text-center"><span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-100 text-emerald-700">{waiting ? <Loader2 className="h-7 w-7 animate-spin" /> : <CheckCircle2 className="h-7 w-7" />}</span><h1 className="mt-4 text-3xl font-black">{waiting ? "Vi bekräftar ditt köp" : "Ditt köp är klart"}</h1><p className="mt-2 text-sm text-slate-500">{waiting ? "Det tar vanligtvis bara några sekunder." : "Spara den här sidan för kvitto och uthämtning."}</p></div>
+        <div className="mb-7 text-center"><span className={`mx-auto grid h-14 w-14 place-items-center rounded-full ${purchaseConfirmed ? "bg-emerald-100 text-emerald-700" : isCancelled || needsReview ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>{waiting ? <Loader2 className="h-7 w-7 animate-spin" /> : purchaseConfirmed ? <CheckCircle2 className="h-7 w-7" /> : <XCircle className="h-7 w-7" />}</span><h1 className="mt-4 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
+        {purchaseConfirmed && activity ? (
+          <section className="mb-4 rounded-[24px] border border-black/10 bg-white p-5">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din aktivitet</p>
+            <h2 className="mt-1 text-xl font-black">{activity.name}</h2>
+            <p className="mt-3 text-sm font-semibold">{activityDate} · {String(activity.start_time || "").slice(0, 5)}–{String(activity.end_time || "").slice(0, 5)}</p>
+            {activity.venue_name ? <p className="mt-1 text-sm text-slate-500">{activity.venue_name}</p> : null}
+            {order.customer_name ? <p className="mt-3 text-sm"><span className="text-slate-500">Spelare</span> · <strong>{order.customer_name}</strong></p> : null}
+            <p className="mt-1 text-xs text-slate-500">Referens {purchaseReference}</p>
+            {!requiresGuestClaim ? <a href="#ticket" className="mt-4 inline-flex text-sm font-black text-emerald-800 underline underline-offset-4">Visa biljett</a> : null}
+          </section>
+        ) : null}
+        {racketInstruction ? <section className="mb-4 rounded-2xl border border-black/10 bg-white p-4"><p className="font-black">{racketInstruction.summary}</p><p className="mt-1 text-sm text-slate-500">{racketInstruction.pickup}</p></section> : null}
+        {purchaseConfirmed && hasParticipation && requiresGuestClaim && !isCancelled ? (
+          <section className="mb-4 rounded-[24px] border border-black/10 bg-white p-5">
+            <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-950 text-white"><Ticket className="h-5 w-5" /></span><div><h2 className="font-black">Vem ska spela?</h2><p className="text-sm text-slate-500">Namnet visas på din biljett.</p></div></div>
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="För- och efternamn" className="mt-4 h-12 w-full rounded-xl border border-black/15 px-3 text-base" />
+            <button type="button" onClick={() => confirmIdentity.mutate()} disabled={!displayName.trim() || confirmIdentity.isPending} className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{confirmIdentity.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Bekräfta namn och visa biljett</button>
+          </section>
+        ) : null}
+        {purchaseConfirmed && hasParticipation && !requiresGuestClaim ? (
+          <section id="ticket" className="mb-4 rounded-[24px] border border-emerald-200 bg-emerald-50 p-5 text-emerald-950">
+            <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-emerald-700 text-white"><Ticket className="h-5 w-5" /></span><div><p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-700">Din biljett</p><h2 className="text-xl font-black">{activity?.name}</h2></div></div>
+            <p className="mt-4 text-sm font-semibold">{activityDate} · {String(activity?.start_time || "").slice(0, 5)}–{String(activity?.end_time || "").slice(0, 5)}</p>
+            <button type="button" onClick={() => checkIn.mutate()} disabled={checkedIn || !checkInAvailable || checkIn.isPending || isCancelled} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-800 font-black text-white disabled:opacity-40">{checkIn.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}{checkedIn ? "Incheckad" : "Checka in"}</button>
+            {!order.account_claimed ? user ? (
+              <button type="button" onClick={() => claimAccount.mutate()} disabled={claimAccount.isPending} className="mt-3 h-11 w-full rounded-xl border border-emerald-800/20 bg-white text-sm font-black text-emerald-950 disabled:opacity-40">Koppla köpet till mitt konto</button>
+            ) : (
+              <button type="button" onClick={startAuth} className="mt-3 h-11 w-full rounded-xl border border-emerald-800/20 bg-white text-sm font-black text-emerald-950">Spara biljett, kvitto och historik</button>
+            ) : null}
+            {order.account_claimed && activity?.venue_slug ? <Link to={`/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`} className="mt-3 flex h-11 items-center justify-center rounded-xl border border-emerald-800/20 bg-white text-sm font-black text-emerald-950">Öppna aktivitet och chatt</Link> : null}
+            {!checkedIn && !isCancelled ? <button type="button" onClick={() => { if (window.confirm("Avboka platsen och återbetala köpet?")) cancelOrder.mutate(); }} disabled={cancelOrder.isPending || cancellationPending} className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold text-emerald-900/70 disabled:opacity-40">{cancelOrder.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}{cancellationPending ? "Återbetalning behandlas" : "Avboka"}</button> : null}
+          </section>
+        ) : null}
         <section className="overflow-hidden rounded-2xl border border-black/10 bg-white">
-          {lines.map((line) => <div key={line.id} className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-4 last:border-0"><div className="flex items-center gap-3"><PackageCheck className="h-5 w-5 text-slate-500" /><div><p className="font-bold">{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-xs text-slate-500">{line.fulfillment_type === "desk_pickup" ? line.fulfillment_status === "collected" ? "Uthämtad" : "Hämtas vid disken" : "Din plats"}</p></div></div><p className="font-black">{formatCommerceMoney(line.line_total_inc_vat_minor || line.unit_price_minor * line.quantity)}</p></div>)}
+          {lines.map((line) => <div key={line.id} className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-4 last:border-0"><div className="flex items-center gap-3"><PackageCheck className="h-5 w-5 text-slate-500" /><div><p className="font-bold">{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-xs text-slate-500">{line.fulfillment_type === "desk_pickup" ? fulfillmentLabel(line.fulfillment_status, isCancelled) : "Din plats"}</p></div></div><p className="font-black">{formatCommerceMoney(line.line_total_inc_vat_minor || line.unit_price_minor * line.quantity)}</p></div>)}
         </section>
         <section className="mt-4 rounded-2xl border border-black/10 bg-white p-4"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receipt ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {(receipt as any).receipt_number}</p> : null}</section>
         <div className="mt-6 grid gap-2"><Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link><Link to="/shop" className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div>

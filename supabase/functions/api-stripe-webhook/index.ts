@@ -3,7 +3,8 @@
 //
 // Configure the webhook endpoint in the Stripe dashboard:
 //   https://<project>.supabase.co/functions/v1/api-stripe-webhook
-// Events to listen for: checkout.session.completed, checkout.session.expired, invoice.paid
+// Events to listen for: checkout.session.completed, checkout.session.expired,
+// charge.refunded, refund.updated, invoice.paid
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
@@ -18,6 +19,14 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
+type ServiceClient = ReturnType<typeof getServiceClient>;
+type StripeRefundObject = {
+  id?: string | null;
+  status?: string | null;
+  payment_intent?: string | { id?: string | null } | null;
+  amount?: number | null;
+  amount_refunded?: number | null;
+};
 
 // Deno-native Stripe webhook signature verification.
 // Do not use the Stripe Node SDK in Supabase Edge Runtime here; it can trigger
@@ -72,7 +81,7 @@ function timingSafeEqual(a: string, b: string): boolean {
   return out === 0;
 }
 
-Deno.serve(async (req) => {
+const stripeWebhookHandler = async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -181,6 +190,22 @@ Deno.serve(async (req) => {
     }
   }
 
+  if (event.type === 'charge.refunded' || event.type === 'refund.updated') {
+    try {
+      await handleCommerceRefund(event.data.object, event.type, serviceClient);
+      await serviceClient.from('stripe_events')
+        .update({ status: 'processed', processed_at: new Date().toISOString(), error: null })
+        .eq('id', eventId);
+      return jsonResponse({ received: true }, 200);
+    } catch (err) {
+      console.error(`Error processing ${event.type} webhook:`, err);
+      await serviceClient.from('stripe_events')
+        .update({ status: 'failed', processed_at: new Date().toISOString(), error: (err as Error).message })
+        .eq('id', eventId);
+      return errorResponse((err as Error).message, 500);
+    }
+  }
+
   if (event.type !== 'checkout.session.completed') {
     await serviceClient.from('stripe_events')
       .update({ status: 'skipped', processed_at: new Date().toISOString() })
@@ -227,7 +252,11 @@ Deno.serve(async (req) => {
   }
 
   return jsonResponse({ received: true }, 200);
-});
+};
+
+const localFunctionPort = Number(Deno.env.get('FUNCTION_PORT') || 0);
+if (localFunctionPort > 0) Deno.serve({ port: localFunctionPort }, stripeWebhookHandler);
+else Deno.serve(stripeWebhookHandler);
 
 function randomCommerceToken() {
   const bytes = new Uint8Array(32);
@@ -262,7 +291,7 @@ async function sendCommerceReceiptEmail(params: {
   }
   const receiptUrl = canonicalPublicUrl(`/order/${encodeURIComponent(params.token)}`);
   const pickupCopy = params.pickupItems.length
-    ? `<p><strong>Hämtas vid disken:</strong> ${params.pickupItems.map(escapeCommerceEmailHtml).join(', ')}</p>`
+    ? `<p><strong>Hämtas vid desken:</strong> ${params.pickupItems.map(escapeCommerceEmailHtml).join(', ')}. Uppge ditt namn så hjälper vi dig.</p>`
     : '';
   const firstName = params.name ? escapeCommerceEmailHtml(params.name.split(' ')[0]) : '';
   const response = await fetch('https://api.resend.com/emails', {
@@ -342,7 +371,7 @@ async function handleCommerceOrder(
 
   const participation = lines.find((line: any) => line.commerce_kind === 'participation');
   if (participation) {
-    if (!order.user_id) throw new Error('Commerce participation has no authenticated user');
+    if (!order.user_id && !customerId) throw new Error('Commerce participation has no owner');
     const { data: activity } = await serviceClient
       .from('activity_sessions')
       .select('id, name, session_type')
@@ -355,7 +384,7 @@ async function handleCommerceOrder(
         p_venue_id: order.venue_id,
         p_activity_session_id: participation.activity_session_id,
         p_session_date: participation.session_date,
-        p_user_id: order.user_id,
+        p_user_id: order.user_id || null,
         p_customer_id: customerId,
         p_status: 'confirmed',
         p_stripe_session_id: session.id,
@@ -398,7 +427,7 @@ async function handleCommerceOrder(
             ledgerSourceType: 'commerce_order',
             ledgerSourceId: orderId,
             customerId,
-            userId: order.user_id,
+            userId: order.user_id || null,
             title: `Betald commerce-order kunde inte leverera ${activity?.name || participation.product_name}`,
             metadata: {
               commerce_order_id: orderId,
@@ -427,9 +456,10 @@ async function handleCommerceOrder(
         if (error) throw new Error(error.message);
       },
       upsertEntitlement: async (registrationId) => {
-        const { error } = await serviceClient.from('access_entitlements').upsert({
+        const entitlement = {
           venue_id: order.venue_id,
-          user_id: order.user_id,
+          user_id: order.user_id || null,
+          customer_id: customerId,
           entitlement_type: 'session_ticket',
           status: 'active',
           source_type: 'session_ticket',
@@ -443,10 +473,15 @@ async function handleCommerceOrder(
             commerce_order_line_id: participation.id,
             stripe_session_id: session.id,
           },
-        }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
+        };
+        const { error } = await serviceClient.from('access_entitlements').upsert(entitlement, {
+          onConflict: order.user_id
+            ? 'source_type,source_id,user_id,entitlement_type'
+            : 'source_type,source_id,customer_id,entitlement_type',
+        });
         if (error) throw new Error(error.message);
       },
-      announceRegistration: roomId
+      announceRegistration: roomId && order.user_id
         ? async () => {
           await announceActivityRegistration(serviceClient, {
             roomId,
@@ -461,6 +496,21 @@ async function handleCommerceOrder(
         console.error('Commerce paid fulfillment failure handling failed:', error);
       },
     });
+  }
+
+  if (!order.user_id) {
+    await serviceClient.from('commerce_orders').update({
+      claim_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    }).eq('id', orderId);
+    const { error: eventError } = await serviceClient.from('commerce_events').upsert({
+      venue_id: order.venue_id,
+      commerce_order_id: orderId,
+      activity_session_id: participation?.activity_session_id || null,
+      event_name: 'guest_purchase_succeeded',
+      journey_id_hash: order.metadata?.journey_id_hash || null,
+      metadata: { source: 'stripe_webhook' },
+    }, { onConflict: 'commerce_order_id,event_name' });
+    if (eventError) console.error('guest purchase event failed', eventError.message);
   }
 
   if (customerEmail) {
@@ -484,7 +534,7 @@ async function handleCommerceCheckoutExpired(session: any, serviceClient: any) {
   const orderId = String(session?.metadata?.commerce_order_id || '').trim();
   if (!orderId) return;
   const { data: order, error: orderError } = await serviceClient.from('commerce_orders')
-    .select('id, status, stripe_session_id')
+    .select('id, venue_id, status, stripe_session_id, metadata')
     .eq('id', orderId)
     .maybeSingle();
   if (orderError) throw new Error(orderError.message);
@@ -506,6 +556,114 @@ async function handleCommerceCheckoutExpired(session: any, serviceClient: any) {
     .eq('id', order.id)
     .eq('status', 'checkout_pending');
   if (expireError) throw new Error(expireError.message);
+  const { data: participation } = await serviceClient.from('commerce_order_lines')
+    .select('activity_session_id')
+    .eq('commerce_order_id', order.id)
+    .eq('commerce_kind', 'participation')
+    .maybeSingle();
+  const { error: eventError } = await serviceClient.from('commerce_events').upsert({
+    venue_id: order.venue_id,
+    commerce_order_id: order.id,
+    activity_session_id: participation?.activity_session_id || null,
+    event_name: 'checkout_abandoned',
+    journey_id_hash: order.metadata?.journey_id_hash || null,
+    metadata: { source: 'stripe_webhook' },
+  }, { onConflict: 'commerce_order_id,event_name' });
+  if (eventError) console.error('checkout abandoned event failed', eventError.message);
+}
+
+async function handleCommerceRefund(object: StripeRefundObject, eventType: string, serviceClient: ServiceClient) {
+  if (eventType === 'refund.updated' && object?.status !== 'succeeded') return;
+  const paymentIntentId = stripeId(object?.payment_intent);
+  if (!paymentIntentId) return;
+  const { data: order, error: orderError } = await serviceClient.from('commerce_orders')
+    .select('id, venue_id, customer_id, guest_name, status, stripe_payment_intent_id, booking_receipt_id, total_inc_vat_minor, vat_amount_minor, currency, metadata')
+    .eq('stripe_payment_intent_id', paymentIntentId)
+    .maybeSingle();
+  if (orderError) throw new Error(orderError.message);
+  if (!order || order.status === 'cancelled') return;
+  if (!['paid', 'attention'].includes(order.status)) return;
+
+  const refundedMinor = Number(eventType === 'charge.refunded' ? object?.amount_refunded : object?.amount || 0);
+  const fullRefund = refundedMinor >= Number(order.total_inc_vat_minor || 0);
+  if (!fullRefund) {
+    const { error } = await serviceClient.from('commerce_orders').update({
+      status: 'attention',
+      metadata: {
+        ...(order.metadata || {}),
+        partial_refund_minor: refundedMinor,
+        partial_refund_object_id: String(object?.id || ''),
+      },
+    }).eq('id', order.id).in('status', ['paid', 'attention']);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const { data: participation, error: lineError } = await serviceClient.from('commerce_order_lines')
+    .select('session_registration_id')
+    .eq('commerce_order_id', order.id)
+    .eq('commerce_kind', 'participation')
+    .maybeSingle();
+  if (lineError) throw new Error(lineError.message);
+  if (participation?.session_registration_id) {
+    const { error: registrationError } = await serviceClient.from('session_registrations')
+      .update({ status: 'cancelled' })
+      .eq('id', participation.session_registration_id)
+      .neq('status', 'cancelled');
+    if (registrationError) throw new Error(registrationError.message);
+    const { error: entitlementError } = await serviceClient.from('access_entitlements')
+      .update({ status: 'revoked' })
+      .eq('source_type', 'session_ticket')
+      .eq('source_id', participation.session_registration_id)
+      .neq('status', 'revoked');
+    if (entitlementError) throw new Error(entitlementError.message);
+  }
+  const { error: pickupError } = await serviceClient.from('commerce_order_lines')
+    .update({ fulfillment_status: 'not_collected' })
+    .eq('commerce_order_id', order.id)
+    .eq('fulfillment_type', 'desk_pickup')
+    .eq('fulfillment_status', 'pending_pickup');
+  if (pickupError) throw new Error(pickupError.message);
+  if (order.booking_receipt_id) {
+    const { error: receiptError } = await serviceClient.from('booking_receipts')
+      .update({ payment_status: 'refunded', updated_at: new Date().toISOString() })
+      .eq('id', order.booking_receipt_id);
+    if (receiptError) throw new Error(receiptError.message);
+  }
+  const { data: receipt } = order.booking_receipt_id
+    ? await serviceClient.from('booking_receipts').select('receipt_number').eq('id', order.booking_receipt_id).maybeSingle()
+    : { data: null };
+  const { error: ledgerError } = await serviceClient.from('ledger_entries').insert({
+    venue_id: order.venue_id,
+    customer_id: order.customer_id,
+    source_type: 'commerce_refund',
+    source_id: order.id,
+    accounting_date: DateTime.now().setZone('Europe/Stockholm').toISODate(),
+    occurred_at: new Date().toISOString(),
+    customer_name: order.guest_name,
+    amount_inc_vat_minor: Number(order.total_inc_vat_minor || 0),
+    vat_amount_minor: Number(order.vat_amount_minor || 0),
+    payment_status: 'refunded',
+    payment_method: 'stripe',
+    receipt_number: receipt?.receipt_number || null,
+    booking_receipt_id: order.booking_receipt_id,
+    metadata: {
+      commerce_order_id: order.id,
+      stripe_payment_intent_id: paymentIntentId,
+      stripe_refund_object_id: String(object?.id || ''),
+    },
+  });
+  if (ledgerError && ledgerError.code !== '23505') throw new Error(ledgerError.message);
+  const { error: cancelError } = await serviceClient.from('commerce_orders').update({
+    status: 'cancelled',
+    metadata: {
+      ...(order.metadata || {}),
+      cancelled_at: new Date().toISOString(),
+      cancellation_source: 'stripe_refund',
+      stripe_refund_object_id: String(object?.id || ''),
+    },
+  }).eq('id', order.id).in('status', ['paid', 'attention']);
+  if (cancelError) throw new Error(cancelError.message);
 }
 
 // ── Court booking ─────────────────────────────────────────────────────────────

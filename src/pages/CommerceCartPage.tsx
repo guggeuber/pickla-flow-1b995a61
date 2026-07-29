@@ -133,6 +133,7 @@ export default function CommerceCartPage() {
         expected_version: orderQuery.data?.order.version,
         guest_email: email.trim() || null,
         guest_name: name.trim() || null,
+        journey_id: commerceJourneyId(),
         success_path: `/commerce/confirmed?token=${encodeURIComponent(token)}`,
         cancel_path: `/cart?token=${encodeURIComponent(token)}`,
       }, { auth });
@@ -143,7 +144,7 @@ export default function CommerceCartPage() {
           undefined,
           hasParticipation ? undefined : async () => {
             setGuestSessionFallback(true);
-            if (!email.trim()) {
+            if (!email.trim() && !orderQuery.data?.order.contact_email_present) {
               setForceEmailEntry(true);
               throw new Error(CHECKOUT_EMAIL_REQUIRED_MESSAGE);
             }
@@ -186,8 +187,7 @@ export default function CommerceCartPage() {
     return null;
   }
 
-  const needsLogin = hasParticipation && runAsGuest;
-  const showGuestDetails = !hasParticipation && runAsGuest;
+  const showGuestDetails = runAsGuest;
   const showEmailRecovery = forceEmailEntry && !showGuestDetails;
   const needsEmail = (showGuestDetails || showEmailRecovery) && !email.trim();
 

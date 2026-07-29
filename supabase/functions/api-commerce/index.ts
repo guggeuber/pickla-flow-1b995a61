@@ -2,7 +2,12 @@ import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { requireVenueRole } from '../_shared/authorization.ts';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
-import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
+import {
+  resolveCustomerIdForUser,
+  resolveOrCreateCustomerIdForUser,
+  resolveOrCreateGuestCustomerByEmail,
+  linkExistingCustomerToVerifiedAuth,
+} from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { evaluateCommerceAvailability, type CommerceProductLike } from '../_shared/commerce_availability.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
@@ -14,6 +19,7 @@ const MAX_QUANTITY = 100;
 const STRIPE_API_BASE = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+type AdminClient = ReturnType<typeof getServiceClient>;
 type DbRecord = Record<string, unknown>;
 
 function productMaxQuantity(product: CommerceProduct) {
@@ -70,6 +76,26 @@ async function createStripeCheckoutSession(stripeKey: string, data: Record<strin
   return payload as StripeCheckoutSession;
 }
 
+async function createStripeRefund(stripeKey: string, paymentIntentId: string, orderId: string) {
+  const body = new URLSearchParams({
+    payment_intent: paymentIntentId,
+    reason: 'requested_by_customer',
+    'metadata[commerce_order_id]': orderId,
+  });
+  const response = await fetch(`${STRIPE_API_BASE}/refunds`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${stripeKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Idempotency-Key': `commerce-cancel-${orderId}`,
+    },
+    body,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error?.message || `Stripe API error ${response.status}`);
+  return payload as { id: string; status?: string };
+}
+
 function safeLocalPath(value: unknown, fallback: string) {
   const path = String(value || '').trim();
   if (!path.startsWith('/') || path.startsWith('//')) return fallback;
@@ -95,7 +121,7 @@ function newCartToken() {
 
 const CLIENT_COMMERCE_EVENTS = new Set(['activity_sheet_opened', 'logged_out_cta_clicked']);
 
-async function recordCommerceEvent(admin: any, input: {
+async function recordCommerceEvent(admin: AdminClient, input: {
   eventName: string;
   venueId?: string | null;
   orderId?: string | null;
@@ -135,7 +161,7 @@ async function optionalUser(req: Request) {
   return { userId: auth.userId };
 }
 
-async function loadOrderByToken(admin: any, token: string, userId?: string | null, allowReceiptToken = false) {
+async function loadOrderByToken(admin: AdminClient, token: string, userId?: string | null, allowReceiptToken = false) {
   if (!token || token.length < 32) throw new Error('Invalid cart token');
   const tokenHash = await sha256(token);
   let query = admin.from('commerce_orders').select('*');
@@ -150,7 +176,7 @@ async function loadOrderByToken(admin: any, token: string, userId?: string | nul
   return order;
 }
 
-async function loadOrderByReference(admin: any, reference: string, userId?: string | null, allowReceiptToken = false) {
+async function loadOrderByReference(admin: AdminClient, reference: string, userId?: string | null, allowReceiptToken = false) {
   const cleanReference = String(reference || '').trim();
   if (userId && UUID_PATTERN.test(cleanReference)) {
     const { data: order, error } = await admin.from('commerce_orders')
@@ -165,7 +191,7 @@ async function loadOrderByReference(admin: any, reference: string, userId?: stri
   return loadOrderByToken(admin, cleanReference, userId, allowReceiptToken);
 }
 
-async function findAuthenticatedActivityDraft(admin: any, venueId: string, userId: string, draftScope: string) {
+async function findAuthenticatedActivityDraft(admin: AdminClient, venueId: string, userId: string, draftScope: string) {
   const { data, error } = await admin.from('commerce_orders')
     .select('*')
     .eq('venue_id', venueId)
@@ -185,7 +211,7 @@ async function findAuthenticatedActivityDraft(admin: any, venueId: string, userI
   return data;
 }
 
-async function loadOrderLines(admin: any, orderId: string): Promise<DbRecord[]> {
+async function loadOrderLines(admin: AdminClient, orderId: string): Promise<DbRecord[]> {
   const { data, error } = await admin
     .from('commerce_order_lines')
     .select('*')
@@ -256,7 +282,7 @@ function projectReceiptLine(line: DbRecord) {
   };
 }
 
-async function cartResponse(admin: any, order: any, token?: string | null) {
+async function cartResponse(admin: AdminClient, order: any, token?: string | null) {
   const lines = await loadOrderLines(admin, order.id);
   let receipt = null;
   let receiptLines: any[] = [];
@@ -337,7 +363,7 @@ async function cartResponse(admin: any, order: any, token?: string | null) {
   };
 }
 
-async function venueContext(admin: any, venueId: string) {
+async function venueContext(admin: AdminClient, venueId: string) {
   const { data, error } = await admin
     .from('venues')
     .select('id, organization_id, name, slug, commerce_enabled')
@@ -348,7 +374,7 @@ async function venueContext(admin: any, venueId: string) {
   return data;
 }
 
-async function validateCartItems(admin: any, venueId: string, items: any[], userId?: string | null) {
+async function validateCartItems(admin: AdminClient, venueId: string, items: any[], userId?: string | null) {
   if (!Array.isArray(items) || items.length === 0 || items.length > MAX_CART_LINES) {
     throw new Error('Cart must contain 1-25 items');
   }
@@ -487,7 +513,7 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
   }));
 }
 
-async function resolveLines(admin: any, order: any, lines: any[], userId?: string | null, resolvedCustomerId?: string | null) {
+async function resolveLines(admin: AdminClient, order: any, lines: any[], userId?: string | null, resolvedCustomerId?: string | null) {
   const productIds = lines.map((line) => line.product_id).filter(Boolean);
   const { data: products, error } = await admin
     .from('access_products')
@@ -596,7 +622,7 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
   return resolved;
 }
 
-async function assertParticipationCapacityAvailable(admin: any, order: any, lines: any[]) {
+async function assertParticipationCapacityAvailable(admin: AdminClient, order: any, lines: any[]) {
   const participation = lines.find((line) => line.commerce_kind === 'participation');
   if (!participation?.activity_session_id || !participation?.session_date) return;
   const { data, error } = await admin.rpc('capacity_fill', {
@@ -612,7 +638,7 @@ async function assertParticipationCapacityAvailable(admin: any, order: any, line
   }
 }
 
-async function acquireParticipationHold(admin: any, order: any, line: any, userId: string | null, customerId: string | null) {
+async function acquireParticipationHold(admin: AdminClient, order: any, line: any, userId: string | null, customerId: string | null) {
   const { data, error } = await admin.rpc('acquire_capacity_hold', {
     p_venue_id: order.venue_id,
     p_scope_type: 'activity_session',
@@ -631,12 +657,12 @@ async function acquireParticipationHold(admin: any, order: any, line: any, userI
   return hold.hold_id;
 }
 
-async function releaseHold(admin: any, holdId?: string | null, reason = 'commerce_checkout_failed') {
+async function releaseHold(admin: AdminClient, holdId?: string | null, reason = 'commerce_checkout_failed') {
   if (!holdId) return;
   await admin.rpc('release_capacity_hold', { p_hold_id: holdId, p_reason: reason });
 }
 
-async function commitFreeParticipation(admin: any, order: any, line: any, resolvedLine: any, userId: string | null, customerId: string | null, holdId: string) {
+async function commitFreeParticipation(admin: AdminClient, order: any, line: any, resolvedLine: any, userId: string | null, customerId: string | null, holdId: string) {
   const { data, error } = await admin.rpc('commit_activity_registration_capacity', {
     p_venue_id: order.venue_id,
     p_activity_session_id: line.activity_session_id,
@@ -652,25 +678,38 @@ async function commitFreeParticipation(admin: any, order: any, line: any, resolv
     p_hold_id: holdId,
   }).maybeSingle();
   if (error) throw new Error(error.message);
-  if (!data?.ok || !data?.registration_id) throw new Error(data?.reason || 'capacity_full');
-  await admin.from('commerce_order_lines').update({ session_registration_id: data.registration_id }).eq('id', line.id);
-  await admin.from('access_entitlements').upsert({
+  const committed = (data || {}) as { ok?: boolean; registration_id?: string; reason?: string };
+  if (!committed.ok || !committed.registration_id) throw new Error(committed.reason || 'capacity_full');
+  await admin.from('commerce_order_lines').update({ session_registration_id: committed.registration_id }).eq('id', line.id);
+  const entitlement = {
     venue_id: order.venue_id,
     user_id: userId,
+    customer_id: customerId,
     entitlement_type: 'session_ticket',
     status: 'active',
     source_type: 'session_ticket',
-    source_id: data.registration_id,
+    source_id: committed.registration_id,
     activity_session_id: line.activity_session_id,
     session_date: line.session_date,
     includes_session_types: ['open_play'],
     metadata: { commerce_order_id: order.id, commerce_order_line_id: line.id },
-  }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
-  await admin.from('commerce_orders').update({ status: 'paid', paid_at: new Date().toISOString(), customer_id: customerId, user_id: userId }).eq('id', order.id);
-  return data.registration_id as string;
+  };
+  await admin.from('access_entitlements').upsert(entitlement, {
+    onConflict: userId
+      ? 'source_type,source_id,user_id,entitlement_type'
+      : 'source_type,source_id,customer_id,entitlement_type',
+  });
+  await admin.from('commerce_orders').update({
+    status: 'paid',
+    paid_at: new Date().toISOString(),
+    customer_id: customerId,
+    user_id: userId,
+    claim_expires_at: userId ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+  }).eq('id', order.id);
+  return committed.registration_id;
 }
 
-Deno.serve(async (req) => {
+const commerceHandler = async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
   const url = new URL(req.url);
   const path = url.pathname.split('/').filter(Boolean).pop() || '';
@@ -861,6 +900,208 @@ Deno.serve(async (req) => {
       return jsonResponse(await cartResponse(admin, order), 200, 0);
     }
 
+    if (req.method === 'POST' && path === 'claim') {
+      const body = await req.json();
+      const reference = String(body.token || body.reference || '').trim();
+      const displayName = String(body.display_name || body.displayName || '').trim().slice(0, 120);
+      if (!displayName) return errorResponse('Namn krävs', 400);
+      const order = await loadOrderByToken(admin, reference, userId, true);
+      if (!['paid', 'attention'].includes(order.status)) return errorResponse('Köpet är inte klart ännu', 409);
+      if (!order.customer_id) return errorResponse('Kund saknas', 409);
+      if (order.claim_expires_at && new Date(order.claim_expires_at).getTime() <= Date.now()) {
+        return errorResponse('Claim expired', 410);
+      }
+      const wasClaimed = Boolean(order.guest_claimed_at);
+      const { data: claimed, error: claimError } = await admin.rpc('confirm_commerce_guest_identity', {
+        p_order_id: order.id,
+        p_customer_id: order.customer_id,
+        p_display_name: displayName,
+      }).maybeSingle();
+      if (claimError || !claimed) throw new Error(claimError?.message || 'Claim failed');
+      if (!wasClaimed) {
+        await recordCommerceEvent(admin, {
+          eventName: 'claim_completed',
+          venueId: order.venue_id,
+          orderId: order.id,
+          activitySessionId: String((await loadOrderLines(admin, order.id)).find((line) => line.commerce_kind === 'participation')?.activity_session_id || '') || null,
+          durationMs: order.paid_at ? Date.now() - new Date(order.paid_at).getTime() : null,
+          metadata: {
+            within_7d: order.paid_at ? Date.now() - new Date(order.paid_at).getTime() <= 7 * 86400000 : false,
+            within_30d: order.paid_at ? Date.now() - new Date(order.paid_at).getTime() <= 30 * 86400000 : false,
+          },
+        });
+      }
+      const refreshed = await loadOrderByToken(admin, reference, userId, true);
+      return jsonResponse(await cartResponse(admin, refreshed), 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'claim-account') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const body = await req.json();
+      const reference = String(body.token || body.reference || '').trim();
+      const order = await loadOrderByToken(admin, reference, userId, true);
+      if (!['paid', 'attention'].includes(order.status)) return errorResponse('Köpet är inte klart ännu', 409);
+      if (!order.customer_id || !order.guest_email) return errorResponse('Kund saknas', 409);
+      if (order.claim_expires_at && new Date(order.claim_expires_at).getTime() <= Date.now()) return errorResponse('Claim expired', 410);
+      const { data: authResult, error: authResultError } = await admin.auth.admin.getUserById(userId);
+      if (authResultError) throw new Error(authResultError.message);
+      const authUser = authResult?.user;
+      if (!authUser?.email_confirmed_at) return errorResponse('Bekräfta din e-post innan köpet kopplas.', 409);
+      if (String(authUser.email || '').trim().toLowerCase() !== String(order.guest_email).trim().toLowerCase()) {
+        return errorResponse('Logga in med samma e-postadress som användes vid köpet.', 403);
+      }
+      const alreadyClaimed = order.claimed_user_id === userId;
+      const { data: claimed, error: claimError } = await admin.rpc('claim_commerce_activity_order', {
+        p_order_id: order.id,
+        p_customer_id: order.customer_id,
+        p_user_id: userId,
+      }).maybeSingle();
+      if (claimError || !claimed) throw new Error(claimError?.message || 'Account claim failed');
+      const customerId = await linkExistingCustomerToVerifiedAuth(admin, {
+        customerId: order.customer_id,
+        userId,
+        venueId: order.venue_id,
+        source: 'commerce_account_claim',
+      });
+      if (customerId !== order.customer_id) throw new Error('Customer identity mismatch after claim');
+      if (!alreadyClaimed) {
+        await recordCommerceEvent(admin, {
+          eventName: 'account_activated',
+          venueId: order.venue_id,
+          orderId: order.id,
+          activitySessionId: String((await loadOrderLines(admin, order.id)).find((line) => line.commerce_kind === 'participation')?.activity_session_id || '') || null,
+          durationMs: order.paid_at ? Date.now() - new Date(order.paid_at).getTime() : null,
+          metadata: {
+            within_7d: order.paid_at ? Date.now() - new Date(order.paid_at).getTime() <= 7 * 86400000 : false,
+            within_30d: order.paid_at ? Date.now() - new Date(order.paid_at).getTime() <= 30 * 86400000 : false,
+          },
+        });
+      }
+      const refreshed = await loadOrderByReference(admin, order.id, userId, true);
+      return jsonResponse(await cartResponse(admin, refreshed), 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'guest-checkin') {
+      const body = await req.json();
+      const reference = String(body.token || body.reference || '').trim();
+      const order = await loadOrderByToken(admin, reference, userId, true);
+      if (!['paid', 'attention'].includes(order.status) || !order.guest_claimed_at || !order.customer_id) {
+        return errorResponse('Biljetten är inte klar', 409);
+      }
+      const lines = await loadOrderLines(admin, order.id);
+      const participation = lines.find((line) => line.commerce_kind === 'participation');
+      if (!participation?.session_registration_id) return errorResponse('Biljetten saknas', 404);
+      const { data: activity, error: activityError } = await admin.from('activity_sessions')
+        .select('id, start_time, end_time')
+        .eq('id', participation.activity_session_id)
+        .eq('venue_id', order.venue_id)
+        .maybeSingle();
+      if (activityError || !activity) return errorResponse('Aktiviteten saknas', 404);
+      const interval = activitySessionOccurrenceInterval(participation.session_date, activity.start_time, activity.end_time);
+      const now = DateTime.now().setZone('Europe/Stockholm');
+      if (!interval || now < interval.start.minus({ minutes: 30 }) || now >= interval.end) {
+        return errorResponse('Check-in är inte öppen', 409);
+      }
+      const { data: registration } = await admin.from('session_registrations')
+        .select('id, status')
+        .eq('id', participation.session_registration_id)
+        .eq('customer_id', order.customer_id)
+        .maybeSingle();
+      if (!registration || !['confirmed', 'checked_in'].includes(registration.status)) return errorResponse('Biljetten är inte giltig', 409);
+      const { data: existingCheckin } = await admin.from('venue_checkins')
+        .select('*')
+        .eq('venue_id', order.venue_id)
+        .eq('entry_type', 'session_ticket')
+        .eq('entitlement_id', registration.id)
+        .is('checked_out_at', null)
+        .maybeSingle();
+      if (!existingCheckin) {
+        const { error: checkinError } = await admin.from('venue_checkins').insert({
+          venue_id: order.venue_id,
+          customer_id: order.customer_id,
+          user_id: order.user_id || null,
+          player_name: order.guest_name || 'Spelare',
+          entry_type: 'session_ticket',
+          entitlement_id: registration.id,
+          checked_in_by: null,
+          session_date: participation.session_date,
+        });
+        if (checkinError && checkinError.code !== '23505') throw new Error(checkinError.message);
+      }
+      await admin.from('session_registrations').update({ status: 'checked_in' }).eq('id', registration.id).neq('status', 'cancelled');
+      return jsonResponse({ checked_in: true, registration_id: registration.id }, existingCheckin ? 200 : 201, 0);
+    }
+
+    if (req.method === 'POST' && path === 'cancel') {
+      const body = await req.json();
+      const reference = String(body.token || body.reference || '').trim();
+      const order = await loadOrderByToken(admin, reference, userId, true);
+      if (order.status === 'cancelled') return jsonResponse(await cartResponse(admin, order), 200, 0);
+      if (!['paid', 'attention'].includes(order.status)) return errorResponse('Köpet kan inte avbokas', 409);
+      const lines = await loadOrderLines(admin, order.id);
+      const participation = lines.find((line) => line.commerce_kind === 'participation');
+      if (!participation?.activity_session_id || !participation.session_date) {
+        return errorResponse('Endast aktivitetsköp kan avbokas här', 409);
+      }
+      const { data: activity, error: activityError } = await admin.from('activity_sessions')
+        .select('id, start_time, end_time')
+        .eq('id', participation.activity_session_id)
+        .eq('venue_id', order.venue_id)
+        .maybeSingle();
+      if (activityError || !activity) return errorResponse('Aktiviteten saknas', 404);
+      const interval = activitySessionOccurrenceInterval(participation.session_date, activity.start_time, activity.end_time);
+      if (!interval || DateTime.now().setZone('Europe/Stockholm') >= interval.start) {
+        return errorResponse('Aktiviteten har redan startat', 409);
+      }
+
+      if (Number(order.total_inc_vat_minor || 0) === 0) {
+        if (participation.session_registration_id) {
+          await admin.from('session_registrations')
+            .update({ status: 'cancelled' })
+            .eq('id', participation.session_registration_id)
+            .in('status', ['confirmed', 'checked_in', 'no_show']);
+          await admin.from('access_entitlements')
+            .update({ status: 'revoked' })
+            .eq('source_type', 'session_ticket')
+            .eq('source_id', participation.session_registration_id)
+            .neq('status', 'revoked');
+        }
+        await admin.from('commerce_order_lines')
+          .update({ fulfillment_status: 'not_collected' })
+          .eq('commerce_order_id', order.id)
+          .eq('fulfillment_type', 'desk_pickup')
+          .eq('fulfillment_status', 'pending_pickup');
+        const { data: cancelled, error: cancelError } = await admin.from('commerce_orders')
+          .update({ status: 'cancelled', metadata: { ...(order.metadata || {}), cancelled_at: new Date().toISOString(), cancellation_source: 'customer' } })
+          .eq('id', order.id)
+          .in('status', ['paid', 'attention'])
+          .select('*')
+          .maybeSingle();
+        if (cancelError) throw new Error(cancelError.message);
+        return jsonResponse(await cartResponse(admin, cancelled || { ...order, status: 'cancelled' }), 200, 0);
+      }
+
+      if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
+      const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+      if (!stripeKey) throw new Error('Stripe not configured');
+      const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
+      const { data: pending, error: pendingError } = await admin.from('commerce_orders')
+        .update({
+          metadata: {
+            ...(order.metadata || {}),
+            cancellation_requested_at: order.metadata?.cancellation_requested_at || new Date().toISOString(),
+            cancellation_source: 'customer',
+            stripe_refund_id: refund.id,
+          },
+        })
+        .eq('id', order.id)
+        .in('status', ['paid', 'attention'])
+        .select('*')
+        .maybeSingle();
+      if (pendingError) throw new Error(pendingError.message);
+      return jsonResponse({ ...(await cartResponse(admin, pending || order)), cancellation_pending: true }, 202, 0);
+    }
+
     if (req.method === 'POST' && path === 'resolve') {
       const body = await req.json();
       const order = await loadOrderByReference(admin, String(body.token || ''), userId);
@@ -890,7 +1131,6 @@ Deno.serve(async (req) => {
       }
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.filter((line) => line.commerce_kind === 'participation');
-      if (participation.length > 0 && !userId) return errorResponse('Logga in för att boka plats.', 401);
       if (participation.length > 1) return errorResponse('Release 1 supports one participation per cart', 409);
 
       let customerId = order.customer_id || null;
@@ -898,11 +1138,30 @@ Deno.serve(async (req) => {
         if (order.user_id && order.user_id !== userId) return errorResponse('Forbidden', 403);
         customerId = await resolveOrCreateCustomerIdForUser(admin, userId, order.venue_id, 'commerce_checkout');
         await admin.from('commerce_orders').update({ user_id: userId, customer_id: customerId }).eq('id', order.id).eq('status', 'draft');
+      } else if (participation.length > 0) {
+        if (!checkoutGuestEmail) return errorResponse('E-post krävs för kvitto och biljett.', 400);
+        customerId = await resolveOrCreateGuestCustomerByEmail(admin, {
+          venueId: order.venue_id,
+          email: checkoutGuestEmail,
+          displayName: checkoutGuestName,
+          source: 'commerce_activity_checkout',
+        });
+        const { data: existingRegistration, error: existingRegistrationError } = await admin
+          .from('session_registrations')
+          .select('id')
+          .eq('activity_session_id', participation[0].activity_session_id)
+          .eq('session_date', participation[0].session_date)
+          .eq('customer_id', customerId)
+          .in('status', ['confirmed', 'checked_in', 'no_show'])
+          .maybeSingle();
+        if (existingRegistrationError) throw new Error(existingRegistrationError.message);
+        if (existingRegistration) return errorResponse('Du har redan en plats till den här aktiviteten.', 409);
+        await admin.from('commerce_orders').update({ customer_id: customerId }).eq('id', order.id).eq('status', 'draft');
       }
-      const resolved = await resolveLines(admin, order, lines, userId);
+      const resolved = await resolveLines(admin, order, lines, userId, customerId);
       let holdId: string | null = null;
       if (participation[0]) {
-        holdId = await acquireParticipationHold(admin, order, participation[0], userId!, customerId);
+        holdId = await acquireParticipationHold(admin, order, participation[0], userId || null, customerId);
         const resolvedParticipation = resolved.find((line) => line.id === participation[0].id);
         if (resolvedParticipation) resolvedParticipation.capacity_hold_id = holdId;
       }
@@ -920,9 +1179,26 @@ Deno.serve(async (req) => {
 
       if (Number(frozenOrder.total_inc_vat_minor || 0) === 0) {
         try {
-          if (!participation[0] || !holdId || !userId) throw new Error('Free order has no participation');
+          if (!participation[0] || !holdId || (!userId && !customerId)) throw new Error('Free order has no participation owner');
           const resolvedParticipation = resolved.find((line) => line.id === participation[0].id);
-          const registrationId = await commitFreeParticipation(admin, order, participation[0], resolvedParticipation, userId, customerId, holdId);
+          const registrationId = await commitFreeParticipation(admin, order, participation[0], resolvedParticipation, userId || null, customerId, holdId);
+          await recordCommerceEvent(admin, {
+            eventName: 'checkout_started',
+            venueId: order.venue_id,
+            orderId: order.id,
+            activitySessionId: String(participation[0].activity_session_id || '') || null,
+            journeyId: body.journey_id,
+          });
+          if (!userId) {
+            await recordCommerceEvent(admin, {
+              eventName: 'guest_purchase_succeeded',
+              venueId: order.venue_id,
+              orderId: order.id,
+              activitySessionId: String(participation[0].activity_session_id || '') || null,
+              journeyId: body.journey_id,
+              metadata: { source: 'free_checkout' },
+            });
+          }
           return jsonResponse({ free: true, order_id: order.id, registration_id: registrationId, redirect: safeLocalPath(body.success_path, '/my') });
         } catch (error) {
           await admin.from('commerce_orders').update({ status: 'attention' }).eq('id', order.id);
@@ -1098,4 +1374,8 @@ Deno.serve(async (req) => {
     if (message.includes('Platsen hann tas')) return errorResponse(message, 409);
     return errorResponse(message, 400);
   }
-});
+};
+
+const localFunctionPort = Number(Deno.env.get('FUNCTION_PORT') || 0);
+if (localFunctionPort > 0) Deno.serve({ port: localFunctionPort }, commerceHandler);
+else Deno.serve(commerceHandler);

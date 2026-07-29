@@ -704,10 +704,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (isRegistered || !session || !occurrenceDate) return;
-    if (!user?.id) {
-      navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
-      return;
-    }
     if (!backendPricing || pricingPending) {
       toast.info("Hämtar ditt pris...");
       return;
@@ -737,6 +733,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           : await createCommerceCart(cartInput, { auth: "omit" });
         if (!cart.cart_token) throw new Error("Varukorgen kunde inte skapas");
         navigate(`/cart?token=${encodeURIComponent(cart.cart_token)}`);
+        return;
+      }
+      if (!user?.id) {
+        navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`);
         return;
       }
       const result = await withPurchaseSessionRecovery(() => apiPost("api-bookings", "create-checkout", {
