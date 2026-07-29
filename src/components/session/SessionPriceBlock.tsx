@@ -11,6 +11,7 @@ type SessionPriceBlockProps = {
   variant?: "row" | "drawer";
   contextLine?: ReactNode;
   muted?: boolean;
+  neutral?: boolean;
 };
 
 function includedPlanName(label?: string | null) {
@@ -18,7 +19,7 @@ function includedPlanName(label?: string | null) {
   return label.replace(/^Ingår\s+i\s+/i, "").replace(/^Ingår\s+·\s*/i, "").trim() || label;
 }
 
-export function SessionPriceBlock({ presentation, variant = "row", contextLine, muted = false }: SessionPriceBlockProps) {
+export function SessionPriceBlock({ presentation, variant = "row", contextLine, muted = false, neutral = false }: SessionPriceBlockProps) {
   const pricing = presentation.pricing;
 
   if (!pricing) return null;
@@ -43,6 +44,21 @@ export function SessionPriceBlock({ presentation, variant = "row", contextLine, 
 
   if (pricing.kind === "included") {
     const label = pricing.label ?? presentation.entitlementLabel ?? "Ingår";
+    if (neutral) {
+      return (
+        <div className="flex items-center justify-between rounded-2xl border border-black/10 bg-white px-5 py-4 text-neutral-950">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-neutral-950 text-white">
+              <Check className="h-5 w-5" />
+            </span>
+            <span className="text-[18px] font-bold">{label}</span>
+          </div>
+          {pricing.amountSek !== null && pricing.amountSek !== undefined ? (
+            <span className="text-[24px] font-black">{pricing.amountSek} kr</span>
+          ) : null}
+        </div>
+      );
+    }
     if (/^Ingår i /i.test(label)) {
       return <MemberStrip planName={includedPlanName(label)} amountSek={pricing.amountSek ?? 0} />;
     }

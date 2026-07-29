@@ -1015,19 +1015,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={!purchaseMode} />
 
           {isRegistered ? (
-            <div
-              className="rounded-[22px] bg-emerald-50 px-4 py-3"
-              style={{ border: "1px solid rgba(16,185,129,0.22)" }}
-            >
+            <div className="rounded-[22px] border border-black/10 bg-white px-4 py-3">
               <div className="flex items-start gap-3">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white text-emerald-700">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-slate-950 text-white">
                   {isCheckedIn ? <UserCheck className="h-5 w-5" /> : <Ticket className="h-5 w-5" />}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-[15px] font-black text-emerald-950" style={{ fontFamily: FONT_HEADING }}>
+                  <p className="text-[15px] font-black text-slate-950" style={{ fontFamily: FONT_HEADING }}>
                     {isCheckedIn ? "Du är incheckad" : "Din biljett är klar"}
                   </p>
-                  <p className="mt-1 text-[12px] font-semibold text-emerald-800/75">
+                  <p className="mt-1 text-[12px] font-semibold text-slate-500">
                     {isCheckedIn
                       ? "Du är redo att spela."
                       : canCheckInNow
@@ -1048,23 +1045,23 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           ) : null}
 
           {isRegistered && participationItems.length > 0 ? (
-            <div className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-3">
+            <div className="rounded-[22px] border border-black/10 bg-white px-4 py-3">
               {participationItems.map((item) => (
-                <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-[13px] font-bold text-emerald-950">
+                <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-[13px] font-bold text-slate-950">
                   <span>{item.product_name} {item.quantity > 1 ? `· ${item.quantity} st` : ""} ✓</span>
-                  <span className="text-[11px] text-emerald-800/70">{item.fulfillment_status === "collected" ? "Uthämtad" : "Hämtas vid desken"}</span>
+                  <span className="text-[11px] text-slate-500">{item.fulfillment_status === "collected" ? "Uthämtad" : "Hämtas ut i desken"}</span>
                 </div>
               ))}
             </div>
           ) : null}
 
           {!isRegistered && !pricingPending && (earlyBirdLine || capacityScarcityLine) ? (
-            <p className="rounded-2xl bg-[#fff7ed] px-4 py-3 text-center text-[13px] font-black text-[#9a3412]" style={{ fontFamily: FONT_HEADING }}>
+            <p className="px-2 py-1 text-center text-[13px] font-black text-slate-700" style={{ fontFamily: FONT_HEADING }}>
               {earlyBirdLine || capacityScarcityLine}
             </p>
           ) : null}
 
-          <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={priceContextLine} />
+          <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={priceContextLine} neutral={commercePilotEnabled} />
 
           {!isRegistered && commercePilotEnabled && commerceCatalog.isSuccess && commerceExtras.length > 0 ? (
             <section data-testid="commerce-addons" className="rounded-[22px] bg-[#f8fafc] px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
@@ -1078,7 +1075,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <h4 className="break-words font-black">{product.name}</h4>
-                          <p className="mt-0.5 text-[11px] font-semibold text-neutral-500">Hämtas vid desken</p>
+                          <p className="mt-0.5 text-[11px] font-semibold text-neutral-500">Hämtas ut i desken</p>
                         </div>
                         <p className="shrink-0 font-black">{formatCommerceMoney(product.base_price_sek * 100)}</p>
                       </div>
@@ -1102,11 +1099,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               <div className="flex items-end justify-between gap-4">
                 <div className="min-w-0">
                   <p className="text-[12px] font-semibold text-neutral-500">Totalt · {commerceItemCount} {commerceItemCount === 1 ? "artikel" : "artiklar"}</p>
-                  {commerceSavingsMinor > 0 ? <p className="mt-1 text-[12px] font-bold text-emerald-700">Du sparar {formatCommerceMoney(commerceSavingsMinor)}</p> : null}
+                  {commerceSavingsMinor > 0 ? <p className="mt-1 text-[12px] font-bold text-slate-700">Du sparar {formatCommerceMoney(commerceSavingsMinor)}</p> : null}
                 </div>
                 <p className="shrink-0 text-[26px] font-black tracking-tight">{formatCommerceMoney(commerceTotalMinor)}</p>
               </div>
-              {pricingIsIncluded ? <p className="mt-2 text-[12px] font-bold text-emerald-700">Aktiviteten {includedLabel?.toLowerCase() || "ingår i medlemskap"}</p> : null}
+              {pricingIsIncluded ? <p className="mt-2 text-[12px] font-bold text-slate-700">Aktiviteten {includedLabel?.toLowerCase() || "ingår i medlemskap"}</p> : null}
             </section>
           ) : null}
 

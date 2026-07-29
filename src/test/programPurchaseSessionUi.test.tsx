@@ -32,9 +32,7 @@ vi.mock("@/lib/commerce", () => ({
   ), 0),
   commerceRacketOrderSummaryInstruction: (quantity: number) => quantity <= 0
     ? null
-    : quantity === 1
-      ? "Hyrrack hämtas ut i desken. Uppge ditt namn så hjälper vi dig."
-      : "Dina hyrda rack hämtas ut i desken. Uppge ditt namn så hjälper vi dig.",
+    : "Uppge ditt namn i desken så hjälper vi dig.",
   fetchCommerceOrder: mocks.fetchOrder,
   formatCommerceMoney: (minor: number) => `${minor / 100} kr`,
   isCommerceOrderIdReference: () => false,
@@ -142,6 +140,8 @@ describe("program purchase request UI guard", () => {
 
     expect(await screen.findByText("Ingår i Founder")).toBeInTheDocument();
     expect(screen.getByText("Du sparar 165 kr")).toBeInTheDocument();
+    expect(screen.getByText("Ingår i Founder")).not.toHaveClass("text-emerald-700");
+    expect(screen.getByText("Du sparar 165 kr")).toHaveClass("text-slate-700");
     await waitFor(() => expect(screen.getByRole("button", { name: "Betala 0 kr" })).toBeEnabled());
     expect(screen.getByText(/Varav moms 0 kr/)).toBeInTheDocument();
     expect(screen.getByText("Varav moms")).toBeInTheDocument();
@@ -159,13 +159,32 @@ describe("program purchase request UI guard", () => {
     expect(await screen.findByRole("heading", { name: "Ordersammanfattning" })).toBeInTheDocument();
     expect(screen.getByText("Platsen bekräftas direkt efter betalning.")).toBeInTheDocument();
     expect(screen.queryByText(/Uppge ditt namn/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/En betalning, ett kvitto/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Betala 59.4 kr" })).toBeEnabled());
   });
 
+  it("keeps guest contact details separate from pickup guidance", async () => {
+    mocks.auth.user = null;
+    const initialOrder = await mocks.fetchOrder();
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: { id: "order-1", version: 1, currency: "SEK" }, lines: initialOrder.lines, checkout_ready: true };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+
+    expect(await screen.findByRole("heading", { name: "Dina uppgifter" })).toBeInTheDocument();
+    expect(screen.getByText("Vi skickar kvitto och orderinformation till din e-postadress.")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Namn")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("E-post")).toBeInTheDocument();
+    expect(screen.queryByText("Kvitto och uthämtning")).not.toBeInTheDocument();
+    expect(screen.queryByText(/En betalning, ett kvitto/)).not.toBeInTheDocument();
+  });
+
   it.each([
-    [1, "Hyrrack hämtas ut i desken. Uppge ditt namn så hjälper vi dig.", "Betala 109.4 kr"],
-    [2, "Dina hyrda rack hämtas ut i desken. Uppge ditt namn så hjälper vi dig.", "Betala 159.4 kr"],
-  ])("shows the contextual pickup instruction for Hyrrack quantity %s", async (quantity, instruction, paymentLabel) => {
+    [1, "Betala 109.4 kr"],
+    [2, "Betala 159.4 kr"],
+  ])("shows the contextual pickup instruction for Hyrrack quantity %s", async (quantity, paymentLabel) => {
     const initialOrder = await mocks.fetchOrder();
     const lines = [...initialOrder.lines, {
       id: "line-racket",
@@ -189,8 +208,9 @@ describe("program purchase request UI guard", () => {
 
     renderCart();
 
-    expect(await screen.findByText(instruction)).toBeInTheDocument();
-    expect(screen.getByText(`Antal ${quantity} · Hämtas vid desken`)).toBeInTheDocument();
+    expect(await screen.findByText("Uppge ditt namn i desken så hjälper vi dig.")).toBeInTheDocument();
+    expect(screen.getByText(`Antal ${quantity} · Hämtas ut i desken`)).toBeInTheDocument();
+    expect(screen.getByText("Uppge ditt namn i desken så hjälper vi dig.").closest("div")?.parentElement).toHaveTextContent("Hyrrack");
     await waitFor(() => expect(screen.getByRole("button", { name: paymentLabel })).toBeEnabled());
   });
 

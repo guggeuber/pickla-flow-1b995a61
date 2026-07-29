@@ -133,25 +133,35 @@ describe("Commerce R1 confirmed purchase state", () => {
   });
 
   it.each([
-    [1, "Du har hyrt 1 rack.", "Hämta ut det i desken genom att uppge ditt namn."],
-    [2, "Du har hyrt 2 rack.", "Hämta ut dem i desken genom att uppge ditt namn."],
-  ])("shows confirmed pickup copy for Hyrrack quantity %s", async (quantity, summary, pickup) => {
+    [1, "Du har hyrt 1 rack. Hämta ut det i desken genom att uppge ditt namn."],
+    [2, "Du har hyrt 2 rack. Hämta ut dem i desken genom att uppge ditt namn."],
+  ])("shows confirmed pickup copy for Hyrrack quantity %s", async (quantity, pickupCopy) => {
     const lines = [participationLine, racketLine(Number(quantity))];
     mocks.fetchOrder.mockResolvedValue(orderResponse({}, lines));
     renderOrder();
 
     expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
-    expect(screen.getByText(summary)).toBeInTheDocument();
-    expect(screen.getByText(pickup)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hyrrack" })).toBeInTheDocument();
+    expect(screen.getByText(pickupCopy)).toBeInTheDocument();
   });
 
   it("does not instruct collection after a full refund", async () => {
     const lines = [participationLine, racketLine(1, "not_collected")];
-    mocks.fetchOrder.mockResolvedValue(orderResponse({ status: "cancelled" }, lines));
+    mocks.fetchOrder.mockResolvedValue(orderResponse({}, lines));
     renderOrder();
 
-    expect(await screen.findByRole("heading", { name: "Köpet är avbokat" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
     expect(screen.getByText("Ej längre tillgänglig för uthämtning")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Hyrrack" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Hämta ut det i desken/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the confirmed ticket neutral and free of success colours", async () => {
+    mocks.fetchOrder.mockResolvedValue(orderResponse({ requires_guest_claim: false }));
+    renderOrder();
+
+    const ticketHeading = await screen.findByText("Din biljett");
+    expect(ticketHeading.closest("section")).toHaveClass("bg-white", "border-black/10");
+    expect(ticketHeading.closest("section")).not.toHaveClass("bg-success", "border-success", "bg-emerald-50");
   });
 });
