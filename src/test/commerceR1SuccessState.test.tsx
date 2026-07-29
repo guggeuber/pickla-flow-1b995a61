@@ -166,4 +166,39 @@ describe("Commerce R1 confirmed purchase state", () => {
     expect(screen.getByTestId("commerce-success-check").parentElement).not.toHaveClass("rounded-full", "bg-slate-100");
     expect(screen.getByTestId("commerce-ticket-icon").parentElement).not.toHaveClass("bg-slate-950", "text-white");
   });
+
+  it("moves member management to the canonical registration drawer route", async () => {
+    mocks.auth.user = { id: "member-1" };
+    mocks.fetchOrder.mockResolvedValue(orderResponse({
+      requires_guest_claim: false,
+      account_claimed: true,
+    }));
+    renderOrder();
+
+    const managementLink = await screen.findByRole("link", { name: "Visa bokning" });
+    expect(managementLink).toHaveAttribute("href", "/my?registration=registration-1&v=solna");
+    expect(screen.getByRole("link", { name: "Öppna aktivitet och chatt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Avboka" })).not.toBeInTheDocument();
+  });
+
+  it("keeps account-later guests on the ticket activation journey", async () => {
+    mocks.fetchOrder.mockResolvedValue(orderResponse({
+      requires_guest_claim: false,
+      account_claimed: false,
+    }));
+    renderOrder();
+
+    expect(await screen.findByRole("button", { name: "Spara biljett, kvitto och historik" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Visa bokning" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Öppna aktivitet och chatt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Till Min sida" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose direct cancellation on immediate success", async () => {
+    mocks.fetchOrder.mockResolvedValue(orderResponse({ requires_guest_claim: false }));
+    renderOrder();
+
+    expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Avboka" })).not.toBeInTheDocument();
+  });
 });

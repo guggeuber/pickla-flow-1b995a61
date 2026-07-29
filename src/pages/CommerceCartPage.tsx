@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, ShoppingBag, Ticket } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -211,6 +211,7 @@ export default function CommerceCartPage() {
             const isRacketLine = commerceRacketPickupQuantity([line]) > 0;
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
             const lineName = isActivityParticipationLine ? "Personlig plats" : line.product_name;
+            const LineIcon = line.commerce_kind === "participation" ? Ticket : ShoppingBag;
             const lineMetadata = isRacketLine && racketInstruction
               ? `Antal ${line.quantity} · ${racketInstruction}`
               : line.fulfillment_type === "desk_pickup"
@@ -220,10 +221,13 @@ export default function CommerceCartPage() {
                   : "Personlig plats";
             return (
               <div key={line.id} className="flex items-start justify-between gap-4 border-b border-black/10 py-5 last:border-b-0">
-                <div className="min-w-0">
-                  <p className="font-bold">{lineName}</p>
-                  {lineMetadata ? <p className="mt-1 text-xs leading-relaxed text-slate-600">{lineMetadata}</p> : null}
-                  <p className="mt-1 text-[11px] font-semibold text-slate-400">Varav moms {formatCommerceMoney(lineVatMinor(line))}</p>
+                <div className="flex min-w-0 items-start gap-3">
+                  <LineIcon data-testid={line.commerce_kind === "participation" ? "commerce-line-ticket-icon" : "commerce-line-product-icon"} className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="min-w-0">
+                    <p className="font-bold">{lineName}</p>
+                    {lineMetadata ? <p className="mt-1 text-xs leading-relaxed text-slate-600">{lineMetadata}</p> : null}
+                    <p className="mt-1 text-[11px] font-semibold text-slate-400">Varav moms {formatCommerceMoney(lineVatMinor(line))}</p>
+                  </div>
                 </div>
                 <div className="shrink-0 text-right">
                   <p className="font-black">{includedLineLabel(line) || formatCommerceMoney(lineTotalMinor(line))}</p>

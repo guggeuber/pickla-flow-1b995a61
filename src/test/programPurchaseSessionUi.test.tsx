@@ -187,6 +187,9 @@ describe("program purchase request UI guard", () => {
     expect(await screen.findByRole("heading", { name: "Open Play" })).toBeInTheDocument();
     expect(screen.getAllByText("Open Play")).toHaveLength(1);
     expect(screen.getByText("Personlig plats")).toBeInTheDocument();
+    const ticketIcon = screen.getByTestId("commerce-line-ticket-icon");
+    expect(ticketIcon).toHaveClass("text-slate-400");
+    expect(ticketIcon.parentElement).not.toHaveClass("bg-slate-100", "rounded-xl");
   });
 
   it("keeps guest contact details separate from pickup guidance", async () => {
@@ -237,6 +240,9 @@ describe("program purchase request UI guard", () => {
     const pickupCopy = `Antal ${quantity} · Hämtas ut i desken genom att uppge ditt namn.`;
     expect(await screen.findByText(pickupCopy)).toBeInTheDocument();
     expect(screen.getByText(pickupCopy).parentElement).toHaveTextContent("Hyrrack");
+    const productIcon = screen.getByTestId("commerce-line-product-icon");
+    expect(productIcon).toHaveClass("text-slate-400");
+    expect(productIcon.parentElement).not.toHaveClass("bg-slate-100", "rounded-xl");
     expect(screen.queryByText("Uppge ditt namn i desken så hjälper vi dig.")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: paymentLabel })).toBeEnabled());
   });

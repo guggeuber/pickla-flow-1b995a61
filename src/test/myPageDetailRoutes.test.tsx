@@ -120,6 +120,7 @@ describe("MyPage detail routes", () => {
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("Hotfix Open Play")).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: "Gå till chatt" })).toBeInTheDocument();
+    expect(within(drawer).getByRole("button", { name: "Avboka" })).toBeInTheDocument();
   });
 
   it("renders a valid booking detail drawer from /my?booking=<valid-ref>", async () => {

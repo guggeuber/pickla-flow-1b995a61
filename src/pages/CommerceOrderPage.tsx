@@ -9,7 +9,6 @@ import { activityCheckInAvailable } from "@/lib/activityTiming";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import {
   checkInCommerceGuest,
-  cancelCommerceActivityOrder,
   claimCommerceOrderAccount,
   commerceRacketPickupQuantity,
   commerceRacketSuccessInstruction,
@@ -48,14 +47,6 @@ export default function CommerceOrderPage() {
     onSuccess: async () => { toast.success("Du är incheckad"); await query.refetch(); },
     onError: (error: Error) => toast.error(error.message || "Kunde inte checka in"),
   });
-  const cancelOrder = useMutation({
-    mutationFn: () => cancelCommerceActivityOrder(token, user ? {} : { auth: "omit" }),
-    onSuccess: async (result) => {
-      toast.success(result.cancellation_pending ? "Återbetalningen behandlas" : "Aktiviteten är avbokad");
-      await query.refetch();
-    },
-    onError: (error: Error) => toast.error(error.message || "Kunde inte avboka"),
-  });
   const activity = query.data?.activity_access;
   const checkInAvailable = useMemo(() => activity ? activityCheckInAvailable({
     sessionDate: activity.session_date,
@@ -78,6 +69,13 @@ export default function CommerceOrderPage() {
   const checkedIn = activity?.registration_status === "checked_in";
   const cancellationPending = Boolean(order.cancellation_pending);
   const requiresGuestClaim = order.requires_guest_claim === true;
+  const managementRegistrationId = activity?.registration_id
+    || lines.find((line) => line.commerce_kind === "participation")?.session_registration_id
+    || null;
+  const managementPath = managementRegistrationId
+    ? `/my?registration=${encodeURIComponent(managementRegistrationId)}${activity?.venue_slug ? `&v=${encodeURIComponent(activity.venue_slug)}` : ""}`
+    : null;
+  const canManageBooking = Boolean(user && order.account_claimed && managementPath);
   const participantConfirmed = !hasParticipation || ["confirmed", "checked_in", "no_show"].includes(String(activity?.registration_status || ""));
   const purchaseConfirmed = order.status === "paid" && participantConfirmed;
   const waiting = order.status === "checkout_pending";
@@ -138,13 +136,13 @@ export default function CommerceOrderPage() {
             <div className="flex items-start gap-3"><Ticket data-testid="commerce-ticket-icon" className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" /><div><p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din biljett</p><h2 className="mt-0.5 text-xl font-black">{activity?.name}</h2></div></div>
             <p className="mt-3 text-sm font-semibold">{activityDate} · {String(activity?.start_time || "").slice(0, 5)}–{String(activity?.end_time || "").slice(0, 5)}</p>
             <button type="button" onClick={() => checkIn.mutate()} disabled={checkedIn || !checkInAvailable || checkIn.isPending || isCancelled} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{checkIn.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}{checkedIn ? "Incheckad" : "Checka in"}</button>
+            {canManageBooking ? <Link to={managementPath!} className="mt-3 flex h-11 items-center justify-center rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950">Visa bokning</Link> : null}
+            {user && order.account_claimed && activity?.venue_slug ? <Link to={`/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`} className="mt-2 flex h-10 items-center justify-center text-sm font-bold text-slate-600 underline decoration-black/20 underline-offset-4">Öppna aktivitet och chatt</Link> : null}
             {!order.account_claimed ? user ? (
               <button type="button" onClick={() => claimAccount.mutate()} disabled={claimAccount.isPending} className="mt-3 h-11 w-full rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950 disabled:opacity-40">Koppla köpet till mitt konto</button>
             ) : (
               <button type="button" onClick={startAuth} className="mt-3 h-11 w-full rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950">Spara biljett, kvitto och historik</button>
             ) : null}
-            {order.account_claimed && activity?.venue_slug ? <Link to={`/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`} className="mt-3 flex h-11 items-center justify-center rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950">Öppna aktivitet och chatt</Link> : null}
-            {!checkedIn && !isCancelled ? <button type="button" onClick={() => { if (window.confirm("Avboka platsen och återbetala köpet?")) cancelOrder.mutate(); }} disabled={cancelOrder.isPending || cancellationPending} className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold text-slate-950/70 disabled:opacity-40">{cancelOrder.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}{cancellationPending ? "Återbetalning behandlas" : "Avboka"}</button> : null}
           </section>
         ) : null}
         <section className="divide-y divide-black/10 border-y border-black/10">
@@ -154,7 +152,7 @@ export default function CommerceOrderPage() {
           })}
         </section>
         <section className="py-5"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receiptNumber ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {receiptNumber}</p> : null}</section>
-        <div className="mt-6 grid gap-2"><Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link><Link to="/shop" className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div>
+        <div className="mt-6 grid gap-2">{user && !canManageBooking ? <Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link> : null}<Link to="/shop" className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div>
       </main>
     </div>
   );
