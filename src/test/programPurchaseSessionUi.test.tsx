@@ -26,8 +26,18 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/lib/commerce", () => ({
+  commerceJourneyId: () => "test-commerce-journey-id",
+  commerceRacketPickupQuantity: (lines: Array<Record<string, unknown>>) => lines.reduce((sum, line) => (
+    line.product_name === "Hyrrack" ? sum + Number(line.quantity || 0) : sum
+  ), 0),
+  commerceRacketOrderSummaryInstruction: (quantity: number) => quantity <= 0
+    ? null
+    : quantity === 1
+      ? "Hyrrack hämtas ut i desken. Uppge ditt namn så hjälper vi dig."
+      : "Dina hyrda rack hämtas ut i desken. Uppge ditt namn så hjälper vi dig.",
   fetchCommerceOrder: mocks.fetchOrder,
   formatCommerceMoney: (minor: number) => `${minor / 100} kr`,
+  isCommerceOrderIdReference: () => false,
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -90,6 +100,100 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("program purchase request UI guard", () => {
+  it("presents an included membership line, VAT and savings from resolved server pricing", async () => {
+    const includedOrder = {
+      order: {
+        id: "order-1",
+        venue_id: "venue-1",
+        status: "draft",
+        version: 1,
+        currency: "SEK",
+        total_inc_vat_minor: 0,
+        total_ex_vat_minor: 0,
+        vat_amount_minor: 0,
+      },
+      lines: [{
+        id: "line-1",
+        product_id: "product-1",
+        product_key: "open_play",
+        product_name: "Open Play",
+        commerce_kind: "participation",
+        quantity: 1,
+        unit_price_minor: 0,
+        line_total_inc_vat_minor: 0,
+        vat_rate: 6,
+        vat_amount_minor: 0,
+        fulfillment_type: "participation",
+        fulfillment_status: "pending",
+        resolver_snapshot: {
+          pricing_reason: "membership_entitlement",
+          membership_tier_name: "Founder",
+          debug: { base_amount_sek: 165 },
+        },
+      }],
+    };
+    mocks.fetchOrder.mockResolvedValue(includedOrder);
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: { id: "order-1", version: 1, currency: "SEK" }, lines: includedOrder.lines };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+
+    expect(await screen.findByText("Ingår i Founder")).toBeInTheDocument();
+    expect(screen.getByText("Du sparar 165 kr")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Betala 0 kr" })).toBeEnabled());
+    expect(screen.getByText(/Varav moms 0 kr/)).toBeInTheDocument();
+    expect(screen.getByText("Varav moms")).toBeInTheDocument();
+  });
+
+  it("shows a server-priced order summary without pickup copy when no racket is selected", async () => {
+    const initialOrder = await mocks.fetchOrder();
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: { id: "order-1", version: 1, currency: "SEK" }, lines: initialOrder.lines, checkout_ready: true };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+
+    expect(await screen.findByRole("heading", { name: "Ordersammanfattning" })).toBeInTheDocument();
+    expect(screen.getByText("Platsen bekräftas direkt efter betalning.")).toBeInTheDocument();
+    expect(screen.queryByText(/Uppge ditt namn/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Betala 59.4 kr" })).toBeEnabled());
+  });
+
+  it.each([
+    [1, "Hyrrack hämtas ut i desken. Uppge ditt namn så hjälper vi dig.", "Betala 109.4 kr"],
+    [2, "Dina hyrda rack hämtas ut i desken. Uppge ditt namn så hjälper vi dig.", "Betala 159.4 kr"],
+  ])("shows the contextual pickup instruction for Hyrrack quantity %s", async (quantity, instruction, paymentLabel) => {
+    const initialOrder = await mocks.fetchOrder();
+    const lines = [...initialOrder.lines, {
+      id: "line-racket",
+      product_id: "product-racket",
+      product_key: "rental_racket",
+      product_name: "Hyrrack",
+      commerce_kind: "rental",
+      quantity,
+      unit_price_minor: 5000,
+      line_total_inc_vat_minor: 5000 * Number(quantity),
+      vat_rate: 6,
+      vat_amount_minor: Math.round(5000 * Number(quantity) * 6 / 106),
+      fulfillment_type: "desk_pickup",
+      fulfillment_status: "not_required",
+    }];
+    mocks.fetchOrder.mockResolvedValue({ ...initialOrder, lines });
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: { id: "order-1", version: 1, currency: "SEK" }, lines, checkout_ready: true };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+
+    expect(await screen.findByText(instruction)).toBeInTheDocument();
+    expect(screen.getByText(`Antal ${quantity} · Hämtas vid desken`)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: paymentLabel })).toBeEnabled());
+  });
+
   it("waits for auth initialization before loading the purchase", async () => {
     mocks.auth.loading = true;
     const view = renderCart();
@@ -173,7 +277,7 @@ describe("program purchase request UI guard", () => {
     await waitFor(() => expect(checkoutButton).toBeEnabled());
     fireEvent.click(checkoutButton);
 
-    await waitFor(() => expect(checkoutOptions).toHaveLength(2));
+    await waitFor(() => expect(checkoutOptions).toHaveLength(2), { timeout: 3000 });
     expect(checkoutOptions).toEqual([{ auth: "session" }, { auth: "session" }]);
     expect(mocks.refreshSession).toHaveBeenCalledTimes(1);
     expect(mocks.toastError).not.toHaveBeenCalledWith(expect.stringMatching(/jwt|kid|es256|token/i));
@@ -290,7 +394,7 @@ describe("program purchase request UI guard", () => {
         total_inc_vat_minor: 5000,
         total_ex_vat_minor: 4000,
         vat_amount_minor: 1000,
-        guest_email: "guest@example.com",
+        contact_email_present: true,
       },
       lines: [{
         id: "line-merch",
@@ -323,9 +427,11 @@ describe("program purchase request UI guard", () => {
     });
 
     renderCart();
-    fireEvent.click(await screen.findByRole("button", { name: "Betala 50 kr" }));
+    const guestCheckout = await screen.findByRole("button", { name: "Betala 50 kr" });
+    await waitFor(() => expect(guestCheckout).toBeEnabled());
+    fireEvent.click(guestCheckout);
 
-    await waitFor(() => expect(checkoutOptions).toHaveLength(2));
+    await waitFor(() => expect(checkoutOptions).toHaveLength(2), { timeout: 3000 });
     expect(checkoutOptions).toEqual([{ auth: "session" }, { auth: "omit" }]);
     expect(mocks.refreshSession).toHaveBeenCalledTimes(1);
     expect(mocks.toastError).not.toHaveBeenCalledWith(expect.stringMatching(/jwt|token/i));

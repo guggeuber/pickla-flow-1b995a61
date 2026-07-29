@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Share2, ShoppingBag, Star, Ticket, UserCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Loader2, MessageCircle, Minus, Plus, Share2, ShoppingBag, Ticket, UserCheck } from "lucide-react";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
@@ -16,7 +16,20 @@ import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { activityCheckInAvailable, useActivityNow } from "@/lib/activityTiming";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { activitySessionToPresentation } from "@/lib/sessionPresentation";
-import { createCommerceCart, fetchCommerceCatalog, formatCommerceMoney } from "@/lib/commerce";
+import {
+  activityCommerceDraftScope,
+  activityCommerceSelectionKey,
+  commerceProductMaxQuantity,
+  commerceJourneyId,
+  createCommerceCart,
+  fetchCommerceCatalog,
+  formatCommerceMoney,
+  readActivityCommerceSelection,
+  resumeCommerceActivityDraft,
+  trackCommerceFunnelEvent,
+  writeActivityCommerceSelection,
+  type CommerceCartItemInput,
+} from "@/lib/commerce";
 import { purchaseErrorMessage, withPurchaseSessionRecovery } from "@/lib/purchaseSessionRecovery";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 
@@ -91,6 +104,19 @@ function formatCourtRange(courts: Array<{ name?: string | null; court_number?: n
   return ordered.map((court) => court.name || "Bana").join(", ");
 }
 
+function clampCommerceSelection(
+  quantities: Record<string, number>,
+  products: Array<{ id: string; max_quantity?: number; resolver_rules?: Record<string, unknown> | null }>,
+) {
+  const productById = new Map(products.map((product) => [product.id, product]));
+  return Object.fromEntries(Object.entries(quantities).flatMap(([productId, value]) => {
+    const product = productById.get(productId);
+    if (!product) return [];
+    const quantity = Math.max(0, Math.min(commerceProductMaxQuantity(product), Math.floor(Number(value) || 0)));
+    return quantity > 0 ? [[productId, quantity]] : [];
+  }));
+}
+
 export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnly?: boolean }) {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
@@ -102,7 +128,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const purchaseInFlight = useRef(false);
   const [interestLoading, setInterestLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState(false);
-  const [selectedCommerceProductIds, setSelectedCommerceProductIds] = useState<string[]>([]);
+  const [commerceQuantities, setCommerceQuantities] = useState<Record<string, number>>({});
+  const [commerceDraftHydrated, setCommerceDraftHydrated] = useState(false);
+  const hydratedCommerceScopeRef = useRef("");
+  const commerceSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commerceSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const commerceDraftDirtyRef = useRef(false);
+  const commerceOpenedEventRef = useRef("");
+  const latestCommerceQuantitiesRef = useRef<Record<string, number>>({});
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
   const ticketMode = searchParams.get("ticket") === "1";
@@ -183,13 +216,69 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   });
   const sessionProductKey = String(session?.product_key || (session?.session_type === "open_play" ? "open_play_slot" : ""));
   const commerceParticipationProduct = commerceCatalog.data?.products.find((product) => product.commerce_kind === "participation" && product.product_key === sessionProductKey);
-  const offeredRentalIds = new Set((commerceCatalog.data?.relationships || []).filter((relationship) => relationship.source_product_id === commerceParticipationProduct?.id).map((relationship) => relationship.target_product_id));
-  const commerceExtras = (commerceCatalog.data?.products || []).filter((product) => (
-    product.commerce_kind !== "participation"
-    && product.activity_addon_enabled
-    && offeredRentalIds.has(product.id)
-  ));
+  const offeredRentalIds = useMemo(() => new Set(
+    (commerceCatalog.data?.relationships || [])
+      .filter((relationship) => relationship.source_product_id === commerceParticipationProduct?.id)
+      .map((relationship) => relationship.target_product_id),
+  ), [commerceCatalog.data?.relationships, commerceParticipationProduct?.id]);
+  const commerceExtras = useMemo(() => (
+    (commerceCatalog.data?.products || []).filter((product) => (
+      product.commerce_kind !== "participation"
+      && product.activity_addon_enabled
+      && offeredRentalIds.has(product.id)
+    ))
+  ), [commerceCatalog.data?.products, offeredRentalIds]);
   const commercePilotEnabled = Boolean(commerceParticipationProduct);
+  useEffect(() => {
+    if (!commercePilotEnabled || !venueId || !sessionId) return;
+    const eventKey = `${venueId}:${sessionId}:${occurrenceDate || ""}`;
+    if (commerceOpenedEventRef.current === eventKey) return;
+    commerceOpenedEventRef.current = eventKey;
+    void trackCommerceFunnelEvent({
+      eventName: "activity_sheet_opened",
+      venueId,
+      activitySessionId: sessionId,
+    });
+  }, [commercePilotEnabled, occurrenceDate, sessionId, venueId]);
+  const commerceDraftScope = sessionId && occurrenceDate
+    ? activityCommerceDraftScope(sessionId, occurrenceDate)
+    : "";
+  const commerceSelectionKey = sessionId && occurrenceDate
+    ? activityCommerceSelectionKey(sessionId, occurrenceDate)
+    : "";
+  const commerceDraft = useQuery({
+    queryKey: ["commerce-activity-draft", venueId, commerceDraftScope, user?.id],
+    enabled: commercePilotEnabled
+      && !authLoading
+      && !!user?.id
+      && !!venueId
+      && !!commerceDraftScope,
+    retry: false,
+    queryFn: () => withPurchaseSessionRecovery(() => (
+      resumeCommerceActivityDraft(venueId!, commerceDraftScope)
+    )),
+  });
+  useEffect(() => {
+    if (!commerceSelectionKey || !commerceDraftScope) return;
+    if (hydratedCommerceScopeRef.current === commerceDraftScope) return;
+    if (user?.id && !commerceDraft.isFetched) return;
+
+    const persistedSelection = readActivityCommerceSelection(commerceSelectionKey);
+    const serverSelection = Object.fromEntries((commerceDraft.data?.lines || []).flatMap((line) => (
+      line.commerce_kind !== "participation" && line.product_id && Number(line.quantity || 0) > 0
+        ? [[line.product_id, Number(line.quantity)]]
+        : []
+    )));
+    const nextSelection = clampCommerceSelection(
+      commerceDraft.data ? serverSelection : persistedSelection,
+      commerceExtras,
+    );
+    hydratedCommerceScopeRef.current = commerceDraftScope;
+    latestCommerceQuantitiesRef.current = nextSelection;
+    setCommerceQuantities(nextSelection);
+    writeActivityCommerceSelection(commerceSelectionKey, nextSelection);
+    setCommerceDraftHydrated(true);
+  }, [commerceDraft.data, commerceDraft.isFetched, commerceDraftScope, commerceExtras, commerceSelectionKey, user?.id]);
   const sessionCourtIds = useMemo(() => (
     Array.isArray(session?.court_ids) ? session.court_ids.filter(Boolean) : []
   ), [session?.court_ids]);
@@ -220,7 +309,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     : null;
   const occurrenceHidden = isPublicActivityOverrideHidden(occurrenceOverride?.status) || Boolean(error && !data?.activity_session);
   const accessSnapshotForResolvedSession = useAccessSnapshot({ venueId, sessionDate: occurrenceDate });
-  const isLoading = sessionLoading && (previewLoading || waitForAccessSnapshot);
+  const isLoading = (sessionLoading && (previewLoading || waitForAccessSnapshot))
+    || (!!venueId && commerceCatalog.isLoading);
 
   const { data: registrations = [], refetch: refetchRegistrations } = useQuery({
     queryKey: ["program-session-registrations", sessionId, occurrenceDate, user?.id],
@@ -334,7 +424,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     ? "Hämtar ditt pris..."
     : backendPricing?.checkoutLabel || formatSek(effectivePrice);
   const pricingIsIncluded = !pricingPending && backendPricing?.requiresCheckout === false;
-  const requiresCheckout = !pricingPending && backendPricing?.requiresCheckout === true;
   const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
   const membershipName = String(
     backendPricing?.membershipTierName ||
@@ -357,6 +446,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const savedTodaySek = !pricingPending && pricingIsIncluded && basePrice > effectivePrice
     ? Math.round((basePrice - effectivePrice) * 100) / 100
     : 0;
+  const commerceExtrasQuantity = commerceExtras.reduce((sum, product) => (
+    sum + Number(commerceQuantities[product.id] || 0)
+  ), 0);
+  const commerceExtrasTotalMinor = commerceExtras.reduce((sum, product) => (
+    sum + Number(commerceQuantities[product.id] || 0) * Math.round(Number(product.base_price_sek || 0) * 100)
+  ), 0);
+  const commerceTotalMinor = Math.max(0, Math.round(effectivePrice * 100)) + commerceExtrasTotalMinor;
+  const commerceItemCount = 1 + commerceExtrasQuantity;
+  const commerceSavingsMinor = Math.max(0, Math.round((basePrice - effectivePrice) * 100));
   const now = useActivityNow();
   const occurrenceInterval = occurrenceDate && session?.start_time && session?.end_time
     ? activitySessionOccurrenceInterval(occurrenceDate, session.start_time, session.end_time)
@@ -387,7 +485,88 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
       : pricingPending
         ? "Hämtar ditt pris..."
-        : `${user?.id ? (pricingIsIncluded ? "Boka plats" : "Betala och boka plats") : "Logga in och boka plats"} · ${checkoutLabel}`;
+        : commercePilotEnabled
+          ? `Fortsätt · ${formatCommerceMoney(commerceTotalMinor)}`
+          : `${user?.id ? (pricingIsIncluded ? "Boka plats" : "Betala och boka plats") : "Logga in och boka plats"} · ${checkoutLabel}`;
+  const purchaseMode = !isRegistered && !isFull;
+
+  const buildActivityCartItems = useCallback((quantities: Record<string, number>): CommerceCartItemInput[] => {
+    if (!commerceParticipationProduct || !sessionId || !occurrenceDate) return [];
+    const safeQuantities = clampCommerceSelection(quantities, commerceExtras);
+    return [
+      {
+        product_id: commerceParticipationProduct.id,
+        quantity: 1,
+        activity_session_id: sessionId,
+        session_date: occurrenceDate,
+      },
+      ...commerceExtras.flatMap((product) => {
+        const quantity = Number(safeQuantities[product.id] || 0);
+        return quantity > 0 ? [{
+          product_id: product.id,
+          quantity,
+          parent_product_id: commerceParticipationProduct.id,
+        }] : [];
+      }),
+    ];
+  }, [commerceExtras, commerceParticipationProduct, occurrenceDate, sessionId]);
+
+  const persistActivityDraft = useCallback((quantities: Record<string, number>) => {
+    if (!user?.id || !session?.venue_id || !commerceDraftScope) {
+      return Promise.reject(new Error("Logga in för att spara köpet"));
+    }
+    return withPurchaseSessionRecovery(() => createCommerceCart({
+      venueId: session.venue_id,
+      source: "activity_drawer",
+      draftScope: commerceDraftScope,
+      items: buildActivityCartItems(quantities),
+    }));
+  }, [buildActivityCartItems, commerceDraftScope, session?.venue_id, user?.id]);
+
+  const enqueueActivityDraftSave = useCallback((quantities: Record<string, number>) => {
+    const save = () => persistActivityDraft(quantities);
+    const queued = commerceSaveQueueRef.current.then(save, save);
+    commerceSaveQueueRef.current = queued.catch(() => undefined);
+    return queued;
+  }, [persistActivityDraft]);
+
+  const flushActivityDraft = useCallback(async () => {
+    if (commerceSaveTimerRef.current) {
+      clearTimeout(commerceSaveTimerRef.current);
+      commerceSaveTimerRef.current = null;
+    }
+    if (commerceDraftDirtyRef.current && user?.id) {
+      commerceDraftDirtyRef.current = false;
+      await enqueueActivityDraftSave({ ...latestCommerceQuantitiesRef.current });
+    } else {
+      await commerceSaveQueueRef.current;
+    }
+  }, [enqueueActivityDraftSave, user?.id]);
+
+  useEffect(() => {
+    if (
+      !commerceDraftHydrated
+      || !commerceDraftDirtyRef.current
+      || !user?.id
+      || !commercePilotEnabled
+      || !commerceDraftScope
+    ) return;
+    if (commerceSaveTimerRef.current) clearTimeout(commerceSaveTimerRef.current);
+    const snapshot = { ...commerceQuantities };
+    commerceSaveTimerRef.current = setTimeout(() => {
+      commerceSaveTimerRef.current = null;
+      commerceDraftDirtyRef.current = false;
+      void enqueueActivityDraftSave(snapshot).catch(() => {
+        commerceDraftDirtyRef.current = true;
+      });
+    }, 300);
+    return () => {
+      if (commerceSaveTimerRef.current) {
+        clearTimeout(commerceSaveTimerRef.current);
+        commerceSaveTimerRef.current = null;
+      }
+    };
+  }, [commerceDraftHydrated, commerceDraftScope, commercePilotEnabled, commerceQuantities, enqueueActivityDraftSave, user?.id]);
 
   const sessionPresentation = session
     ? activitySessionToPresentation({
@@ -404,6 +583,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               displayName: hostsLabel(sessionHosts),
               avatarUrl: sessionHosts[0]?.avatar_url ?? null,
               count: sessionHosts.length,
+              avatars: sessionHosts.map((host) => ({
+                id: host.customer_id || null,
+                displayName: hostDisplayName(host),
+                avatarUrl: host.avatar_url || null,
+              })),
             }
           : null,
         people: participantProfiles,
@@ -494,6 +678,21 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     });
   };
 
+  const changeCommerceQuantity = (productId: string, delta: number) => {
+    setCommerceQuantities((current) => {
+      const product = commerceExtras.find((candidate) => candidate.id === productId);
+      const maximum = product ? commerceProductMaxQuantity(product) : 1;
+      const nextQuantity = Math.max(0, Math.min(maximum, Number(current[productId] || 0) + delta));
+      const next = { ...current };
+      if (nextQuantity > 0) next[productId] = nextQuantity;
+      else delete next[productId];
+      latestCommerceQuantitiesRef.current = next;
+      commerceDraftDirtyRef.current = true;
+      if (commerceSelectionKey) writeActivityCommerceSelection(commerceSelectionKey, next);
+      return next;
+    });
+  };
+
   const startSignup = async () => {
     if (authLoading || purchaseInFlight.current) return;
     if (isFull) {
@@ -518,24 +717,24 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     setLoading(true);
     try {
       if (commercePilotEnabled && commerceParticipationProduct) {
-        const extras = commerceExtras.filter((product) => selectedCommerceProductIds.includes(product.id));
-        const cart = await withPurchaseSessionRecovery(() => createCommerceCart({
+        if (!user?.id) {
+          void trackCommerceFunnelEvent({
+            eventName: "logged_out_cta_clicked",
+            venueId: session.venue_id,
+            activitySessionId: sessionId!,
+          });
+        }
+        if (user?.id) await flushActivityDraft();
+        const cartInput = {
           venueId: session.venue_id,
           source: "activity_drawer",
-          items: [
-            {
-              product_id: commerceParticipationProduct.id,
-              quantity: 1,
-              activity_session_id: sessionId,
-              session_date: occurrenceDate,
-            },
-            ...extras.map((product) => ({
-              product_id: product.id,
-              quantity: 1,
-              parent_product_id: commerceParticipationProduct.id,
-            })),
-          ],
-        }));
+          ...(user?.id ? { draftScope: commerceDraftScope } : {}),
+          items: buildActivityCartItems(latestCommerceQuantitiesRef.current),
+          journeyId: commerceJourneyId(),
+        };
+        const cart = user?.id
+          ? await withPurchaseSessionRecovery(() => createCommerceCart(cartInput))
+          : await createCommerceCart(cartInput, { auth: "omit" });
         if (!cart.cart_token) throw new Error("Varukorgen kunde inte skapas");
         navigate(`/cart?token=${encodeURIComponent(cart.cart_token)}`);
         return;
@@ -661,8 +860,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
   const closeDrawer = (open: boolean) => {
     if (!open) {
-      if (overlayOnly) navigate(-1);
-      else navigate(todayPath);
+      const close = () => {
+        if (overlayOnly) navigate(-1);
+        else navigate(todayPath);
+      };
+      if (commerceDraftDirtyRef.current && user?.id) {
+        void flushActivityDraft().catch(() => undefined).finally(close);
+      } else {
+        close();
+      }
     }
   };
 
@@ -744,18 +950,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       </>
       )}
 
-      {session && !occurrenceHidden && sessionPresentation && (
+      {session && !occurrenceHidden && sessionPresentation && !commerceCatalog.isLoading && (
         <SessionDrawerShell
           open
           onOpenChange={closeDrawer}
           presentation={sessionPresentation}
           footer={
             <div className="space-y-2">
-              {!isRegistered && !pricingPending && (earlyBirdLine || capacityScarcityLine) ? (
-                <p className="rounded-2xl bg-[#fff7ed] px-4 py-3 text-center text-[13px] font-black text-[#9a3412]" style={{ fontFamily: FONT_HEADING }}>
-                  {earlyBirdLine || capacityScarcityLine}
-                </p>
-              ) : null}
               <SessionActions
                 primary={{
                   key: "primary",
@@ -768,31 +969,35 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     isCheckedIn ? <UserCheck className="h-5 w-5" /> : <Check className="h-5 w-5" />
                   ) : null,
                 }}
-                secondary={[
-                  {
-                    key: "interest",
-                    label: "Intresserad",
-                    onClick: toggleInterest,
-                    disabled: interestLoading || queueLoading,
-                    icon: interestLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : userIsInterested ? <Check className="h-4 w-4" /> : <Star className="h-4 w-4" />,
-                  },
-                  {
+                secondary={isRegistered ? [{
                     key: "chat",
                     label: "Chatt",
                     onClick: openChat,
                     disabled: !room?.id,
                     icon: previewLoading && !room?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />,
-                  },
-                  ...(!isRegistered
-                    ? [{
-                        key: "share",
-                        label: "Dela",
-                        onClick: shareActivity,
-                        icon: <Share2 className="h-4 w-4" />,
-                      }]
-                    : []),
-                ]}
+                  }] : []}
               />
+              {!isRegistered ? (
+                <div className="grid grid-cols-2 gap-2 pt-1" aria-label="Aktivitetsalternativ">
+                  <button type="button" onClick={openChat} disabled={!room?.id} className="flex h-10 items-center justify-center gap-2 rounded-xl text-[13px] font-semibold text-neutral-500 disabled:opacity-40">
+                    {previewLoading && !room?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+                    Chatt
+                  </button>
+                  <button type="button" onClick={shareActivity} className="flex h-10 items-center justify-center gap-2 rounded-xl text-[13px] font-semibold text-neutral-500">
+                    <Share2 className="h-4 w-4" />
+                    Dela
+                  </button>
+                </div>
+              ) : null}
+              {!isRegistered && !user?.id && commercePilotEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`)}
+                  className="w-full py-1 text-center text-[12px] font-semibold text-neutral-500 underline underline-offset-2"
+                >
+                  Medlem? Logga in för ditt pris
+                </button>
+              ) : null}
               {isRegistered ? (
                 <button
                   type="button"
@@ -807,7 +1012,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </div>
           }
         >
-          <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation />
+          <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={!purchaseMode} />
 
           {isRegistered ? (
             <div
@@ -847,48 +1052,71 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               {participationItems.map((item) => (
                 <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-[13px] font-bold text-emerald-950">
                   <span>{item.product_name} {item.quantity > 1 ? `· ${item.quantity} st` : ""} ✓</span>
-                  <span className="text-[11px] text-emerald-800/70">{item.fulfillment_status === "collected" ? "Uthämtad" : "Hämtas vid disken"}</span>
+                  <span className="text-[11px] text-emerald-800/70">{item.fulfillment_status === "collected" ? "Uthämtad" : "Hämtas vid desken"}</span>
                 </div>
               ))}
             </div>
           ) : null}
 
+          {!isRegistered && !pricingPending && (earlyBirdLine || capacityScarcityLine) ? (
+            <p className="rounded-2xl bg-[#fff7ed] px-4 py-3 text-center text-[13px] font-black text-[#9a3412]" style={{ fontFamily: FONT_HEADING }}>
+              {earlyBirdLine || capacityScarcityLine}
+            </p>
+          ) : null}
+
           <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={priceContextLine} />
 
-          {!isRegistered && commercePilotEnabled && commerceExtras.length > 0 ? (
-            <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
-              <div className="mb-2 flex items-center gap-2"><ShoppingBag className="h-4 w-4" /><p className="text-[13px] font-black">Lägg till i samma köp</p></div>
-              <div className="grid gap-2">
+          {!isRegistered && commercePilotEnabled && commerceCatalog.isSuccess && commerceExtras.length > 0 ? (
+            <section data-testid="commerce-addons" className="rounded-[22px] bg-[#f8fafc] px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
+              <div className="mb-3 flex items-center gap-2"><ShoppingBag className="h-4 w-4 shrink-0" /><h3 className="text-[13px] font-black">Lägg till i samma köp</h3></div>
+              <div className="grid gap-3">
                 {commerceExtras.map((product) => {
-                  const selected = selectedCommerceProductIds.includes(product.id);
+                  const quantity = Number(commerceQuantities[product.id] || 0);
+                  const maximum = commerceProductMaxQuantity(product);
                   return (
-                    <label key={product.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-white px-3 py-3 text-[13px] font-bold">
-                      <span><span className="block">{product.name}</span><span className="block text-[11px] font-semibold text-neutral-500">Hämtas vid disken</span></span>
-                      <span className="flex items-center gap-3"><span>{formatCommerceMoney(product.base_price_sek * 100)}</span><input type="checkbox" checked={selected} onChange={() => setSelectedCommerceProductIds((current) => selected ? current.filter((id) => id !== product.id) : [...current, product.id])} className="h-5 w-5 accent-slate-950" /></span>
-                    </label>
+                    <article key={product.id} className="rounded-2xl bg-white px-3 py-3 text-[13px]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="break-words font-black">{product.name}</h4>
+                          <p className="mt-0.5 text-[11px] font-semibold text-neutral-500">Hämtas vid desken</p>
+                        </div>
+                        <p className="shrink-0 font-black">{formatCommerceMoney(product.base_price_sek * 100)}</p>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <span className="text-[11px] font-semibold text-neutral-500">Antal</span>
+                        <div className="flex shrink-0 items-center gap-2" aria-label={`Antal ${product.name}`}>
+                          <button type="button" onClick={() => changeCommerceQuantity(product.id, -1)} disabled={quantity === 0} className="grid h-9 w-9 place-items-center rounded-full border border-black/10 bg-white disabled:opacity-35" aria-label={`Minska ${product.name}`}><Minus className="h-4 w-4" /></button>
+                          <span className="w-6 text-center text-[15px] font-black tabular-nums" aria-live="polite">{quantity}</span>
+                          <button type="button" onClick={() => changeCommerceQuantity(product.id, 1)} disabled={quantity >= maximum} className="grid h-9 w-9 place-items-center rounded-full bg-slate-950 text-white disabled:opacity-35" aria-label={`Öka ${product.name}`}><Plus className="h-4 w-4" /></button>
+                        </div>
+                      </div>
+                    </article>
                   );
                 })}
               </div>
-            </div>
+            </section>
           ) : null}
 
+          {!isRegistered && commercePilotEnabled && !pricingPending ? (
+            <section data-testid="commerce-live-total" className="rounded-[22px] bg-white px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }} aria-live="polite">
+              <div className="flex items-end justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-[12px] font-semibold text-neutral-500">Totalt · {commerceItemCount} {commerceItemCount === 1 ? "artikel" : "artiklar"}</p>
+                  {commerceSavingsMinor > 0 ? <p className="mt-1 text-[12px] font-bold text-emerald-700">Du sparar {formatCommerceMoney(commerceSavingsMinor)}</p> : null}
+                </div>
+                <p className="shrink-0 text-[26px] font-black tracking-tight">{formatCommerceMoney(commerceTotalMinor)}</p>
+              </div>
+              {pricingIsIncluded ? <p className="mt-2 text-[12px] font-bold text-emerald-700">Aktiviteten {includedLabel?.toLowerCase() || "ingår i medlemskap"}</p> : null}
+            </section>
+          ) : null}
+
+          {isRegistered && savedTodaySek > 0 ? (
           <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
-            {pricingPending && (
-              <p className="text-[12px] font-semibold text-neutral-500">
-                Vi kontrollerar medlemskap, dagsaccess och entitlements.
-              </p>
-            )}
-            {isRegistered && savedTodaySek > 0 && (
-              <p className="text-[12px] font-semibold text-neutral-500">
-                Du sparade {formatSek(savedTodaySek)} idag.
-              </p>
-            )}
-            {requiresCheckout && (
-              <p className="mt-1 text-[12px] text-neutral-500">
-                Betalning sker via Stripe innan platsen bekräftas.
-              </p>
-            )}
+            <p className="text-[12px] font-semibold text-neutral-500">
+              Du sparade {formatSek(savedTodaySek)} idag.
+            </p>
           </div>
+          ) : null}
         </SessionDrawerShell>
       )}
     </div>

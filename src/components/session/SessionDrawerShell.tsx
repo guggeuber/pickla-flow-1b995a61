@@ -23,7 +23,7 @@ type SessionDrawerShellProps = ShellContentProps & {
 function ShellContent({ presentation, children, footer, className, onClose }: ShellContentProps) {
   return (
     <div className={cn("mx-auto flex h-full w-full max-w-md flex-col bg-white text-neutral-950", className)}>
-      <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/95 px-6 pb-5 pt-3 backdrop-blur">
+      <div className="relative z-10 shrink-0 border-b border-neutral-200 bg-white/95 px-6 pb-5 pt-3 backdrop-blur">
         <div className="relative mb-5 flex items-center justify-center">
           <div className="h-2 w-28 rounded-full bg-foreground/80" />
           {onClose ? (
@@ -40,12 +40,12 @@ function ShellContent({ presentation, children, footer, className, onClose }: Sh
         <SessionHeader presentation={presentation} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-5 [-webkit-overflow-scrolling:touch]">
         <div className="space-y-4">{children}</div>
       </div>
 
       {footer ? (
-        <div className="sticky bottom-0 border-t border-neutral-200 bg-white/95 px-6 pb-[calc(env(safe-area-inset-bottom)+20px)] pt-4 backdrop-blur">
+        <div className="relative z-20 shrink-0 border-t border-neutral-200 bg-white/95 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 backdrop-blur">
           {footer}
         </div>
       ) : null}

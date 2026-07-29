@@ -27,6 +27,11 @@ export type SessionHostPresentation = {
   displayName?: string | null;
   avatarUrl?: string | null;
   count?: number | null;
+  avatars?: Array<{
+    id?: string | null;
+    displayName?: string | null;
+    avatarUrl?: string | null;
+  }>;
 };
 
 export type SessionPresentation = {

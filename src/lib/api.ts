@@ -2,7 +2,7 @@ import { getSessionSingleFlight } from "@/lib/authSessionSingleFlight";
 import { reportApiFailure } from "@/lib/clientObservability";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
+const BASE_URL = import.meta.env.VITE_SUPABASE_FUNCTIONS_URL || `https://${PROJECT_ID}.supabase.co/functions/v1`;
 const SLOW_API_MS = 700;
 
 export class ApiRequestError extends Error {

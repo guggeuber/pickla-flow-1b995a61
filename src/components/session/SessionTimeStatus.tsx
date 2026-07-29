@@ -3,7 +3,7 @@ import { DateTime } from "luxon";
 import type { SessionPresentation } from "@/lib/sessionPresentation";
 
 type SessionTimeStatusProps = {
-  presentation: Pick<SessionPresentation, "startsAt" | "endsAt" | "timingStatus" | "timingLabel">;
+  presentation: Pick<SessionPresentation, "startsAt" | "endsAt" | "timingStatus" | "timingLabel" | "resourceNames">;
   variant?: "row" | "drawer";
 };
 
@@ -13,14 +13,23 @@ export function SessionTimeStatus({ presentation, variant = "row" }: SessionTime
   const timeRange = `${start.toFormat("HH:mm")}–${end.toFormat("HH:mm")}`;
   const dateLabel = start.toRelativeCalendar({ locale: "sv" }) || start.toFormat("d MMM");
   const detailLabel = presentation.timingStatus.detailLabel;
-  const shouldShowDetail = Boolean(detailLabel && detailLabel !== timeRange && detailLabel !== presentation.timingStatus.rangeLabel);
+  const resourceLabel = presentation.resourceNames.join(", ");
+  const compactMeta = `${dateLabel} ${timeRange}${resourceLabel ? ` · ${resourceLabel}` : ""}`;
+  const addsNewTimingInformation = presentation.timingStatus.isOngoing
+    || /^Startar om /i.test(detailLabel)
+    || presentation.timingStatus.isEnded;
+  const statusLabel = presentation.timingStatus.isOngoing
+    ? `Pågår · ${detailLabel}`
+    : presentation.timingStatus.isEnded
+      ? "Avslutad"
+      : detailLabel;
 
   if (variant === "drawer") {
     return (
       <div className="space-y-1">
-        <div className="text-[15px] font-semibold text-neutral-500">{dateLabel} · {timeRange}</div>
-        {shouldShowDetail ? (
-          <div className="text-[15px] font-bold text-neutral-600">{detailLabel}</div>
+        <div className="text-[14px] font-semibold text-neutral-500">{compactMeta}</div>
+        {addsNewTimingInformation && statusLabel ? (
+          <div className="text-[14px] font-bold text-neutral-700">{statusLabel}</div>
         ) : null}
       </div>
     );

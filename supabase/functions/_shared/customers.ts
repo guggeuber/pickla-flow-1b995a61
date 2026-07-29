@@ -119,9 +119,11 @@ export async function resolveOrCreateGuestCustomerByEmail(
     }
   }
 
-  await assertIdentityCanAttach(admin, organizationId, customerId, 'email', email);
+  if (!customerId) throw new Error('Guest customer could not be resolved');
+  const resolvedCustomerId = customerId;
+  await assertIdentityCanAttach(admin, organizationId, resolvedCustomerId, 'email', email);
   await insertIdentityIfMissing(admin, {
-    customer_id: customerId,
+    customer_id: resolvedCustomerId,
     organization_id: organizationId,
     provider: 'email',
     provider_id: email,
@@ -129,8 +131,8 @@ export async function resolveOrCreateGuestCustomerByEmail(
     verified_at: null,
     metadata: { source: input.source || 'commerce_guest_checkout', verified: false },
   });
-  await linkCustomerToVenue(admin, customerId, input.venueId, input.source || 'commerce_guest_checkout');
-  return customerId;
+  await linkCustomerToVenue(admin, resolvedCustomerId, input.venueId, input.source || 'commerce_guest_checkout');
+  return resolvedCustomerId;
 }
 
 async function resolveCanonicalCustomerId(admin: any, organizationId: string, startingCustomerId: string) {
@@ -361,15 +363,18 @@ export async function resolveOrCreateCustomerIdForUser(
     customerId = inserted.id;
   }
 
+  if (!customerId) throw new Error('Authenticated customer could not be resolved');
+  const resolvedCustomerId = customerId;
+
   await admin
     .from('player_profiles')
-    .update({ customer_id: customerId })
+    .update({ customer_id: resolvedCustomerId })
     .eq('auth_user_id', cleanUserId)
     .is('customer_id', null);
 
-  await assertIdentityCanAttach(admin, organizationId, customerId, 'auth', cleanUserId);
+  await assertIdentityCanAttach(admin, organizationId, resolvedCustomerId, 'auth', cleanUserId);
   await insertIdentityIfMissing(admin, {
-    customer_id: customerId,
+    customer_id: resolvedCustomerId,
     organization_id: organizationId,
     provider: 'auth',
     provider_id: cleanUserId,
@@ -378,9 +383,9 @@ export async function resolveOrCreateCustomerIdForUser(
   });
 
   if (email) {
-    await assertIdentityCanAttach(admin, organizationId, customerId, 'email', email);
+    await assertIdentityCanAttach(admin, organizationId, resolvedCustomerId, 'email', email);
     await insertIdentityIfMissing(admin, {
-      customer_id: customerId,
+      customer_id: resolvedCustomerId,
       organization_id: organizationId,
       provider: 'email',
       provider_id: email,
@@ -392,7 +397,7 @@ export async function resolveOrCreateCustomerIdForUser(
 
   if (phone) {
     await insertIdentityIfMissing(admin, {
-      customer_id: customerId,
+      customer_id: resolvedCustomerId,
       organization_id: organizationId,
       provider: 'phone',
       provider_id: phone,
@@ -401,6 +406,70 @@ export async function resolveOrCreateCustomerIdForUser(
     });
   }
 
-  await linkCustomerToVenue(admin, customerId, venueId, source);
-  return customerId;
+  await linkCustomerToVenue(admin, resolvedCustomerId, venueId, source);
+  return resolvedCustomerId;
+}
+
+export async function linkExistingCustomerToVerifiedAuth(
+  admin: Parameters<typeof resolveCustomerIdForUser>[0],
+  input: {
+    customerId: string;
+    userId: string;
+    venueId: string;
+    source?: string;
+  },
+) {
+  const source = input.source || 'commerce_account_claim';
+  const { data: authResult, error: authError } = await admin.auth.admin.getUserById(input.userId);
+  if (authError) throw new Error(authError.message);
+  const authUser = authResult?.user;
+  const email = normalizeEmail(authUser?.email);
+  if (!authUser || !email || !authUser.email_confirmed_at) throw new Error('Verified account required');
+
+  const { data: customer, error: customerError } = await admin.from('customers')
+    .select('id, organization_id, auth_user_id, email_normalized, merged_into_id, status')
+    .eq('id', input.customerId)
+    .maybeSingle();
+  if (customerError) throw new Error(customerError.message);
+  if (!customer || customer.merged_into_id || customer.status !== 'active') throw new Error('Customer is not claimable');
+  if (customer.auth_user_id && customer.auth_user_id !== input.userId) throw new Error('Customer is already linked');
+  if (normalizeEmail(customer.email_normalized) !== email) throw new Error('Customer email does not match account');
+
+  await assertIdentityCanAttach(admin, customer.organization_id, customer.id, 'auth', input.userId);
+  await assertIdentityCanAttach(admin, customer.organization_id, customer.id, 'email', email);
+  const { error: updateError } = await admin.from('customers')
+    .update({ auth_user_id: input.userId, updated_at: new Date().toISOString() })
+    .eq('id', customer.id);
+  if (updateError) throw new Error(updateError.message);
+
+  const { data: profile, error: profileError } = await admin.from('player_profiles')
+    .select('id, customer_id')
+    .eq('auth_user_id', input.userId)
+    .maybeSingle();
+  if (profileError) throw new Error(profileError.message);
+  if (profile?.customer_id && profile.customer_id !== customer.id) throw new Error('Player profile belongs to another customer');
+  if (profile?.id && !profile.customer_id) {
+    const { error } = await admin.from('player_profiles').update({ customer_id: customer.id }).eq('id', profile.id);
+    if (error) throw new Error(error.message);
+  }
+
+  await insertIdentityIfMissing(admin, {
+    customer_id: customer.id,
+    organization_id: customer.organization_id,
+    provider: 'auth',
+    provider_id: input.userId,
+    verified_at: new Date().toISOString(),
+    metadata: { source },
+  });
+  await insertIdentityIfMissing(admin, {
+    customer_id: customer.id,
+    organization_id: customer.organization_id,
+    provider: 'email',
+    provider_id: email,
+    email,
+    verified_at: authUser.email_confirmed_at,
+    metadata: { source },
+  });
+  await linkCustomerToVenue(admin, customer.id, input.venueId, source);
+  return customer.id as string;
 }

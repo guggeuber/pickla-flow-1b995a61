@@ -4,14 +4,40 @@ import { requireVenueRole } from '../_shared/authorization.ts';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
-import { evaluateCommerceAvailability } from '../_shared/commerce_availability.ts';
+import { evaluateCommerceAvailability, type CommerceProductLike } from '../_shared/commerce_availability.ts';
+import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const CART_TOKEN_BYTES = 32;
 const MAX_CART_LINES = 25;
 const MAX_QUANTITY = 100;
-const STRIPE_API_BASE = 'https://api.stripe.com/v1';
+const STRIPE_API_BASE = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type DbRecord = Record<string, unknown>;
+
+function productMaxQuantity(product: CommerceProduct) {
+  const configured = Number(product?.resolver_rules?.max_quantity ?? 20);
+  return Math.max(1, Math.min(MAX_QUANTITY, Number.isFinite(configured) ? Math.floor(configured) : 20));
+}
 
 type StripeCheckoutSession = { id: string; url: string | null };
+
+type CommerceProduct = CommerceProductLike & {
+  id: string;
+  venue_id: string;
+  product_key: string;
+  name: string;
+  description?: string | null;
+  commerce_kind: string;
+  fulfillment_type: string;
+  resolver_rules?: Record<string, unknown> | null;
+};
+
+type RpcVersionRow = {
+  version: number;
+  total_inc_vat_minor?: number | string | null;
+};
 
 function appendStripeFormValue(body: URLSearchParams, key: string, value: unknown) {
   if (value === undefined || value === null) return;
@@ -67,6 +93,40 @@ function newCartToken() {
   return base64Url(bytes);
 }
 
+const CLIENT_COMMERCE_EVENTS = new Set(['activity_sheet_opened', 'logged_out_cta_clicked']);
+
+async function recordCommerceEvent(admin: any, input: {
+  eventName: string;
+  venueId?: string | null;
+  orderId?: string | null;
+  activitySessionId?: string | null;
+  journeyId?: string | null;
+  journeyHash?: string | null;
+  durationMs?: number | null;
+  metadata?: Record<string, string | number | boolean | null>;
+}) {
+  const journey = String(input.journeyId || '').trim().slice(0, 120);
+  const safeMetadata = Object.fromEntries(Object.entries(input.metadata || {}).filter(([key, value]) => (
+    ['source', 'authenticated', 'within_7d', 'within_30d', 'outcome'].includes(key)
+    && ['string', 'number', 'boolean'].includes(typeof value)
+  )));
+  const { error } = await admin.from('commerce_events').insert({
+    venue_id: input.venueId || null,
+    commerce_order_id: input.orderId || null,
+    activity_session_id: input.activitySessionId || null,
+    event_name: input.eventName,
+    journey_id_hash: input.journeyHash || (journey ? await sha256(journey) : null),
+    duration_ms: input.durationMs == null ? null : Math.max(0, Math.floor(input.durationMs)),
+    metadata: safeMetadata,
+  });
+  if (error) console.error('commerce event failed', input.eventName, error.message);
+}
+
+function normalizeActivityDraftScope(value: unknown) {
+  const scope = String(value || '').trim().toLowerCase().slice(0, 160);
+  return /^activity:[0-9a-f-]{36}:\d{4}-\d{2}-\d{2}$/.test(scope) ? scope : '';
+}
+
 async function optionalUser(req: Request) {
   const header = req.headers.get('Authorization');
   if (!header?.startsWith('Bearer ')) return { userId: null as string | null };
@@ -90,7 +150,42 @@ async function loadOrderByToken(admin: any, token: string, userId?: string | nul
   return order;
 }
 
-async function loadOrderLines(admin: any, orderId: string) {
+async function loadOrderByReference(admin: any, reference: string, userId?: string | null, allowReceiptToken = false) {
+  const cleanReference = String(reference || '').trim();
+  if (userId && UUID_PATTERN.test(cleanReference)) {
+    const { data: order, error } = await admin.from('commerce_orders')
+      .select('*')
+      .eq('id', cleanReference)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!order) throw new Error('Cart not found');
+    if (order.user_id !== userId) throw new Error('Forbidden');
+    return order;
+  }
+  return loadOrderByToken(admin, cleanReference, userId, allowReceiptToken);
+}
+
+async function findAuthenticatedActivityDraft(admin: any, venueId: string, userId: string, draftScope: string) {
+  const { data, error } = await admin.from('commerce_orders')
+    .select('*')
+    .eq('venue_id', venueId)
+    .eq('user_id', userId)
+    .eq('draft_scope', draftScope)
+    .eq('status', 'draft')
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  if (data.expires_at && new Date(data.expires_at).getTime() <= Date.now()) {
+    await admin.from('commerce_orders').update({
+      status: 'expired',
+      metadata: { ...(data.metadata || {}), expiry_reason: 'commerce_r1_stale_activity_draft' },
+    }).eq('id', data.id).eq('status', 'draft');
+    return null;
+  }
+  return data;
+}
+
+async function loadOrderLines(admin: any, orderId: string): Promise<DbRecord[]> {
   const { data, error } = await admin
     .from('commerce_order_lines')
     .select('*')
@@ -98,7 +193,67 @@ async function loadOrderLines(admin: any, orderId: string) {
     .order('sort_order')
     .order('created_at');
   if (error) throw new Error(error.message);
-  return data || [];
+  return (data || []) as DbRecord[];
+}
+
+function projectOrderLine(line: DbRecord) {
+  const resolver = (line.resolver_snapshot || {}) as DbRecord;
+  const debug = (resolver.debug || {}) as DbRecord;
+  const productSnapshot = (line.product_snapshot || {}) as DbRecord;
+  return {
+    id: line.id,
+    product_id: line.product_id,
+    product_key: line.product_key,
+    product_name: line.product_name,
+    commerce_kind: line.commerce_kind,
+    quantity: line.quantity,
+    unit_price_minor: line.unit_price_minor,
+    discount_minor: line.discount_minor,
+    line_total_inc_vat_minor: line.line_total_inc_vat_minor,
+    line_total_ex_vat_minor: line.line_total_ex_vat_minor,
+    vat_rate: line.vat_rate,
+    vat_amount_minor: line.vat_amount_minor,
+    fulfillment_type: line.fulfillment_type,
+    fulfillment_status: line.fulfillment_status,
+    activity_session_id: line.activity_session_id,
+    session_date: line.session_date,
+    session_registration_id: line.session_registration_id,
+    parent_line_id: line.parent_line_id,
+    product_snapshot: {
+      base_price_sek: Number(productSnapshot.base_price_sek || 0),
+      customer_instruction_code: productSnapshot.customer_instruction_code || null,
+    },
+    resolver_snapshot: {
+      pricing_reason: resolver.pricing_reason || null,
+      access_decision: resolver.access_decision || null,
+      entitlement_type: resolver.entitlement_type || null,
+      membership_tier_name: resolver.membership_tier_name || null,
+      debug: {
+        base_amount_sek: Number(debug.base_amount_sek || productSnapshot.base_price_sek || 0),
+        pricing_reason: debug.pricing_reason || resolver.pricing_reason || null,
+        access_decision: debug.access_decision || resolver.access_decision || null,
+        membership_tier_name: debug.membership_tier_name || resolver.membership_tier_name || null,
+      },
+    },
+  };
+}
+
+function projectReceiptLine(line: DbRecord) {
+  return {
+    id: line.id,
+    product_id: line.product_id,
+    product_key: line.product_key,
+    product_name: line.product_name,
+    commerce_kind: line.commerce_kind,
+    quantity: line.quantity,
+    unit_price_minor: line.unit_price_minor,
+    discount_minor: line.discount_minor,
+    line_total_inc_vat_minor: line.total_inc_vat_minor,
+    line_total_ex_vat_minor: line.total_ex_vat_minor,
+    vat_rate: line.vat_rate,
+    vat_amount_minor: line.vat_amount_minor,
+    fulfillment_type: line.fulfillment_type,
+  };
 }
 
 async function cartResponse(admin: any, order: any, token?: string | null) {
@@ -119,6 +274,36 @@ async function cartResponse(admin: any, order: any, token?: string | null) {
     receipt = receiptRow || null;
     receiptLines = lineRows || [];
   }
+  const participation = lines.find((line) => line.commerce_kind === 'participation');
+  let activityAccess = null;
+  if (participation?.activity_session_id) {
+    const [{ data: activity }, { data: registration }, { data: venue }] = await Promise.all([
+      admin.from('activity_sessions')
+        .select('id, venue_id, name, start_time, end_time')
+        .eq('id', participation.activity_session_id)
+        .eq('venue_id', order.venue_id)
+        .maybeSingle(),
+      participation.session_registration_id
+        ? admin.from('session_registrations')
+            .select('id, status')
+            .eq('id', participation.session_registration_id)
+            .eq('customer_id', order.customer_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      admin.from('venues').select('name, slug').eq('id', order.venue_id).maybeSingle(),
+    ]);
+    activityAccess = activity ? {
+      activity_session_id: activity.id,
+      session_date: participation.session_date,
+      name: activity.name,
+      start_time: activity.start_time,
+      end_time: activity.end_time,
+      venue_name: venue?.name || null,
+      venue_slug: venue?.slug || null,
+      registration_id: registration?.id || null,
+      registration_status: registration?.status || null,
+    } : null;
+  }
   return {
     order: {
       id: order.id,
@@ -131,15 +316,23 @@ async function cartResponse(admin: any, order: any, token?: string | null) {
       total_inc_vat_minor: order.total_inc_vat_minor,
       total_ex_vat_minor: order.total_ex_vat_minor,
       vat_amount_minor: order.vat_amount_minor,
-      guest_name: order.guest_name,
-      guest_email: order.guest_email,
+      draft_scope: order.draft_scope || null,
+      contact_email_present: Boolean(order.guest_email),
+      guest_claimed: Boolean(order.guest_claimed_at),
+      requires_guest_claim: !order.user_id && !order.guest_claimed_at,
+      account_claimed: Boolean(order.claimed_user_id || order.user_id),
+      claim_expires_at: order.claim_expires_at || null,
+      cancellation_pending: Boolean(order.metadata?.cancellation_requested_at),
       paid_at: order.paid_at,
       booking_receipt_id: order.booking_receipt_id,
-      metadata: order.metadata || {},
+      customer_name: ['paid', 'refunded', 'cancelled'].includes(String(order.status))
+        ? order.guest_name || null
+        : null,
     },
-    lines,
+    lines: lines.map(projectOrderLine),
     receipt,
-    receipt_lines: receiptLines,
+    receipt_lines: receiptLines.map(projectReceiptLine),
+    activity_access: activityAccess,
     ...(token ? { cart_token: token } : {}),
   };
 }
@@ -166,13 +359,21 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
     .eq('venue_id', venueId)
     .in('id', productIds);
   if (productError) throw new Error(productError.message);
-  const productById = new Map((products || []).map((product: any) => [product.id, product]));
+  const productById = new Map<string, CommerceProduct>(
+    (products || []).map((product: CommerceProduct) => [String(product.id), product]),
+  );
   if (productById.size !== productIds.length) throw new Error('Product not found');
   const venue = await venueContext(admin, venueId);
 
   const normalized = items.map((item, index) => {
     const product = productById.get(String(item.product_id || ''));
-    const quantity = Math.min(Math.max(Math.floor(Number(item.quantity || 1)), 1), MAX_QUANTITY);
+    if (!product) throw new Error('Product not found');
+    const maximum = productMaxQuantity(product);
+    const requestedQuantity = Math.floor(Number(item.quantity || 1));
+    if (!Number.isFinite(requestedQuantity) || requestedQuantity < 1 || requestedQuantity > maximum) {
+      throw new Error(`Quantity must be between 1 and ${maximum}`);
+    }
+    const quantity = requestedQuantity;
     if (product.commerce_kind === 'participation' && quantity !== 1) throw new Error('Participation quantity must be one');
     return {
       input: item,
@@ -273,22 +474,31 @@ async function validateCartItems(admin: any, venueId: string, items: any[], user
       base_price_sek: Number(item.product.base_price_sek || 0),
       vat_rate: Number(item.product.vat_rate || 0),
       resolver_rules: item.product.resolver_rules || {},
+      customer_instruction_code: String(item.product.resolver_rules?.customer_instruction_code || (
+        item.product.commerce_kind === 'rental'
+        && item.product.fulfillment_type === 'desk_pickup'
+        && /racket|hyrrack/i.test(`${item.product.product_key} ${item.product.name}`)
+          ? 'desk_pickup_racket_by_name'
+          : ''
+      )) || null,
     },
     metadata: item.input.metadata || {},
     sort_order: item.index * 10,
   }));
 }
 
-async function resolveLines(admin: any, order: any, lines: any[], userId?: string | null) {
+async function resolveLines(admin: any, order: any, lines: any[], userId?: string | null, resolvedCustomerId?: string | null) {
   const productIds = lines.map((line) => line.product_id).filter(Boolean);
   const { data: products, error } = await admin
     .from('access_products')
     .select('id, venue_id, product_key, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
     .in('id', productIds);
   if (error) throw new Error(error.message);
-  const productsById = new Map((products || []).map((product: any) => [product.id, product]));
+  const productsById = new Map<string, CommerceProduct>(
+    (products || []).map((product: CommerceProduct) => [String(product.id), product]),
+  );
   const venue = await venueContext(admin, order.venue_id);
-  const customerId = userId ? await resolveCustomerIdForUser(admin, userId) : null;
+  const customerId = resolvedCustomerId ?? (userId ? await resolveCustomerIdForUser(admin, userId) : order.customer_id || null);
   const lineById = new Map(lines.map((line) => [line.id, line]));
   const resolved: any[] = [];
   for (const line of lines) {
@@ -362,6 +572,10 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
       commerce_kind: product.commerce_kind,
       fulfillment_type: product.fulfillment_type,
       quantity: line.quantity,
+      activity_session_id: line.activity_session_id,
+      session_date: line.session_date,
+      session_registration_id: line.session_registration_id,
+      parent_line_id: line.parent_line_id,
       unit_price_minor: unitPriceMinor,
       discount_minor: 0,
       vat_rate: Number(product.vat_rate || 0),
@@ -382,7 +596,23 @@ async function resolveLines(admin: any, order: any, lines: any[], userId?: strin
   return resolved;
 }
 
-async function acquireParticipationHold(admin: any, order: any, line: any, userId: string, customerId: string | null) {
+async function assertParticipationCapacityAvailable(admin: any, order: any, lines: any[]) {
+  const participation = lines.find((line) => line.commerce_kind === 'participation');
+  if (!participation?.activity_session_id || !participation?.session_date) return;
+  const { data, error } = await admin.rpc('capacity_fill', {
+    p_venue_id: order.venue_id,
+    p_scope_type: 'activity_session',
+    p_scope_id: participation.activity_session_id,
+    p_session_date: participation.session_date,
+  });
+  if (error) throw new Error(error.message);
+  const fill = Array.isArray(data) ? data[0] : data;
+  if (fill?.available_count !== null && Number(fill?.available_count ?? 0) <= 0) {
+    throw new Error('Platsen hann tas — välj ett annat pass.');
+  }
+}
+
+async function acquireParticipationHold(admin: any, order: any, line: any, userId: string | null, customerId: string | null) {
   const { data, error } = await admin.rpc('acquire_capacity_hold', {
     p_venue_id: order.venue_id,
     p_scope_type: 'activity_session',
@@ -396,8 +626,9 @@ async function acquireParticipationHold(admin: any, order: any, line: any, userI
     p_metadata: { commerce_order_id: order.id, commerce_order_line_id: line.id },
   }).maybeSingle();
   if (error) throw new Error(error.message);
-  if (!data?.ok || !data?.hold_id) throw new Error('Platsen hann tas — välj ett annat pass.');
-  return data.hold_id as string;
+  const hold = (data || {}) as { ok?: boolean; hold_id?: string };
+  if (!hold.ok || !hold.hold_id) throw new Error('Platsen hann tas — välj ett annat pass.');
+  return hold.hold_id;
 }
 
 async function releaseHold(admin: any, holdId?: string | null, reason = 'commerce_checkout_failed') {
@@ -405,7 +636,7 @@ async function releaseHold(admin: any, holdId?: string | null, reason = 'commerc
   await admin.rpc('release_capacity_hold', { p_hold_id: holdId, p_reason: reason });
 }
 
-async function commitFreeParticipation(admin: any, order: any, line: any, resolvedLine: any, userId: string, customerId: string | null, holdId: string) {
+async function commitFreeParticipation(admin: any, order: any, line: any, resolvedLine: any, userId: string | null, customerId: string | null, holdId: string) {
   const { data, error } = await admin.rpc('commit_activity_registration_capacity', {
     p_venue_id: order.venue_id,
     p_activity_session_id: line.activity_session_id,
@@ -462,7 +693,7 @@ Deno.serve(async (req) => {
       ]);
       if (productError || relationshipError) throw new Error(productError?.message || relationshipError?.message);
       const relatedProductIds = new Set((relationships || []).map((relationship: any) => relationship.target_product_id));
-      const availableProducts = (products || []).filter((product: any) => {
+      const availableProducts = (products || []).filter((product) => {
         if (product.commerce_kind === 'participation') {
           return evaluateCommerceAvailability(product, {
             channel: 'participation',
@@ -479,8 +710,9 @@ Deno.serve(async (req) => {
           hasActiveRelationship: relatedProductIds.has(product.id),
         });
         return store.eligible || addon.eligible;
-      }).map((product: any) => ({
+      }).map((product) => ({
         ...product,
+        max_quantity: productMaxQuantity(product),
         store_eligible: evaluateCommerceAvailability(product, {
           channel: 'standalone',
           venueCommerceEnabled: venue.commerce_enabled === true,
@@ -494,27 +726,93 @@ Deno.serve(async (req) => {
       }, 200, 0);
     }
 
+    if (req.method === 'POST' && path === 'event') {
+      const body = await req.json();
+      const eventName = String(body.event_name || '').trim();
+      const venueId = String(body.venue_id || '').trim();
+      const activitySessionId = String(body.activity_session_id || '').trim();
+      const journeyId = String(body.journey_id || '').trim();
+      if (!CLIENT_COMMERCE_EVENTS.has(eventName)) return errorResponse('Unsupported event', 400);
+      if (!venueId || !activitySessionId || journeyId.length < 16) return errorResponse('Invalid event scope', 400);
+      await venueContext(admin, venueId);
+      const { data: activity } = await admin.from('activity_sessions')
+        .select('id')
+        .eq('id', activitySessionId)
+        .eq('venue_id', venueId)
+        .eq('is_active', true)
+        .eq('publish_status', 'published')
+        .maybeSingle();
+      if (!activity) return errorResponse('Activity not found', 404);
+      await recordCommerceEvent(admin, {
+        eventName,
+        venueId,
+        activitySessionId,
+        journeyId,
+        metadata: { authenticated: Boolean(userId), source: 'activity_drawer' },
+      });
+      return jsonResponse({ recorded: true }, 202, 0);
+    }
+
+    if (req.method === 'GET' && path === 'draft') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      const draftScope = normalizeActivityDraftScope(url.searchParams.get('scope'));
+      if (!venueId || !draftScope) return errorResponse('Invalid activity draft scope', 400);
+      const order = await findAuthenticatedActivityDraft(admin, venueId, userId, draftScope);
+      if (!order) return errorResponse('Cart not found', 404);
+      return jsonResponse(await cartResponse(admin, order, order.id), 200, 0);
+    }
+
     if (req.method === 'POST' && path === 'cart') {
       const body = await req.json();
       const venueId = String(body.venue_id || '').trim();
       const venue = await venueContext(admin, venueId);
+      const lines = await validateCartItems(admin, venueId, body.items, userId);
+      const suppliedDraftScope = normalizeActivityDraftScope(body.draft_scope);
+      if (body.draft_scope && !suppliedDraftScope) return errorResponse('Invalid activity draft scope', 400);
+      if (suppliedDraftScope && !userId) return errorResponse('Unauthorized', 401);
+      const participation = lines.find((line) => line.commerce_kind === 'participation');
+      const canonicalDraftScope = participation
+        ? `activity:${participation.activity_session_id}:${participation.session_date}`.toLowerCase()
+        : '';
+      if (suppliedDraftScope && suppliedDraftScope !== canonicalDraftScope) {
+        return errorResponse('Activity draft scope does not match cart', 409);
+      }
+      const persistentDraftScope = userId ? suppliedDraftScope : '';
       const token = newCartToken();
       const tokenHash = await sha256(token);
+      const journeyId = String(body.journey_id || '').trim().slice(0, 120);
+      const journeyIdHash = journeyId.length >= 16 ? await sha256(journeyId) : null;
       const customerId = userId ? await resolveOrCreateCustomerIdForUser(admin, userId, venueId, 'commerce_cart') : null;
-      const { data: order, error: orderError } = await admin.from('commerce_orders').insert({
-        organization_id: venue.organization_id,
-        venue_id: venueId,
-        customer_id: customerId,
-        user_id: userId,
-        guest_token_hash: tokenHash,
-        guest_name: body.guest_name || null,
-        guest_email: body.guest_email ? String(body.guest_email).trim().toLowerCase() : null,
-        guest_phone: body.guest_phone || null,
-        metadata: { source: body.source || 'commerce_cart' },
-      }).select('*').single();
-      if (orderError) throw new Error(orderError.message);
+      let order = persistentDraftScope
+        ? await findAuthenticatedActivityDraft(admin, venueId, userId!, persistentDraftScope)
+        : null;
+      let created = false;
+      if (!order) {
+        const { data: insertedOrder, error: orderError } = await admin.from('commerce_orders').insert({
+          organization_id: venue.organization_id,
+          venue_id: venueId,
+          customer_id: customerId,
+          user_id: userId,
+          guest_token_hash: tokenHash,
+          draft_scope: persistentDraftScope || null,
+          expires_at: persistentDraftScope ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+          guest_name: body.guest_name || null,
+          guest_email: body.guest_email ? String(body.guest_email).trim().toLowerCase() : null,
+          guest_phone: body.guest_phone || null,
+          metadata: { source: body.source || 'commerce_cart', journey_id_hash: journeyIdHash },
+        }).select('*').single();
+        if (orderError?.code === '23505' && persistentDraftScope) {
+          order = await findAuthenticatedActivityDraft(admin, venueId, userId!, persistentDraftScope);
+        } else if (orderError) {
+          throw new Error(orderError.message);
+        } else {
+          order = insertedOrder;
+          created = true;
+        }
+      }
+      if (!order) throw new Error('Cart not found');
       try {
-        const lines = await validateCartItems(admin, venueId, body.items, userId);
         const { data: replaced, error: replaceError } = await admin.rpc('replace_commerce_cart_lines', {
           p_order_id: order.id,
           p_expected_version: order.version,
@@ -523,18 +821,25 @@ Deno.serve(async (req) => {
           p_guest_email: body.guest_email || null,
           p_guest_phone: body.guest_phone || null,
         }).maybeSingle();
-        if (replaceError) throw new Error(replaceError.message);
-        order.version = replaced.version;
+        const replacedRow = replaced as RpcVersionRow | null;
+        if (replaceError || replacedRow?.version == null) throw new Error(replaceError?.message || 'Cart update failed');
+        order.version = replacedRow.version;
+        if (persistentDraftScope) {
+          await admin.from('commerce_orders').update({
+            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          }).eq('id', order.id).eq('status', 'draft');
+        }
       } catch (error) {
-        await admin.from('commerce_orders').delete().eq('id', order.id).eq('status', 'draft');
+        if (created) await admin.from('commerce_orders').delete().eq('id', order.id).eq('status', 'draft');
         throw error;
       }
-      return jsonResponse(await cartResponse(admin, order, token), 201, 0);
+      const reference = persistentDraftScope ? order.id : token;
+      return jsonResponse(await cartResponse(admin, order, reference), created ? 201 : 200, 0);
     }
 
     if (req.method === 'PUT' && path === 'cart') {
       const body = await req.json();
-      const order = await loadOrderByToken(admin, String(body.token || ''), userId);
+      const order = await loadOrderByReference(admin, String(body.token || ''), userId);
       const lines = await validateCartItems(admin, order.venue_id, body.items, userId);
       const { data, error } = await admin.rpc('replace_commerce_cart_lines', {
         p_order_id: order.id,
@@ -544,30 +849,32 @@ Deno.serve(async (req) => {
         p_guest_email: body.guest_email || null,
         p_guest_phone: body.guest_phone || null,
       }).maybeSingle();
-      if (error) throw new Error(error.message);
-      order.version = data.version;
+      const updatedRow = data as RpcVersionRow | null;
+      if (error || updatedRow?.version == null) throw new Error(error?.message || 'Cart update failed');
+      order.version = updatedRow.version;
       return jsonResponse(await cartResponse(admin, order, String(body.token || '')), 200, 0);
     }
 
     if (req.method === 'GET' && path === 'order') {
       const token = url.searchParams.get('token') || '';
-      const order = await loadOrderByToken(admin, token, userId, true);
+      const order = await loadOrderByReference(admin, token, userId, true);
       return jsonResponse(await cartResponse(admin, order), 200, 0);
     }
 
     if (req.method === 'POST' && path === 'resolve') {
       const body = await req.json();
-      const order = await loadOrderByToken(admin, String(body.token || ''), userId);
+      const order = await loadOrderByReference(admin, String(body.token || ''), userId);
       if (order.status !== 'draft') return errorResponse('Cart is not editable', 409);
       const lines = await loadOrderLines(admin, order.id);
       const resolved = await resolveLines(admin, order, lines, userId);
-      return jsonResponse({ order: { id: order.id, version: order.version, currency: order.currency }, lines: resolved }, 200, 0);
+      await assertParticipationCapacityAvailable(admin, order, lines);
+      return jsonResponse({ order: { id: order.id, version: order.version, currency: order.currency }, lines: resolved.map(projectOrderLine), checkout_ready: true }, 200, 0);
     }
 
     if (req.method === 'POST' && path === 'checkout') {
       const body = await req.json();
       const token = String(body.token || '');
-      const order = await loadOrderByToken(admin, token, userId);
+      const order = await loadOrderByReference(admin, token, userId);
       if (order.status !== 'draft') return errorResponse('Cart is not editable', 409);
       if (order.version !== Number(body.expected_version)) return errorResponse('Cart changed — review it again.', 409);
       const checkoutGuestEmail = body.guest_email ? String(body.guest_email).trim().toLowerCase() : order.guest_email;
@@ -605,12 +912,13 @@ Deno.serve(async (req) => {
         p_expected_version: order.version,
         p_lines: resolved,
       }).maybeSingle();
-      if (freezeError) {
+      const frozenOrder = frozen as RpcVersionRow | null;
+      if (freezeError || frozenOrder?.version == null) {
         await releaseHold(admin, holdId, 'commerce_freeze_failed');
-        throw new Error(freezeError.message);
+        throw new Error(freezeError?.message || 'Cart freeze failed');
       }
 
-      if (Number(frozen.total_inc_vat_minor || 0) === 0) {
+      if (Number(frozenOrder.total_inc_vat_minor || 0) === 0) {
         try {
           if (!participation[0] || !holdId || !userId) throw new Error('Free order has no participation');
           const resolvedParticipation = resolved.find((line) => line.id === participation[0].id);
@@ -631,7 +939,7 @@ Deno.serve(async (req) => {
       }
       if (!customerEmail) {
         await releaseHold(admin, holdId, 'commerce_missing_email');
-        await admin.rpc('reopen_commerce_order_after_checkout_failure', { p_order_id: order.id, p_version: frozen.version });
+        await admin.rpc('reopen_commerce_order_after_checkout_failure', { p_order_id: order.id, p_version: frozenOrder.version });
         return errorResponse('E-post krävs för kvitto och uthämtning.', 400);
       }
 
@@ -658,20 +966,20 @@ Deno.serve(async (req) => {
             })),
           metadata: {
             commerce_order_id: order.id,
-            commerce_order_version: String(frozen.version),
+            commerce_order_version: String(frozenOrder.version),
           },
           success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${cancelPath}`,
         });
       } catch (error) {
         await releaseHold(admin, holdId, 'commerce_stripe_create_failed');
-        await admin.rpc('reopen_commerce_order_after_checkout_failure', { p_order_id: order.id, p_version: frozen.version });
+        await admin.rpc('reopen_commerce_order_after_checkout_failure', { p_order_id: order.id, p_version: frozenOrder.version });
         throw error;
       }
 
       const { data: attached, error: attachError } = await admin.rpc('attach_commerce_order_stripe_session', {
         p_order_id: order.id,
-        p_version: frozen.version,
+        p_version: frozenOrder.version,
         p_stripe_session_id: stripeSession.id,
       });
       if (attachError || !attached) throw new Error(attachError?.message || 'Could not attach Stripe session');
@@ -682,7 +990,14 @@ Deno.serve(async (req) => {
         });
         if (holdAttachError) throw new Error(holdAttachError.message);
       }
-      return jsonResponse({ url: stripeSession.url, order_id: order.id, version: frozen.version });
+      await recordCommerceEvent(admin, {
+        eventName: 'checkout_started',
+        venueId: order.venue_id,
+        orderId: order.id,
+        activitySessionId: String(participation[0]?.activity_session_id || '') || null,
+        journeyId: body.journey_id,
+      });
+      return jsonResponse({ url: stripeSession.url, order_id: order.id, version: frozenOrder.version });
     }
 
     if (req.method === 'GET' && path === 'my-orders') {
@@ -747,7 +1062,7 @@ Deno.serve(async (req) => {
         : { data: [], error: null };
       if (lineError) throw new Error(lineError.message);
       const orderById = new Map((orders || []).map((order: any) => [order.id, order]));
-      return jsonResponse({ items: (lines || []).map((line: any) => ({ ...line, order: orderById.get(line.commerce_order_id) })) }, 200, 5);
+      return jsonResponse({ items: (lines || []).map((line) => ({ ...line, order: orderById.get(line.commerce_order_id) })) }, 200, 5);
     }
 
     if (req.method === 'PATCH' && path === 'fulfillment') {
