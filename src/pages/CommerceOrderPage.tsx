@@ -120,7 +120,6 @@ export default function CommerceOrderPage() {
             {activity.venue_name ? <p className="mt-1 text-sm text-slate-500">{activity.venue_name}</p> : null}
             {order.customer_name ? <p className="mt-3 text-sm"><span className="text-slate-500">Spelare</span> · <strong>{order.customer_name}</strong></p> : null}
             <p className="mt-1 text-xs text-slate-500">Referens {purchaseReference}</p>
-            {!requiresGuestClaim ? <a href="#ticket" className="mt-4 inline-flex text-sm font-black text-slate-950 underline underline-offset-4">Visa biljett</a> : null}
           </section>
         ) : null}
         {racketInstruction ? <section className="mb-6 border-t border-black/10 px-1 pt-5"><h2 className="font-black">Hyrrack</h2><p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{racketInstruction.summary} {racketInstruction.pickup}</p></section> : null}
@@ -141,7 +140,10 @@ export default function CommerceOrderPage() {
             {!order.account_claimed ? user ? (
               <button type="button" onClick={() => claimAccount.mutate()} disabled={claimAccount.isPending} className="mt-3 h-11 w-full rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950 disabled:opacity-40">Koppla köpet till mitt konto</button>
             ) : (
-              <button type="button" onClick={startAuth} className="mt-3 h-11 w-full rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950">Spara biljett, kvitto och historik</button>
+              <div className="mt-3">
+                <button type="button" onClick={startAuth} className="h-11 w-full rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950">Spara bokningen</button>
+                <p className="mt-2 text-center text-xs leading-relaxed text-slate-500">Skapa konto och få biljett, kvitto och bokningshistorik på Min sida.</p>
+              </div>
             ) : null}
           </section>
         ) : null}

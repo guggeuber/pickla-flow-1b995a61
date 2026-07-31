@@ -178,6 +178,8 @@ describe("Commerce R1 confirmed purchase state", () => {
     const managementLink = await screen.findByRole("link", { name: "Visa bokning" });
     expect(managementLink).toHaveAttribute("href", "/my?registration=registration-1&v=solna");
     expect(screen.getByRole("link", { name: "Öppna aktivitet och chatt" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Visa biljett" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Spara bokningen" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Avboka" })).not.toBeInTheDocument();
   });
 
@@ -188,7 +190,9 @@ describe("Commerce R1 confirmed purchase state", () => {
     }));
     renderOrder();
 
-    expect(await screen.findByRole("button", { name: "Spara biljett, kvitto och historik" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Spara bokningen" })).toBeInTheDocument();
+    expect(screen.getByText("Skapa konto och få biljett, kvitto och bokningshistorik på Min sida.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Visa biljett" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Visa bokning" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Öppna aktivitet och chatt" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Till Min sida" })).not.toBeInTheDocument();
