@@ -74,7 +74,7 @@ export function isCartVersionConflict(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { message?: unknown; status?: unknown };
   return Number(candidate.status || 0) === 409
-    && /cart changed|stale_cart_version/i.test(String(candidate.message || ""));
+    && /cart changed|stale_cart_version|priset uppdaterades/i.test(String(candidate.message || ""));
 }
 
 export function isCheckoutEmailRequired(error: unknown): boolean {

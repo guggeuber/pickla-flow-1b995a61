@@ -95,6 +95,29 @@ async function countActivityFill(client: any, venueId: string, activitySessionId
   return count || 0;
 }
 
+async function countActivityEarlyBirdFill(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
+  const { data: fillRows, error: fillError } = await client.rpc('activity_early_bird_fill', {
+    p_venue_id: venueId,
+    p_activity_session_id: activitySessionId,
+    p_session_date: sessionDate,
+  });
+  const fill = Array.isArray(fillRows) ? fillRows[0] : fillRows;
+  if (!fillError && fill) return Number(fill.fill_count || 0);
+
+  const { count, error } = await client
+    .from('session_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('activity_session_id', activitySessionId)
+    .eq('session_date', sessionDate)
+    .in('status', ['confirmed', 'checked_in', 'no_show'])
+    .eq('metadata->>pricing_reason', 'early_bird');
+  if (error) {
+    console.error('early-bird allocation count failed', error.message);
+    return 0;
+  }
+  return count || 0;
+}
+
 export type ActivityPricingDecision = {
   activitySessionId: string;
   sessionDate: string;
@@ -126,6 +149,7 @@ export async function resolveActivityPricingDecision({
   salesChannel = 'online',
   session: providedSession,
   productCache,
+  applyEarlyBird = true,
 }: {
   client: any;
   venueId: string;
@@ -138,6 +162,7 @@ export async function resolveActivityPricingDecision({
   salesChannel?: string | null;
   session?: any | null;
   productCache?: Map<string, Promise<any>>;
+  applyEarlyBird?: boolean;
 }): Promise<ActivityPricingDecision> {
   const session = providedSession?.id
     ? providedSession
@@ -198,9 +223,12 @@ export async function resolveActivityPricingDecision({
   const registrationsCount = shouldCountRegistrations
     ? await countActivityFill(client, venueId, activitySessionId, sessionDate)
     : 0;
+  const earlyBirdFill = purchaseKind === 'activity_ticket' && scarcityMode === 'early_bird'
+    ? await countActivityEarlyBirdFill(client, venueId, activitySessionId, sessionDate)
+    : 0;
   const earlyBirdPriceSek = minorToSek(earlyBirdPriceMinor);
-  const earlyBirdRemaining = earlyBirdSlots ? Math.max(earlyBirdSlots - registrationsCount, 0) : 0;
-  const earlyBirdActive = purchaseKind === 'activity_ticket' &&
+  const earlyBirdRemaining = earlyBirdSlots ? Math.max(earlyBirdSlots - earlyBirdFill, 0) : 0;
+  const earlyBirdActive = applyEarlyBird && purchaseKind === 'activity_ticket' &&
     scarcityMode === 'early_bird' &&
     earlyBirdPriceSek != null &&
     Boolean(earlyBirdSlots) &&
@@ -253,6 +281,7 @@ export async function resolveActivityPricingDecision({
     resolved_product_key: productKey,
     product_kind: product?.product_kind || null,
     purchase_kind: purchaseKind,
+    early_bird_applied_during_resolution: applyEarlyBird,
     product_base_amount_sek: product?.base_price_sek ?? null,
     base_amount_sek: baseAmountSek,
     online_price_sek: onlinePriceSek || null,
@@ -287,6 +316,7 @@ export async function resolveActivityPricingDecision({
         price_sek: earlyBirdPriceSek,
         slots: earlyBirdSlots,
         remaining: earlyBirdRemaining,
+        allocated_count: earlyBirdFill,
       },
     },
   };
