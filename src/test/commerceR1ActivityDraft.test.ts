@@ -109,17 +109,30 @@ describe("Commerce R1 activity draft", () => {
     expect(programSource).not.toContain('label: "Intresserad"');
     expect(programSource).toContain("Chatt");
     expect(programSource).toContain("Dela");
+    expect(programSource).toContain('aria-label="Chatt"');
+    expect(programSource).toContain('aria-label="Dela"');
+    expect(programSource).toContain('headerActions={');
+    expect(programSource).toContain("fixedFooter");
+    expect(programSource).not.toContain('aria-label="Aktivitetsalternativ"');
+    expect(programSource).toContain('showInvitation={purchaseMode}');
     expect(programSource).toContain("authLoading || loading || queueLoading || checkinLoading || pricingPending");
     expect(programSource).toContain('Medlem? Logga in för ditt pris');
+    expect(programSource).toContain('Gäller detta pass.');
+    expect(programSource).toContain('Alla Open Play-pass idag.');
     expect(programSource).toContain('`Fortsätt · ${formatCommerceMoney(commerceTotalMinor)}`');
     expect(programSource).not.toContain('"Häng på"');
     expect(programSource).not.toContain('"Köp plats"');
   });
 
   it("keeps the pinned controls outside the scroll viewport with iOS safe-area padding", () => {
-    expect(drawerSource).toContain("relative z-20 shrink-0");
+    expect(drawerSource).toContain('data-testid="session-fixed-action"');
+    expect(drawerSource).toContain('fixedFooter ? "absolute inset-x-0 bottom-0"');
+    expect(drawerSource).toContain('"z-20 border-t border-neutral-200');
     expect(drawerSource).toContain("overflow-y-auto overscroll-contain");
+    expect(drawerSource).toContain("pb-[calc(92px+env(safe-area-inset-bottom,0px)+24px)]");
     expect(drawerSource).toContain("env(safe-area-inset-bottom,0px)");
-    expect(drawerSource).not.toContain('className="sticky bottom-0');
+    expect(drawerSource).toContain('data-testid="session-header-actions"');
+    expect(drawerSource).toContain("[&>div:first-child]:hidden");
+    expect(drawerSource).toContain("overflow-clip");
   });
 });

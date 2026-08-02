@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { apiPost } from "@/lib/api";
 import {
+  COMMERCE_PICKUP_COPY,
   commerceJourneyId,
   commerceRacketOrderSummaryInstruction,
   commerceRacketPickupQuantity,
@@ -39,12 +40,6 @@ function nestedNumber(value: unknown, path: string[]) {
 
 function lineTotalMinor(line: CommerceOrderLine) {
   return Number(line.unit_price_minor || 0) * Number(line.quantity || 1);
-}
-
-function lineVatMinor(line: CommerceOrderLine) {
-  const total = lineTotalMinor(line);
-  const rate = Number(line.vat_rate || 0);
-  return rate > 0 ? Math.round(total * rate / (100 + rate)) : 0;
 }
 
 function originalUnitPriceMinor(line: CommerceOrderLine) {
@@ -112,7 +107,6 @@ export default function CommerceCartPage() {
     [orderQuery.data?.lines, resolveQuery.data?.lines],
   );
   const total = useMemo(() => lines.reduce((sum, line) => sum + lineTotalMinor(line), 0), [lines]);
-  const totalVat = useMemo(() => lines.reduce((sum, line) => sum + lineVatMinor(line), 0), [lines]);
   const totalSavings = useMemo(() => lines.reduce((sum, line) => (
     sum + Math.max(0, originalUnitPriceMinor(line) - Number(line.unit_price_minor || 0)) * Number(line.quantity || 1)
   ), 0), [lines]);
@@ -216,9 +210,9 @@ export default function CommerceCartPage() {
             const lineMetadata = isRacketLine && racketInstruction
               ? `Antal ${line.quantity} · ${racketInstruction}`
               : line.fulfillment_type === "desk_pickup"
-                ? `Antal ${line.quantity} · Hämtas ut i desken`
+                ? `Antal ${line.quantity} · ${COMMERCE_PICKUP_COPY}`
                 : isDayPassLine
-                  ? "Gäller inkluderade Open Play-pass denna dag"
+                  ? "Alla Open Play-pass idag."
                   : isActivityParticipationLine
                     ? null
                   : "Personlig plats";
@@ -229,7 +223,6 @@ export default function CommerceCartPage() {
                   <div className="min-w-0">
                     <p className="font-bold">{lineName}</p>
                     {lineMetadata ? <p className="mt-1 text-xs leading-relaxed text-slate-600">{lineMetadata}</p> : null}
-                    <p className="mt-1 text-[11px] font-semibold text-slate-400">Varav moms {formatCommerceMoney(lineVatMinor(line))}</p>
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
@@ -252,10 +245,8 @@ export default function CommerceCartPage() {
       <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
         <div className="mx-auto max-w-xl">
           <div className="mb-1 flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><span className="text-2xl font-black">{serverPricingReady ? formatCommerceMoney(total) : "—"}</span></div>
-          <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-500"><span>Varav moms</span><span>{serverPricingReady ? formatCommerceMoney(totalVat) : "—"}</span></div>
           {totalSavings > 0 ? <p className="mb-3 text-sm font-bold text-slate-700">Du sparar {formatCommerceMoney(totalSavings)}</p> : null}
-          <p className="mb-3 text-center text-xs font-semibold text-slate-500">Platsen bekräftas direkt efter betalning.</p>
-          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || !serverPricingReady || needsEmail} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
+          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || !serverPricingReady || needsEmail} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
         </div>
       </footer>
     </div>

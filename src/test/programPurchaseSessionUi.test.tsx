@@ -26,13 +26,14 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/lib/commerce", () => ({
+  COMMERCE_PICKUP_COPY: "Hämtas vid disken.",
   commerceJourneyId: () => "test-commerce-journey-id",
   commerceRacketPickupQuantity: (lines: Array<Record<string, unknown>>) => lines.reduce((sum, line) => (
     line.product_name === "Hyrrack" ? sum + Number(line.quantity || 0) : sum
   ), 0),
   commerceRacketOrderSummaryInstruction: (quantity: number) => quantity <= 0
     ? null
-    : "Hämtas ut i desken genom att uppge ditt namn.",
+    : "Hämtas vid disken.",
   fetchCommerceOrder: mocks.fetchOrder,
   formatCommerceMoney: (minor: number) => `${minor / 100} kr`,
   isCommerceOrderIdReference: () => false,
@@ -98,7 +99,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("program purchase request UI guard", () => {
-  it("presents an included membership line, VAT and savings from resolved server pricing", async () => {
+  it("presents an included membership line and savings without VAT in the purchase UI", async () => {
     const includedOrder = {
       order: {
         id: "order-1",
@@ -143,8 +144,7 @@ describe("program purchase request UI guard", () => {
     expect(screen.getByText("Ingår i Founder")).not.toHaveClass("text-emerald-700");
     expect(screen.getByText("Du sparar 165 kr")).toHaveClass("text-slate-700");
     await waitFor(() => expect(screen.getByRole("button", { name: "Betala 0 kr" })).toBeEnabled());
-    expect(screen.getByText(/Varav moms 0 kr/)).toBeInTheDocument();
-    expect(screen.getByText("Varav moms")).toBeInTheDocument();
+    expect(screen.queryByText(/moms/i)).not.toBeInTheDocument();
   });
 
   it("shows a server-priced order summary without pickup copy when no racket is selected", async () => {
@@ -157,7 +157,7 @@ describe("program purchase request UI guard", () => {
     renderCart();
 
     expect(await screen.findByRole("heading", { name: "Ordersammanfattning" })).toBeInTheDocument();
-    expect(screen.getByText("Platsen bekräftas direkt efter betalning.")).toBeInTheDocument();
+    expect(screen.queryByText("Platsen bekräftas direkt efter betalning.")).not.toBeInTheDocument();
     expect(screen.queryByText(/Uppge ditt namn/)).not.toBeInTheDocument();
     expect(screen.queryByText(/En betalning, ett kvitto/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Betala 59.4 kr" })).toBeEnabled());
@@ -237,7 +237,7 @@ describe("program purchase request UI guard", () => {
 
     renderCart();
 
-    const pickupCopy = `Antal ${quantity} · Hämtas ut i desken genom att uppge ditt namn.`;
+    const pickupCopy = `Antal ${quantity} · Hämtas vid disken.`;
     expect(await screen.findByText(pickupCopy)).toBeInTheDocument();
     expect(screen.getByText(pickupCopy).parentElement).toHaveTextContent("Hyrrack");
     const productIcon = screen.getByTestId("commerce-line-product-icon");

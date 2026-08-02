@@ -133,8 +133,8 @@ describe("Commerce R1 confirmed purchase state", () => {
   });
 
   it.each([
-    [1, "Du har hyrt 1 rack. Hämta ut det i desken genom att uppge ditt namn."],
-    [2, "Du har hyrt 2 rack. Hämta ut dem i desken genom att uppge ditt namn."],
+    [1, "Du har hyrt 1 rack. Hämtas vid disken."],
+    [2, "Du har hyrt 2 rack. Hämtas vid disken."],
   ])("shows confirmed pickup copy for Hyrrack quantity %s", async (quantity, pickupCopy) => {
     const lines = [participationLine, racketLine(Number(quantity))];
     mocks.fetchOrder.mockResolvedValue(orderResponse({}, lines));
@@ -153,7 +153,7 @@ describe("Commerce R1 confirmed purchase state", () => {
     expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
     expect(screen.getByText("Ej längre tillgänglig för uthämtning")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Hyrrack" })).not.toBeInTheDocument();
-    expect(screen.queryByText(/Hämta ut det i desken/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Hämtas vid disken/)).not.toBeInTheDocument();
   });
 
   it("keeps the confirmed ticket neutral and free of success colours", async () => {

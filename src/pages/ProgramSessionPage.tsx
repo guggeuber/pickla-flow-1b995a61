@@ -19,6 +19,7 @@ import { activitySessionToPresentation } from "@/lib/sessionPresentation";
 import {
   activityCommerceDraftScope,
   activityCommerceSelectionKey,
+  COMMERCE_PICKUP_COPY,
   commerceProductMaxQuantity,
   commerceJourneyId,
   createCommerceCart,
@@ -985,64 +986,45 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           open
           onOpenChange={closeDrawer}
           presentation={sessionPresentation}
+          fixedFooter
+          headerActions={
+            <>
+              <button
+                type="button"
+                onClick={openChat}
+                disabled={!room?.id}
+                className="grid h-11 w-11 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 disabled:opacity-40"
+                aria-label="Chatt"
+              >
+                {previewLoading && !room?.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <MessageCircle className="h-5 w-5" />}
+              </button>
+              <button
+                type="button"
+                onClick={shareActivity}
+                className="grid h-11 w-11 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+                aria-label="Dela"
+              >
+                <Share2 className="h-5 w-5" />
+              </button>
+            </>
+          }
           footer={
-            <div className="space-y-2">
-              <SessionActions
-                primary={{
-                  key: "primary",
-                  label: ctaLabel,
-                  onClick: isRegistered ? checkInTicket : startSignup,
-                  disabled: authLoading || loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow),
-                  icon: loading || queueLoading || checkinLoading ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : isRegistered ? (
-                    isCheckedIn ? <UserCheck className="h-5 w-5" /> : <Check className="h-5 w-5" />
-                  ) : null,
-                }}
-                secondary={isRegistered ? [{
-                    key: "chat",
-                    label: "Chatt",
-                    onClick: openChat,
-                    disabled: !room?.id,
-                    icon: previewLoading && !room?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />,
-                  }] : []}
-              />
-              {!isRegistered ? (
-                <div className="grid grid-cols-2 gap-2 pt-1" aria-label="Aktivitetsalternativ">
-                  <button type="button" onClick={openChat} disabled={!room?.id} className="flex h-10 items-center justify-center gap-2 rounded-xl text-[13px] font-semibold text-neutral-500 disabled:opacity-40">
-                    {previewLoading && !room?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
-                    Chatt
-                  </button>
-                  <button type="button" onClick={shareActivity} className="flex h-10 items-center justify-center gap-2 rounded-xl text-[13px] font-semibold text-neutral-500">
-                    <Share2 className="h-4 w-4" />
-                    Dela
-                  </button>
-                </div>
-              ) : null}
-              {!isRegistered && !user?.id && commercePilotEnabled ? (
-                <button
-                  type="button"
-                  onClick={() => navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`)}
-                  className="w-full py-1 text-center text-[12px] font-semibold text-neutral-500 underline underline-offset-2"
-                >
-                  Medlem? Logga in för ditt pris
-                </button>
-              ) : null}
-              {isRegistered ? (
-                <button
-                  type="button"
-                  onClick={shareActivity}
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-100 px-4 text-[14px] font-semibold text-slate-950"
-                  style={{ fontFamily: FONT_HEADING }}
-                >
-                  <Share2 className="h-4 w-4" />
-                  Bjud in en vän
-                </button>
-              ) : null}
-            </div>
+            <SessionActions
+              primary={{
+                key: "primary",
+                label: ctaLabel,
+                onClick: isRegistered ? checkInTicket : startSignup,
+                disabled: authLoading || loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow),
+                icon: loading || queueLoading || checkinLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : isRegistered ? (
+                  isCheckedIn ? <UserCheck className="h-5 w-5" /> : <Check className="h-5 w-5" />
+                ) : null,
+              }}
+            />
           }
         >
-          <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={!purchaseMode} />
+          <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={purchaseMode} />
 
           {isRegistered ? (
             <div className="rounded-[22px] border border-black/10 bg-white px-4 py-3">
@@ -1079,7 +1061,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               {participationItems.map((item) => (
                 <div key={item.id} className="flex items-center justify-between gap-3 py-1 text-[13px] font-bold text-slate-950">
                   <span>{item.product_name} {item.quantity > 1 ? `· ${item.quantity} st` : ""} ✓</span>
-                  <span className="text-[11px] text-slate-500">{item.fulfillment_status === "collected" ? "Uthämtad" : "Hämtas ut i desken"}</span>
+                  <span className="text-[11px] text-slate-500">{item.fulfillment_status === "collected" ? "Uthämtad" : COMMERCE_PICKUP_COPY}</span>
                 </div>
               ))}
             </div>
@@ -1098,11 +1080,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 data-testid="commerce-option-activity-ticket"
                 aria-pressed={commercePurchaseKind === "activity_ticket"}
                 onClick={() => selectCommercePurchaseKind("activity_ticket")}
-                className="flex w-full items-start justify-between gap-4 border-b border-black/10 py-4 text-left"
+                className="flex w-full items-start justify-between gap-4 border-b border-black/10 py-4 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-neutral-950"
               >
                 <span>
                   <span className="block text-[14px] font-black text-slate-950">Personlig plats</span>
-                  <span className="mt-1 block text-[12px] font-semibold text-slate-500">Gäller det här passet.</span>
+                  <span className="mt-1 block text-[12px] font-semibold text-slate-500">Gäller detta pass.</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
                   {backendPricing?.checkoutLabel || formatSek(Number(backendPricing?.finalAmountSek || 0))}
@@ -1114,11 +1096,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 data-testid="commerce-option-day-pass"
                 aria-pressed={commercePurchaseKind === "day_pass"}
                 onClick={() => selectCommercePurchaseKind("day_pass")}
-                className="flex w-full items-start justify-between gap-4 py-4 text-left"
+                className="flex w-full items-start justify-between gap-4 py-4 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-neutral-950"
               >
                 <span>
                   <span className="block text-[14px] font-black text-slate-950">Spela hela dagen</span>
-                  <span className="mt-1 block text-[12px] font-semibold text-slate-500">{commerceDayPassProduct.name} · Gäller inkluderade Open Play-pass på Pickla denna dag.</span>
+                  <span className="mt-1 block text-[12px] font-semibold text-slate-500">Alla Open Play-pass idag.</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
                   {dayPassPricing.checkoutLabel || formatSek(Number(dayPassPricing.finalAmountSek || commerceDayPassProduct.base_price_sek || 0))}
@@ -1142,16 +1124,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <h4 className="break-words font-black">{product.name}</h4>
-                          <p className="mt-0.5 text-[11px] font-semibold text-neutral-500">Hämtas ut i desken</p>
+                          <p className="mt-0.5 text-[11px] font-semibold text-neutral-500">{COMMERCE_PICKUP_COPY}</p>
                         </div>
                         <p className="shrink-0 font-black">{formatCommerceMoney(product.base_price_sek * 100)}</p>
                       </div>
                       <div className="mt-3 flex items-center justify-between gap-3">
                         <span className="text-[11px] font-semibold text-neutral-500">Antal</span>
                         <div className="flex shrink-0 items-center gap-2" aria-label={`Antal ${product.name}`}>
-                          <button type="button" onClick={() => changeCommerceQuantity(product.id, -1)} disabled={quantity === 0} className="grid h-9 w-9 place-items-center rounded-full border border-black/10 bg-white disabled:opacity-35" aria-label={`Minska ${product.name}`}><Minus className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => changeCommerceQuantity(product.id, -1)} disabled={quantity === 0} className="grid h-9 w-9 place-items-center rounded-full border border-black/10 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 disabled:opacity-35" aria-label={`Minska ${product.name}`}><Minus className="h-4 w-4" /></button>
                           <span className="w-6 text-center text-[15px] font-black tabular-nums" aria-live="polite">{quantity}</span>
-                          <button type="button" onClick={() => changeCommerceQuantity(product.id, 1)} disabled={quantity >= maximum} className="grid h-9 w-9 place-items-center rounded-full bg-slate-950 text-white disabled:opacity-35" aria-label={`Öka ${product.name}`}><Plus className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => changeCommerceQuantity(product.id, 1)} disabled={quantity >= maximum} className="grid h-9 w-9 place-items-center rounded-full bg-slate-950 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 disabled:opacity-35" aria-label={`Öka ${product.name}`}><Plus className="h-4 w-4" /></button>
                         </div>
                       </div>
                     </article>
@@ -1172,6 +1154,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               </div>
               {pricingIsIncluded ? <p className="mt-2 text-[12px] font-bold text-slate-700">Aktiviteten {includedLabel?.toLowerCase() || "ingår i medlemskap"}</p> : null}
             </section>
+          ) : null}
+
+          {!isRegistered && !user?.id && commercePilotEnabled ? (
+            <button
+              type="button"
+              onClick={() => navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`)}
+              className="w-full py-1 text-center text-[12px] font-semibold text-neutral-500 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-950"
+            >
+              Medlem? Logga in för ditt pris
+            </button>
           ) : null}
 
           {isRegistered && savedTodaySek > 0 ? (

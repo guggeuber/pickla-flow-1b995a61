@@ -22,6 +22,18 @@ describe("Commerce R1 PeopleRow threshold", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("invites without quantifying an empty or below-threshold group", () => {
+    render(
+      <SessionPeopleRow
+        presentation={{ people: [], committedCount: 0, capacity: 12, placesLeft: 12 }}
+        variant="drawer"
+        showInvitation
+      />,
+    );
+    expect(screen.getByText("Plats för fler — ta gärna med en vän")).toBeInTheDocument();
+    expect(screen.queryByText(/0 av 12|12 platser kvar/)).not.toBeInTheDocument();
+  });
+
   it("shows names and avatars at threshold", () => {
     render(
       <PeopleRow

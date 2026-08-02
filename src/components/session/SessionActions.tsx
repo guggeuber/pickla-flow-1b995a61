@@ -27,7 +27,7 @@ export function SessionActions({ primary, secondary = [], className }: SessionAc
           form={primary.form}
           onClick={primary.onClick}
           disabled={primary.disabled || primary.loading}
-          className="h-14 w-full gap-2 rounded-[22px] bg-neutral-950 text-[17px] font-black text-white hover:bg-neutral-900"
+          className="h-14 w-full gap-2 rounded-[22px] bg-neutral-950 text-[17px] font-black text-white hover:bg-neutral-900 focus-visible:ring-neutral-950 focus-visible:ring-offset-0"
         >
           {primary.icon}
           {primary.label}

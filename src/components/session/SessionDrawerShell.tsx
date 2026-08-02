@@ -10,6 +10,8 @@ type ShellContentProps = {
   presentation: SessionPresentation;
   children: ReactNode;
   footer?: ReactNode;
+  headerActions?: ReactNode;
+  fixedFooter?: boolean;
   className?: string;
   onClose?: () => void;
 };
@@ -20,32 +22,49 @@ type SessionDrawerShellProps = ShellContentProps & {
   standalone?: boolean;
 };
 
-function ShellContent({ presentation, children, footer, className, onClose }: ShellContentProps) {
+function ShellContent({ presentation, children, footer, headerActions, fixedFooter = false, className, onClose }: ShellContentProps) {
   return (
-    <div className={cn("mx-auto flex h-full w-full max-w-md flex-col bg-white text-neutral-950", className)}>
+    <div className={cn("relative mx-auto flex h-full w-full max-w-md flex-col bg-white text-neutral-950", className)}>
       <div className="relative z-10 shrink-0 border-b border-neutral-200 bg-white/95 px-6 pb-5 pt-3 backdrop-blur">
-        <div className="relative mb-5 flex items-center justify-center">
-          <div className="h-2 w-28 rounded-full bg-foreground/80" />
-          {onClose ? (
-            <button
-              type="button"
-              onClick={onClose}
-              className="absolute right-0 grid h-10 w-10 place-items-center rounded-full bg-neutral-100 text-neutral-500"
-              aria-label="Stäng"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          ) : null}
+        <div className="relative mb-3 flex h-11 items-center justify-center">
+          <div className="h-1.5 w-10 rounded-full bg-foreground/80" />
+          <div className="absolute right-0 top-0 flex items-center gap-1" data-testid="session-header-actions">
+            {headerActions}
+            {onClose ? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="grid h-11 w-11 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+                aria-label="Stäng"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            ) : null}
+          </div>
         </div>
         <SessionHeader presentation={presentation} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-5 [-webkit-overflow-scrolling:touch]">
+      <div
+        data-testid="session-scroll-area"
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-5 [-webkit-overflow-scrolling:touch]",
+          footer && fixedFooter
+            ? "pb-[calc(92px+env(safe-area-inset-bottom,0px)+24px)]"
+            : "pb-6",
+        )}
+      >
         <div className="space-y-4">{children}</div>
       </div>
 
       {footer ? (
-        <div className="relative z-20 shrink-0 border-t border-neutral-200 bg-white/95 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 backdrop-blur">
+        <div
+          data-testid="session-fixed-action"
+          className={cn(
+            "z-20 border-t border-neutral-200 bg-white/95 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 backdrop-blur",
+            fixedFooter ? "absolute inset-x-0 bottom-0" : "relative shrink-0",
+          )}
+        >
           {footer}
         </div>
       ) : null}
@@ -60,6 +79,8 @@ export function SessionDrawerShell({
   presentation,
   children,
   footer,
+  headerActions,
+  fixedFooter,
   className,
 }: SessionDrawerShellProps) {
   const onClose = onOpenChange ? () => onOpenChange(false) : undefined;
@@ -67,7 +88,7 @@ export function SessionDrawerShell({
   if (standalone) {
     return (
       <div className="min-h-dvh bg-[#f7f4ee] text-neutral-950">
-        <ShellContent presentation={presentation} footer={footer} className={className} onClose={onClose}>
+        <ShellContent presentation={presentation} footer={footer} headerActions={headerActions} fixedFooter={fixedFooter} className={className} onClose={onClose}>
           {children}
         </ShellContent>
       </div>
@@ -76,10 +97,10 @@ export function SessionDrawerShell({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="z-[60] h-[88dvh] max-h-[720px] overflow-hidden rounded-t-[28px] border-neutral-200 bg-white p-0 text-neutral-950">
+      <DrawerContent className="z-[60] h-[88dvh] max-h-[720px] overflow-clip rounded-t-[28px] border-neutral-200 bg-white p-0 text-neutral-950 outline-none [&>div:first-child]:hidden">
         <DrawerTitle className="sr-only">{presentation.title}</DrawerTitle>
         <DrawerDescription className="sr-only">{presentation.typeLabel}</DrawerDescription>
-        <ShellContent presentation={presentation} footer={footer} className={className} onClose={onClose}>
+        <ShellContent presentation={presentation} footer={footer} headerActions={headerActions} fixedFooter={fixedFooter} className={className} onClose={onClose}>
           {children}
         </ShellContent>
       </DrawerContent>

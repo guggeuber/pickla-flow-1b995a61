@@ -291,7 +291,7 @@ async function sendCommerceReceiptEmail(params: {
   }
   const receiptUrl = canonicalPublicUrl(`/order/${encodeURIComponent(params.token)}`);
   const pickupCopy = params.pickupItems.length
-    ? `<p><strong>Hämtas vid desken:</strong> ${params.pickupItems.map(escapeCommerceEmailHtml).join(', ')}. Uppge ditt namn så hjälper vi dig.</p>`
+    ? `<p><strong>Hämtas vid disken.</strong> ${params.pickupItems.map(escapeCommerceEmailHtml).join(', ')}.</p>`
     : '';
   const firstName = params.name ? escapeCommerceEmailHtml(params.name.split(' ')[0]) : '';
   const response = await fetch('https://api.resend.com/emails', {

@@ -109,6 +109,7 @@ export interface CommerceOrderResponse {
 }
 
 export const RACKET_PICKUP_INSTRUCTION_CODE = "desk_pickup_racket_by_name";
+export const COMMERCE_PICKUP_COPY = "Hämtas vid disken.";
 
 function isRacketPickupLine(line: CommerceOrderLine) {
   const snapshot = line.product_snapshot && typeof line.product_snapshot === "object"
@@ -135,16 +136,14 @@ export function commerceRacketPickupQuantity(
 
 export function commerceRacketOrderSummaryInstruction(quantity: number) {
   if (quantity <= 0) return null;
-  return "Hämtas ut i desken genom att uppge ditt namn.";
+  return COMMERCE_PICKUP_COPY;
 }
 
 export function commerceRacketSuccessInstruction(quantity: number) {
   if (quantity <= 0) return null;
   return {
     summary: `Du har hyrt ${quantity} rack.`,
-    pickup: quantity === 1
-      ? "Hämta ut det i desken genom att uppge ditt namn."
-      : "Hämta ut dem i desken genom att uppge ditt namn.",
+    pickup: COMMERCE_PICKUP_COPY,
   };
 }
 

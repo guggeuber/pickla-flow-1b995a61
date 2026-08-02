@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { activityCheckInAvailable } from "@/lib/activityTiming";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import {
+  COMMERCE_PICKUP_COPY,
   checkInCommerceGuest,
   claimCommerceOrderAccount,
   commerceRacketPickupQuantity,
@@ -21,7 +22,7 @@ function fulfillmentLabel(status: string, cancelled: boolean) {
   if (cancelled || status === "not_collected") return "Ej längre tillgänglig för uthämtning";
   if (status === "collected") return "Uthämtad";
   if (status === "attention") return "Kontakta Pickla";
-  return "Hämtas ut i desken";
+  return COMMERCE_PICKUP_COPY;
 }
 
 export default function CommerceOrderPage() {

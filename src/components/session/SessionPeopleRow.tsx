@@ -16,6 +16,16 @@ export function SessionPeopleRow({ presentation, variant = "row", showInvitation
 
   if (!showInvitation && committedCount < PEOPLE_ROW_NAMED_THRESHOLD) return null;
 
+  if (committedCount < PEOPLE_ROW_NAMED_THRESHOLD) {
+    return (
+      <PeopleRow
+        people={presentation.people}
+        participantCount={committedCount}
+        showInvitation={showInvitation}
+      />
+    );
+  }
+
   if (variant === "row") {
     return (
       <div className="space-y-1">

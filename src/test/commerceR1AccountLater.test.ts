@@ -15,7 +15,8 @@ describe("Commerce R1B account-later contract", () => {
     expect(programPage).toContain("logged_out_cta_clicked");
     expect(programPage).not.toContain("Betalning sker via Stripe innan platsen bekräftas.");
     expect(cartPage).toContain('`Betala ${formatCommerceMoney(total)}`');
-    expect(cartPage).toContain("Platsen bekräftas direkt efter betalning.");
+    expect(cartPage).not.toContain("Platsen bekräftas direkt efter betalning.");
+    expect(cartPage).not.toContain("Varav moms");
     expect(orderPage).toContain('"Platsen är din"');
   });
 
@@ -51,6 +52,11 @@ describe("Commerce R1B account-later contract", () => {
     expect(webhook).toContain("status: 'cancelled'");
     expect(commerceApi).toContain("Idempotency-Key");
     expect(commerceApi).toContain("path === 'cancel'");
+  });
+
+  it("uses the canonical customer-facing pickup term in receipt email copy", () => {
+    expect(webhook).toContain("Hämtas vid disken.");
+    expect(webhook).not.toContain("Hämtas vid desken");
   });
 
   it("records only the approved privacy-safe funnel", () => {
