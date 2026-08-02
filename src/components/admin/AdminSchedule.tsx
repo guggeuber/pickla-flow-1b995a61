@@ -480,7 +480,7 @@ const pricingPreview = ({
     ];
   }
   if (soldAs === "day_pass") {
-    const basePrice = price || 199;
+    const basePrice = price;
     return [
       ["Online", formatSek(basePrice)],
       ["Desk", formatSek(desk || basePrice)],

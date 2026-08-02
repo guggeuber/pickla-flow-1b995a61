@@ -307,6 +307,29 @@ async function sendCommerceReceiptEmail(params: {
   if (!response.ok) console.error('Commerce receipt email failed', await response.text());
 }
 
+async function upsertCommerceDayPass(serviceClient: any, input: {
+  orderId: string;
+  venueId: string;
+  userId: string | null;
+  customerId: string | null;
+  validDate: string;
+  priceMinor: number;
+  stripeSessionId?: string | null;
+}) {
+  const { data, error } = await serviceClient.from('day_passes').upsert({
+    commerce_order_id: input.orderId,
+    venue_id: input.venueId,
+    user_id: input.userId,
+    customer_id: input.customerId,
+    valid_date: input.validDate,
+    price: Math.round(Math.max(0, input.priceMinor)) / 100,
+    status: 'active',
+    stripe_session_id: input.stripeSessionId || null,
+  }, { onConflict: 'commerce_order_id' }).select('id').single();
+  if (error || !data?.id) throw new Error(error?.message || 'Commerce day pass could not be delivered');
+  return String(data.id);
+}
+
 async function handleCommerceOrder(
   session: any,
   meta: Record<string, string>,
@@ -371,6 +394,9 @@ async function handleCommerceOrder(
 
   const participation = lines.find((line: any) => line.commerce_kind === 'participation');
   if (participation) {
+    const purchaseKind = String(participation.resolver_snapshot?.purchase_kind || (
+      participation.product_key === 'day_access' ? 'day_pass' : 'activity_ticket'
+    ));
     if (!order.user_id && !customerId) throw new Error('Commerce participation has no owner');
     const { data: activity } = await serviceClient
       .from('activity_sessions')
@@ -394,6 +420,7 @@ async function handleCommerceOrder(
           commerce_order_id: orderId,
           commerce_order_line_id: participation.id,
           pricing_reason: participation.resolver_snapshot?.pricing_reason || null,
+          purchase_kind: purchaseKind,
           session_type: activity?.session_type || 'open_play',
           session_name: activity?.name || participation.product_name,
         },
@@ -456,6 +483,42 @@ async function handleCommerceOrder(
         if (error) throw new Error(error.message);
       },
       upsertEntitlement: async (registrationId) => {
+        if (purchaseKind === 'day_pass') {
+          const dayPassId = await upsertCommerceDayPass(serviceClient, {
+            orderId,
+            venueId: order.venue_id,
+            userId: order.user_id || null,
+            customerId,
+            validDate: participation.session_date,
+            priceMinor: Number(participation.line_total_inc_vat_minor || 0),
+            stripeSessionId: session.id,
+          });
+          const { error } = await serviceClient.from('access_entitlements').upsert({
+            venue_id: order.venue_id,
+            user_id: order.user_id || null,
+            customer_id: customerId,
+            entitlement_type: 'day_access',
+            status: 'active',
+            source_type: 'commerce_order',
+            source_id: orderId,
+            activity_session_id: null,
+            session_date: null,
+            valid_date: participation.session_date,
+            includes_session_types: ['open_play'],
+            metadata: {
+              commerce_order_id: orderId,
+              commerce_order_line_id: participation.id,
+              day_pass_id: dayPassId,
+              stripe_session_id: session.id,
+            },
+          }, {
+            onConflict: order.user_id
+              ? 'source_type,source_id,user_id,entitlement_type'
+              : 'source_type,source_id,customer_id,entitlement_type',
+          });
+          if (error) throw new Error(error.message);
+          return;
+        }
         const entitlement = {
           venue_id: order.venue_id,
           user_id: order.user_id || null,
@@ -600,7 +663,7 @@ async function handleCommerceRefund(object: StripeRefundObject, eventType: strin
   }
 
   const { data: participation, error: lineError } = await serviceClient.from('commerce_order_lines')
-    .select('session_registration_id')
+    .select('session_registration_id, product_key, resolver_snapshot')
     .eq('commerce_order_id', order.id)
     .eq('commerce_kind', 'participation')
     .maybeSingle();
@@ -611,12 +674,23 @@ async function handleCommerceRefund(object: StripeRefundObject, eventType: strin
       .eq('id', participation.session_registration_id)
       .neq('status', 'cancelled');
     if (registrationError) throw new Error(registrationError.message);
-    const { error: entitlementError } = await serviceClient.from('access_entitlements')
+    const dayPassPurchase = participation.product_key === 'day_access'
+      || participation.resolver_snapshot?.purchase_kind === 'day_pass';
+    let entitlementQuery = serviceClient.from('access_entitlements')
       .update({ status: 'revoked' })
-      .eq('source_type', 'session_ticket')
-      .eq('source_id', participation.session_registration_id)
       .neq('status', 'revoked');
+    entitlementQuery = dayPassPurchase
+      ? entitlementQuery.eq('source_type', 'commerce_order').eq('source_id', order.id)
+      : entitlementQuery.eq('source_type', 'session_ticket').eq('source_id', participation.session_registration_id);
+    const { error: entitlementError } = await entitlementQuery;
     if (entitlementError) throw new Error(entitlementError.message);
+    if (dayPassPurchase) {
+      const { error: passError } = await serviceClient.from('day_passes')
+        .update({ status: 'cancelled' })
+        .eq('commerce_order_id', order.id)
+        .neq('status', 'cancelled');
+      if (passError) throw new Error(passError.message);
+    }
   }
   const { error: pickupError } = await serviceClient.from('commerce_order_lines')
     .update({ fulfillment_status: 'not_collected' })

@@ -176,6 +176,7 @@ BEGIN
   v_early_bird_slots := COALESCE(v_session.early_bird_slots, (v_session.metadata->>'early_bird_slots')::INTEGER);
 
   IF v_scarcity_mode = 'early_bird'
+    AND COALESCE(p_metadata->>'purchase_kind', 'activity_ticket') <> 'day_pass'
     AND v_early_bird_price_minor > 0
     AND v_early_bird_slots > 0 THEN
     SELECT COUNT(*)::INTEGER INTO v_early_bird_committed

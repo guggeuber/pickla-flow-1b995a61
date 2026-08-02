@@ -18,6 +18,7 @@ const ids = {
   futureActivity: "c2b00000-0000-4000-8000-000000000011",
   capacityActivity: "c2b00000-0000-4000-8000-000000000012",
   participation: "c2b00000-0000-4000-8000-000000000020",
+  dayPass: "c2b00000-0000-4000-8000-000000000022",
   racket: "c2b00000-0000-4000-8000-000000000021",
   capacityParticipation: "c2b00000-0000-4000-8000-000000000030",
   capacityRacket: "c2b00000-0000-4000-8000-000000000031",
@@ -177,12 +178,13 @@ async function seed() {
     { id: ids.capacityVenue, organization_id: org.id, name: "Commerce R1 Capacity Venue", slug: "commerce-r1-capacity", commerce_enabled: true },
   ] });
   await rest("activity_sessions", "", { method: "POST", body: [
-    { id: ids.activity, venue_id: ids.venue, name: "Open Play R1", session_type: "open_play", sport_type: "pickleball", recurrence_days: [0,1,2,3,4,5,6], start_time: "00:01", end_time: "00:00", price_sek: 165, capacity: 8, product_key: "r1_open_play", publish_status: "published" },
-    { id: ids.futureActivity, venue_id: ids.venue, name: "Future Open Play R1", session_type: "open_play", sport_type: "pickleball", recurrence_days: [0,1,2,3,4,5,6], start_time: "10:00", end_time: "12:00", price_sek: 165, capacity: 8, product_key: "r1_open_play", publish_status: "published" },
-    { id: ids.capacityActivity, venue_id: ids.capacityVenue, name: "Capacity One R1", session_type: "open_play", sport_type: "pickleball", recurrence_days: [0,1,2,3,4,5,6], start_time: "10:00", end_time: "12:00", price_sek: 165, capacity: 1, product_key: "r1_capacity_play", publish_status: "published" },
+    { id: ids.activity, venue_id: ids.venue, name: "Open Play R1", session_type: "open_play", sport_type: "pickleball", recurrence_days: [0,1,2,3,4,5,6], start_time: "00:01", end_time: "00:00", price_sek: 165, capacity: 8, product_key: "r1_open_play", access_policy: { allows_day_access: true }, publish_status: "published" },
+    { id: ids.futureActivity, venue_id: ids.venue, name: "Future Open Play R1", session_type: "open_play", sport_type: "pickleball", recurrence_days: [0,1,2,3,4,5,6], start_time: "10:00", end_time: "12:00", price_sek: 165, capacity: 8, product_key: "r1_open_play", access_policy: { allows_day_access: true }, publish_status: "published" },
+    { id: ids.capacityActivity, venue_id: ids.capacityVenue, name: "Capacity One R1", session_type: "open_play", sport_type: "pickleball", recurrence_days: [0,1,2,3,4,5,6], start_time: "10:00", end_time: "12:00", price_sek: 165, capacity: 1, product_key: "r1_capacity_play", access_policy: { allows_day_access: true }, publish_status: "published" },
   ] });
   await rest("access_products", "", { method: "POST", body: [
     { id: ids.participation, venue_id: ids.venue, product_key: "r1_open_play", name: "Open Play R1", product_kind: "session_ticket", session_type: "open_play", commerce_kind: "participation", fulfillment_type: "participation", fulfillment_presentation: "participation", base_price_sek: 165, vat_rate: 6, resolver_rules: {}, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: false },
+    { id: ids.dayPass, venue_id: ids.venue, product_key: "day_access", name: "Heldagspass", product_kind: "day_access", session_type: null, commerce_kind: "participation", fulfillment_type: "participation", fulfillment_presentation: "participation", base_price_sek: 237, vat_rate: 6, resolver_rules: { entitlement_type: "day_access", includes_session_types: ["open_play"] }, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: false },
     { id: ids.racket, venue_id: ids.venue, product_key: "r1_rental_racket", name: "Hyrrack", product_kind: "rental", session_type: null, commerce_kind: "rental", fulfillment_type: "desk_pickup", fulfillment_presentation: "desk_pickup", base_price_sek: 50, vat_rate: 6, resolver_rules: { max_quantity: 3 }, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: true },
     { id: ids.capacityParticipation, venue_id: ids.capacityVenue, product_key: "r1_capacity_play", name: "Capacity One R1", product_kind: "session_ticket", session_type: "open_play", commerce_kind: "participation", fulfillment_type: "participation", fulfillment_presentation: "participation", base_price_sek: 165, vat_rate: 6, resolver_rules: {}, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: false },
     { id: ids.capacityRacket, venue_id: ids.capacityVenue, product_key: "r1_capacity_racket", name: "Hyrrack", product_kind: "rental", session_type: null, commerce_kind: "rental", fulfillment_type: "desk_pickup", fulfillment_presentation: "desk_pickup", base_price_sek: 50, vat_rate: 6, resolver_rules: {}, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: true },
@@ -277,6 +279,37 @@ const history = (await fn("my-orders", { token: guestAccount.token })).payload;
 assert(history.orders.some((order) => order.id === guestCheckout.order_id), "claimed order missing from account history");
 await fn("claim-account", { method: "POST", token: attacker.token, expected: 403, body: { token: guestCart.cart_token } });
 pass("R1B claim", "name, ticket, check-in, anti-hijack, account activation and history");
+
+const dayPassEmail = "daypass@commerce-r1.local";
+const dayPassCart = await createCart({ productId: ids.dayPass, email: dayPassEmail, name: "Day Pass Guest" });
+const dayPassResolved = (await fn("resolve", { method: "POST", body: { token: dayPassCart.cart_token } })).payload;
+assert(dayPassResolved.lines.length === 1, "day pass was mixed with an activity ticket");
+assert(dayPassResolved.lines[0].unit_price_minor === 23700, "day pass did not use the exact configured Admin price");
+assert(dayPassResolved.lines[0].resolver_snapshot?.purchase_kind === "day_pass", "day pass line type is not authoritative");
+const dayPassCheckout = await checkout(dayPassCart, { email: dayPassEmail, name: "Day Pass Guest" });
+const dayPassSession = new URL(dayPassCheckout.url).searchParams.get("session");
+await signedWebhook(checkoutEvent({ eventId: "evt_r1_day_pass", sessionId: dayPassSession, orderId: dayPassCheckout.order_id, version: dayPassCheckout.version, amount: 23700, email: dayPassEmail, name: "Day Pass Guest", paymentIntent: "pi_r1_day_pass" }));
+await signedWebhook(checkoutEvent({ eventId: "evt_r1_day_pass_duplicate", sessionId: dayPassSession, orderId: dayPassCheckout.order_id, version: dayPassCheckout.version, amount: 23700, email: dayPassEmail, name: "Day Pass Guest", paymentIntent: "pi_r1_day_pass" }));
+const dayPassOrder = (await rest("commerce_orders", `id=eq.${dayPassCheckout.order_id}&select=id,status,customer_id,booking_receipt_id`)).payload[0];
+const dayPassRecord = (await rest("day_passes", `commerce_order_id=eq.${dayPassCheckout.order_id}&select=id,user_id,customer_id,valid_date,price,status`)).payload;
+const dayAccess = (await rest("access_entitlements", `source_type=eq.commerce_order&source_id=eq.${dayPassCheckout.order_id}&select=id,user_id,customer_id,entitlement_type,valid_date,status`)).payload;
+const ordinaryTicket = (await rest("access_entitlements", `source_type=eq.session_ticket&metadata->>commerce_order_id=eq.${dayPassCheckout.order_id}&select=id`)).payload;
+assert(dayPassOrder.status === "paid" && dayPassOrder.booking_receipt_id, "day pass receipt/order did not finalize");
+assert(dayPassRecord.length === 1 && Number(dayPassRecord[0].price) === 237 && dayPassRecord[0].valid_date === today, "canonical day pass record is wrong or duplicated");
+assert(dayAccess.length === 1 && dayAccess[0].entitlement_type === "day_access" && dayAccess[0].valid_date === today, "day access entitlement is wrong or duplicated");
+assert(ordinaryTicket.length === 0, "day pass incorrectly delivered an ordinary session ticket");
+await fn("claim", { method: "POST", body: { token: dayPassCart.cart_token, display_name: "Day Pass Guest" } });
+const dayPassGuestCheckin = (await fn("guest-checkin", { method: "POST", body: { token: dayPassCart.cart_token } })).payload;
+assert(dayPassGuestCheckin.checked_in === true, "account-later day access check-in failed");
+const dayPassAccount = await createUser(dayPassEmail);
+await fn("claim-account", { method: "POST", token: dayPassAccount.token, body: { token: dayPassCart.cart_token } });
+const claimedDayPass = (await rest("day_passes", `commerce_order_id=eq.${dayPassCheckout.order_id}&select=user_id`)).payload[0];
+assert(claimedDayPass.user_id === dayPassAccount.id, "day pass did not move into account history");
+await signedWebhook({ id: "evt_r1_day_pass_refund", type: "charge.refunded", data: { object: { id: "ch_r1_day_pass", payment_intent: "pi_r1_day_pass", amount: 23700, amount_refunded: 23700 } } });
+const revokedDayPass = (await rest("day_passes", `commerce_order_id=eq.${dayPassCheckout.order_id}&select=status`)).payload[0];
+const revokedDayAccess = (await rest("access_entitlements", `source_type=eq.commerce_order&source_id=eq.${dayPassCheckout.order_id}&select=status`)).payload[0];
+assert(revokedDayPass.status === "cancelled" && revokedDayAccess.status === "revoked", "day pass refund did not revoke access");
+pass("R1 day pass", "configured quote, guest purchase, idempotent delivery, check-in, account history and refund revocation");
 
 const failCart = await createCart({ email: "fail-payment@commerce-r1.local", name: "Payment Failure" });
 await fn("checkout", { method: "POST", expected: 400, body: { token: failCart.cart_token, expected_version: failCart.order.version, guest_email: "fail-payment@commerce-r1.local", guest_name: "Payment Failure" } });

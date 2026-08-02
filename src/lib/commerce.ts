@@ -6,6 +6,7 @@ export interface CommerceProduct {
   id: string;
   venue_id: string;
   product_key: string;
+  product_kind?: string | null;
   name: string;
   description: string | null;
   commerce_kind: CommerceKind;

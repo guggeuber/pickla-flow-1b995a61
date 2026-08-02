@@ -64,6 +64,8 @@ export default function CommerceOrderPage() {
   if (query.isLoading || authLoading) return <div className="grid min-h-[100dvh] place-items-center bg-white"><Loader2 className="h-6 w-6 animate-spin" /></div>;
   if (!query.data) return <div className="grid min-h-[100dvh] place-items-center bg-white px-6 text-center">Ordern kunde inte öppnas.</div>;
   const { order, lines, receipt } = query.data;
+  const dayPassLine = lines.find((line) => line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass");
+  const isDayPassPurchase = Boolean(dayPassLine);
   const hasParticipation = Boolean(activity);
   const isCancelled = order.status === "cancelled" || activity?.registration_status === "cancelled";
   const checkedIn = activity?.registration_status === "checked_in";
@@ -90,6 +92,8 @@ export default function CommerceOrderPage() {
     ? "Vi bekräftar ditt köp"
     : isCancelled
       ? "Köpet är avbokat"
+      : purchaseConfirmed && isDayPassPurchase
+        ? "Heldagspasset är aktivt"
       : purchaseConfirmed && hasParticipation
         ? "Platsen är din"
         : purchaseConfirmed
@@ -99,6 +103,8 @@ export default function CommerceOrderPage() {
             : "Vi kontrollerar ditt köp";
   const supportingCopy = waiting
     ? "Det tar vanligtvis bara några sekunder."
+    : purchaseConfirmed && isDayPassPurchase
+      ? `Du har heldagstillgång och en plats på ${activity?.name}.`
     : purchaseConfirmed && hasParticipation
       ? `Du är anmäld till ${activity?.name}.`
       : purchaseConfirmed
@@ -132,7 +138,7 @@ export default function CommerceOrderPage() {
         ) : null}
         {purchaseConfirmed && hasParticipation && !requiresGuestClaim ? (
           <section id="ticket" className="mb-6 border-y border-black/10 py-5 text-slate-950">
-            <div className="flex items-start gap-3"><Ticket data-testid="commerce-ticket-icon" className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" /><div><p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din biljett</p><h2 className="mt-0.5 text-xl font-black">{activity?.name}</h2></div></div>
+            <div className="flex items-start gap-3"><Ticket data-testid="commerce-ticket-icon" className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" /><div><p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{isDayPassPurchase ? "Ditt heldagspass" : "Din biljett"}</p><h2 className="mt-0.5 text-xl font-black">{activity?.name}</h2></div></div>
             <p className="mt-3 text-sm font-semibold">{activityDate} · {String(activity?.start_time || "").slice(0, 5)}–{String(activity?.end_time || "").slice(0, 5)}</p>
             <button type="button" onClick={() => checkIn.mutate()} disabled={checkedIn || !checkInAvailable || checkIn.isPending || isCancelled} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{checkIn.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}{checkedIn ? "Incheckad" : "Checka in"}</button>
             {canManageBooking ? <Link to={managementPath!} className="mt-3 flex h-11 items-center justify-center rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950">Visa bokning</Link> : null}
@@ -149,8 +155,9 @@ export default function CommerceOrderPage() {
         ) : null}
         <section className="divide-y divide-black/10 border-y border-black/10">
           {lines.map((line) => {
-            const lineName = activity && line.commerce_kind === "participation" ? "Personlig plats" : line.product_name;
-            return <div key={line.id} className="flex items-center justify-between gap-3 py-4"><div><p className="font-bold">{lineName}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-xs text-slate-500">{line.fulfillment_type === "desk_pickup" ? fulfillmentLabel(line.fulfillment_status, isCancelled) : "Din plats"}</p></div><p className="font-black">{formatCommerceMoney(line.line_total_inc_vat_minor || line.unit_price_minor * line.quantity)}</p></div>;
+            const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
+            const lineName = isDayPassLine ? line.product_name : activity && line.commerce_kind === "participation" ? "Personlig plats" : line.product_name;
+            return <div key={line.id} className="flex items-center justify-between gap-3 py-4"><div><p className="font-bold">{lineName}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-xs text-slate-500">{line.fulfillment_type === "desk_pickup" ? fulfillmentLabel(line.fulfillment_status, isCancelled) : isDayPassLine ? "Gäller hela dagen" : "Din plats"}</p></div><p className="font-black">{formatCommerceMoney(line.line_total_inc_vat_minor || line.unit_price_minor * line.quantity)}</p></div>;
           })}
         </section>
         <section className="py-5"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receiptNumber ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {receiptNumber}</p> : null}</section>

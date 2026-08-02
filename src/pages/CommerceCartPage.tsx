@@ -210,14 +210,17 @@ export default function CommerceCartPage() {
           {lines.map((line) => {
             const isRacketLine = commerceRacketPickupQuantity([line]) > 0;
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
-            const lineName = isActivityParticipationLine ? "Personlig plats" : line.product_name;
+            const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
+            const lineName = isDayPassLine ? line.product_name : isActivityParticipationLine ? "Personlig plats" : line.product_name;
             const LineIcon = line.commerce_kind === "participation" ? Ticket : ShoppingBag;
             const lineMetadata = isRacketLine && racketInstruction
               ? `Antal ${line.quantity} · ${racketInstruction}`
               : line.fulfillment_type === "desk_pickup"
                 ? `Antal ${line.quantity} · Hämtas ut i desken`
-                : isActivityParticipationLine
-                  ? null
+                : isDayPassLine
+                  ? "Gäller inkluderade Open Play-pass denna dag"
+                  : isActivityParticipationLine
+                    ? null
                   : "Personlig plats";
             return (
               <div key={line.id} className="flex items-start justify-between gap-4 border-b border-black/10 py-5 last:border-b-0">

@@ -33,6 +33,7 @@ type CommerceProduct = CommerceProductLike & {
   id: string;
   venue_id: string;
   product_key: string;
+  product_kind?: string | null;
   name: string;
   description?: string | null;
   commerce_kind: string;
@@ -251,6 +252,7 @@ function projectOrderLine(line: DbRecord) {
     },
     resolver_snapshot: {
       pricing_reason: resolver.pricing_reason || null,
+      purchase_kind: resolver.purchase_kind || 'activity_ticket',
       applied_price_type: resolver.applied_price_type || resolver.pricing_reason || null,
       final_price_minor: Number(resolver.final_price_minor ?? line.unit_price_minor ?? 0),
       early_bird_remaining: resolver.early_bird_remaining == null ? null : Number(resolver.early_bird_remaining),
@@ -427,19 +429,26 @@ async function validateCartItems(admin: AdminClient, venueId: string, items: any
         venueCommerceEnabled: venue.commerce_enabled === true,
       });
       if (!availability.eligible) throw new Error(availability.message || 'Product is not available');
+      const isDayPassProduct = item.product.product_key === 'day_access' || item.product.product_kind === 'day_access';
+      if (isDayPassProduct && Number(item.product.base_price_sek || 0) <= 0) throw new Error('Heldagspass saknar pris i Admin.');
       const sessionId = String(item.input.activity_session_id || item.input.source_id || '').trim();
       const sessionDate = String(item.input.session_date || '').slice(0, 10);
       if (!sessionId || !sessionDate) throw new Error('Participation requires session and date');
       const { data: session, error: sessionError } = await admin
         .from('activity_sessions')
-        .select('id, venue_id, product_key, session_type, is_active, publish_status')
+        .select('id, venue_id, product_key, session_type, access_policy, is_active, publish_status')
         .eq('id', sessionId)
         .eq('venue_id', venueId)
         .maybeSingle();
       if (sessionError) throw new Error(sessionError.message);
       if (!session?.is_active || session.publish_status !== 'published') throw new Error('Activity session is not available');
-      const expectedKey = session.product_key || (session.session_type === 'open_play' ? 'open_play_slot' : null);
-      if (expectedKey && expectedKey !== item.product.product_key) throw new Error('Product does not match activity session');
+      const expectedKey = session.product_key && session.product_key !== 'day_access'
+        ? session.product_key
+        : session.session_type === 'open_play' ? 'open_play_slot' : 'session_ticket';
+      const dayPassAllowed = isDayPassProduct
+        && session.session_type === 'open_play'
+        && session.access_policy?.allows_day_access !== false;
+      if (!dayPassAllowed && expectedKey && expectedKey !== item.product.product_key) throw new Error('Product does not match activity session');
       item.input.activity_session_id = sessionId;
       item.input.session_date = sessionDate;
       item.input.source_type = 'activity_session';
@@ -528,7 +537,7 @@ async function resolveLines(
   const productIds = lines.map((line) => line.product_id).filter(Boolean);
   const { data: products, error } = await admin
     .from('access_products')
-    .select('id, venue_id, product_key, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
+    .select('id, venue_id, product_key, product_kind, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
     .in('id', productIds);
   if (error) throw new Error(error.message);
   const productsById = new Map<string, CommerceProduct>(
@@ -580,6 +589,12 @@ async function resolveLines(
     let unitPriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
     let resolverSnapshot: Record<string, unknown> = { pricing_source: 'product_base_price' };
     if (line.commerce_kind === 'participation') {
+      const purchaseKind = product.product_key === 'day_access' || product.product_kind === 'day_access'
+        ? 'day_pass'
+        : 'activity_ticket';
+      if (purchaseKind === 'day_pass' && Number(product.base_price_sek || 0) <= 0) {
+        throw new Error('Heldagspass saknar pris i Admin.');
+      }
       const decision = await resolveActivityPricingDecision({
         client: admin,
         venueId: order.venue_id,
@@ -588,13 +603,14 @@ async function resolveLines(
         sessionDate: line.session_date,
         requestedProductKey: product.product_key,
         requestedAmountSek: Number(product.base_price_sek || 0),
-        purchaseKind: 'activity_ticket',
+        purchaseKind,
         salesChannel: 'online',
         applyEarlyBird: options.applyEarlyBird !== false,
       });
       unitPriceMinor = Math.round(Number(decision.finalAmountSek || 0) * 100);
       resolverSnapshot = {
         product_key: decision.productKey,
+        purchase_kind: purchaseKind,
         pricing_reason: decision.pricingReason,
         access_decision: decision.accessDecision,
         entitlement_type: decision.entitlementType,
@@ -628,6 +644,7 @@ async function resolveLines(
         ...(line.product_snapshot || {}),
         name: product.name,
         product_key: product.product_key,
+        product_kind: product.product_kind || null,
         commerce_kind: product.commerce_kind,
         fulfillment_type: product.fulfillment_type,
         vat_rate: Number(product.vat_rate || 0),
@@ -676,7 +693,11 @@ async function acquireParticipationHold(
     p_regular_price_minor: Number(regularResolvedLine?.unit_price_minor || 0),
     p_regular_price_type: regularPriceType,
     p_quoted_price_minor: Number(quotedResolvedLine?.unit_price_minor || 0),
-    p_metadata: { commerce_order_id: order.id, commerce_order_line_id: line.id },
+    p_metadata: {
+      commerce_order_id: order.id,
+      commerce_order_line_id: line.id,
+      purchase_kind: regularResolvedLine?.resolver_snapshot?.purchase_kind || 'activity_ticket',
+    },
   }).maybeSingle();
   if (error) throw new Error(error.message);
   const hold = (data || {}) as {
@@ -715,18 +736,46 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
   const committed = (data || {}) as { ok?: boolean; registration_id?: string; reason?: string };
   if (!committed.ok || !committed.registration_id) throw new Error(committed.reason || 'capacity_full');
   await admin.from('commerce_order_lines').update({ session_registration_id: committed.registration_id }).eq('id', line.id);
+  const purchaseKind = String(resolvedLine?.resolver_snapshot?.purchase_kind || 'activity_ticket');
+  let sourceType = 'session_ticket';
+  let sourceId = committed.registration_id;
+  let entitlementType = 'session_ticket';
+  let activitySessionId: string | null = line.activity_session_id;
+  let entitlementSessionDate: string | null = line.session_date;
+  let validDate: string | null = null;
+  let entitlementMetadata: Record<string, unknown> = { commerce_order_id: order.id, commerce_order_line_id: line.id };
+  if (purchaseKind === 'day_pass') {
+    const { data: dayPass, error: dayPassError } = await admin.from('day_passes').upsert({
+      commerce_order_id: order.id,
+      venue_id: order.venue_id,
+      user_id: userId,
+      customer_id: customerId,
+      valid_date: line.session_date,
+      price: 0,
+      status: 'active',
+    }, { onConflict: 'commerce_order_id' }).select('id').single();
+    if (dayPassError || !dayPass?.id) throw new Error(dayPassError?.message || 'Commerce day pass could not be delivered');
+    sourceType = 'commerce_order';
+    sourceId = order.id;
+    entitlementType = 'day_access';
+    activitySessionId = null;
+    entitlementSessionDate = null;
+    validDate = line.session_date;
+    entitlementMetadata = { ...entitlementMetadata, day_pass_id: dayPass.id };
+  }
   const entitlement = {
     venue_id: order.venue_id,
     user_id: userId,
     customer_id: customerId,
-    entitlement_type: 'session_ticket',
+    entitlement_type: entitlementType,
     status: 'active',
-    source_type: 'session_ticket',
-    source_id: committed.registration_id,
-    activity_session_id: line.activity_session_id,
-    session_date: line.session_date,
+    source_type: sourceType,
+    source_id: sourceId,
+    activity_session_id: activitySessionId,
+    session_date: entitlementSessionDate,
+    valid_date: validDate,
     includes_session_types: ['open_play'],
-    metadata: { commerce_order_id: order.id, commerce_order_line_id: line.id },
+    metadata: entitlementMetadata,
   };
   await admin.from('access_entitlements').upsert(entitlement, {
     onConflict: userId
@@ -758,7 +807,7 @@ const commerceHandler = async (req: Request) => {
       const [venue, { data: products, error: productError }, { data: relationships, error: relationshipError }] = await Promise.all([
         venueContext(admin, venueId),
         admin.from('access_products')
-          .select('id, venue_id, product_key, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, is_active, standalone_enabled, activity_addon_enabled, category, sport, image_url')
+          .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, is_active, standalone_enabled, activity_addon_enabled, category, sport, image_url')
           .eq('venue_id', venueId).eq('status', 'active').eq('is_active', true).order('sort_order'),
         admin.from('product_relationships')
           .select('id, source_product_id, target_product_id, relationship_type, sort_order')
@@ -768,6 +817,9 @@ const commerceHandler = async (req: Request) => {
       const relatedProductIds = new Set((relationships || []).map((relationship: any) => relationship.target_product_id));
       const availableProducts = (products || []).filter((product) => {
         if (product.commerce_kind === 'participation') {
+          if ((product.product_key === 'day_access' || product.product_kind === 'day_access') && Number(product.base_price_sek || 0) <= 0) {
+            return false;
+          }
           return evaluateCommerceAvailability(product, {
             channel: 'participation',
             venueCommerceEnabled: venue.commerce_enabled === true,
@@ -998,6 +1050,17 @@ const commerceHandler = async (req: Request) => {
         source: 'commerce_account_claim',
       });
       if (customerId !== order.customer_id) throw new Error('Customer identity mismatch after claim');
+      const { error: passClaimError } = await admin.from('day_passes')
+        .update({ user_id: userId })
+        .eq('commerce_order_id', order.id)
+        .eq('customer_id', order.customer_id);
+      if (passClaimError) throw new Error(passClaimError.message);
+      const { error: accessClaimError } = await admin.from('access_entitlements')
+        .update({ user_id: userId })
+        .eq('customer_id', order.customer_id)
+        .eq('source_type', 'commerce_order')
+        .eq('source_id', order.id);
+      if (accessClaimError) throw new Error(accessClaimError.message);
       if (!alreadyClaimed) {
         await recordCommerceEvent(admin, {
           eventName: 'account_activated',
@@ -1025,6 +1088,9 @@ const commerceHandler = async (req: Request) => {
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.find((line) => line.commerce_kind === 'participation');
       if (!participation?.session_registration_id) return errorResponse('Biljetten saknas', 404);
+      const purchaseKind = String((participation.resolver_snapshot as any)?.purchase_kind || (
+        participation.product_key === 'day_access' ? 'day_pass' : 'activity_ticket'
+      ));
       const { data: activity, error: activityError } = await admin.from('activity_sessions')
         .select('id, start_time, end_time')
         .eq('id', participation.activity_session_id)
@@ -1042,11 +1108,25 @@ const commerceHandler = async (req: Request) => {
         .eq('customer_id', order.customer_id)
         .maybeSingle();
       if (!registration || !['confirmed', 'checked_in'].includes(registration.status)) return errorResponse('Biljetten är inte giltig', 409);
+      const { data: dayAccess } = purchaseKind === 'day_pass'
+        ? await admin.from('access_entitlements')
+            .select('id')
+            .eq('customer_id', order.customer_id)
+            .eq('source_type', 'commerce_order')
+            .eq('source_id', order.id)
+            .eq('entitlement_type', 'day_access')
+            .eq('status', 'active')
+            .eq('valid_date', participation.session_date)
+            .maybeSingle()
+        : { data: null };
+      const entryType = purchaseKind === 'day_pass' ? 'day_access' : 'session_ticket';
+      const entitlementId = purchaseKind === 'day_pass' ? dayAccess?.id : registration.id;
+      if (!entitlementId) return errorResponse('Tillträdet saknas', 404);
       const { data: existingCheckin } = await admin.from('venue_checkins')
         .select('*')
         .eq('venue_id', order.venue_id)
-        .eq('entry_type', 'session_ticket')
-        .eq('entitlement_id', registration.id)
+        .eq('entry_type', entryType)
+        .eq('entitlement_id', entitlementId)
         .is('checked_out_at', null)
         .maybeSingle();
       if (!existingCheckin) {
@@ -1055,8 +1135,8 @@ const commerceHandler = async (req: Request) => {
           customer_id: order.customer_id,
           user_id: order.user_id || null,
           player_name: order.guest_name || 'Spelare',
-          entry_type: 'session_ticket',
-          entitlement_id: registration.id,
+          entry_type: entryType,
+          entitlement_id: entitlementId,
           checked_in_by: null,
           session_date: participation.session_date,
         });
@@ -1094,11 +1174,16 @@ const commerceHandler = async (req: Request) => {
             .update({ status: 'cancelled' })
             .eq('id', participation.session_registration_id)
             .in('status', ['confirmed', 'checked_in', 'no_show']);
-          await admin.from('access_entitlements')
-            .update({ status: 'revoked' })
-            .eq('source_type', 'session_ticket')
-            .eq('source_id', participation.session_registration_id)
-            .neq('status', 'revoked');
+          const dayPassPurchase = participation.product_key === 'day_access'
+            || (participation.resolver_snapshot as any)?.purchase_kind === 'day_pass';
+          let entitlementQuery = admin.from('access_entitlements').update({ status: 'revoked' }).neq('status', 'revoked');
+          entitlementQuery = dayPassPurchase
+            ? entitlementQuery.eq('source_type', 'commerce_order').eq('source_id', order.id)
+            : entitlementQuery.eq('source_type', 'session_ticket').eq('source_id', participation.session_registration_id);
+          await entitlementQuery;
+          if (dayPassPurchase) {
+            await admin.from('day_passes').update({ status: 'cancelled' }).eq('commerce_order_id', order.id).neq('status', 'cancelled');
+          }
         }
         await admin.from('commerce_order_lines')
           .update({ fulfillment_status: 'not_collected' })

@@ -129,6 +129,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [interestLoading, setInterestLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState(false);
   const [commerceQuantities, setCommerceQuantities] = useState<Record<string, number>>({});
+  const [commercePurchaseKind, setCommercePurchaseKind] = useState<"activity_ticket" | "day_pass">("activity_ticket");
   const [commerceDraftHydrated, setCommerceDraftHydrated] = useState(false);
   const hydratedCommerceScopeRef = useRef("");
   const commerceSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -214,8 +215,18 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     enabled: !!venueId,
     staleTime: 60000,
   });
-  const sessionProductKey = String(session?.product_key || (session?.session_type === "open_play" ? "open_play_slot" : ""));
+  const configuredSessionProductKey = String(session?.product_key || "");
+  const sessionProductKey = configuredSessionProductKey === "day_access"
+    ? session?.session_type === "open_play" ? "open_play_slot" : "session_ticket"
+    : configuredSessionProductKey || (session?.session_type === "open_play" ? "open_play_slot" : "session_ticket");
   const commerceParticipationProduct = commerceCatalog.data?.products.find((product) => product.commerce_kind === "participation" && product.product_key === sessionProductKey);
+  const commerceDayPassProduct = commerceCatalog.data?.products.find((product) => (
+    product.commerce_kind === "participation"
+    && (product.product_key === "day_access" || product.product_kind === "day_access")
+    && Number(product.base_price_sek || 0) > 0
+    && session?.session_type === "open_play"
+    && session?.access_policy?.allows_day_access !== false
+  ));
   const offeredRentalIds = useMemo(() => new Set(
     (commerceCatalog.data?.relationships || [])
       .filter((relationship) => relationship.source_product_id === commerceParticipationProduct?.id)
@@ -264,6 +275,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     if (user?.id && !commerceDraft.isFetched) return;
 
     const persistedSelection = readActivityCommerceSelection(commerceSelectionKey);
+    const persistedPurchaseKind = window.sessionStorage.getItem(`${commerceSelectionKey}:purchase-kind`);
+    const draftParticipationProductId = commerceDraft.data?.lines.find((line) => line.commerce_kind === "participation")?.product_id;
+    const nextPurchaseKind = commerceDayPassProduct?.id && (
+      draftParticipationProductId === commerceDayPassProduct.id
+      || (!commerceDraft.data && persistedPurchaseKind === "day_pass")
+    ) ? "day_pass" : "activity_ticket";
     const serverSelection = Object.fromEntries((commerceDraft.data?.lines || []).flatMap((line) => (
       line.commerce_kind !== "participation" && line.product_id && Number(line.quantity || 0) > 0
         ? [[line.product_id, Number(line.quantity)]]
@@ -276,9 +293,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     hydratedCommerceScopeRef.current = commerceDraftScope;
     latestCommerceQuantitiesRef.current = nextSelection;
     setCommerceQuantities(nextSelection);
+    setCommercePurchaseKind(nextPurchaseKind);
     writeActivityCommerceSelection(commerceSelectionKey, nextSelection);
     setCommerceDraftHydrated(true);
-  }, [commerceDraft.data, commerceDraft.isFetched, commerceDraftScope, commerceExtras, commerceSelectionKey, user?.id]);
+  }, [commerceDayPassProduct?.id, commerceDraft.data, commerceDraft.isFetched, commerceDraftScope, commerceExtras, commerceSelectionKey, user?.id]);
   const sessionCourtIds = useMemo(() => (
     Array.isArray(session?.court_ids) ? session.court_ids.filter(Boolean) : []
   ), [session?.court_ids]);
@@ -394,11 +412,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const isCheckedIn = localCheckedIn || currentRegistration?.status === "checked_in";
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
   const backendPricing = data?.activityTicketPricing || data?.pricing || null;
+  const dayPassPricing = data?.dayPassPricing || null;
+  const selectedPricing = commercePurchaseKind === "day_pass" ? dayPassPricing : backendPricing;
   const pricingDebug = backendPricing?.debug || {};
   const pricingScarcity = (pricingDebug.scarcity || data?.scarcity || {}) as any;
   const earlyBird = (pricingScarcity.early_bird || {}) as any;
   const earlyBirdActive = Boolean(earlyBird.active) && Number(earlyBird.remaining || 0) > 0 && Number(earlyBird.price_sek || 0) > 0;
-  const earlyBirdLine = earlyBirdActive
+  const earlyBirdLine = commercePurchaseKind === "activity_ticket" && earlyBirdActive
     ? `Tidigt pris ${formatSek(Number(earlyBird.price_sek || 0))} — ${Number(earlyBird.remaining || 0)} kvar just nu`
     : null;
   const capacityScarcityLine = !earlyBirdLine && pricingScarcity.mode === "capacity" && pricingScarcity.capacity_active
@@ -415,26 +435,28 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     waitForAccessSnapshot ||
     accessSnapshotForResolvedSession.isLoading ||
     previewLoading ||
-    !backendPricing
+    !selectedPricing
   );
-  const basePrice = Number(backendPricing?.baseAmountSek ?? session?.price_sek ?? 0);
-  const effectivePrice = Number(backendPricing?.effectivePriceSek ?? backendPricing?.finalAmountSek ?? basePrice);
+  const basePrice = Number(selectedPricing?.baseAmountSek ?? (
+    commercePurchaseKind === "day_pass" ? commerceDayPassProduct?.base_price_sek : session?.price_sek
+  ) ?? 0);
+  const effectivePrice = Number(selectedPricing?.effectivePriceSek ?? selectedPricing?.finalAmountSek ?? basePrice);
   const displayedPrice = pricingPending ? "Hämtar pris..." : effectivePrice <= 0 ? 0 : effectivePrice;
   const checkoutLabel = pricingPending
     ? "Hämtar ditt pris..."
-    : backendPricing?.checkoutLabel || formatSek(effectivePrice);
-  const pricingIsIncluded = !pricingPending && backendPricing?.requiresCheckout === false;
+    : selectedPricing?.checkoutLabel || formatSek(effectivePrice);
+  const pricingIsIncluded = !pricingPending && selectedPricing?.requiresCheckout === false;
   const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
   const membershipName = String(
-    backendPricing?.membershipTierName ||
+    selectedPricing?.membershipTierName ||
     pricingDebug.membership_tier_name ||
     accessSnapshotForResolvedSession.data?.membershipTierName ||
     ""
   );
   const includedLabel = pricingIsIncluded
-    ? isPlayingHostReason(backendPricing?.pricingReason) || isPlayingHostReason(backendPricing?.entitlementType)
+    ? isPlayingHostReason(selectedPricing?.pricingReason) || isPlayingHostReason(selectedPricing?.entitlementType)
       ? "Ingår — du är värd"
-      : backendPricing?.accessDecision === "day_access_included"
+      : selectedPricing?.accessDecision === "day_access_included"
       ? "Ingår idag"
       : `Ingår i ${membershipName || "medlemskap"}`
     : null;
@@ -446,12 +468,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const savedTodaySek = !pricingPending && pricingIsIncluded && basePrice > effectivePrice
     ? Math.round((basePrice - effectivePrice) * 100) / 100
     : 0;
-  const commerceExtrasQuantity = commerceExtras.reduce((sum, product) => (
+  const commerceExtrasQuantity = commercePurchaseKind === "activity_ticket" ? commerceExtras.reduce((sum, product) => (
     sum + Number(commerceQuantities[product.id] || 0)
-  ), 0);
-  const commerceExtrasTotalMinor = commerceExtras.reduce((sum, product) => (
+  ), 0) : 0;
+  const commerceExtrasTotalMinor = commercePurchaseKind === "activity_ticket" ? commerceExtras.reduce((sum, product) => (
     sum + Number(commerceQuantities[product.id] || 0) * Math.round(Number(product.base_price_sek || 0) * 100)
-  ), 0);
+  ), 0) : 0;
   const commerceTotalMinor = Math.max(0, Math.round(effectivePrice * 100)) + commerceExtrasTotalMinor;
   const commerceItemCount = 1 + commerceExtrasQuantity;
   const commerceSavingsMinor = Math.max(0, Math.round((basePrice - effectivePrice) * 100));
@@ -491,25 +513,26 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const purchaseMode = !isRegistered && !isFull;
 
   const buildActivityCartItems = useCallback((quantities: Record<string, number>): CommerceCartItemInput[] => {
-    if (!commerceParticipationProduct || !sessionId || !occurrenceDate) return [];
+    const selectedProduct = commercePurchaseKind === "day_pass" ? commerceDayPassProduct : commerceParticipationProduct;
+    if (!selectedProduct || !sessionId || !occurrenceDate) return [];
     const safeQuantities = clampCommerceSelection(quantities, commerceExtras);
     return [
       {
-        product_id: commerceParticipationProduct.id,
+        product_id: selectedProduct.id,
         quantity: 1,
         activity_session_id: sessionId,
         session_date: occurrenceDate,
       },
-      ...commerceExtras.flatMap((product) => {
+      ...(commercePurchaseKind === "activity_ticket" ? commerceExtras.flatMap((product) => {
         const quantity = Number(safeQuantities[product.id] || 0);
         return quantity > 0 ? [{
           product_id: product.id,
           quantity,
-          parent_product_id: commerceParticipationProduct.id,
+          parent_product_id: selectedProduct.id,
         }] : [];
-      }),
+      }) : []),
     ];
-  }, [commerceExtras, commerceParticipationProduct, occurrenceDate, sessionId]);
+  }, [commerceDayPassProduct, commerceExtras, commerceParticipationProduct, commercePurchaseKind, occurrenceDate, sessionId]);
 
   const persistActivityDraft = useCallback((quantities: Record<string, number>) => {
     if (!user?.id || !session?.venue_id || !commerceDraftScope) {
@@ -566,7 +589,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         commerceSaveTimerRef.current = null;
       }
     };
-  }, [commerceDraftHydrated, commerceDraftScope, commercePilotEnabled, commerceQuantities, enqueueActivityDraftSave, user?.id]);
+  }, [commerceDraftHydrated, commerceDraftScope, commercePilotEnabled, commercePurchaseKind, commerceQuantities, enqueueActivityDraftSave, user?.id]);
 
   const sessionPresentation = session
     ? activitySessionToPresentation({
@@ -693,6 +716,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     });
   };
 
+  const selectCommercePurchaseKind = (kind: "activity_ticket" | "day_pass") => {
+    if (kind === "day_pass" && !commerceDayPassProduct) return;
+    setCommercePurchaseKind(kind);
+    commerceDraftDirtyRef.current = true;
+    if (commerceSelectionKey) window.sessionStorage.setItem(`${commerceSelectionKey}:purchase-kind`, kind);
+  };
+
   const startSignup = async () => {
     if (authLoading || purchaseInFlight.current) return;
     if (isFull) {
@@ -704,7 +734,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (isRegistered || !session || !occurrenceDate) return;
-    if (!backendPricing || pricingPending) {
+    if (!selectedPricing || pricingPending) {
       toast.info("Hämtar ditt pris...");
       return;
     }
@@ -1061,9 +1091,46 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </p>
           ) : null}
 
-          <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={priceContextLine} neutral={commercePilotEnabled} />
+          {!isRegistered && commercePilotEnabled && commerceDayPassProduct && dayPassPricing ? (
+            <section data-testid="commerce-purchase-options" className="border-y border-black/10 py-1">
+              <button
+                type="button"
+                data-testid="commerce-option-activity-ticket"
+                aria-pressed={commercePurchaseKind === "activity_ticket"}
+                onClick={() => selectCommercePurchaseKind("activity_ticket")}
+                className="flex w-full items-start justify-between gap-4 border-b border-black/10 py-4 text-left"
+              >
+                <span>
+                  <span className="block text-[14px] font-black text-slate-950">Personlig plats</span>
+                  <span className="mt-1 block text-[12px] font-semibold text-slate-500">Gäller det här passet.</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
+                  {backendPricing?.checkoutLabel || formatSek(Number(backendPricing?.finalAmountSek || 0))}
+                  <span className={`grid h-5 w-5 place-items-center rounded-full border ${commercePurchaseKind === "activity_ticket" ? "border-slate-950 bg-slate-950 text-white" : "border-black/20 text-transparent"}`}><Check className="h-3 w-3" /></span>
+                </span>
+              </button>
+              <button
+                type="button"
+                data-testid="commerce-option-day-pass"
+                aria-pressed={commercePurchaseKind === "day_pass"}
+                onClick={() => selectCommercePurchaseKind("day_pass")}
+                className="flex w-full items-start justify-between gap-4 py-4 text-left"
+              >
+                <span>
+                  <span className="block text-[14px] font-black text-slate-950">Spela hela dagen</span>
+                  <span className="mt-1 block text-[12px] font-semibold text-slate-500">{commerceDayPassProduct.name} · Gäller inkluderade Open Play-pass på Pickla denna dag.</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
+                  {dayPassPricing.checkoutLabel || formatSek(Number(dayPassPricing.finalAmountSek || commerceDayPassProduct.base_price_sek || 0))}
+                  <span className={`grid h-5 w-5 place-items-center rounded-full border ${commercePurchaseKind === "day_pass" ? "border-slate-950 bg-slate-950 text-white" : "border-black/20 text-transparent"}`}><Check className="h-3 w-3" /></span>
+                </span>
+              </button>
+            </section>
+          ) : null}
 
-          {!isRegistered && commercePilotEnabled && commerceCatalog.isSuccess && commerceExtras.length > 0 ? (
+          <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={commercePurchaseKind === "activity_ticket" ? priceContextLine : undefined} neutral={commercePilotEnabled} />
+
+          {!isRegistered && commercePurchaseKind === "activity_ticket" && commercePilotEnabled && commerceCatalog.isSuccess && commerceExtras.length > 0 ? (
             <section data-testid="commerce-addons" className="rounded-[22px] bg-[#f8fafc] px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
               <div className="mb-3 flex items-center gap-2"><ShoppingBag className="h-4 w-4 shrink-0" /><h3 className="text-[13px] font-black">Lägg till i samma köp</h3></div>
               <div className="grid gap-3">

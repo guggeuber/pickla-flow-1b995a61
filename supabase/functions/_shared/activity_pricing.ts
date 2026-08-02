@@ -1,6 +1,5 @@
 import { resolveCustomerIdForUser } from './customers.ts';
 
-const DEFAULT_DAY_ACCESS_PRICE_SEK = 199;
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
 const PEOPLE_ROW_THRESHOLD = 3;
@@ -200,9 +199,7 @@ export async function resolveActivityPricingDecision({
   const product = await productPromise;
 
   const productBaseAmountSek = Number(product?.base_price_sek ?? 0);
-  const fallbackBaseAmountSek = productKey === 'day_access'
-    ? DEFAULT_DAY_ACCESS_PRICE_SEK
-    : Number(requestedAmountSek || 0);
+  const fallbackBaseAmountSek = Number(requestedAmountSek || 0);
   const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
   const earlyBirdPriceMinor = positiveInt(
     session.early_bird_price_minor ??

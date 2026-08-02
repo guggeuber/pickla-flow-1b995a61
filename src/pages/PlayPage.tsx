@@ -28,7 +28,7 @@ const cards = [
     title: "Open Play",
     sub: "Hoppa in och spela med andra · 165 kr",
     sub2: "Fredagsklubben after work · 99 kr",
-    cta: "Köp dagspass →",
+    cta: "Se Open Play →",
     to: "/openplay",
   },
   {
