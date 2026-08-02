@@ -233,8 +233,34 @@ export function checkInCommerceGuest(token: string) {
   return apiPost<{ checked_in: boolean; registration_id: string }>("api-commerce", "guest-checkin", { token }, { auth: "omit" });
 }
 
-export function cancelCommerceActivityOrder(token: string, options: ApiRequestOptions = {}) {
-  return apiPost<CommerceOrderResponse & { cancellation_pending?: boolean }>("api-commerce", "cancel", { token }, options);
+export function cancelCommerceActivityOrder(reference: string, options: ApiRequestOptions = {}) {
+  return apiPost<CommerceOrderResponse & { cancellation_pending?: boolean }>("api-commerce", "cancel", { reference }, options);
+}
+
+export type CommerceRegistrationManagementState =
+  | "paid"
+  | "free"
+  | "pending"
+  | "refund_pending"
+  | "refunded"
+  | "cancelled"
+  | "started"
+  | "attention"
+  | "unmanaged";
+
+export interface CommerceRegistrationManagement {
+  available: boolean;
+  state: CommerceRegistrationManagementState;
+  order_id?: string;
+  registration_id?: string;
+  paid?: boolean;
+  cancellation_pending?: boolean;
+  receipt_payment_status?: string | null;
+  policy?: "before_activity_start";
+}
+
+export function fetchCommerceRegistrationManagement(registrationId: string) {
+  return apiGet<CommerceRegistrationManagement>("api-commerce", "registration-order", { registrationId });
 }
 
 export async function resumeCommerceActivityDraft(

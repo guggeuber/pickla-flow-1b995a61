@@ -30,6 +30,11 @@ import { BookingStatusChip } from "@/components/bookings/BookingStatusChip";
 import { BookingConversationIndicator } from "@/components/bookings/BookingConversationIndicator";
 import { bookingHasConversation, buildBookingHistory, formatBookingHistoryTime } from "@/lib/bookingHistory";
 import { useMyBookings } from "@/hooks/useMyBookings";
+import {
+  cancelCommerceActivityOrder,
+  fetchCommerceRegistrationManagement,
+  type CommerceRegistrationManagementState,
+} from "@/lib/commerce";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -1387,6 +1392,38 @@ function SessionRegistrationDetailsSheet({
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const [openingLobby, setOpeningLobby] = useState(false);
+  const [confirmCancellation, setConfirmCancellation] = useState(false);
+  useEffect(() => setConfirmCancellation(false), [open, registration?.id]);
+  const cancellationQuery = useQuery({
+    queryKey: ["commerce-registration-order", registration?.id, user?.id],
+    enabled: open && !!registration?.id && !!user?.id,
+    retry: false,
+    queryFn: () => fetchCommerceRegistrationManagement(registration!.id),
+  });
+  const cancellationMutation = useMutation({
+    mutationFn: () => {
+      const orderId = cancellationQuery.data?.order_id;
+      if (!orderId) throw new Error("Ordern kunde inte hittas");
+      return cancelCommerceActivityOrder(orderId);
+    },
+    onSuccess: async (result) => {
+      setConfirmCancellation(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["commerce-registration-order", registration?.id, user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["my-session-registrations", user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["commerce-my-orders"] }),
+        queryClient.invalidateQueries({ queryKey: ["my-receipts", user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["my-passes", user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["access-snapshot"] }),
+      ]);
+      toast.success(result.cancellation_pending ? "Återbetalningen har startat" : "Aktiviteten är avbokad");
+    },
+    onError: async (error: unknown) => {
+      setConfirmCancellation(false);
+      await cancellationQuery.refetch();
+      toast.error(error instanceof Error ? error.message : "Avbokningen kunde inte genomföras. Försök igen eller kontakta Pickla.");
+    },
+  });
   const checkinMutation = useMutation({
     mutationFn: () => apiPost("api-checkins", "self", {
       venue_id: registration?.venue_id,
@@ -1437,6 +1474,18 @@ function SessionRegistrationDetailsSheet({
   });
   const money = (amount: number) =>
     `${Number(amount || 0).toLocaleString("sv-SE", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })} kr`;
+  const cancellationState: CommerceRegistrationManagementState = cancellationQuery.data?.state || "unmanaged";
+  const canCancelCommerceRegistration = cancellationQuery.data?.available === true
+    && ["paid", "free"].includes(cancellationState);
+  const cancellationBlocksCheckIn = ["refund_pending", "refunded", "cancelled", "attention"].includes(cancellationState);
+  const cancellationStatus = ({
+    refund_pending: { label: "Återbetalning pågår", detail: "Platsen återkallas när Stripe har bekräftat återbetalningen." },
+    refunded: { label: "Återbetald", detail: "Platsen är avbokad och betalningen återförd." },
+    cancelled: { label: "Avbokad", detail: "Platsen är inte längre aktiv." },
+    started: { label: "Avbokning stängd", detail: "Aktiviteten har redan startat." },
+    attention: { label: "Vi hjälper dig", detail: "Köpet behöver hanteras av Pickla. Kontakta oss så löser vi det." },
+    pending: { label: "Köpet behandlas", detail: "Vänta tills köpet är bekräftat innan du avbokar." },
+  } as Partial<Record<CommerceRegistrationManagementState, { label: string; detail: string }>>)[cancellationState];
 
   const handleOpenLobby = async () => {
     if (openingLobby) return;
@@ -1521,8 +1570,8 @@ function SessionRegistrationDetailsSheet({
               )}
             </div>
             <div className="text-right shrink-0">
-              <span className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: GREEN_LIGHT, color: GREEN, fontFamily: FONT_HEADING }}>
-                {["confirmed", "checked_in", "paid"].includes(String(registration.status || "")) ? "Anmäld ✓" : "Väntande"}
+              <span className="px-3 py-1 rounded-full text-xs font-bold" style={{ background: cancellationStatus ? PAGE_BG : GREEN_LIGHT, color: cancellationStatus ? TEXT_SECONDARY : GREEN, fontFamily: FONT_HEADING }}>
+                {cancellationStatus?.label || (["confirmed", "checked_in", "paid"].includes(String(registration.status || "")) ? "Anmäld ✓" : "Väntande")}
               </span>
               {paidAmount !== null ? (
                 <p className="text-sm font-bold mt-2" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>
@@ -1536,7 +1585,7 @@ function SessionRegistrationDetailsSheet({
             </div>
           </div>
 
-          <div className="mt-5">
+          {!cancellationBlocksCheckIn ? <div className="mt-5">
             {isCheckedIn ? (
               <div className="w-full rounded-2xl px-4 py-4 text-center text-sm font-bold" style={{ background: GREEN_LIGHT, border: `1.5px solid ${GREEN_BORDER}`, color: GREEN, fontFamily: FONT_HEADING }}>
                 Incheckad
@@ -1556,7 +1605,7 @@ function SessionRegistrationDetailsSheet({
                 Check-in: {checkinEligibility.reason}
               </div>
             )}
-          </div>
+          </div> : null}
 
           <div className="grid grid-cols-2 gap-2 mt-3">
             <button
@@ -1591,13 +1640,34 @@ function SessionRegistrationDetailsSheet({
               <FileText className="w-4 h-4" />
               Kvitto
             </button>
-            <button
-              onClick={() => toast.info("Avbokning av aktivitetspass kommer här strax")}
-              className="col-span-2 w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
-              style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.16)", color: "#EF4444", fontFamily: FONT_HEADING }}
-            >
-              Avboka
-            </button>
+            {canCancelCommerceRegistration ? confirmCancellation ? (
+              <div className="col-span-2 rounded-xl border p-3" style={{ borderColor: CARD_BORDER, background: PAGE_BG }}>
+                <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>Avboka din plats?</p>
+                <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>
+                  {cancellationState === "paid" ? "Betalningen återförs när Stripe har bekräftat återbetalningen." : "Platsen släpps direkt."}
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setConfirmCancellation(false)} disabled={cancellationMutation.isPending} className="h-10 rounded-lg border text-xs font-bold" style={{ borderColor: CARD_BORDER, color: TEXT_PRIMARY }}>Behåll</button>
+                  <button type="button" onClick={() => cancellationMutation.mutate()} disabled={cancellationMutation.isPending} className="flex h-10 items-center justify-center rounded-lg bg-slate-950 text-xs font-bold text-white disabled:opacity-50">
+                    {cancellationMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ja, avboka"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmCancellation(true)}
+                className="col-span-2 w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform"
+                style={{ background: "transparent", border: `1px solid ${CARD_BORDER}`, color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}
+              >
+                Avboka
+              </button>
+            ) : cancellationStatus ? (
+              <div className="col-span-2 rounded-xl border px-3 py-3 text-center" style={{ borderColor: CARD_BORDER, background: PAGE_BG }}>
+                <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>{cancellationStatus.label}</p>
+                <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>{cancellationStatus.detail}</p>
+              </div>
+            ) : null}
           </div>
         </div>
       </DrawerContent>

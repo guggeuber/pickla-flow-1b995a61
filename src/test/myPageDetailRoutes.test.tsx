@@ -67,6 +67,16 @@ function seedMyPageQueries(queryClient: QueryClient, input: {
   queryClient.setQueryData(["wellness-certificate", currentYear + 1], { items: [] });
   queryClient.setQueryData(["my-corporate", auth.user.id], { memberships: [], packages: [] });
   queryClient.setQueryData(["commerce-my-orders"], { orders: [], lines: [] });
+  for (const registration of input.registrations || []) {
+    queryClient.setQueryData(["commerce-registration-order", registration.id, auth.user.id], {
+      available: true,
+      state: "free",
+      order_id: "commerce-order-id",
+      registration_id: registration.id,
+      paid: false,
+      policy: "before_activity_start",
+    });
+  }
   queryClient.setQueryData(["payment-methods"], { methods: [] });
   queryClient.setQueryData(["venue-id-for-push", "pickla-arena-sthlm"], "venue-id");
 }

@@ -1149,9 +1149,13 @@ const commerceHandler = async (req: Request) => {
     if (req.method === 'POST' && path === 'cancel') {
       const body = await req.json();
       const reference = String(body.token || body.reference || '').trim();
-      const order = await loadOrderByToken(admin, reference, userId, true);
+      const order = await loadOrderByReference(admin, reference, userId, true);
       if (order.status === 'cancelled') return jsonResponse(await cartResponse(admin, order), 200, 0);
       if (!['paid', 'attention'].includes(order.status)) return errorResponse('Köpet kan inte avbokas', 409);
+      if (order.metadata?.cancellation_requested_at) {
+        return jsonResponse({ ...(await cartResponse(admin, order)), cancellation_pending: true }, 202, 0);
+      }
+      if (order.status === 'attention') return errorResponse('Köpet behöver hanteras av Pickla innan det kan avbokas.', 409);
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.find((line) => line.commerce_kind === 'participation');
       if (!participation?.activity_session_id || !participation.session_date) {
@@ -1170,26 +1174,33 @@ const commerceHandler = async (req: Request) => {
 
       if (Number(order.total_inc_vat_minor || 0) === 0) {
         if (participation.session_registration_id) {
-          await admin.from('session_registrations')
+          const { error: registrationCancelError } = await admin.from('session_registrations')
             .update({ status: 'cancelled' })
             .eq('id', participation.session_registration_id)
             .in('status', ['confirmed', 'checked_in', 'no_show']);
+          if (registrationCancelError) throw new Error(registrationCancelError.message);
           const dayPassPurchase = participation.product_key === 'day_access'
             || (participation.resolver_snapshot as any)?.purchase_kind === 'day_pass';
           let entitlementQuery = admin.from('access_entitlements').update({ status: 'revoked' }).neq('status', 'revoked');
           entitlementQuery = dayPassPurchase
             ? entitlementQuery.eq('source_type', 'commerce_order').eq('source_id', order.id)
             : entitlementQuery.eq('source_type', 'session_ticket').eq('source_id', participation.session_registration_id);
-          await entitlementQuery;
+          const { error: entitlementRevokeError } = await entitlementQuery;
+          if (entitlementRevokeError) throw new Error(entitlementRevokeError.message);
           if (dayPassPurchase) {
-            await admin.from('day_passes').update({ status: 'cancelled' }).eq('commerce_order_id', order.id).neq('status', 'cancelled');
+            const { error: dayPassCancelError } = await admin.from('day_passes')
+              .update({ status: 'cancelled' })
+              .eq('commerce_order_id', order.id)
+              .neq('status', 'cancelled');
+            if (dayPassCancelError) throw new Error(dayPassCancelError.message);
           }
         }
-        await admin.from('commerce_order_lines')
+        const { error: pickupCancelError } = await admin.from('commerce_order_lines')
           .update({ fulfillment_status: 'not_collected' })
           .eq('commerce_order_id', order.id)
           .eq('fulfillment_type', 'desk_pickup')
           .eq('fulfillment_status', 'pending_pickup');
+        if (pickupCancelError) throw new Error(pickupCancelError.message);
         const { data: cancelled, error: cancelError } = await admin.from('commerce_orders')
           .update({ status: 'cancelled', metadata: { ...(order.metadata || {}), cancelled_at: new Date().toISOString(), cancellation_source: 'customer' } })
           .eq('id', order.id)
@@ -1444,6 +1455,57 @@ const commerceHandler = async (req: Request) => {
         ? await admin.from('commerce_order_lines').select('*').in('commerce_order_id', orderIds).order('sort_order')
         : { data: [] };
       return jsonResponse({ orders: orders || [], lines: lines || [] }, 200, 15);
+    }
+
+    if (req.method === 'GET' && path === 'registration-order') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const registrationId = url.searchParams.get('registrationId') || '';
+      if (!UUID_PATTERN.test(registrationId)) return errorResponse('Missing registrationId', 400);
+      const { data: registration, error: registrationError } = await admin.from('session_registrations')
+        .select('id, user_id, status, activity_session_id, session_date')
+        .eq('id', registrationId)
+        .maybeSingle();
+      if (registrationError || !registration) return errorResponse('Registration not found', 404);
+      if (registration.user_id !== userId) return errorResponse('Forbidden', 403);
+      const { data: participationLine, error: lineError } = await admin.from('commerce_order_lines')
+        .select('id, commerce_order_id')
+        .eq('session_registration_id', registrationId)
+        .eq('commerce_kind', 'participation')
+        .maybeSingle();
+      if (lineError) throw new Error(lineError.message);
+      if (!participationLine) return jsonResponse({ available: false, state: 'unmanaged' }, 200, 15);
+      const order = await loadOrderByReference(admin, participationLine.commerce_order_id, userId, true);
+      const [{ data: activity }, { data: receipt }] = await Promise.all([
+        admin.from('activity_sessions').select('id, start_time, end_time')
+          .eq('id', registration.activity_session_id).eq('venue_id', order.venue_id).maybeSingle(),
+        order.booking_receipt_id
+          ? admin.from('booking_receipts').select('id, payment_status').eq('id', order.booking_receipt_id).maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
+      const interval = activity
+        ? activitySessionOccurrenceInterval(registration.session_date, activity.start_time, activity.end_time)
+        : null;
+      const started = !interval || DateTime.now().setZone('Europe/Stockholm') >= interval.start;
+      const cancellationPending = Boolean(order.metadata?.cancellation_requested_at);
+      const refunded = receipt?.payment_status === 'refunded';
+      let state = 'paid';
+      if (refunded) state = 'refunded';
+      else if (order.status === 'cancelled' || registration.status === 'cancelled') state = 'cancelled';
+      else if (cancellationPending) state = 'refund_pending';
+      else if (order.status === 'attention') state = 'attention';
+      else if (started) state = 'started';
+      else if (order.status === 'checkout_pending' || order.status === 'draft') state = 'pending';
+      else if (Number(order.total_inc_vat_minor || 0) === 0) state = 'free';
+      return jsonResponse({
+        available: true,
+        state,
+        order_id: order.id,
+        registration_id: registration.id,
+        paid: Number(order.total_inc_vat_minor || 0) > 0,
+        cancellation_pending: cancellationPending,
+        receipt_payment_status: receipt?.payment_status || null,
+        policy: 'before_activity_start',
+      }, 200, 0);
     }
 
     if (req.method === 'GET' && path === 'participation-items') {
