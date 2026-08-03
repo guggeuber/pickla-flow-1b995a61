@@ -1,4 +1,4 @@
-import { ArrowRight, BarChart3, Calendar, LogIn, Menu, Plus, X } from "lucide-react";
+import { ArrowRight, BarChart3, Calendar, LogIn, Menu, Plus, ShoppingBag, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -152,6 +152,21 @@ export function PicklaTopBar({
                     <Plus className="h-5 w-5 text-neutral-500" />
                   </button>
                 ))}
+              </section>
+
+              <section className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => go(`/shop?v=${encodeURIComponent(slug)}`)}
+                  className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-left text-neutral-950"
+                  style={{ fontFamily: FONT_HEADING }}
+                >
+                  <span className="flex items-center gap-3">
+                    <ShoppingBag className="h-5 w-5 text-neutral-500" />
+                    Butik
+                  </span>
+                  <ArrowRight className="h-4 w-4 text-neutral-400" />
+                </button>
               </section>
 
               {user && (
