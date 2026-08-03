@@ -16,6 +16,8 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 const CART_TOKEN_BYTES = 32;
 const MAX_CART_LINES = 25;
 const MAX_QUANTITY = 100;
+const SHOP_DRAFT_SCOPE = 'shop';
+const DRAFT_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 const STRIPE_API_BASE = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -154,6 +156,71 @@ function normalizeActivityDraftScope(value: unknown) {
   return /^activity:[0-9a-f-]{36}:\d{4}-\d{2}-\d{2}$/.test(scope) ? scope : '';
 }
 
+function normalizeStandaloneIdempotencyKey(value: unknown) {
+  const key = String(value || '').trim().slice(0, 200);
+  return key.length >= 32 ? key : '';
+}
+
+function standaloneDraftExpiry() {
+  return new Date(Date.now() + DRAFT_LIFETIME_MS).toISOString();
+}
+
+async function expireStandaloneDraftIfNeeded(admin: AdminClient, order: any) {
+  if (order?.draft_scope !== SHOP_DRAFT_SCOPE || order?.status !== 'draft') return false;
+  if (!order.expires_at || new Date(order.expires_at).getTime() > Date.now()) return false;
+  const { error } = await admin.from('commerce_orders').update({
+    status: 'expired',
+    metadata: { ...(order.metadata || {}), expiry_reason: 'commerce_r1b_stale_shop_draft' },
+  }).eq('id', order.id).eq('status', 'draft');
+  if (error) throw new Error(error.message);
+  return true;
+}
+
+async function findStandaloneDraft(
+  admin: AdminClient,
+  venueId: string,
+  userId: string | null,
+  idempotencyKeyHash: string,
+) {
+  let query = admin.from('commerce_orders')
+    .select('*')
+    .eq('venue_id', venueId)
+    .eq('draft_scope', SHOP_DRAFT_SCOPE)
+    .eq('status', 'draft');
+  query = userId
+    ? query.eq('user_id', userId)
+    : query.is('user_id', null).eq('draft_idempotency_key_hash', idempotencyKeyHash);
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return { order: null, expired: false };
+  if (await expireStandaloneDraftIfNeeded(admin, data)) return { order: null, expired: true };
+  return { order: data, expired: false };
+}
+
+async function claimStandaloneGuestDraft(admin: AdminClient, order: any, userId?: string | null) {
+  if (!userId || order?.draft_scope !== SHOP_DRAFT_SCOPE || order?.status !== 'draft' || order?.user_id) {
+    return order;
+  }
+  const existing = await findStandaloneDraft(
+    admin,
+    String(order.venue_id),
+    userId,
+    String(order.draft_idempotency_key_hash || ''),
+  );
+  if (existing.order && existing.order.id !== order.id) throw new Error('Shop cart owner conflict');
+  const customerId = await resolveOrCreateCustomerIdForUser(admin, userId, order.venue_id, 'commerce_shop_cart_claim');
+  const { data, error } = await admin.from('commerce_orders')
+    .update({ user_id: userId, customer_id: customerId })
+    .eq('id', order.id)
+    .eq('status', 'draft')
+    .is('user_id', null)
+    .select('*')
+    .maybeSingle();
+  if (error?.code === '23505') throw new Error('Shop cart owner conflict');
+  if (error) throw new Error(error.message);
+  return data || order;
+}
+
 async function optionalUser(req: Request) {
   const header = req.headers.get('Authorization');
   if (!header?.startsWith('Bearer ')) return { userId: null as string | null };
@@ -169,11 +236,13 @@ async function loadOrderByToken(admin: AdminClient, token: string, userId?: stri
   query = allowReceiptToken
     ? query.or(`guest_token_hash.eq.${tokenHash},receipt_token_hash.eq.${tokenHash}`)
     : query.eq('guest_token_hash', tokenHash);
-  const { data: order, error } = await query.maybeSingle();
+  const { data, error } = await query.maybeSingle();
   if (error) throw new Error(error.message);
-  if (!order) throw new Error('Cart not found');
+  if (!data) throw new Error('Cart not found');
+  const order = await claimStandaloneGuestDraft(admin, data, userId);
   const receiptTokenMatches = allowReceiptToken && order.receipt_token_hash === tokenHash && ['paid', 'attention'].includes(order.status);
   if (order.user_id && order.user_id !== userId && !receiptTokenMatches) throw new Error('Forbidden');
+  if (await expireStandaloneDraftIfNeeded(admin, order)) throw new Error('Cart expired');
   return order;
 }
 
@@ -187,6 +256,7 @@ async function loadOrderByReference(admin: AdminClient, reference: string, userI
     if (error) throw new Error(error.message);
     if (!order) throw new Error('Cart not found');
     if (order.user_id !== userId) throw new Error('Forbidden');
+    if (await expireStandaloneDraftIfNeeded(admin, order)) throw new Error('Cart expired');
     return order;
   }
   return loadOrderByToken(admin, cleanReference, userId, allowReceiptToken);
@@ -249,6 +319,7 @@ function projectOrderLine(line: DbRecord) {
     product_snapshot: {
       base_price_sek: Number(productSnapshot.base_price_sek || 0),
       customer_instruction_code: productSnapshot.customer_instruction_code || null,
+      max_quantity: productMaxQuantity({ resolver_rules: productSnapshot.resolver_rules || {} } as CommerceProduct),
     },
     resolver_snapshot: {
       pricing_reason: resolver.pricing_reason || null,
@@ -356,6 +427,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
       claim_expires_at: order.claim_expires_at || null,
       cancellation_pending: Boolean(order.metadata?.cancellation_requested_at),
       paid_at: order.paid_at,
+      expires_at: order.expires_at || null,
       booking_receipt_id: order.booking_receipt_id,
       customer_name: ['paid', 'refunded', 'cancelled'].includes(String(order.status))
         ? order.guest_name || null
@@ -380,10 +452,17 @@ async function venueContext(admin: AdminClient, venueId: string) {
   return data;
 }
 
-async function validateCartItems(admin: AdminClient, venueId: string, items: any[], userId?: string | null) {
-  if (!Array.isArray(items) || items.length === 0 || items.length > MAX_CART_LINES) {
-    throw new Error('Cart must contain 1-25 items');
+async function validateCartItems(
+  admin: AdminClient,
+  venueId: string,
+  items: any[],
+  userId?: string | null,
+  options: { allowEmpty?: boolean } = {},
+) {
+  if (!Array.isArray(items) || items.length > MAX_CART_LINES || (!options.allowEmpty && items.length === 0)) {
+    throw new Error(options.allowEmpty ? 'Cart must contain 0-25 items' : 'Cart must contain 1-25 items');
   }
+  if (items.length === 0) return [];
   const productIds = Array.from(new Set(items.map((item) => String(item.product_id || '')).filter(Boolean)));
   const { data: products, error: productError } = await admin
     .from('access_products')
@@ -625,6 +704,7 @@ async function resolveLines(
     }
     resolved.push({
       id: line.id,
+      product_id: product.id,
       product_key: product.product_key,
       product_name: product.name,
       commerce_kind: product.commerce_kind,
@@ -892,7 +972,93 @@ const commerceHandler = async (req: Request) => {
       const body = await req.json();
       const venueId = String(body.venue_id || '').trim();
       const venue = await venueContext(admin, venueId);
-      const lines = await validateCartItems(admin, venueId, body.items, userId);
+      const shopScopeRequested = String(body.draft_scope || '').trim().toLowerCase() === SHOP_DRAFT_SCOPE;
+      const lines = await validateCartItems(admin, venueId, body.items, userId, { allowEmpty: shopScopeRequested });
+
+      if (shopScopeRequested) {
+        if (lines.some((line) => line.commerce_kind === 'participation')) {
+          return errorResponse('Activity products require an activity draft', 409);
+        }
+        const idempotencyKey = normalizeStandaloneIdempotencyKey(body.idempotency_key);
+        if (!idempotencyKey) return errorResponse('Standalone cart idempotency key is required', 400);
+        const idempotencyKeyHash = await sha256(idempotencyKey);
+        const journeyId = String(body.journey_id || '').trim().slice(0, 120);
+        const journeyIdHash = journeyId.length >= 16 ? await sha256(journeyId) : null;
+        const customerId = userId
+          ? await resolveOrCreateCustomerIdForUser(admin, userId, venueId, 'commerce_shop_cart')
+          : null;
+        const found = await findStandaloneDraft(admin, venueId, userId || null, idempotencyKeyHash);
+        if (found.expired && !userId) return errorResponse('Cart expired', 410);
+        let order = found.order;
+        let created = false;
+        const token = userId ? newCartToken() : idempotencyKey;
+        if (!order) {
+          const { data: insertedOrder, error: orderError } = await admin.from('commerce_orders').insert({
+            organization_id: venue.organization_id,
+            venue_id: venueId,
+            customer_id: customerId,
+            user_id: userId,
+            guest_token_hash: await sha256(token),
+            draft_scope: SHOP_DRAFT_SCOPE,
+            draft_idempotency_key_hash: idempotencyKeyHash,
+            expires_at: standaloneDraftExpiry(),
+            guest_name: body.guest_name || null,
+            guest_email: body.guest_email ? String(body.guest_email).trim().toLowerCase() : null,
+            guest_phone: body.guest_phone || null,
+            metadata: { source: body.source || 'commerce_shop', journey_id_hash: journeyIdHash },
+          }).select('*').single();
+          if (orderError?.code === '23505') {
+            const converged = await findStandaloneDraft(admin, venueId, userId || null, idempotencyKeyHash);
+            order = converged.order;
+          } else if (orderError) {
+            throw new Error(orderError.message);
+          } else {
+            order = insertedOrder;
+            created = true;
+          }
+        }
+        if (!order) throw new Error('Cart not found');
+
+        const existingLines = created ? [] : await loadOrderLines(admin, order.id);
+        const shouldReplace = created || (existingLines.length === 0 && lines.length > 0);
+        try {
+          if (shouldReplace) {
+            const { data: replaced, error: replaceError } = await admin.rpc('replace_commerce_cart_lines', {
+              p_order_id: order.id,
+              p_expected_version: order.version,
+              p_lines: lines,
+              p_guest_name: body.guest_name || null,
+              p_guest_email: body.guest_email || null,
+              p_guest_phone: body.guest_phone || null,
+            }).maybeSingle();
+            const replacedRow = replaced as RpcVersionRow | null;
+            if (replaceError || replacedRow?.version == null) {
+              if (!created && String(replaceError?.message || '').includes('stale_cart_version')) {
+                const converged = await findStandaloneDraft(admin, venueId, userId || null, idempotencyKeyHash);
+                if (!converged.order) throw new Error('Cart update failed');
+                order = converged.order;
+              } else {
+                throw new Error(replaceError?.message || 'Cart update failed');
+              }
+            } else {
+              order.version = replacedRow.version;
+            }
+          }
+          const expiresAt = standaloneDraftExpiry();
+          const { error: expiryError } = await admin.from('commerce_orders')
+            .update({ expires_at: expiresAt })
+            .eq('id', order.id)
+            .eq('status', 'draft');
+          if (expiryError) throw new Error(expiryError.message);
+          order.expires_at = expiresAt;
+        } catch (error) {
+          if (created) await admin.from('commerce_orders').delete().eq('id', order.id).eq('status', 'draft');
+          throw error;
+        }
+        const reference = userId ? order.id : idempotencyKey;
+        return jsonResponse(await cartResponse(admin, order, reference), created ? 201 : 200, 0);
+      }
+
       const suppliedDraftScope = normalizeActivityDraftScope(body.draft_scope);
       if (body.draft_scope && !suppliedDraftScope) return errorResponse('Invalid activity draft scope', 400);
       if (suppliedDraftScope && !userId) return errorResponse('Unauthorized', 401);
@@ -921,7 +1087,7 @@ const commerceHandler = async (req: Request) => {
           user_id: userId,
           guest_token_hash: tokenHash,
           draft_scope: persistentDraftScope || null,
-          expires_at: persistentDraftScope ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+          expires_at: persistentDraftScope ? standaloneDraftExpiry() : null,
           guest_name: body.guest_name || null,
           guest_email: body.guest_email ? String(body.guest_email).trim().toLowerCase() : null,
           guest_phone: body.guest_phone || null,
@@ -951,7 +1117,7 @@ const commerceHandler = async (req: Request) => {
         order.version = replacedRow.version;
         if (persistentDraftScope) {
           await admin.from('commerce_orders').update({
-            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            expires_at: standaloneDraftExpiry(),
           }).eq('id', order.id).eq('status', 'draft');
         }
       } catch (error) {
@@ -965,7 +1131,8 @@ const commerceHandler = async (req: Request) => {
     if (req.method === 'PUT' && path === 'cart') {
       const body = await req.json();
       const order = await loadOrderByReference(admin, String(body.token || ''), userId);
-      const lines = await validateCartItems(admin, order.venue_id, body.items, userId);
+      const standaloneShopDraft = order.draft_scope === SHOP_DRAFT_SCOPE;
+      const lines = await validateCartItems(admin, order.venue_id, body.items, userId, { allowEmpty: standaloneShopDraft });
       const { data, error } = await admin.rpc('replace_commerce_cart_lines', {
         p_order_id: order.id,
         p_expected_version: Number(body.expected_version),
@@ -977,6 +1144,22 @@ const commerceHandler = async (req: Request) => {
       const updatedRow = data as RpcVersionRow | null;
       if (error || updatedRow?.version == null) throw new Error(error?.message || 'Cart update failed');
       order.version = updatedRow.version;
+      if (standaloneShopDraft) {
+        const expiresAt = standaloneDraftExpiry();
+        const { error: expiryError } = await admin.from('commerce_orders')
+          .update({ expires_at: expiresAt })
+          .eq('id', order.id)
+          .eq('status', 'draft');
+        if (expiryError) throw new Error(expiryError.message);
+        order.expires_at = expiresAt;
+        if (lines.length === 0) {
+          order.subtotal_minor = 0;
+          order.discount_minor = 0;
+          order.total_inc_vat_minor = 0;
+          order.total_ex_vat_minor = 0;
+          order.vat_amount_minor = 0;
+        }
+      }
       return jsonResponse(await cartResponse(admin, order, String(body.token || '')), 200, 0);
     }
 
@@ -1237,6 +1420,13 @@ const commerceHandler = async (req: Request) => {
       const order = await loadOrderByReference(admin, String(body.token || ''), userId);
       if (order.status !== 'draft') return errorResponse('Cart is not editable', 409);
       const lines = await loadOrderLines(admin, order.id);
+      if (lines.length === 0 && order.draft_scope === SHOP_DRAFT_SCOPE) {
+        return jsonResponse({
+          order: { id: order.id, version: order.version, currency: order.currency },
+          lines: [],
+          checkout_ready: false,
+        }, 200, 0);
+      }
       const resolved = await resolveLines(admin, order, lines, userId);
       await assertParticipationCapacityAvailable(admin, order, lines);
       return jsonResponse({ order: { id: order.id, version: order.version, currency: order.currency }, lines: resolved.map(projectOrderLine), checkout_ready: true }, 200, 0);
@@ -1260,6 +1450,7 @@ const commerceHandler = async (req: Request) => {
         order.guest_name = checkoutGuestName || null;
       }
       const lines = await loadOrderLines(admin, order.id);
+      if (lines.length === 0) return errorResponse('Cart is empty', 409);
       const participation = lines.filter((line) => line.commerce_kind === 'participation');
       if (participation.length > 1) return errorResponse('Release 1 supports one participation per cart', 409);
 
@@ -1545,7 +1736,7 @@ const commerceHandler = async (req: Request) => {
       const status = url.searchParams.get('status') || 'pending_pickup';
       const { data: orders, error: orderError } = await admin
         .from('commerce_orders')
-        .select('id, venue_id, customer_id, guest_name, guest_email, guest_phone, status, paid_at, booking_receipt_id')
+        .select('id, venue_id, customer_id, guest_name, status, paid_at, booking_receipt_id')
         .eq('venue_id', venueId)
         .in('status', ['paid', 'attention']);
       if (orderError) throw new Error(orderError.message);
@@ -1555,7 +1746,26 @@ const commerceHandler = async (req: Request) => {
           .eq('fulfillment_type', 'desk_pickup').eq('fulfillment_status', status).order('created_at')
         : { data: [], error: null };
       if (lineError) throw new Error(lineError.message);
-      const orderById = new Map((orders || []).map((order: any) => [order.id, order]));
+      const customerIds = Array.from(new Set((orders || []).map((order: any) => order.customer_id).filter(Boolean)));
+      const { data: customers, error: customerError } = customerIds.length
+        ? await admin.from('customers').select('id, display_name, first_name, last_name').in('id', customerIds)
+        : { data: [], error: null };
+      if (customerError) throw new Error(customerError.message);
+      const customerById = new Map((customers || []).map((customer: any) => [customer.id, customer]));
+      const orderById = new Map((orders || []).map((order: any) => {
+        const customer = customerById.get(order.customer_id) as any;
+        const customerName = order.guest_name || customer?.display_name
+          || [customer?.first_name, customer?.last_name].filter(Boolean).join(' ')
+          || 'Kund';
+        return [order.id, {
+          id: order.id,
+          venue_id: order.venue_id,
+          status: order.status,
+          paid_at: order.paid_at,
+          booking_receipt_id: order.booking_receipt_id,
+          customer_name: customerName,
+        }];
+      }));
       return jsonResponse({ items: (lines || []).map((line) => ({ ...line, order: orderById.get(line.commerce_order_id) })) }, 200, 5);
     }
 
@@ -1587,6 +1797,8 @@ const commerceHandler = async (req: Request) => {
     console.error('api-commerce', path, message);
     if (message === 'Unauthorized') return errorResponse(message, 401);
     if (message === 'Forbidden') return errorResponse(message, 403);
+    if (message === 'Cart expired') return errorResponse(message, 410);
+    if (message === 'Shop cart owner conflict') return errorResponse(message, 409);
     if (message.includes('stale_cart_version')) return errorResponse('Cart changed — review it again.', 409);
     if (message.includes('not found') || message.includes('not_found')) return errorResponse(message, 404);
     if (message.includes('Platsen hann tas')) return errorResponse(message, 409);

@@ -20,6 +20,7 @@ const ids = {
   participation: "c2b00000-0000-4000-8000-000000000020",
   dayPass: "c2b00000-0000-4000-8000-000000000022",
   racket: "c2b00000-0000-4000-8000-000000000021",
+  shopBag: "c2b00000-0000-4000-8000-000000000023",
   capacityParticipation: "c2b00000-0000-4000-8000-000000000030",
   capacityRacket: "c2b00000-0000-4000-8000-000000000031",
 };
@@ -115,6 +116,21 @@ async function createCart({ venueId = ids.venue, productId = ids.participation, 
   })).payload;
 }
 
+async function createShopCart({ token, key, items = [] }) {
+  return (await fn("cart", {
+    method: "POST",
+    token,
+    body: {
+      venue_id: ids.venue,
+      source: "commerce_r1b_shop_e2e",
+      draft_scope: "shop",
+      idempotency_key: key,
+      items,
+      journey_id: crypto.randomBytes(32).toString("hex"),
+    },
+  })).payload;
+}
+
 async function checkout(cart, { email, name, token } = {}) {
   return (await fn("checkout", {
     method: "POST",
@@ -186,6 +202,7 @@ async function seed() {
     { id: ids.participation, venue_id: ids.venue, product_key: "r1_open_play", name: "Open Play R1", product_kind: "session_ticket", session_type: "open_play", commerce_kind: "participation", fulfillment_type: "participation", fulfillment_presentation: "participation", base_price_sek: 165, vat_rate: 6, resolver_rules: {}, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: false },
     { id: ids.dayPass, venue_id: ids.venue, product_key: "day_access", name: "Heldagspass", product_kind: "day_access", session_type: null, commerce_kind: "participation", fulfillment_type: "participation", fulfillment_presentation: "participation", base_price_sek: 237, vat_rate: 6, resolver_rules: { entitlement_type: "day_access", includes_session_types: ["open_play"] }, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: false },
     { id: ids.racket, venue_id: ids.venue, product_key: "r1_rental_racket", name: "Hyrrack", product_kind: "rental", session_type: null, commerce_kind: "rental", fulfillment_type: "desk_pickup", fulfillment_presentation: "desk_pickup", base_price_sek: 50, vat_rate: 6, resolver_rules: { max_quantity: 3 }, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: true },
+    { id: ids.shopBag, venue_id: ids.venue, product_key: "r1b_shop_bag", name: "Pickla Bag", product_kind: "merchandise", session_type: null, commerce_kind: "merchandise", fulfillment_type: "desk_pickup", fulfillment_presentation: "desk_pickup", base_price_sek: 200, vat_rate: 25, resolver_rules: { max_quantity: 4 }, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: true, activity_addon_enabled: false },
     { id: ids.capacityParticipation, venue_id: ids.capacityVenue, product_key: "r1_capacity_play", name: "Capacity One R1", product_kind: "session_ticket", session_type: "open_play", commerce_kind: "participation", fulfillment_type: "participation", fulfillment_presentation: "participation", base_price_sek: 165, vat_rate: 6, resolver_rules: {}, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: false },
     { id: ids.capacityRacket, venue_id: ids.capacityVenue, product_key: "r1_capacity_racket", name: "Hyrrack", product_kind: "rental", session_type: null, commerce_kind: "rental", fulfillment_type: "desk_pickup", fulfillment_presentation: "desk_pickup", base_price_sek: 50, vat_rate: 6, resolver_rules: {}, commerce_enabled: true, status: "active", is_active: true, standalone_enabled: false, activity_addon_enabled: true },
   ] });
@@ -200,6 +217,51 @@ pass("fixture", "local venue, activities and products seeded");
 
 const member = await createUser("member@commerce-r1.local");
 const attacker = await createUser("attacker@commerce-r1.local");
+
+const guestShopKey = crypto.randomBytes(32).toString("hex");
+const shopItems = [{ product_id: ids.shopBag, quantity: 2 }];
+const [guestShopFirst, guestShopRetry] = await Promise.all([
+  createShopCart({ key: guestShopKey, items: shopItems }),
+  createShopCart({ key: guestShopKey, items: shopItems }),
+]);
+assert(guestShopFirst.order.id === guestShopRetry.order.id, "guest double click created two shop carts");
+const guestShopLoaded = (await fn(`order?token=${guestShopKey}`)).payload;
+assert(guestShopLoaded.lines.length === 1 && guestShopLoaded.lines[0].quantity === 2, "guest shop cart did not persist after reload");
+const guestShopResolved = (await fn("resolve", { method: "POST", body: { token: guestShopKey } })).payload;
+assert(guestShopResolved.lines[0].unit_price_minor === 20000, "standalone cart did not resolve canonical catalogue price");
+const emptiedShop = (await fn("cart", {
+  method: "PUT",
+  body: { token: guestShopKey, expected_version: guestShopLoaded.order.version, items: [] },
+})).payload;
+assert(emptiedShop.order.id === guestShopFirst.order.id && emptiedShop.lines.length === 0, "zero-item PUT did not preserve empty cart identity");
+const readdedShop = (await fn("cart", {
+  method: "PUT",
+  body: { token: guestShopKey, expected_version: emptiedShop.order.version, items: [{ product_id: ids.shopBag, quantity: 1 }] },
+})).payload;
+assert(readdedShop.order.id === guestShopFirst.order.id && readdedShop.lines[0].quantity === 1, "re-add after empty did not reuse cart");
+await rest("commerce_orders", `id=eq.${guestShopFirst.order.id}`, { method: "PATCH", body: { expires_at: new Date(Date.now() - 1000).toISOString() } });
+await fn(`order?token=${guestShopKey}`, { expected: 410 });
+const rotatedGuestShop = await createShopCart({ key: crypto.randomBytes(32).toString("hex"), items: shopItems });
+assert(rotatedGuestShop.order.id !== guestShopFirst.order.id, "expired guest cart remained active");
+
+const signedKeyA = crypto.randomBytes(32).toString("hex");
+const signedKeyB = crypto.randomBytes(32).toString("hex");
+const [signedShopA, signedShopB] = await Promise.all([
+  createShopCart({ token: member.token, key: signedKeyA }),
+  createShopCart({ token: member.token, key: signedKeyB }),
+]);
+assert(signedShopA.order.id === signedShopB.order.id, "two signed-in tabs created separate shop carts");
+
+const claimUser = await createUser("shop-claim@commerce-r1.local");
+const claimKey = crypto.randomBytes(32).toString("hex");
+const claimGuestCart = await createShopCart({ key: claimKey, items: shopItems });
+const claimedShop = (await fn(`order?token=${claimKey}`, { token: claimUser.token })).payload;
+assert(claimedShop.order.id === claimGuestCart.order.id, "guest cart was not deterministically claimed after login");
+const claimedRow = (await rest("commerce_orders", `id=eq.${claimGuestCart.order.id}&select=user_id`)).payload[0];
+assert(claimedRow.user_id === claimUser.id, "claimed shop cart did not gain canonical user ownership");
+await fn(`order?token=${claimKey}`, { expected: 403 });
+pass("R1B standalone cart", "guest/signed identity, retries, two tabs, expiry, empty/re-add, resolve and guest-to-login");
+
 const currentScope = `activity:${ids.activity}:${today}`;
 const memberCart = await createCart({ token: member.token, scope: currentScope, quantity: 1 });
 assert(memberCart.order.draft_scope === currentScope, "authenticated draft scope missing");
@@ -260,12 +322,27 @@ assert(guestOrder.status === "paid" && guestOrder.booking_receipt_id, "guest pay
 assert(guestRegistration && guestRegistration.status === "confirmed", "guest participant was not created exactly once");
 assert(guestRegistrations.filter((row) => row.customer_id === guestOrder.customer_id).length === 1, "duplicate participant exists");
 const guestParticipationLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${guestCheckout.order_id}&commerce_kind=eq.participation&select=capacity_hold_id`)).payload[0];
-const guestRacketLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${guestCheckout.order_id}&commerce_kind=eq.rental&select=quantity,fulfillment_status,product_snapshot`)).payload[0];
+const guestRacketLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${guestCheckout.order_id}&commerce_kind=eq.rental&select=id,quantity,fulfillment_status,product_snapshot`)).payload[0];
 assert(guestRacketLine.quantity === 1 && guestRacketLine.fulfillment_status === "pending_pickup", "Hyrrack quantity or pickup state missing");
 assert(guestRacketLine.product_snapshot?.customer_instruction_code === "desk_pickup_racket_by_name", "Hyrrack instruction was not retained");
 const guestHold = (await rest("capacity_holds", `id=eq.${guestParticipationLine.capacity_hold_id}&select=status,customer_id`)).payload[0];
 assert(guestHold.status === "committed" && guestHold.customer_id === guestOrder.customer_id, "guest hold did not share canonical customer");
 pass("R1B purchase", "one order, hold, participant and receipt after duplicate webhook");
+
+const deskUser = await createUser("desk@commerce-r1.local");
+await rest("venue_staff", "", { method: "POST", body: [
+  { venue_id: ids.venue, user_id: deskUser.id, role: "desk_staff", is_active: true },
+  { venue_id: ids.capacityVenue, user_id: deskUser.id, role: "desk_staff", is_active: true },
+] });
+await fn("fulfillment", { method: "PATCH", token: deskUser.token, body: { venue_id: ids.venue, line_id: guestRacketLine.id, status: "collected" } });
+const collectedOnce = (await rest("commerce_order_lines", `id=eq.${guestRacketLine.id}&select=fulfilled_at,fulfilled_by,fulfillment_status`)).payload[0];
+await fn("fulfillment", { method: "PATCH", token: deskUser.token, body: { venue_id: ids.venue, line_id: guestRacketLine.id, status: "collected" } });
+const collectedTwice = (await rest("commerce_order_lines", `id=eq.${guestRacketLine.id}&select=fulfilled_at,fulfilled_by,fulfillment_status`)).payload[0];
+const fulfillmentAudits = (await rest("audit_log", `entity_id=eq.${guestRacketLine.id}&action=eq.commerce.fulfillment.transition&select=id`)).payload;
+assert(collectedOnce.fulfilled_at === collectedTwice.fulfilled_at, "fulfillment retry changed fulfilled_at");
+assert(collectedOnce.fulfilled_by === collectedTwice.fulfilled_by && fulfillmentAudits.length === 1, "fulfillment retry changed actor or duplicated audit");
+await fn("fulfillment", { method: "PATCH", token: deskUser.token, expected: 403, body: { venue_id: ids.capacityVenue, line_id: guestRacketLine.id, status: "collected" } });
+pass("R1B fulfillment", "collected transition, retry idempotency, audit-once and cross-venue denial");
 
 const claimed = (await fn("claim", { method: "POST", body: { token: guestCart.cart_token, display_name: "Ada R1" } })).payload;
 assert(claimed.order.guest_claimed === true, "display name claim did not issue ticket");

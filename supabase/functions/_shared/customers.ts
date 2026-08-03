@@ -211,7 +211,7 @@ export async function linkCustomerToVenue(admin: any, customerId?: string | null
     visit_count: 0,
     metadata: { source },
   });
-  if (error) throw new Error(error.message);
+  if (error && error.code !== '23505') throw new Error(error.message);
 }
 
 async function assertIdentityCanAttach(admin: any, organizationId: string, customerId: string, provider: string, providerId: string) {
