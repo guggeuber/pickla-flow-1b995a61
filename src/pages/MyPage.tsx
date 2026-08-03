@@ -2418,7 +2418,22 @@ const MyPage = () => {
   const [selectedBooking, setSelectedBooking] = useState<Record<string, unknown> | null>(null);
   const [selectedSessionRegistration, setSelectedSessionRegistration] = useState<MySessionRegistration | null>(null);
   const [showMembershipDetails, setShowMembershipDetails] = useState(false);
-  const [showPast, setShowPast] = useState(true);
+  const [showPast, setShowPast] = useState(false);
+  const pastPreferenceOwnerRef = useRef("");
+
+  useEffect(() => {
+    if (!user?.id || pastPreferenceOwnerRef.current === user.id) return;
+    pastPreferenceOwnerRef.current = user.id;
+    setShowPast(window.localStorage.getItem(`pickla:my:previous-bookings:${user.id}`) === "expanded");
+  }, [user?.id]);
+
+  const togglePastBookings = () => {
+    setShowPast((current) => {
+      const next = !current;
+      if (user?.id) window.localStorage.setItem(`pickla:my:previous-bookings:${user.id}`, next ? "expanded" : "collapsed");
+      return next;
+    });
+  };
 
   useEffect(() => {
     const bookingRefParam = searchParams.get("booking");
@@ -2741,11 +2756,11 @@ const MyPage = () => {
             {pastBookingCount > 0 && (
               <div className="mt-2">
                 <button
-                  onClick={() => setShowPast(!showPast)}
+                  onClick={togglePastBookings}
                   className="w-full flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:scale-[0.98] transition-transform"
                   style={{ color: TEXT_SECONDARY, fontFamily: FONT_HEADING }}
                 >
-                  {showPast ? "Dölj tidigare bokningar" : `Visa tidigare bokningar (${pastBookingCount})`}
+                  {showPast ? "Dölj tidigare bokningar" : "Visa tidigare bokningar"}
                   <ChevronDown className="w-3.5 h-3.5 transition-transform" style={{ transform: showPast ? "rotate(180deg)" : "none" }} />
                 </button>
                 <AnimatePresence>

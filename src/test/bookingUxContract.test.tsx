@@ -26,7 +26,9 @@ describe("final booking UX contract", () => {
     expect(myPageSource).not.toContain(">Meddelanden</span>");
     expect(myPageSource).not.toContain("ThreadRow");
     expect(myPageSource).toContain("pastBookings.map");
-    expect(myPageSource).toContain("const [showPast, setShowPast] = useState(true)");
+    expect(myPageSource).toContain("const [showPast, setShowPast] = useState(false)");
+    expect(myPageSource).toContain("pickla:my:previous-bookings:");
+    expect(myPageSource).toContain('"Visa tidigare bokningar"');
   });
 
   it("renders a neutral indicator only when conversation data matches", () => {

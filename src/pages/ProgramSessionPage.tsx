@@ -131,6 +131,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [queueLoading, setQueueLoading] = useState(false);
   const [commerceQuantities, setCommerceQuantities] = useState<Record<string, number>>({});
   const [commercePurchaseKind, setCommercePurchaseKind] = useState<"activity_ticket" | "day_pass">("activity_ticket");
+  const [commerceStep, setCommerceStep] = useState<"product" | "addons">("product");
   const [commerceDraftHydrated, setCommerceDraftHydrated] = useState(false);
   const hydratedCommerceScopeRef = useRef("");
   const commerceSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,7 +141,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const latestCommerceQuantitiesRef = useRef<Record<string, number>>({});
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
-  const ticketMode = searchParams.get("ticket") === "1";
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
   const programPath = sessionId ? publicProgramPath(sessionId, requestedDate, venueSlug) : "/today";
   const ticketPath = sessionId ? ticketProgramPath(sessionId, requestedDate, venueSlug) : "/today";
@@ -230,9 +230,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   ));
   const offeredRentalIds = useMemo(() => new Set(
     (commerceCatalog.data?.relationships || [])
-      .filter((relationship) => relationship.source_product_id === commerceParticipationProduct?.id)
+      .filter((relationship) => (
+        relationship.source_product_id === commerceParticipationProduct?.id
+        || relationship.source_product_id === commerceDayPassProduct?.id
+      ))
       .map((relationship) => relationship.target_product_id),
-  ), [commerceCatalog.data?.relationships, commerceParticipationProduct?.id]);
+  ), [commerceCatalog.data?.relationships, commerceDayPassProduct?.id, commerceParticipationProduct?.id]);
   const commerceExtras = useMemo(() => (
     (commerceCatalog.data?.products || []).filter((product) => (
       product.commerce_kind !== "participation"
@@ -240,6 +243,19 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       && offeredRentalIds.has(product.id)
     ))
   ), [commerceCatalog.data?.products, offeredRentalIds]);
+  const selectedCommerceProduct = commercePurchaseKind === "day_pass" ? commerceDayPassProduct : commerceParticipationProduct;
+  const selectedOfferedProductIds = useMemo(() => new Set(
+    (commerceCatalog.data?.relationships || [])
+      .filter((relationship) => relationship.source_product_id === selectedCommerceProduct?.id)
+      .map((relationship) => relationship.target_product_id),
+  ), [commerceCatalog.data?.relationships, selectedCommerceProduct?.id]);
+  const commerceExtrasForPurchase = useMemo(() => (
+    (commerceCatalog.data?.products || []).filter((product) => (
+      product.commerce_kind !== "participation"
+      && product.activity_addon_enabled
+      && selectedOfferedProductIds.has(product.id)
+    ))
+  ), [commerceCatalog.data?.products, selectedOfferedProductIds]);
   const commercePilotEnabled = Boolean(commerceParticipationProduct);
   useEffect(() => {
     if (!commercePilotEnabled || !venueId || !sessionId) return;
@@ -452,13 +468,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const savedTodaySek = !pricingPending && pricingIsIncluded && basePrice > effectivePrice
     ? Math.round((basePrice - effectivePrice) * 100) / 100
     : 0;
-  const commerceExtrasQuantity = commercePurchaseKind === "activity_ticket" ? commerceExtras.reduce((sum, product) => (
+  const commerceExtrasQuantity = commerceExtrasForPurchase.reduce((sum, product) => (
     sum + Number(commerceQuantities[product.id] || 0)
-  ), 0) : 0;
-  const commerceExtrasTotalMinor = commercePurchaseKind === "activity_ticket" ? commerceExtras.reduce((sum, product) => (
+  ), 0);
+  const commerceExtrasTotalMinor = commerceExtrasForPurchase.reduce((sum, product) => (
     sum + Number(commerceQuantities[product.id] || 0) * Math.round(Number(product.base_price_sek || 0) * 100)
-  ), 0) : 0;
-  const commerceTotalMinor = Math.max(0, Math.round(effectivePrice * 100)) + commerceExtrasTotalMinor;
+  ), 0);
+  const commerceProductTotalMinor = Math.max(0, Math.round(effectivePrice * 100));
+  const commerceTotalMinor = commerceProductTotalMinor + commerceExtrasTotalMinor;
   const commerceItemCount = 1 + commerceExtrasQuantity;
   const commerceSavingsMinor = Math.max(0, Math.round((basePrice - effectivePrice) * 100));
   const now = useActivityNow();
@@ -492,14 +509,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       : pricingPending
         ? "Hämtar ditt pris..."
         : commercePilotEnabled
-          ? `Fortsätt · ${formatCommerceMoney(commerceTotalMinor)}`
+          ? `Fortsätt · ${formatCommerceMoney(commerceStep === "product" ? commerceProductTotalMinor : commerceTotalMinor)}`
           : `${user?.id ? (pricingIsIncluded ? "Boka plats" : "Betala och boka plats") : "Logga in och boka plats"} · ${checkoutLabel}`;
   const purchaseMode = !isRegistered && !isFull;
 
   const buildActivityCartItems = useCallback((quantities: Record<string, number>): CommerceCartItemInput[] => {
-    const selectedProduct = commercePurchaseKind === "day_pass" ? commerceDayPassProduct : commerceParticipationProduct;
+    const selectedProduct = selectedCommerceProduct;
     if (!selectedProduct || !sessionId || !occurrenceDate) return [];
-    const safeQuantities = clampCommerceSelection(quantities, commerceExtras);
+    const safeQuantities = clampCommerceSelection(quantities, commerceExtrasForPurchase);
     return [
       {
         product_id: selectedProduct.id,
@@ -507,16 +524,16 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         activity_session_id: sessionId,
         session_date: occurrenceDate,
       },
-      ...(commercePurchaseKind === "activity_ticket" ? commerceExtras.flatMap((product) => {
+      ...commerceExtrasForPurchase.flatMap((product) => {
         const quantity = Number(safeQuantities[product.id] || 0);
         return quantity > 0 ? [{
           product_id: product.id,
           quantity,
           parent_product_id: selectedProduct.id,
         }] : [];
-      }) : []),
+      }),
     ];
-  }, [commerceDayPassProduct, commerceExtras, commerceParticipationProduct, commercePurchaseKind, occurrenceDate, sessionId]);
+  }, [commerceExtrasForPurchase, occurrenceDate, selectedCommerceProduct, sessionId]);
 
   const persistActivityDraft = useCallback((quantities: Record<string, number>) => {
     if (!user?.id || !session?.venue_id || !commerceDraftScope) {
@@ -705,6 +722,18 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     setCommercePurchaseKind(kind);
     commerceDraftDirtyRef.current = true;
     if (commerceSelectionKey) window.sessionStorage.setItem(`${commerceSelectionKey}:purchase-kind`, kind);
+  };
+
+  const handleSessionPrimaryAction = () => {
+    if (purchaseMode && commercePilotEnabled && commerceStep === "product") {
+      setCommerceStep("addons");
+      return;
+    }
+    if (isRegistered) {
+      void checkInTicket();
+      return;
+    }
+    void startSignup();
   };
 
   const startSignup = async () => {
@@ -970,7 +999,18 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           onOpenChange={closeDrawer}
           presentation={sessionPresentation}
           fixedFooter
-          headerActions={
+          hidePresentationHeader={purchaseMode && commercePilotEnabled && commerceStep === "addons"}
+          headerLeading={purchaseMode && commercePilotEnabled && commerceStep === "addons" ? (
+            <button
+              type="button"
+              onClick={() => setCommerceStep("product")}
+              className="grid h-11 w-11 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+              aria-label="Tillbaka till produktval"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          ) : undefined}
+          headerActions={purchaseMode && commercePilotEnabled && commerceStep === "addons" ? undefined : (
             <>
               <button
                 type="button"
@@ -990,13 +1030,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 <Share2 className="h-5 w-5" />
               </button>
             </>
-          }
+          )}
           footer={
             <SessionActions
               primary={{
                 key: "primary",
                 label: ctaLabel,
-                onClick: isRegistered ? checkInTicket : startSignup,
+                onClick: handleSessionPrimaryAction,
                 disabled: authLoading || loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow),
                 icon: loading || queueLoading || checkinLoading ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -1007,7 +1047,9 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             />
           }
         >
-          <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={purchaseMode} />
+          {commerceStep === "product" || !purchaseMode || !commercePilotEnabled ? (
+            <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={purchaseMode} />
+          ) : null}
 
           {isRegistered ? (
             <div className="rounded-[22px] border border-black/10 bg-white px-4 py-3">
@@ -1031,12 +1073,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 </div>
               </div>
             </div>
-          ) : ticketMode ? (
-            <div className="rounded-[22px] bg-[#f8fafc] px-4 py-3" style={{ border: `1px solid ${MENU_BORDER}` }}>
-              <p className="text-[13px] font-semibold text-neutral-600">
-                Logga in så visar vi din biljett här direkt efter bokning.
-              </p>
-            </div>
           ) : null}
 
           {isRegistered && participationItems.length > 0 ? (
@@ -1050,13 +1086,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </div>
           ) : null}
 
-          {!isRegistered && !pricingPending && (earlyBirdLine || capacityScarcityLine) ? (
+          {!isRegistered && commerceStep === "product" && !pricingPending && (earlyBirdLine || capacityScarcityLine) ? (
             <p className="px-2 py-1 text-center text-[13px] font-black text-slate-700" style={{ fontFamily: FONT_HEADING }}>
               {earlyBirdLine || capacityScarcityLine}
             </p>
           ) : null}
 
-          {!isRegistered && commercePilotEnabled && commerceDayPassProduct && dayPassPricing ? (
+          {!isRegistered && commerceStep === "product" && commercePilotEnabled ? (
             <section data-testid="commerce-purchase-options" className="border-y border-black/10 py-1">
               <button
                 type="button"
@@ -1074,32 +1110,46 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   <span className={`grid h-5 w-5 place-items-center rounded-full border ${commercePurchaseKind === "activity_ticket" ? "border-slate-950 bg-slate-950 text-white" : "border-black/20 text-transparent"}`}><Check className="h-3 w-3" /></span>
                 </span>
               </button>
-              <button
-                type="button"
-                data-testid="commerce-option-day-pass"
-                aria-pressed={commercePurchaseKind === "day_pass"}
-                onClick={() => selectCommercePurchaseKind("day_pass")}
-                className="flex w-full items-start justify-between gap-4 py-4 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-neutral-950"
-              >
-                <span>
-                  <span className="block text-[14px] font-black text-slate-950">Spela hela dagen</span>
-                  <span className="mt-1 block text-[12px] font-semibold text-slate-500">Alla Open Play-pass idag.</span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
-                  {dayPassPricing.checkoutLabel || formatSek(Number(dayPassPricing.finalAmountSek || commerceDayPassProduct.base_price_sek || 0))}
-                  <span className={`grid h-5 w-5 place-items-center rounded-full border ${commercePurchaseKind === "day_pass" ? "border-slate-950 bg-slate-950 text-white" : "border-black/20 text-transparent"}`}><Check className="h-3 w-3" /></span>
-                </span>
-              </button>
+              {commerceDayPassProduct && dayPassPricing ? (
+                <button
+                  type="button"
+                  data-testid="commerce-option-day-pass"
+                  aria-pressed={commercePurchaseKind === "day_pass"}
+                  onClick={() => selectCommercePurchaseKind("day_pass")}
+                  className="flex w-full items-start justify-between gap-4 py-4 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-neutral-950"
+                >
+                  <span>
+                    <span className="block text-[14px] font-black text-slate-950">Spela hela dagen</span>
+                    <span className="mt-1 block text-[12px] font-semibold text-slate-500">Alla Open Play-pass idag.</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
+                    {dayPassPricing.checkoutLabel || formatSek(Number(dayPassPricing.finalAmountSek || commerceDayPassProduct.base_price_sek || 0))}
+                    <span className={`grid h-5 w-5 place-items-center rounded-full border ${commercePurchaseKind === "day_pass" ? "border-slate-950 bg-slate-950 text-white" : "border-black/20 text-transparent"}`}><Check className="h-3 w-3" /></span>
+                  </span>
+                </button>
+              ) : null}
             </section>
           ) : null}
 
-          <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={commercePurchaseKind === "activity_ticket" ? priceContextLine : undefined} neutral={commercePilotEnabled} />
+          {(!purchaseMode || !commercePilotEnabled || (commerceStep === "product" && pricingIsIncluded)) ? (
+            <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={commercePurchaseKind === "activity_ticket" ? priceContextLine : undefined} neutral={commercePilotEnabled} />
+          ) : null}
 
-          {!isRegistered && commercePurchaseKind === "activity_ticket" && commercePilotEnabled && commerceCatalog.isSuccess && commerceExtras.length > 0 ? (
+          {!isRegistered && commercePilotEnabled && commerceStep === "addons" ? (
+            <section data-testid="commerce-selected-product" className="border-b border-black/10 pb-4">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400">Ditt val</p>
+              <div className="mt-2 flex items-center justify-between gap-4">
+                <p className="text-[15px] font-black text-slate-950">{commercePurchaseKind === "day_pass" ? "Spela hela dagen" : "Personlig plats"}</p>
+                <p className="shrink-0 text-[15px] font-black">{selectedPricing?.checkoutLabel || formatCommerceMoney(commerceProductTotalMinor)}</p>
+              </div>
+            </section>
+          ) : null}
+
+          {!isRegistered && commerceStep === "addons" && commercePilotEnabled && commerceCatalog.isSuccess && commerceExtrasForPurchase.length > 0 ? (
             <section data-testid="commerce-addons" className="rounded-[22px] bg-[#f8fafc] px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
-              <div className="mb-3 flex items-center gap-2"><ShoppingBag className="h-4 w-4 shrink-0" /><h3 className="text-[13px] font-black">Lägg till i samma köp</h3></div>
+              <div className="mb-3 flex items-center gap-2"><ShoppingBag className="h-4 w-4 shrink-0" /><h3 className="text-[13px] font-black">Tillval</h3></div>
               <div className="grid gap-3">
-                {commerceExtras.map((product) => {
+                {commerceExtrasForPurchase.map((product) => {
                   const quantity = Number(commerceQuantities[product.id] || 0);
                   const maximum = commerceProductMaxQuantity(product);
                   return (
@@ -1126,7 +1176,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </section>
           ) : null}
 
-          {!isRegistered && commercePilotEnabled && !pricingPending ? (
+          {!isRegistered && commerceStep === "addons" && commercePilotEnabled && !pricingPending ? (
             <section data-testid="commerce-live-total" className="rounded-[22px] bg-white px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }} aria-live="polite">
               <div className="flex items-end justify-between gap-4">
                 <div className="min-w-0">
@@ -1137,16 +1187,6 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               </div>
               {pricingIsIncluded ? <p className="mt-2 text-[12px] font-bold text-slate-700">Aktiviteten {includedLabel?.toLowerCase() || "ingår i medlemskap"}</p> : null}
             </section>
-          ) : null}
-
-          {!isRegistered && !user?.id && commercePilotEnabled ? (
-            <button
-              type="button"
-              onClick={() => navigate(`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`)}
-              className="w-full py-1 text-center text-[12px] font-semibold text-neutral-500 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-950"
-            >
-              Medlem? Logga in för ditt pris
-            </button>
           ) : null}
 
           {isRegistered && savedTodaySek > 0 ? (

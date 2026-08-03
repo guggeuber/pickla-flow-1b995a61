@@ -235,7 +235,7 @@ export default function CommerceCartPage() {
         </section>
         {showGuestDetails || showEmailRecovery ? (
           <section className="grid gap-3 border-t border-black/10 pt-6">
-            <div><h2 className="font-black">Dina uppgifter</h2><p className="text-sm text-slate-500">Vi skickar kvitto och orderinformation till din e-postadress.</p></div>
+            <h2 className="font-black">Dina uppgifter</h2>
             {showGuestDetails ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Namn" className="h-12 rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" /> : null}
             <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-post" type="email" className="h-12 rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" />
           </section>

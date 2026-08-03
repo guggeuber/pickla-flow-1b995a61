@@ -151,7 +151,7 @@ describe("Commerce R1 confirmed purchase state", () => {
     renderOrder();
 
     expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
-    expect(screen.getByText("Ej längre tillgänglig för uthämtning")).toBeInTheDocument();
+    expect(screen.queryByText("Ej längre tillgänglig för uthämtning")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Hyrrack" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Hämtas vid disken/)).not.toBeInTheDocument();
   });
@@ -178,6 +178,8 @@ describe("Commerce R1 confirmed purchase state", () => {
     const managementLink = await screen.findByRole("link", { name: "Visa bokning" });
     expect(managementLink).toHaveAttribute("href", "/my?registration=registration-1&v=solna");
     expect(screen.getByRole("link", { name: "Öppna aktivitet och chatt" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Chatt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dela" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Visa biljett" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Spara bokningen" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Avboka" })).not.toBeInTheDocument();
@@ -204,5 +206,15 @@ describe("Commerce R1 confirmed purchase state", () => {
 
     expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Avboka" })).not.toBeInTheDocument();
+  });
+
+  it("does not repeat participation order lines, totals or retail actions after success", async () => {
+    mocks.fetchOrder.mockResolvedValue(orderResponse({ requires_guest_claim: false }));
+    renderOrder();
+
+    expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
+    expect(screen.queryByText("Personlig plats")).not.toBeInTheDocument();
+    expect(screen.queryByText("Totalt")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Fortsätt handla" })).not.toBeInTheDocument();
   });
 });

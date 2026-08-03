@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Loader2, ReceiptText, Ticket, XCircle } from "lucide-react";
+import { Check, Loader2, MessageCircle, ReceiptText, Share2, Ticket, XCircle } from "lucide-react";
 import { DateTime } from "luxon";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -89,12 +89,27 @@ export default function CommerceOrderPage() {
   const racketInstruction = commerceRacketSuccessInstruction(racketQuantity);
   const receiptNumber = String((receipt as { receipt_number?: string } | null)?.receipt_number || "");
   const purchaseReference = receiptNumber || order.id.slice(0, 8).toUpperCase();
+  const activityPath = activity?.venue_slug
+    ? `/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`
+    : null;
+  const shareActivity = async () => {
+    if (!activity || !activityPath) return;
+    const shareUrl = `${window.location.origin}${activityPath.replace(/&ticket=1$/, "")}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: activity.name, url: shareUrl });
+        return;
+      }
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success("Länk kopierad");
+    } catch (error: any) {
+      if (error?.name !== "AbortError") toast.error("Kunde inte dela länken");
+    }
+  };
   const heading = waiting
     ? "Vi bekräftar ditt köp"
     : isCancelled
       ? "Köpet är avbokat"
-      : purchaseConfirmed && isDayPassPurchase
-        ? "Heldagspasset är aktivt"
       : purchaseConfirmed && hasParticipation
         ? "Platsen är din"
         : purchaseConfirmed
@@ -117,8 +132,24 @@ export default function CommerceOrderPage() {
             : "Gå tillbaka till ordersammanfattningen för att slutföra betalningen.";
   return (
     <div className="min-h-[100dvh] bg-white px-4 pb-12 pt-[calc(env(safe-area-inset-top,0px)+36px)] text-slate-950">
-      <main className="mx-auto max-w-lg">
-        <div className="mb-9 text-center">{waiting ? <Loader2 className="mx-auto h-7 w-7 animate-spin text-slate-600" /> : purchaseConfirmed ? <Check data-testid="commerce-success-check" className="mx-auto h-8 w-8 stroke-[1.75] text-slate-950" /> : <XCircle className="mx-auto h-7 w-7 text-slate-600" />}<h1 className="mt-5 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
+      <main className="relative mx-auto max-w-lg">
+        {purchaseConfirmed && activity ? (
+          <div className="absolute right-0 top-0 flex items-center gap-1" data-testid="commerce-success-actions">
+            {user && order.account_claimed && activityPath ? (
+              <Link to={activityPath} aria-label="Chatt" className="grid h-11 w-11 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950">
+                <MessageCircle className="h-5 w-5" />
+              </Link>
+            ) : (
+              <button type="button" disabled aria-label="Chatt" className="grid h-11 w-11 place-items-center rounded-full text-neutral-500 opacity-35">
+                <MessageCircle className="h-5 w-5" />
+              </button>
+            )}
+            <button type="button" onClick={shareActivity} aria-label="Dela" className="grid h-11 w-11 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950">
+              <Share2 className="h-5 w-5" />
+            </button>
+          </div>
+        ) : null}
+        <div className="mb-9 px-12 text-center">{waiting ? <Loader2 className="mx-auto h-7 w-7 animate-spin text-slate-600" /> : purchaseConfirmed ? <Check data-testid="commerce-success-check" className="mx-auto h-8 w-8 stroke-[1.75] text-slate-950" /> : <XCircle className="mx-auto h-7 w-7 text-slate-600" />}<h1 className="mt-5 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
         {purchaseConfirmed && activity ? (
           <section className="mb-6 px-1">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din aktivitet</p>
@@ -143,7 +174,7 @@ export default function CommerceOrderPage() {
             <p className="mt-3 text-sm font-semibold">{activityDate} · {String(activity?.start_time || "").slice(0, 5)}–{String(activity?.end_time || "").slice(0, 5)}</p>
             <button type="button" onClick={() => checkIn.mutate()} disabled={checkedIn || !checkInAvailable || checkIn.isPending || isCancelled} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{checkIn.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}{checkedIn ? "Incheckad" : "Checka in"}</button>
             {canManageBooking ? <Link to={managementPath!} className="mt-3 flex h-11 items-center justify-center rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950">Visa bokning</Link> : null}
-            {user && order.account_claimed && activity?.venue_slug ? <Link to={`/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`} className="mt-2 flex h-10 items-center justify-center text-sm font-bold text-slate-600 underline decoration-black/20 underline-offset-4">Öppna aktivitet och chatt</Link> : null}
+            {user && order.account_claimed && activityPath ? <Link to={activityPath} className="mt-2 flex h-10 items-center justify-center text-sm font-bold text-slate-600 underline decoration-black/20 underline-offset-4">Öppna aktivitet och chatt</Link> : null}
             {!order.account_claimed ? user ? (
               <button type="button" onClick={() => claimAccount.mutate()} disabled={claimAccount.isPending} className="mt-3 h-11 w-full rounded-xl border border-black/15 bg-white text-sm font-black text-slate-950 disabled:opacity-40">Koppla köpet till mitt konto</button>
             ) : (
@@ -154,15 +185,15 @@ export default function CommerceOrderPage() {
             ) : null}
           </section>
         ) : null}
-        <section className="divide-y divide-black/10 border-y border-black/10">
+        {!(purchaseConfirmed && hasParticipation) ? <section className="divide-y divide-black/10 border-y border-black/10">
           {lines.map((line) => {
             const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
             const lineName = isDayPassLine ? line.product_name : activity && line.commerce_kind === "participation" ? "Personlig plats" : line.product_name;
             return <div key={line.id} className="flex items-center justify-between gap-3 py-4"><div><p className="font-bold">{lineName}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="text-xs text-slate-500">{line.fulfillment_type === "desk_pickup" ? fulfillmentLabel(line.fulfillment_status, isCancelled) : isDayPassLine ? "Gäller hela dagen" : "Din plats"}</p></div><p className="font-black">{formatCommerceMoney(line.line_total_inc_vat_minor || line.unit_price_minor * line.quantity)}</p></div>;
           })}
-        </section>
-        <section className="py-5"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receiptNumber ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {receiptNumber}</p> : null}</section>
-        <div className="mt-6 grid gap-2">{user && !canManageBooking ? <Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link> : null}<Link to="/shop" className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div>
+        </section> : null}
+        {!(purchaseConfirmed && hasParticipation) ? <section className="py-5"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receiptNumber ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {receiptNumber}</p> : null}</section> : null}
+        {!(purchaseConfirmed && hasParticipation) ? <div className="mt-6 grid gap-2">{user && !canManageBooking ? <Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link> : null}<Link to="/shop" className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div> : null}
       </main>
     </div>
   );

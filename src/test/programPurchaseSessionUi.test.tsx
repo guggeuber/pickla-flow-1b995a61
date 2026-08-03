@@ -203,7 +203,7 @@ describe("program purchase request UI guard", () => {
     renderCart();
 
     expect(await screen.findByRole("heading", { name: "Dina uppgifter" })).toBeInTheDocument();
-    expect(screen.getByText("Vi skickar kvitto och orderinformation till din e-postadress.")).toBeInTheDocument();
+    expect(screen.queryByText("Vi skickar kvitto och orderinformation till din e-postadress.")).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText("Namn")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("E-post")).toBeInTheDocument();
     expect(screen.queryByText("Kvitto och uthämtning")).not.toBeInTheDocument();

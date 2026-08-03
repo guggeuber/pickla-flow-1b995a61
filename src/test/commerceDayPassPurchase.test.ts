@@ -15,7 +15,9 @@ describe("Commerce Heldagspass purchase", () => {
     expect(programPage).toContain('data-testid="commerce-option-activity-ticket"');
     expect(programPage).toContain('data-testid="commerce-option-day-pass"');
     expect(programPage).toContain('aria-pressed={commercePurchaseKind === "day_pass"}');
-    expect(programPage).toContain('commercePurchaseKind === "activity_ticket" ? commerceExtras.flatMap');
+    expect(programPage).toContain("relationship.source_product_id === selectedCommerceProduct?.id");
+    expect(programPage).toContain("commerceExtrasForPurchase.flatMap");
+    expect(programPage).toContain('commerceStep === "addons"');
   });
 
   it("uses only the Admin product base price and has no 199 kr fallback", () => {
@@ -45,7 +47,7 @@ describe("Commerce Heldagspass purchase", () => {
     expect(commerceApi).toContain(".eq('commerce_order_id', order.id)");
     expect(commerceApi).toContain(".update({ user_id: userId })");
     expect(webhook).toContain(".update({ status: 'cancelled' })");
-    expect(orderPage).toContain("Heldagspasset är aktivt");
+    expect(orderPage).toContain('purchaseConfirmed && hasParticipation\n        ? "Platsen är din"');
   });
 
   it("removes the dead commercial CTA", () => {

@@ -9,9 +9,9 @@ const cartPage = readFileSync("src/pages/CommerceCartPage.tsx", "utf8");
 const programPage = readFileSync("src/pages/ProgramSessionPage.tsx", "utf8");
 
 describe("Commerce R1B account-later contract", () => {
-  it("keeps guest purchase primary and member login secondary", () => {
-    expect(programPage).toContain('`Fortsätt · ${formatCommerceMoney(commerceTotalMinor)}`');
-    expect(programPage).toContain("Medlem? Logga in för ditt pris");
+  it("keeps guest purchase primary across the split decision flow", () => {
+    expect(programPage).toContain('commerceStep === "product" ? commerceProductTotalMinor : commerceTotalMinor');
+    expect(programPage).not.toContain("Medlem? Logga in för ditt pris");
     expect(programPage).toContain("logged_out_cta_clicked");
     expect(programPage).not.toContain("Betalning sker via Stripe innan platsen bekräftas.");
     expect(cartPage).toContain('`Betala ${formatCommerceMoney(total)}`');
@@ -34,7 +34,7 @@ describe("Commerce R1B account-later contract", () => {
     expect(commerceApi).toContain("path === 'claim-account'");
     expect(commerceApi).toContain("path === 'guest-checkin'");
     expect(commerceApi).toContain("authUser?.email_confirmed_at");
-    expect(orderPage).toContain("order.account_claimed && activity?.venue_slug");
+    expect(orderPage).toContain("user && order.account_claimed && activityPath");
   });
 
   it("makes participant, ticket and claim ownership service-only and idempotent", () => {

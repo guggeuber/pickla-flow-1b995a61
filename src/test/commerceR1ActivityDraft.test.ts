@@ -105,7 +105,7 @@ describe("Commerce R1 activity draft", () => {
     expect(programSource).toContain('data-testid="commerce-addons"');
     expect(programSource).toContain('aria-label={`Öka ${product.name}`}');
     expect(programSource).toContain('data-testid="commerce-live-total"');
-    expect(programSource).toContain("commerceCatalog.isSuccess && commerceExtras.length > 0");
+    expect(programSource).toContain("commerceCatalog.isSuccess && commerceExtrasForPurchase.length > 0");
     expect(programSource).not.toContain('label: "Intresserad"');
     expect(programSource).toContain("Chatt");
     expect(programSource).toContain("Dela");
@@ -116,10 +116,12 @@ describe("Commerce R1 activity draft", () => {
     expect(programSource).not.toContain('aria-label="Aktivitetsalternativ"');
     expect(programSource).toContain('showInvitation={purchaseMode}');
     expect(programSource).toContain("authLoading || loading || queueLoading || checkinLoading || pricingPending");
-    expect(programSource).toContain('Medlem? Logga in för ditt pris');
     expect(programSource).toContain('Gäller detta pass.');
     expect(programSource).toContain('Alla Open Play-pass idag.');
-    expect(programSource).toContain('`Fortsätt · ${formatCommerceMoney(commerceTotalMinor)}`');
+    expect(programSource).toContain('commerceStep === "product" ? commerceProductTotalMinor : commerceTotalMinor');
+    expect(programSource).toContain('data-testid="commerce-selected-product"');
+    expect(programSource).toContain('hidePresentationHeader={purchaseMode && commercePilotEnabled && commerceStep === "addons"}');
+    expect(programSource).toContain('aria-label="Tillbaka till produktval"');
     expect(programSource).not.toContain('"Häng på"');
     expect(programSource).not.toContain('"Köp plats"');
   });
