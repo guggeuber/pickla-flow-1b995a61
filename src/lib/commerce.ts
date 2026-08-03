@@ -1,4 +1,4 @@
-import { apiGet, apiPost, type ApiRequestOptions } from "@/lib/api";
+import { apiGet, apiPost, apiPut, type ApiRequestOptions } from "@/lib/api";
 
 export type CommerceKind = "participation" | "rental" | "merchandise";
 
@@ -88,6 +88,7 @@ export interface CommerceOrderResponse {
     claim_expires_at?: string | null;
     cancellation_pending?: boolean;
     paid_at?: string | null;
+    expires_at?: string | null;
     booking_receipt_id?: string | null;
     customer_name?: string | null;
   };
@@ -172,6 +173,7 @@ export function createCommerceCart(input: {
   guestName?: string;
   guestEmail?: string;
   journeyId?: string;
+  idempotencyKey?: string;
 }, options: ApiRequestOptions = {}) {
   const body = {
     venue_id: input.venueId,
@@ -181,10 +183,91 @@ export function createCommerceCart(input: {
     guest_name: input.guestName || null,
     guest_email: input.guestEmail || null,
     ...(input.journeyId ? { journey_id: input.journeyId } : {}),
+    ...(input.idempotencyKey ? { idempotency_key: input.idempotencyKey } : {}),
   };
   return Object.keys(options).length > 0
     ? apiPost<CommerceOrderResponse>("api-commerce", "cart", body, options)
     : apiPost<CommerceOrderResponse>("api-commerce", "cart", body);
+}
+
+export function updateCommerceCart(input: {
+  reference: string;
+  expectedVersion: number;
+  items: CommerceCartItemInput[];
+  guestName?: string;
+  guestEmail?: string;
+}, options: ApiRequestOptions = {}) {
+  return apiPut<CommerceOrderResponse>("api-commerce", "cart", {
+    token: input.reference,
+    expected_version: input.expectedVersion,
+    items: input.items,
+    guest_name: input.guestName || null,
+    guest_email: input.guestEmail || null,
+  }, options);
+}
+
+export function commerceCartItemsFromLines(lines: CommerceOrderLine[]): CommerceCartItemInput[] {
+  return lines.map((line) => ({
+    product_id: String(line.product_id || ""),
+    quantity: Number(line.quantity || 0),
+    ...(line.activity_session_id ? { activity_session_id: line.activity_session_id } : {}),
+    ...(line.session_date ? { session_date: line.session_date } : {}),
+  })).filter((item) => item.product_id && item.quantity > 0);
+}
+
+export type StandaloneCartIdentity = {
+  idempotencyKey: string;
+  reference: string;
+  owner: "guest" | string;
+};
+
+const SHOP_CART_STORAGE_PREFIX = "pickla:commerce:r1b:shop-cart";
+
+function newStandaloneCartKey() {
+  if (typeof crypto?.randomUUID === "function") return `${crypto.randomUUID()}${crypto.randomUUID()}`;
+  return `${Date.now()}-${Math.random()}-${Math.random()}-${Math.random()}`;
+}
+
+export function standaloneCartStorageKey(venueId: string) {
+  return `${SHOP_CART_STORAGE_PREFIX}:${venueId}`;
+}
+
+export function readStandaloneCartIdentity(venueId: string, userId?: string | null): StandaloneCartIdentity {
+  const owner = userId || "guest";
+  if (typeof window !== "undefined") {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(standaloneCartStorageKey(venueId)) || "null");
+      const compatibleOwner = parsed?.owner === owner || (Boolean(userId) && parsed?.owner === "guest");
+      if (compatibleOwner && String(parsed?.idempotencyKey || "").length >= 32) {
+        return {
+          idempotencyKey: String(parsed.idempotencyKey),
+          reference: String(parsed.reference || ""),
+          owner: String(parsed.owner) as StandaloneCartIdentity["owner"],
+        };
+      }
+    } catch {
+      // A corrupt or unavailable local cart is safely replaced below.
+    }
+  }
+  return { idempotencyKey: newStandaloneCartKey(), reference: "", owner };
+}
+
+export function writeStandaloneCartIdentity(venueId: string, identity: StandaloneCartIdentity) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(standaloneCartStorageKey(venueId), JSON.stringify(identity));
+  } catch {
+    // The server cart remains authoritative if local persistence is unavailable.
+  }
+}
+
+export function clearStandaloneCartIdentity(venueId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(standaloneCartStorageKey(venueId));
+  } catch {
+    // Nothing else to clean up.
+  }
 }
 
 const COMMERCE_JOURNEY_KEY = "pickla:commerce:journey";

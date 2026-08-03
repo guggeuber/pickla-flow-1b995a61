@@ -7,11 +7,21 @@ import CommerceShopPage from "@/pages/CommerceShopPage";
 const api = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  put: vi.fn(),
 }));
+const cart = vi.hoisted(() => ({ queue: vi.fn() }));
 
 vi.mock("@/lib/api", () => ({
   apiGet: api.get,
   apiPost: api.post,
+  apiPut: api.put,
+}));
+
+vi.mock("@/hooks/useStandaloneShopCart", () => ({
+  useStandaloneShopCart: () => ({
+    quantities: {}, lineCount: 0, resolvedTotalMinor: 0, reference: "cart-token-cart-token-cart-token-12",
+    isLoading: false, isError: false, isUpdating: false, queueQuantities: cart.queue,
+  }),
 }));
 
 const venueId = "7ff6e5dc-f27a-473b-af4e-2b358340ab81";
@@ -20,6 +30,9 @@ describe("CommerceShopPage", () => {
   beforeEach(() => {
     api.get.mockReset();
     api.post.mockReset();
+    api.put.mockReset();
+    cart.queue.mockReset();
+    cart.queue.mockResolvedValue(undefined);
     api.post.mockResolvedValue({ cart_token: "cart-token" });
     api.get.mockImplementation((_fn: string, endpoint: string, params: Record<string, string>) => {
       if (endpoint === "public-venue") {
@@ -71,10 +84,7 @@ describe("CommerceShopPage", () => {
     expect(await screen.findByRole("heading", { name: "Pink Pickla Bag" })).toBeInTheDocument();
     await waitFor(() => expect(api.get).toHaveBeenCalledWith("api-commerce", "catalog", { venueId }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Öka" }));
-    fireEvent.click(screen.getByRole("button", { name: /Granska köp/ }));
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-commerce", "cart", expect.objectContaining({
-      venue_id: venueId,
-    })));
+    fireEvent.click(screen.getByRole("button", { name: "Öka Pink Pickla Bag" }));
+    await waitFor(() => expect(cart.queue).toHaveBeenCalledWith({ "product-bag": 1 }));
   });
 });

@@ -118,9 +118,10 @@ export async function apiPost<T = unknown>(
 export async function apiPut<T = unknown>(
   fn: string,
   endpoint: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  options: ApiRequestOptions = {},
 ): Promise<T> {
-  const headers = await getAuthHeaders();
+  const headers = await getAuthHeaders(true, options.auth);
   const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
   const startedAt = performance.now();
   const res = await fetch(requestUrl, {
@@ -139,7 +140,7 @@ export async function apiPut<T = unknown>(
       message,
       duration_ms: Math.round(performance.now() - startedAt),
     });
-    throw new Error(message);
+    throw new ApiRequestError(message, res.status);
   }
   return res.json();
 }

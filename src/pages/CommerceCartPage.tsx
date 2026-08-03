@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, ShoppingBag, Ticket } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Loader2, Minus, Plus, ShoppingBag, Ticket, Trash2 } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
   fetchCommerceOrder,
   formatCommerceMoney,
   isCommerceOrderIdReference,
+  updateCommerceCart,
   type CommerceOrderLine,
 } from "@/lib/commerce";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
@@ -63,19 +64,25 @@ function includedLineLabel(line: CommerceOrderLine) {
 export default function CommerceCartPage() {
   const [params] = useSearchParams();
   const token = params.get("token") || "";
+  const venueSlug = params.get("v") || "pickla-arena-sthlm";
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user, loading: authLoading } = useAuth();
   const checkoutInFlight = useRef<Promise<{ url?: string; free?: boolean; redirect?: string }> | null>(null);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [guestSessionFallback, setGuestSessionFallback] = useState(false);
   const [forceEmailEntry, setForceEmailEntry] = useState(false);
+  const [standaloneQuantities, setStandaloneQuantities] = useState<Record<string, number> | null>(null);
+  const [cartUpdatesPending, setCartUpdatesPending] = useState(0);
+  const cartUpdateQueue = useRef<Promise<void>>(Promise.resolve());
 
   const authenticatedDraftReference = isCommerceOrderIdReference(token);
   const runAsGuest = !authenticatedDraftReference && (guestSessionFallback || !user);
 
+  const orderQueryKey = useMemo(() => ["commerce-order", token, user?.id || "guest"] as const, [token, user?.id]);
   const orderQuery = useQuery({
-    queryKey: ["commerce-order", token, user?.id || "guest"],
+    queryKey: orderQueryKey,
     queryFn: () => runAsGuest
       ? fetchCommerceOrder(token, { auth: "omit" })
       : withPurchaseSessionRecovery(
@@ -106,7 +113,14 @@ export default function CommerceCartPage() {
     () => resolveQuery.data?.lines || orderQuery.data?.lines || [],
     [orderQuery.data?.lines, resolveQuery.data?.lines],
   );
-  const total = useMemo(() => lines.reduce((sum, line) => sum + lineTotalMinor(line), 0), [lines]);
+  const standaloneShopCart = orderQuery.data?.order.draft_scope === "shop";
+  const serverQuantities = useMemo(() => Object.fromEntries(lines.map((line) => [String(line.product_id || ""), Number(line.quantity || 0)])), [lines]);
+  const visibleQuantities = standaloneQuantities || serverQuantities;
+  const visibleLines = useMemo(() => standaloneShopCart
+    ? lines.filter((line) => Number(visibleQuantities[String(line.product_id || "")] || 0) > 0).map((line) => ({ ...line, quantity: Number(visibleQuantities[String(line.product_id || "")] || 0) }))
+    : lines, [lines, standaloneShopCart, visibleQuantities]);
+  const visibleItemCount = useMemo(() => visibleLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0), [visibleLines]);
+  const total = useMemo(() => visibleLines.reduce((sum, line) => sum + lineTotalMinor(line), 0), [visibleLines]);
   const totalSavings = useMemo(() => lines.reduce((sum, line) => (
     sum + Math.max(0, originalUnitPriceMinor(line) - Number(line.unit_price_minor || 0)) * Number(line.quantity || 1)
   ), 0), [lines]);
@@ -118,6 +132,60 @@ export default function CommerceCartPage() {
   const racketQuantity = commerceRacketPickupQuantity(lines);
   const racketInstruction = commerceRacketOrderSummaryInstruction(racketQuantity);
   const serverPricingReady = resolveQuery.isSuccess && !resolveQuery.isError;
+
+  useEffect(() => {
+    if (!standaloneShopCart || cartUpdatesPending > 0) return;
+    setStandaloneQuantities(null);
+  }, [cartUpdatesPending, standaloneShopCart, serverQuantities]);
+
+  const queueStandaloneUpdate = (next: Record<string, number>) => {
+    const desired = Object.fromEntries(Object.entries(next).filter(([, quantity]) => Number(quantity) > 0));
+    setStandaloneQuantities(desired);
+    setCartUpdatesPending((count) => count + 1);
+    const task = cartUpdateQueue.current.then(async () => {
+      const latestResult = await orderQuery.refetch();
+      const latest = latestResult.data;
+      if (!latest) throw new Error("Varukorgen kunde inte uppdateras.");
+      const items = Object.entries(desired).map(([productId, quantity]) => ({ product_id: productId, quantity }));
+      const sendUpdate = (auth: "session" | "omit") => updateCommerceCart({
+        reference: token,
+        expectedVersion: latest.order.version,
+        items,
+      }, { auth });
+      const updated = runAsGuest
+        ? await sendUpdate("omit")
+        : await withPurchaseSessionRecovery(
+          () => sendUpdate("session"),
+          undefined,
+          authenticatedDraftReference ? undefined : () => sendUpdate("omit"),
+        );
+      queryClient.setQueryData(orderQueryKey, updated);
+      if (items.length > 0) {
+        const sendResolve = (auth: "session" | "omit") => apiPost<{ order: { id: string; version: number; currency: string }; lines: ResolvedLine[]; checkout_ready?: boolean }>("api-commerce", "resolve", { token }, { auth });
+        const resolved = runAsGuest
+          ? await sendResolve("omit")
+          : await withPurchaseSessionRecovery(
+            () => sendResolve("session"),
+            undefined,
+            authenticatedDraftReference ? undefined : () => sendResolve("omit"),
+          );
+        queryClient.setQueryData(["commerce-resolve", token, updated.order.version, user?.id || "guest"], resolved);
+      } else {
+        queryClient.setQueryData(["commerce-resolve", token, updated.order.version, user?.id || "guest"], {
+          order: { id: updated.order.id, version: updated.order.version, currency: updated.order.currency },
+          lines: [],
+          checkout_ready: false,
+        });
+      }
+    }).catch(async (error: Error) => {
+      setStandaloneQuantities(null);
+      await orderQuery.refetch();
+      toast.error(error.message || "Varukorgen kunde inte uppdateras.");
+      throw error;
+    }).finally(() => setCartUpdatesPending((count) => Math.max(0, count - 1)));
+    cartUpdateQueue.current = task.catch(() => undefined);
+    return task;
+  };
 
   const checkout = useMutation({
     mutationFn: () => {
@@ -188,10 +256,11 @@ export default function CommerceCartPage() {
   return (
     <div className="min-h-[100dvh] bg-white text-slate-950">
       <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-black/10 bg-white/95 px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur">
-        <button type="button" onClick={() => navigate(-1)} className="grid h-11 w-11 place-items-center rounded-full border border-black/10 bg-white" aria-label="Tillbaka"><ArrowLeft className="h-5 w-5" /></button>
-        <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Pickla</p><h1 className="text-xl font-black">Ordersammanfattning</h1></div>
+        <button type="button" onClick={() => standaloneShopCart ? navigate(`/shop?v=${encodeURIComponent(venueSlug)}`) : navigate(-1)} className="grid h-11 w-11 place-items-center rounded-full border border-black/10 bg-white" aria-label="Tillbaka"><ArrowLeft className="h-5 w-5" /></button>
+        <div className="min-w-0 flex-1"><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Pickla</p><h1 className="text-xl font-black">{standaloneShopCart ? "Din varukorg" : "Ordersammanfattning"}</h1></div>
+        {standaloneShopCart ? <span className="text-sm font-bold text-slate-500">{visibleItemCount} {visibleItemCount === 1 ? "artikel" : "artiklar"}</span> : null}
       </header>
-      <main className="mx-auto w-full max-w-xl px-5 py-6 pb-52">
+      <main className={`mx-auto w-full max-w-xl px-5 py-6 ${standaloneShopCart && visibleLines.length === 0 ? "pb-16" : "pb-52"}`}>
         {activity ? (
           <section className="pb-6">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Aktivitet</p>
@@ -201,7 +270,7 @@ export default function CommerceCartPage() {
           </section>
         ) : null}
         <section className={activity ? "border-t border-black/10" : ""}>
-          {lines.map((line) => {
+          {visibleLines.map((line) => {
             const isRacketLine = commerceRacketPickupQuantity([line]) > 0;
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
             const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
@@ -223,6 +292,16 @@ export default function CommerceCartPage() {
                   <div className="min-w-0">
                     <p className="font-bold">{lineName}</p>
                     {lineMetadata ? <p className="mt-1 text-xs leading-relaxed text-slate-600">{lineMetadata}</p> : null}
+                    {standaloneShopCart ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [String(line.product_id)]: Math.max(0, Number(line.quantity) - 1) }).catch(() => undefined)} className="grid h-9 w-9 place-items-center rounded-full border border-black/15" aria-label={`Minska ${line.product_name}`}><Minus className="h-4 w-4" /></button>
+                          <span className="w-5 text-center font-black" aria-live="polite">{line.quantity}</span>
+                          <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [String(line.product_id)]: Math.min(Number(line.product_snapshot?.max_quantity || 20), Number(line.quantity) + 1) }).catch(() => undefined)} disabled={Number(line.quantity) >= Number(line.product_snapshot?.max_quantity || 20)} className="grid h-9 w-9 place-items-center rounded-full bg-slate-950 text-white disabled:bg-slate-300" aria-label={`Öka ${line.product_name}`}><Plus className="h-4 w-4" /></button>
+                        </div>
+                        <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [String(line.product_id)]: 0 }).catch(() => undefined)} className="inline-flex h-9 items-center gap-1 px-2 text-xs font-bold text-slate-500" aria-label={`Ta bort ${line.product_name}`}><Trash2 className="h-3.5 w-3.5" />Ta bort</button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
@@ -232,8 +311,15 @@ export default function CommerceCartPage() {
               </div>
             );
           })}
+          {standaloneShopCart && visibleLines.length === 0 ? (
+            <div className="py-14 text-center">
+              <ShoppingBag className="mx-auto h-6 w-6 text-slate-300" />
+              <p className="mt-4 font-black">Varukorgen är tom</p>
+              <button type="button" onClick={() => navigate(`/shop?v=${encodeURIComponent(venueSlug)}`)} className="mt-3 text-sm font-bold underline underline-offset-4">Fortsätt handla</button>
+            </div>
+          ) : null}
         </section>
-        {showGuestDetails || showEmailRecovery ? (
+        {visibleLines.length > 0 && (showGuestDetails || showEmailRecovery) ? (
           <section className="grid gap-3 border-t border-black/10 pt-6">
             <h2 className="font-black">Dina uppgifter</h2>
             {showGuestDetails ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Namn" className="h-12 rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" /> : null}
@@ -242,13 +328,13 @@ export default function CommerceCartPage() {
         ) : null}
         {resolveQuery.isError ? <p className="mt-6 border-t border-black/15 pt-5 text-sm font-semibold text-slate-700">Priset eller platsen kunde inte bekräftas. Gå tillbaka och försök igen.</p> : null}
       </main>
-      <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
+      {(!standaloneShopCart || visibleLines.length > 0) ? <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
         <div className="mx-auto max-w-xl">
           <div className="mb-1 flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><span className="text-2xl font-black">{serverPricingReady ? formatCommerceMoney(total) : "—"}</span></div>
           {totalSavings > 0 ? <p className="mb-3 text-sm font-bold text-slate-700">Du sparar {formatCommerceMoney(totalSavings)}</p> : null}
-          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || !serverPricingReady || needsEmail} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
+          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || cartUpdatesPending > 0 || !serverPricingReady || needsEmail || visibleItemCount === 0} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending || cartUpdatesPending > 0 ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? standaloneShopCart ? `Till kassan · ${formatCommerceMoney(total)}` : `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
         </div>
-      </footer>
+      </footer> : null}
     </div>
   );
 }
