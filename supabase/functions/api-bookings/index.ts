@@ -4,7 +4,6 @@ import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId
 import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
-import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { auditMutation, canOperateVenue } from '../_shared/authorization.ts';
 import { canonicalPublicOrigin, canonicalPublicUrl } from '../_shared/canonical_origin.ts';
@@ -20,6 +19,9 @@ const OPEN_BOOKING_INVITE_SOURCE = 'open_booking_slot';
 const OPEN_BOOKING_PACES = ['all_levels', 'calm_pace', 'familiar_pace', 'high_pace'];
 const OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY = 32;
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
+const STRIPE_API_BASE = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
+
+type StripeCheckoutSession = { id: string; url: string | null };
 
 function isPlayingHostReason(value: unknown) {
   return value === PLAYING_HOST_ROLE || value === LEGACY_HOST_COMP;
@@ -29,6 +31,39 @@ function safeLocalPath(path?: string | null) {
   if (!path || typeof path !== 'string') return '';
   if (!path.startsWith('/') || path.startsWith('//')) return '';
   return path.slice(0, 450);
+}
+
+function appendStripeFormValue(body: URLSearchParams, key: string, value: unknown) {
+  if (value === undefined || value === null) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => appendStripeFormValue(body, `${key}[${index}]`, item));
+    return;
+  }
+  if (typeof value === 'object') {
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+      appendStripeFormValue(body, `${key}[${childKey}]`, childValue);
+    }
+    return;
+  }
+  body.append(key, String(value));
+}
+
+async function createStripeCheckoutSession(stripeKey: string, data: Record<string, unknown>) {
+  const body = new URLSearchParams();
+  Object.entries(data).forEach(([key, value]) => appendStripeFormValue(body, key, value));
+  const response = await fetch(`${STRIPE_API_BASE}/checkout/sessions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${stripeKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Stripe-Version': '2023-10-16',
+    },
+    body,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error?.message || `Stripe API error ${response.status}`);
+  if (!payload?.id) throw new Error('Stripe Checkout response missing session id');
+  return payload as StripeCheckoutSession;
 }
 
 function nameFromBookingNotes(notes?: string | null) {
@@ -1973,8 +2008,6 @@ Deno.serve(async (req) => {
     const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
     if (!stripeKey) return errorResponse('Stripe not configured', 500);
 
-    const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
-
     // Derive base URL from request Origin to support local development while
     // forcing production links onto the canonical apex domain.
     const origin = canonicalPublicOrigin(req);
@@ -2638,12 +2671,12 @@ Deno.serve(async (req) => {
       ? (requestedSuccessPath || '/booking/confirmed?type=booking_participant')
       : '/booking/confirmed';
 
-    let stripeSession: Stripe.Checkout.Session;
+    let stripeSession: StripeCheckoutSession;
 
     try {
       if (isMembership) {
         // Subscription mode — recurring monthly charge
-        stripeSession = await stripe.checkout.sessions.create({
+        stripeSession = await createStripeCheckoutSession(stripeKey, {
           payment_method_types: ['card'],
           mode: 'subscription',
           customer_email: stripeMetadata.customer_email || undefined,
@@ -2664,7 +2697,7 @@ Deno.serve(async (req) => {
         });
       } else {
         // One-time payment (court_booking, day_pass, activity_ticket)
-        stripeSession = await stripe.checkout.sessions.create({
+        stripeSession = await createStripeCheckoutSession(stripeKey, {
           payment_method_types: ['card'],
           mode: 'payment',
           customer_email: stripeMetadata.customer_email || undefined,
