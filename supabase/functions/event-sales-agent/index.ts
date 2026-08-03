@@ -18,6 +18,11 @@ import {
   logAgentRecommendationDecision,
 } from '../_shared/event_operations_agent.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
+import {
+  assertCanonicalEventOfferObjectPath,
+  canonicalEventOfferObjectPath,
+  EVENT_OFFER_SIGNED_URL_TTL_SECONDS,
+} from '../_shared/event_offer_storage.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
@@ -337,7 +342,7 @@ async function selectedEventCourtResources(admin: any, eventRow: any) {
     : { data: [], error: null };
   if (catalogError) throw new Error(catalogError.message);
 
-  const catalogById = new Map((catalogRows || []).map((row: any) => [row.id, row]));
+  const catalogById = new Map<string, any>((catalogRows || []).map((row: any) => [row.id, row]));
   let resources = (allocations || [])
     .map((allocation: any) => {
       const catalog = catalogById.get(allocation.resource_catalog_id);
@@ -405,7 +410,7 @@ async function createOrUpdateEventResourceBlocks(admin: any, eventRow: any, lead
     .eq('event_offer_id', offer.id);
   if (existingError) throw new Error(existingError.message);
 
-  const existingByResource = new Map((existingBlocks || []).map((row: any) => [row.resource_catalog_id, row]));
+  const existingByResource = new Map<string, any>((existingBlocks || []).map((row: any) => [row.resource_catalog_id, row]));
   const keepIds = new Set(resourceIds);
   const blocksToInsert = [];
   const blockIdsToUpdate: string[] = [];
@@ -596,7 +601,7 @@ function uniqueStrings(values: unknown[]) {
 }
 
 async function applyOfferResourcePlan(admin: any, lead: any, offerConfig: any) {
-  const selectedIds = Array.isArray(offerConfig?.selected_resource_ids)
+  const selectedIds: string[] = Array.isArray(offerConfig?.selected_resource_ids)
     ? offerConfig.selected_resource_ids.map((id: unknown) => String(id)).filter(Boolean)
     : [];
   if (!lead.event_id || selectedIds.length === 0) {
@@ -816,7 +821,7 @@ async function prepareOfferDraftFromAgentApproval(admin: any, lead: any, recomme
   let pdfError: string | null = null;
   try {
     const pdfBytes = await buildOfferPdfBytes(payload);
-    const pdfPath = `${offer.venue_id}/${offer.event_lead_id}/${offer.id}.pdf`;
+    const pdfPath = await canonicalEventOfferObjectPath(admin, offer);
     const { error: uploadErr } = await admin.storage.from('event-offers').upload(pdfPath, pdfBytes, {
       contentType: 'application/pdf',
       upsert: true,
@@ -1221,15 +1226,34 @@ Deno.serve(async (req) => {
       if (offerErr || !offer) return errorResponse('Offer not found', 404);
       if (!await assertVenueAdmin(admin, userId, offer.venue_id)) return errorResponse('Forbidden', 403);
 
-      const pdfBytes = await buildOfferPdfBytes(offer.offer_payload || {});
-      const pdfPath = `${offer.venue_id}/${offer.event_lead_id}/${offer.id}.pdf`;
-      const { error: uploadErr } = await admin.storage.from('event-offers').upload(pdfPath, pdfBytes, {
-        contentType: 'application/pdf',
-        upsert: true,
-      });
-      if (uploadErr) return errorResponse(uploadErr.message, 500);
+      let pdfPath: string | null = null;
+      try {
+        const pdfBytes = await buildOfferPdfBytes(offer.offer_payload || {});
+        pdfPath = await canonicalEventOfferObjectPath(admin, offer);
+        const { error: uploadErr } = await admin.storage.from('event-offers').upload(pdfPath, pdfBytes, {
+          contentType: 'application/pdf',
+          upsert: true,
+        });
+        if (uploadErr) throw uploadErr;
 
-      await admin.from('event_offers').update({ pdf_url: pdfPath, status: 'pdf_ready' }).eq('id', offer.id);
+        const { error: updateErr } = await admin.from('event_offers')
+          .update({ pdf_url: pdfPath, status: 'pdf_ready' })
+          .eq('id', offer.id);
+        if (updateErr) throw updateErr;
+      } catch (pdfError) {
+        const message = pdfError instanceof Error ? pdfError.message : 'PDF generation failed';
+        await admin.from('event_lead_activities').insert(leadActivity({
+          lead: { id: offer.event_lead_id, venue_id: offer.venue_id },
+          offerId: offer.id,
+          type: 'pdf_generation_failed',
+          title: 'PDF generation failed',
+          body: 'Offert-PDF kunde inte skapas vid manuell retry.',
+          actorUserId: userId,
+          metadata: { pdf_path: pdfPath, error: message },
+        }));
+        return errorResponse(message, 500);
+      }
+
       await admin.from('event_lead_activities').insert(leadActivity({
         lead: { id: offer.event_lead_id, venue_id: offer.venue_id },
         offerId: offer.id,
@@ -1239,7 +1263,7 @@ Deno.serve(async (req) => {
         actorUserId: userId,
         metadata: { pdf_url: pdfPath },
       }));
-      const { data: signed } = await admin.storage.from('event-offers').createSignedUrl(pdfPath, 60 * 60 * 24 * 7);
+      const { data: signed } = await admin.storage.from('event-offers').createSignedUrl(pdfPath, EVENT_OFFER_SIGNED_URL_TTL_SECONDS);
       return jsonResponse({ ok: true, pdf_url: pdfPath, signed_url: signed?.signedUrl || null });
     }
 
@@ -1258,7 +1282,8 @@ Deno.serve(async (req) => {
       const sales = buildSalesDraft(offer.offer_payload || {});
       const subject = offer.email_subject || sales.subject;
       const body = offer.email_body || sales.emailBody;
-      const { data: signed } = await admin.storage.from('event-offers').createSignedUrl(offer.pdf_url, 60 * 60);
+      const canonicalPath = await assertCanonicalEventOfferObjectPath(admin, offer);
+      const { data: signed } = await admin.storage.from('event-offers').createSignedUrl(canonicalPath, EVENT_OFFER_SIGNED_URL_TTL_SECONDS);
       return jsonResponse({
         offer,
         lead,
@@ -1274,10 +1299,11 @@ Deno.serve(async (req) => {
     if (req.method === 'GET' && path === 'signed-url') {
       const offerId = new URL(req.url).searchParams.get('offerId');
       if (!offerId) return errorResponse('Missing offerId');
-      const { data: offer } = await admin.from('event_offers').select('id, venue_id, pdf_url').eq('id', offerId).maybeSingle();
+      const { data: offer } = await admin.from('event_offers').select('id, venue_id, event_lead_id, pdf_url').eq('id', offerId).maybeSingle();
       if (!offer?.pdf_url) return errorResponse('Offer has no PDF', 404);
       if (!await assertVenueAdmin(admin, userId, offer.venue_id)) return errorResponse('Forbidden', 403);
-      const { data: signed } = await admin.storage.from('event-offers').createSignedUrl(offer.pdf_url, 60 * 60);
+      const canonicalPath = await assertCanonicalEventOfferObjectPath(admin, offer);
+      const { data: signed } = await admin.storage.from('event-offers').createSignedUrl(canonicalPath, EVENT_OFFER_SIGNED_URL_TTL_SECONDS);
       return jsonResponse({ signed_url: signed?.signedUrl || null });
     }
 
@@ -1439,7 +1465,8 @@ Deno.serve(async (req) => {
       if (!lead?.email) return errorResponse('Lead has no email');
       if (!offer.pdf_url) return errorResponse('Offer has no PDF', 404);
 
-      const { data: file, error: downloadErr } = await admin.storage.from('event-offers').download(offer.pdf_url);
+      const canonicalPath = await assertCanonicalEventOfferObjectPath(admin, offer);
+      const { data: file, error: downloadErr } = await admin.storage.from('event-offers').download(canonicalPath);
       if (downloadErr || !file) return errorResponse(downloadErr?.message || 'Could not read PDF', 500);
       const pdfBytes = new Uint8Array(await file.arrayBuffer());
       const sales = buildSalesDraft(offer.offer_payload || {});
