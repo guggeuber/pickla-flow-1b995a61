@@ -39,8 +39,9 @@ describe("active event storage capabilities", () => {
     expect(`${sales}\n${generator}`).not.toMatch(/60 \* 60 \* 24 \* 7/);
   });
 
-  it("allow-lists exactly the four audited legacy logo references", () => {
+  it("records exactly four deferred legacy-logo debt references", () => {
     const manifest = JSON.parse(read("docs/database/event-logo-reconciliation.json"));
+    expect(manifest.release_disposition).toBe("known_content_debt_deferred");
     expect(manifest.records).toHaveLength(4);
     expect(manifest.records.map((record: { table: string; id: string }) => `${record.table}:${record.id}`)).toEqual([
       "events:71a4ed74-ff8d-4fac-bf2f-15606c8ce456",
@@ -51,6 +52,7 @@ describe("active event storage capabilities", () => {
 
     const tool = read("scripts/reconcile-event-logos.mjs");
     expect(tool).toContain("records?.length !== 4");
+    expect(tool).toContain("known_content_debt_deferred");
     expect(tool).toContain("Source URL changed");
     expect(tool).toContain("--allow-production");
     expect(tool).toContain("platform.event_logo.reconciled");

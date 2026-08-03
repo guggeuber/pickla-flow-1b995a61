@@ -4,6 +4,7 @@
   "source_project_ref": "cqnjpudmsreubgviqptg",
   "source_readability_checked_at": "2026-08-03T00:00:00+02:00",
   "source_readability": "unavailable_dns",
+  "release_disposition": "known_content_debt_deferred",
   "records": [
     {
       "table": "events",
@@ -12,7 +13,7 @@
       "label": "Pickla Open 💪🏻",
       "source_url": "https://cqnjpudmsreubgviqptg.supabase.co/storage/v1/object/public/event-logos/templates/b669a0ab-0fa7-4005-9db3-0b4b1f23b130/logo.svg?t=1776343588543",
       "target_path": "71a4ed74-ff8d-4fac-bf2f-15606c8ce456/logo.svg",
-      "fixture_file": "pickla-open.svg",
+      "asset_file": "pickla-open.svg",
       "content_type": "image/svg+xml"
     },
     {
@@ -22,7 +23,7 @@
       "label": "Fredagsklubben",
       "source_url": "https://cqnjpudmsreubgviqptg.supabase.co/storage/v1/object/public/event-logos/templates/82197c90-dc30-480b-9bce-b630ce4f22e0/logo.svg?t=1776343332276",
       "target_path": "9e8a09cc-70e7-4429-ae6a-addb5d06d404/logo.svg",
-      "fixture_file": "fredagsklubben.svg",
+      "asset_file": "fredagsklubben.svg",
       "content_type": "image/svg+xml"
     },
     {
@@ -32,7 +33,7 @@
       "label": "Fredagsklubben",
       "source_url": "https://cqnjpudmsreubgviqptg.supabase.co/storage/v1/object/public/event-logos/templates/82197c90-dc30-480b-9bce-b630ce4f22e0/logo.svg?t=1776343332276",
       "target_path": "templates/82197c90-dc30-480b-9bce-b630ce4f22e0/logo.svg",
-      "fixture_file": "fredagsklubben.svg",
+      "asset_file": "fredagsklubben.svg",
       "content_type": "image/svg+xml"
     },
     {
@@ -42,7 +43,7 @@
       "label": "Pickla Open",
       "source_url": "https://cqnjpudmsreubgviqptg.supabase.co/storage/v1/object/public/event-logos/templates/b669a0ab-0fa7-4005-9db3-0b4b1f23b130/logo.svg?t=1776343588543",
       "target_path": "templates/b669a0ab-0fa7-4005-9db3-0b4b1f23b130/logo.svg",
-      "fixture_file": "pickla-open.svg",
+      "asset_file": "pickla-open.svg",
       "content_type": "image/svg+xml"
     }
   ]

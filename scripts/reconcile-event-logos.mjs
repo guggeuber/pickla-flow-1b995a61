@@ -53,7 +53,7 @@ async function responseJson(response, label) {
 
 async function loadAsset(record, assetDir) {
   if (assetDir) {
-    return new Uint8Array(await readFile(resolve(assetDir, record.fixture_file)));
+    return new Uint8Array(await readFile(resolve(assetDir, record.asset_file)));
   }
   const response = await fetch(record.source_url, { redirect: 'follow' });
   if (!response.ok) throw new Error(`Legacy asset unavailable for ${record.table}/${record.id}: ${response.status}`);
@@ -69,6 +69,9 @@ async function main() {
   const manifest = JSON.parse(await readFile(resolve(manifestPath), 'utf8'));
   if (manifest.version !== 1 || manifest.bucket !== 'event-logos' || manifest.records?.length !== 4) {
     throw new Error('Only the reviewed four-record event-logo manifest version 1 is accepted');
+  }
+  if (manifest.release_disposition !== 'known_content_debt_deferred') {
+    throw new Error('Legacy logo remediation requires the reviewed deferred-debt manifest');
   }
 
   const ids = new Set();
