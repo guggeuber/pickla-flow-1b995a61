@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, AlertTriangle, CalendarCheck, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, Mail, PackageCheck, Phone, ReceiptText, Sparkles, UserCheck, UserPlus } from "lucide-react";
+import { Activity, AlertTriangle, CalendarCheck, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, Mail, PackageCheck, Phone, ReceiptText, Sparkles, Square, UserCheck, UserPlus } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
@@ -190,6 +190,12 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     queryFn: () => apiGet<{ items: any[] }>("api-commerce", "fulfillment", { venueId: venueId!, status: "pending_pickup" }),
     refetchInterval: 30000,
   });
+  const { data: collectedFulfillment } = useQuery({
+    queryKey: ["commerce-fulfillment", venueId, "collected"],
+    enabled: !!venueId && isToday,
+    queryFn: () => apiGet<{ items: any[] }>("api-commerce", "fulfillment", { venueId: venueId!, status: "collected" }),
+    refetchInterval: 30000,
+  });
   const changeDateBy = (days: number) => {
     const next = toStockholmDate(selectedDate).plus({ days }).toISODate()!;
     setSelectedDate(clampDeskDate(next, today));
@@ -241,16 +247,19 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
   });
   const collectMutation = useMutation({
-    mutationFn: (lineId: string) => apiPatch("api-commerce", "fulfillment", { venue_id: venueId, line_id: lineId, status: "collected" }),
-    onSuccess: () => {
+    mutationFn: (line: any) => apiPatch("api-commerce", "fulfillment", { venue_id: venueId, line_id: line.id, status: "collected" }),
+    onSuccess: (_result, line) => {
       toast.success("Uthämtningen är klar");
+      qc.setQueryData<{ items: any[] }>(["commerce-fulfillment", venueId, "pending_pickup"], (current) => current
+        ? { ...current, items: current.items.filter((item) => item.id !== line.id) }
+        : current);
       qc.invalidateQueries({ queryKey: ["commerce-fulfillment", venueId] });
       qc.invalidateQueries({ queryKey: ["commerce-my-orders"] });
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte markera uthämtad"),
   });
 
-  const rows = (bookings as any[] | undefined) || [];
+  const rows = useMemo(() => (bookings as any[] | undefined) || [], [bookings]);
   const courtRows = useMemo(
     () => groupActivityCourtBlocks(rows.filter((b: any) => b.kind !== "activity_registration" && b.status !== "cancelled")),
     [rows]
@@ -285,6 +294,14 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     }
     return Array.from(map.values()).sort((a: any, b: any) => +new Date(a.start_time) - +new Date(b.start_time)).slice(0, 8);
   }, [activityRows]);
+  const activityNameById = useMemo(() => new Map(activityGroups.map((activity: any) => [
+    String(activity.activity_session_id || activity.activity_session?.id || ""),
+    String(activity.activity_session?.name || activity.notes || "Aktivitet"),
+  ])), [activityGroups]);
+  const recentlyCollected = useMemo(() => (collectedFulfillment?.items || []).filter((line: any) => {
+    if (!line.fulfilled_at) return false;
+    return DateTime.fromISO(line.fulfilled_at, { zone: "utc" }).setZone(STOCKHOLM_ZONE).toISODate() === today;
+  }).slice(-8), [collectedFulfillment?.items, today]);
 
   const suggestions = useMemo(() => {
     const now = DateTime.now().setZone(STOCKHOLM_ZONE);
@@ -421,17 +438,30 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
         </section>
       ) : null}
 
-      {isToday && (fulfillment?.items || []).length > 0 ? (
+      {isToday ? (
         <section className="space-y-2">
           <AxSectionLabel icon={PackageCheck} accent={ax("lime")}>Att lämna ut</AxSectionLabel>
-          <div className="grid gap-2 lg:grid-cols-2">
-            {(fulfillment?.items || []).map((line) => (
-              <AxCard key={line.id} className="flex items-center justify-between gap-3 p-3">
-                <div className="min-w-0"><p className="truncate text-sm font-black text-white">{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p><p className="truncate text-xs font-bold" style={{ color: ax("muted") }}>{line.order?.guest_name || line.order?.guest_email || "Kund"}</p></div>
-                <button type="button" onClick={() => collectMutation.mutate(line.id)} disabled={collectMutation.isPending} className="shrink-0 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50" style={{ background: ax("lime"), color: ax("ink") }}>{collectMutation.isPending && collectMutation.variables === line.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Utlämnad"}</button>
-              </AxCard>
-            ))}
-          </div>
+          {(fulfillment?.items || []).length === 0 && recentlyCollected.length === 0 ? <AxEmpty icon={PackageCheck} title="Inget väntar på utlämning" hint="Betalda produkter visas här tills personal markerar dem som utlämnade." tint={ax("lime")} /> : (
+            <div className="grid gap-2 lg:grid-cols-2">
+              {[...(fulfillment?.items || []), ...recentlyCollected].map((line) => {
+                const collected = line.fulfillment_status === "collected";
+                const activityName = activityNameById.get(String(line.activity_session_id || ""));
+                const collecting = collectMutation.isPending && collectMutation.variables?.id === line.id;
+                return (
+                  <AxCard key={line.id} className="flex items-center gap-3 p-3">
+                    <button type="button" role="checkbox" aria-checked={collected} aria-label={`Markera ${line.product_name} som utlämnad`} onClick={() => !collected && collectMutation.mutate(line)} disabled={collected || collecting} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border disabled:opacity-100" style={{ borderColor: collected ? ax("lime") : ax("borderSoft"), color: collected ? ax("lime") : ax("muted") }}>
+                      {collecting ? <Loader2 className="h-5 w-5 animate-spin" /> : collected ? <Check className="h-5 w-5" /> : <Square className="h-5 w-5" />}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-black text-white">{line.order?.customer_name || "Kund"}</p>
+                      <p className="truncate text-xs font-bold" style={{ color: ax("electricSoft") }}>{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p>
+                      <p className="truncate text-[11px]" style={{ color: ax("muted") }}>{activityName || `Order ${String(line.commerce_order_id).slice(0, 8)}`} · {line.order?.status === "paid" ? "Betald" : "Bekräftad"} · {collected ? "Utlämnad" : "Ej utlämnad"}</p>
+                    </div>
+                  </AxCard>
+                );
+              })}
+            </div>
+          )}
         </section>
       ) : null}
 
@@ -484,6 +514,9 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
                   checkingId={(activityCheckinMutation.variables as any)?.session_registration_id || (activityCheckinMutation.variables as any)?.registration_id || null}
                   checking={activityCheckinMutation.isPending}
                   onOpenCustomer={(participant) => setCustomerTarget({ customerId: participant.customer_id || null, userId: participant.user_id || null })}
+                  onCollect={(line) => collectMutation.mutate(line)}
+                  collectingId={(collectMutation.variables as any)?.id || null}
+                  collecting={collectMutation.isPending}
                 />
               ))}
             </div>
@@ -869,6 +902,9 @@ function ActivityRow({
   checkingId,
   checking,
   onOpenCustomer,
+  onCollect,
+  collectingId,
+  collecting,
 }: {
   activity: any;
   expanded: boolean;
@@ -877,6 +913,9 @@ function ActivityRow({
   checkingId: string | null;
   checking: boolean;
   onOpenCustomer: (participant: any) => void;
+  onCollect: (line: any) => void;
+  collectingId: string | null;
+  collecting: boolean;
 }) {
   const name = activity.activity_session?.name || activity.notes || "Aktivitet";
   const participants = Array.isArray(activity.participants) ? activity.participants : [];
@@ -920,6 +959,9 @@ function ActivityRow({
               onCheckIn={() => onCheckIn(participant)}
               checking={checking && checkingId === (participant.session_registration_id || participant.registration_id)}
               onOpenCustomer={() => onOpenCustomer(participant)}
+              onCollect={onCollect}
+              collectingId={collectingId}
+              collecting={collecting}
             />
           ))}
         </div>
@@ -933,11 +975,17 @@ function ActivityParticipantRow({
   onCheckIn,
   checking,
   onOpenCustomer,
+  onCollect,
+  collectingId,
+  collecting,
 }: {
   participant: any;
   onCheckIn: () => void;
   checking: boolean;
   onOpenCustomer: () => void;
+  onCollect: (line: any) => void;
+  collectingId: string | null;
+  collecting: boolean;
 }) {
   const eligibility = activityRegistrationCheckinEligibility(participant);
   const checkedIn = participant.checked_in || participant.consumed || participant.status === "checked_in";
@@ -977,9 +1025,10 @@ function ActivityParticipantRow({
           {Array.isArray(participant.commerce_items) && participant.commerce_items.length > 0 ? (
             <div className="mt-2 grid gap-1">
               {participant.commerce_items.map((item: any) => (
-                <p key={item.id} className="text-[11px] font-black" style={{ color: item.fulfillment_status === "collected" ? ax("lime") : ax("electricSoft") }}>
-                  {item.product_name}{Number(item.quantity || 1) > 1 ? ` · ${item.quantity} st` : ""} · {item.fulfillment_status === "collected" ? "Uthämtad" : "Lämna ut vid incheckning"}
-                </p>
+                <button key={item.id} type="button" role="checkbox" aria-checked={item.fulfillment_status === "collected"} onClick={() => item.fulfillment_status !== "collected" && onCollect(item)} disabled={item.fulfillment_status === "collected" || (collecting && collectingId === item.id)} className="flex items-center gap-2 text-left text-[11px] font-black disabled:opacity-100" style={{ color: item.fulfillment_status === "collected" ? ax("lime") : ax("electricSoft") }}>
+                  {collecting && collectingId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : item.fulfillment_status === "collected" ? <Check className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                  {item.product_name}{Number(item.quantity || 1) > 1 ? ` · ${item.quantity} st` : ""} · {item.fulfillment_status === "collected" ? "Utlämnad" : "Markera utlämnad"}
+                </button>
               ))}
             </div>
           ) : null}
