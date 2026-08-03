@@ -1,10 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, ArrowRight, MapPin, Users, Beer, Trophy, Calendar, Sparkles, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { apiPost } from "@/lib/api";
-import { supabase } from "@/integrations/supabase/client";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import heroPhoto from "@/assets/pickla-hero-photo.jpg";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
@@ -158,48 +157,17 @@ export default function EventLandingPage({ config }: { config: EventLandingConfi
   const [selectedPackageSlug, setSelectedPackageSlug] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const packagesQuery = useQuery({
-    queryKey: ["event-landing-packages"],
-    queryFn: async () => {
-      const { data, error } = await (supabase as any)
-        .from("event_products")
-        .select("id, name, slug, short_description, category, price_from_sek, price_unit, included_items, is_featured, sort_order")
-        .eq("type", "package")
-        .eq("is_active", true)
-        .order("sort_order");
-      if (error) throw error;
-      return (data || []) as Array<{
-        id: string; name: string; slug: string | null; short_description: string | null;
-        category: string | null; price_from_sek: number | null; price_unit: string | null;
-        included_items: string[] | null; is_featured: boolean; sort_order: number;
-      }>;
-    },
-    staleTime: 60_000,
-  });
-
   const displayPackages = useMemo(() => {
-    const rows = packagesQuery.data || [];
-    if (rows.length === 0) {
-      return PACKAGES_FALLBACK.map((p) => ({
-        id: null as string | null,
-        slug: p.name.toLowerCase(),
-        name: p.name,
-        tag: p.tag,
-        price: p.price,
-        includes: p.includes,
-        featured: p.featured,
-      }));
-    }
-    return rows.map((p) => ({
-      id: p.id,
-      slug: p.slug || p.name.toLowerCase(),
+    return PACKAGES_FALLBACK.map((p) => ({
+      id: null as string | null,
+      slug: p.name.toLowerCase(),
       name: p.name,
-      tag: p.category || (p.is_featured ? "Mest populär" : ""),
-      price: p.price_from_sek != null ? String(Math.round(p.price_from_sek)) : "",
-      includes: (p.included_items || []).slice(0, 6),
-      featured: p.is_featured,
+      tag: p.tag,
+      price: p.price,
+      includes: p.includes,
+      featured: p.featured,
     }));
-  }, [packagesQuery.data]);
+  }, []);
 
   const inquiry = useMutation({
     mutationFn: async () => {

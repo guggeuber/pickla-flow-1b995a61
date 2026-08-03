@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2, ArrowBigUp, ArrowBigDown, MessageCircle, Plus, Pin, Send, X,
-  ChevronLeft, Users, CalendarDays, MapPin, Clock, Image as ImageIcon, BarChart3, ExternalLink, Paperclip, Search, Smile,
+  ChevronLeft, Users, CalendarDays, MapPin, Clock, BarChart3, ExternalLink, Search, Smile,
   Pencil, MoreHorizontal, Check, Trash2
 } from "lucide-react";
 import { toast } from "sonner";
@@ -450,35 +450,6 @@ function PollView({ postId, compact = false }: { postId: string; compact?: boole
   );
 }
 
-/* ── Image Upload Helper ── */
-function useImageUpload() {
-  const { user } = useAuth();
-  const [uploading, setUploading] = useState(false);
-
-  const upload = useCallback(async (file: File): Promise<string | null> => {
-    if (!user) return null;
-    setUploading(true);
-    try {
-      const ext = file.name.split(".").pop() || "jpg";
-      const path = `${user.id}/${Date.now()}.${ext}`;
-      const { error } = await supabase.storage.from("forum-images").upload(path, file, {
-        cacheControl: "3600",
-        upsert: false,
-      });
-      if (error) throw error;
-      const { data: urlData } = supabase.storage.from("forum-images").getPublicUrl(path);
-      return urlData.publicUrl;
-    } catch (err: any) {
-      toast.error("Upload failed: " + (err.message || "Unknown error"));
-      return null;
-    } finally {
-      setUploading(false);
-    }
-  }, [user]);
-
-  return { upload, uploading };
-}
-
 /* ── GIF Search (Tenor via public proxy) ── */
 function GifPicker({ onSelect, onClose }: { onSelect: (url: string) => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
@@ -650,9 +621,7 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const startDate = event.start_date ? new Date(event.start_date) : null;
   const eventUrl = event.slug ? `/e/${event.slug}` : `/e/${event.id}`;
-  const { upload, uploading } = useImageUpload();
   const [showGifPicker, setShowGifPicker] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -745,16 +714,6 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
       toast.error("Could not post comment");
     }
     setSending(false);
-  };
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const url = await upload(file);
-    if (url) {
-      await handleSendComment(url);
-    }
-    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleGifSelect = async (gifUrl: string) => {
@@ -861,15 +820,7 @@ function EventDetail({ event, onBack }: { event: any; onBack: () => void }) {
       {/* Comment input */}
       {user ? (
         <div className="pt-3 mt-3 border-t border-neutral-100">
-          <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleImageUpload} />
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform"
-            >
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin text-neutral-400" /> : <Paperclip className="w-4 h-4 text-neutral-400" />}
-            </button>
             <button
               onClick={() => setShowGifPicker(!showGifPicker)}
               className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform"
@@ -1040,9 +991,7 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
   const tagColor = TAG_COLORS[post.tag] || "#6B7280";
   const isLfg = post.tag === "lfg";
   const isPoll = post.tag === "poll";
-  const { upload, uploading } = useImageUpload();
   const [showGifPicker, setShowGifPicker] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Edit state
   const [editing, setEditing] = useState(false);
@@ -1116,14 +1065,6 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
       toast.error("Could not post comment");
     }
     setSending(false);
-  };
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const url = await upload(file);
-    if (url) await handleSendComment(url);
-    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleGifSelect = async (gifUrl: string) => {
@@ -1269,15 +1210,7 @@ function PostDetail({ post, onBack }: { post: any; onBack: () => void }) {
       {/* Comment input */}
       {user ? (
         <div className="pt-3 mt-3 border-t border-neutral-100">
-          <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleImageUpload} />
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform"
-            >
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin text-neutral-400" /> : <Paperclip className="w-4 h-4 text-neutral-400" />}
-            </button>
             <button
               onClick={() => setShowGifPicker(!showGifPicker)}
               className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-neutral-50 active:scale-90 transition-transform text-[11px] font-bold text-neutral-400"
@@ -1324,9 +1257,7 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
   const [sportType, setSportType] = useState("pickleball");
   const [posting, setPosting] = useState(false);
   const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
-  const { upload, uploading } = useImageUpload();
   const [showGifPicker, setShowGifPicker] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: profile } = useQuery({
     queryKey: ["my-profile-id"],
@@ -1336,16 +1267,6 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
       return data;
     },
   });
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const url = await upload(file);
-    if (url) {
-      setBody(prev => prev ? prev + "\n" + url : url);
-    }
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
 
   const handleGifSelect = (gifUrl: string) => {
     setShowGifPicker(false);
@@ -1487,15 +1408,6 @@ function CreatePostSheet({ open, onClose }: { open: boolean; onClose: () => void
 
         {/* Media buttons */}
         <div className="flex gap-2 mb-4">
-          <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleImageUpload} />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-neutral-50 border border-neutral-200 text-neutral-500 active:scale-95 transition-all"
-          >
-            {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
-            Photo
-          </button>
           <button
             onClick={() => setShowGifPicker(!showGifPicker)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-neutral-50 border border-neutral-200 text-neutral-500 active:scale-95 transition-all"

@@ -11,15 +11,6 @@ import { format } from "date-fns";
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
 
-interface Story {
-  id: string;
-  image_url: string;
-  caption: string | null;
-  created_at: string;
-  expires_at: string;
-  venue_id: string | null;
-}
-
 function usePublicVenue(slug: string) {
   return useQuery({
     queryKey: ["public-venue", slug],
@@ -31,22 +22,6 @@ function usePublicVenue(slug: string) {
       });
       if (!res.ok) return null;
       return res.json();
-    },
-  });
-}
-
-function useStories() {
-  return useQuery({
-    queryKey: ["community-stories"],
-    staleTime: 30000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("community_stories" as any)
-        .select("id, image_url, caption, created_at, expires_at, venue_id")
-        .gt("expires_at", new Date().toISOString())
-        .order("created_at", { ascending: false })
-        .limit(20);
-      return (data || []) as unknown as Story[];
     },
   });
 }
@@ -158,7 +133,6 @@ const LinkHub = () => {
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
 
   const { data, isLoading } = usePublicVenue(slug);
-  const { data: stories } = useStories();
 
   const venue = data?.venue;
   const { data: upcomingEvents } = useUpcomingEvents(venue?.id);
@@ -176,14 +150,9 @@ const LinkHub = () => {
     );
   }
 
-  const hasStories = stories && stories.length > 0;
-
-  // Combine venue cover + stories into one image feed
+  // Keep the working venue cover as the only public image source.
   const allImages: { id: string; url: string; caption: string | null }[] = [];
-  if (hasStories) {
-    stories.forEach((s) => allImages.push({ id: s.id, url: s.image_url, caption: s.caption }));
-  }
-  if (!allImages.length && venue?.cover_image_url) {
+  if (venue?.cover_image_url) {
     allImages.push({ id: "venue-cover", url: venue.cover_image_url, caption: venue.name });
   }
 

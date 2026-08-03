@@ -2,7 +2,6 @@ import { motion } from "framer-motion";
 import {
   Ban,
   Building2,
-  Camera,
   CalendarCheck,
   ChevronRight,
   Clock,
@@ -47,7 +46,6 @@ const groups: SettingsGroup[] = [
       { id: "hours", label: "Öppettider", desc: "Veckoschema", icon: Clock, tint: ax("electric", 0.7) },
       { id: "operations", label: "Drift", desc: "Avvikelser & stängt", icon: ShieldAlert, tint: ax("sun", 0.7) },
       { id: "links", label: "Länkar", desc: "Linkhub", icon: Link2, tint: ax("magenta", 0.7) },
-      { id: "stories", label: "Stories", desc: "Community-stories", icon: Camera, tint: ax("magenta", 0.7) },
     ],
   },
   {
@@ -77,7 +75,6 @@ const groups: SettingsGroup[] = [
     items: [
       { id: "events", label: "Events", desc: "Planning & publika", icon: Trophy, tint: ax("magenta", 0.7) },
       { id: "eventLeads", label: "Event Leads", desc: "Agent OS & offerter", icon: MessageSquare, tint: ax("sun", 0.7) },
-      { id: "eventProducts", label: "Event Products", desc: "Paket & resurser", icon: Package, tint: ax("lime", 0.7) },
       { id: "templates", label: "Event-mallar", desc: "Franchise (HQ)", icon: FileText, tint: ax("electric", 0.7), superAdmin: true },
     ],
   },

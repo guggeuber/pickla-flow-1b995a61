@@ -5,7 +5,6 @@ import {
   Ban,
   Building2,
   Calendar,
-  Camera,
   CalendarCheck,
   ChevronDown,
   Clock,
@@ -42,7 +41,6 @@ import AdminHours from "@/components/admin/AdminHours";
 import AdminPricing from "@/components/admin/AdminPricing";
 import AdminLinks from "@/components/admin/AdminLinks";
 import AdminVenue from "@/components/admin/AdminVenue";
-import AdminStories from "@/components/admin/AdminStories";
 import AdminEvents from "@/components/admin/AdminEvents";
 import AdminMemberships from "@/components/admin/AdminMemberships";
 import AdminTemplates from "@/components/admin/AdminTemplates";
@@ -52,7 +50,6 @@ import AdminProducts from "@/components/admin/AdminProducts";
 import AdminSchedule from "@/components/admin/AdminSchedule";
 import AdminDevices from "@/components/admin/AdminDevices";
 import AdminEventLeads from "@/components/admin/AdminEventLeads";
-import AdminEventProducts from "@/components/admin/AdminEventProducts";
 import AdminResourceBlocks from "@/components/admin/AdminResourceBlocks";
 import AdminVenueOperations from "@/components/admin/AdminVenueOperations";
 import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
@@ -150,10 +147,8 @@ const sectionLabels: Record<string, { label: string; icon: any }> = {
   products: { label: "Produkter", icon: Package },
   schedule: { label: "Schema", icon: CalendarCheck },
   links: { label: "Länkar", icon: Link2 },
-  stories: { label: "Stories", icon: Camera },
   events: { label: "Events", icon: Trophy },
   eventLeads: { label: "Event Leads", icon: MessageSquare },
-  eventProducts: { label: "Event Products", icon: Package },
   resourceBlocks: { label: "Blockeringar", icon: Ban },
   operations: { label: "Drift", icon: ShieldAlert },
   revenueLedger: { label: "Revenue Ledger", icon: ReceiptText },
@@ -199,10 +194,8 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
             {id === "products" && <AdminProducts venueId={venueId} />}
             {id === "schedule" && <AdminSchedule venueId={venueId} />}
             {id === "links" && <AdminLinks venueId={venueId} />}
-            {id === "stories" && <AdminStories venueId={venueId} />}
             {id === "events" && <AdminEvents venueId={venueId} />}
             {id === "eventLeads" && <AdminEventLeads venueId={venueId} />}
-            {id === "eventProducts" && <AdminEventProducts venueId={venueId} />}
             {id === "resourceBlocks" && <AdminResourceBlocks venueId={venueId} />}
             {id === "operations" && <AdminVenueOperations venueId={venueId} />}
             {id === "revenueLedger" && <AdminRevenueLedger venueId={venueId} />}

@@ -18,7 +18,6 @@ import {
   TrendingUp,
   Trophy,
   Users,
-  Camera,
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -670,7 +669,6 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
           <QuickAction icon={CalendarCheck} label="Schema"         tint={ax("electric", 0.7)} onClick={() => onOpenSettings("schedule")} />
           <QuickAction icon={Trophy}        label="Event lead"     tint={ax("lime", 0.7)}     onClick={() => onOpenSettings("eventLeads")} />
           <QuickAction icon={Users}         label="Personal"       tint={ax("electric", 0.7)} onClick={() => onOpenSettings("staff")} />
-          <QuickAction icon={Camera}        label="Stories"        tint={ax("magenta", 0.7)}  onClick={() => onOpenSettings("stories")} />
         </div>
       </section>
 
