@@ -5,7 +5,7 @@ import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
@@ -223,7 +223,7 @@ function findEventIdFromInbound(email: any) {
   return subjectMatch?.[1] || null;
 }
 
-function collectEmailAddresses(...values: any[]) {
+function collectEmailAddresses(...values: any[]): string[] {
   return values.flatMap((value) => {
     if (!value) return [];
     if (Array.isArray(value)) return collectEmailAddresses(...value);
@@ -447,7 +447,7 @@ async function buildActivityPreview(client: any, {
   venueSlug?: string | null;
   includeChatPreview?: boolean;
   timings?: Record<string, number>;
-}) {
+}): Promise<any> {
   let room: any = null;
   let resolvedSessionId = sessionId || null;
   let occurrenceDate = date || null;
@@ -485,7 +485,7 @@ async function buildActivityPreview(client: any, {
   if (venueSlug && session.venues?.slug !== venueSlug) throw new Error('Venue mismatch');
 
   const occurrence = nextActivityOccurrence(session, occurrenceDate);
-  occurrenceDate = occurrence.toISODate();
+  occurrenceDate = occurrence.toISODate() as string;
   const override = await activityOccurrenceOverride(client, session.venue_id, session.id, occurrenceDate);
   if (override?.status === 'hidden' || override?.status === 'cancelled') {
     throw new Error('Activity occurrence is not available');
@@ -542,7 +542,7 @@ async function buildActivityPreview(client: any, {
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
       venue_slug: session.venues?.slug || null,
-      hosts: hosts.filter((host) => host.activity_session_id === session.id),
+      hosts: hosts.filter((host: any) => host.activity_session_id === session.id),
     },
     registrations: { count: 0 },
     messages,
@@ -1649,12 +1649,12 @@ Deno.serve(async (req) => {
 
       const leadInput = sanitizeLeadInput({
         venueId: venue.id,
-        company_name: normalizedType === 'company' || normalizedType === 'team' ? cleanName : null,
+        company_name: (normalizedType === 'company' || normalizedType === 'team' ? cleanName : null) as string | undefined,
         contact_name: cleanName,
-        email: cleanEmail,
+        email: cleanEmail as string | undefined,
         phone: cleanPhone,
         participants_count: participantCount,
-        preferred_date: requestedDate,
+        preferred_date: requestedDate as string | undefined,
         preferred_time: timeLabel,
         event_type: normalizedType,
         activities: selectedActivities,
@@ -1666,9 +1666,10 @@ Deno.serve(async (req) => {
       const suggestedPackage = choosePackage(leadInput);
       const estimatedValue = estimateValue(leadInput, suggestedPackage);
 
+      const createdEvent = event as { id: string };
       const { data: eventLead, error: leadErr } = await client.from('event_leads').insert({
         venue_id: venue.id,
-        event_id: event.id,
+        event_id: createdEvent.id,
         company_name: leadInput.companyName,
         contact_name: leadInput.contactName,
         email: leadInput.email,
@@ -1701,16 +1702,16 @@ Deno.serve(async (req) => {
       const roomId = await createInquiryRoom({
         client,
         venueId: venue.id,
-        eventId: event.id,
+        eventId: createdEvent.id,
         title: `${typeLabel} · ${cleanName}`,
         subtitle: `${participantCount} pers · ${requestedDate || 'datum flexibelt'}`,
         message: partnerNotes,
       });
 
-      const confirmationSubject = formatSubject(`Vi har fått din förfrågan till ${venue.name || 'Pickla'}`, event.id);
+      const confirmationSubject = formatSubject(`Vi har fått din förfrågan till ${venue.name || 'Pickla'}`, createdEvent.id);
       await sendGroupInquiryEmail({
         to: cleanEmail,
-        eventId: event.id,
+        eventId: createdEvent.id,
         name: cleanName,
         venueName: venue.name || 'Pickla',
         typeLabel,
@@ -1720,7 +1721,7 @@ Deno.serve(async (req) => {
       }).then(async (result) => {
         if (!result || !roomId) return;
         await client.from('event_communications').insert({
-          event_id: event.id,
+          event_id: createdEvent.id,
           room_id: roomId,
           direction: 'outbound',
           channel: 'email',
@@ -1735,7 +1736,7 @@ Deno.serve(async (req) => {
         });
       }).catch((err) => console.error('Confirmation email failed:', err?.message || err));
 
-      return jsonResponse({ success: true, event_id: event.id, lead_id: eventLead.id, room_id: roomId }, 201);
+      return jsonResponse({ success: true, event_id: createdEvent.id, lead_id: eventLead.id, room_id: roomId }, 201);
     }
 
     // POST /api-event-public/register — register a player + auto-create account

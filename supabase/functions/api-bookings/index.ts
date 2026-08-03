@@ -2,7 +2,7 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId, stockholmDateRangeUtc } from '../_shared/bookings.ts';
 import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
@@ -384,7 +384,7 @@ async function isFounderMember(admin: any, venueId: string, userId: string | nul
   return tierNames.some((name) => /founder/i.test(name));
 }
 
-async function activeMembershipTierNames(admin: any, venueId: string, userId: string | null | undefined) {
+async function activeMembershipTierNames(admin: any, venueId: string, userId: string | null | undefined): Promise<string[]> {
   if (!venueId || !userId) return [];
   const { data, error } = await admin
     .from('memberships')
@@ -1622,7 +1622,7 @@ Deno.serve(async (req) => {
           court_number: row.venue_courts?.court_number || null,
         })),
         capacity,
-        claimed_count: participantSummary.claimed_count,
+        claimed_count: (participantSummary as any).claimed_count,
         committed_count: participantSummary.committed_count,
         founder_booking: isFounderBookingGroup(bookingRows),
         source: isPublicOpenBookingInvite ? 'open_booking' : 'private_invite',
@@ -2132,7 +2132,7 @@ Deno.serve(async (req) => {
         .eq('id', activitySessionId)
         .maybeSingle();
 
-      if (activitySession?.venue_id === venue_id && activitySession.price_sek != null) {
+      if (activitySession && activitySession.venue_id === venue_id && activitySession.price_sek != null) {
         // A scheduled session is the concrete thing being sold, so its price
         // must override the reusable product baseline (e.g. Fredagsklubben
         // can share the day_access product but still cost 99 kr).
@@ -2156,7 +2156,7 @@ Deno.serve(async (req) => {
           .eq('id', meta.open_play_session_id)
           .maybeSingle();
 
-        if (openPlaySession?.venue_id === venue_id && openPlaySession.price_sek != null) {
+        if (openPlaySession && openPlaySession.venue_id === venue_id && openPlaySession.price_sek != null) {
           baseAmountSek = Number(openPlaySession.price_sek);
           finalAmountSek = baseAmountSek;
           meta.base_amount_sek = String(baseAmountSek);
@@ -4022,7 +4022,7 @@ Deno.serve(async (req) => {
       const canCancelOwn = participant.user_id === userId;
       const canOperate = await canOperateVenue(admin, userId, participant.venue_id);
       if (!canCancelOwn && !canOperate) return errorResponse('Forbidden', 403);
-      if (participant.role === 'booker' && !canOperate) {
+      if ((participant as any).role === 'booker' && !canOperate) {
         return errorResponse('Bokaren kan inte avboka hela bokningen här.', 403);
       }
       if (participant.payment_status === 'cancelled') {
@@ -4030,7 +4030,7 @@ Deno.serve(async (req) => {
       }
 
       const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
-      const before = { payment_status: participant.payment_status, checked_in_at: participant.checked_in_at || null };
+      const before = { payment_status: participant.payment_status, checked_in_at: (participant as any).checked_in_at || null };
       const nextMetadata = {
         ...(participant.metadata || {}),
         cancelled_at: new Date().toISOString(),
@@ -4166,7 +4166,7 @@ Deno.serve(async (req) => {
           };
         });
 
-      items.push(...legacyItems);
+      items.push(...(legacyItems as typeof items));
       items.sort((a: any, b: any) => ((a.date || '') > (b.date || '') ? 1 : (a.date || '') < (b.date || '') ? -1 : 0));
 
       const total = items.reduce((sum, item) => sum + item.amount, 0);
