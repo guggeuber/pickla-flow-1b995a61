@@ -3,6 +3,7 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
 import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
+import { projectPublicActivitySessionHosts } from '../_shared/public_activity_hosts.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
@@ -518,7 +519,7 @@ async function buildActivityPreview(client: any, {
     .filter(Boolean)
     .reverse()
     .slice(-6);
-  const hosts = await publicActivitySessionHosts(client, [session.id]);
+  const hostsBySessionId = await publicActivitySessionHosts(client, [session.id]);
 
   return {
     room,
@@ -542,7 +543,7 @@ async function buildActivityPreview(client: any, {
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
       venue_slug: session.venues?.slug || null,
-      hosts: hosts.filter((host: any) => host.activity_session_id === session.id),
+      hosts: hostsBySessionId.get(session.id) || [],
     },
     registrations: { count: 0 },
     messages,
@@ -551,14 +552,28 @@ async function buildActivityPreview(client: any, {
 
 async function publicActivitySessionHosts(client: any, sessionIds: string[]) {
   const cleanIds = [...new Set(sessionIds.filter(Boolean))];
-  if (!cleanIds.length) return [];
+  if (!cleanIds.length) return new Map();
   // Host first name is public because host assignment is an explicit public-facing role.
   const { data, error } = await client.rpc('get_public_activity_session_hosts', { session_ids: cleanIds });
   if (error) {
     console.error('public host lookup failed', error.message);
-    return [];
+    return new Map();
   }
-  return data || [];
+  const allowedIds = new Set(cleanIds);
+  const rawHostsBySessionId = new Map<string, any[]>();
+  for (const row of data || []) {
+    const activitySessionId = typeof row?.activity_session_id === 'string' ? row.activity_session_id : '';
+    if (!allowedIds.has(activitySessionId)) continue;
+    const hosts = rawHostsBySessionId.get(activitySessionId) || [];
+    hosts.push(row);
+    rawHostsBySessionId.set(activitySessionId, hosts);
+  }
+  return new Map(
+    Array.from(rawHostsBySessionId.entries()).map(([activitySessionId, rows]) => [
+      activitySessionId,
+      projectPublicActivitySessionHosts(rows),
+    ]),
+  );
 }
 
 async function activityRegistrationCount(client: any, venueId: string, activitySessionId: string, sessionDate: string) {

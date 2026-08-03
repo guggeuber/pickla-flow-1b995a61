@@ -120,15 +120,6 @@ type RegistrationRow = {
   customer_id?: string | null;
 };
 
-type PublicSessionHost = {
-  activity_session_id: string;
-  customer_id: string;
-  first_name?: string | null;
-  display_name?: string | null;
-  avatar_url?: string | null;
-  sort_order?: number | null;
-};
-
 type ActivitySocialProofRow = {
   activity_session_id: string;
   session_date: string;
@@ -265,7 +256,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       }
 
       const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
-      const [registrationsRes, socialProofRes, hostsRes, overrideMap] = await Promise.all([
+      const [registrationsRes, socialProofRes, overrideMap] = await Promise.all([
         sessionIds.length
           ? supabase
               .from("session_registrations")
@@ -282,15 +273,6 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
               endDate,
             }).catch(() => ({ occurrences: [] }))
           : Promise.resolve({ occurrences: [] }),
-        sessionIds.length
-          ? (async () => {
-              try {
-                return await (supabase as any).rpc("get_public_activity_session_hosts", { session_ids: sessionIds });
-              } catch {
-                return { data: [] as PublicSessionHost[] };
-              }
-            })()
-          : Promise.resolve({ data: [] as PublicSessionHost[] }),
         sessionIds.length
           ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
           : Promise.resolve(new Map()),
@@ -311,27 +293,11 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         }
         registrationsByKey.set(key, [...(registrationsByKey.get(key) || []), row]);
       }
-      const hostsBySessionId = new Map<string, PublicSessionHost[]>();
-      for (const host of hostsRes.data || []) {
-        const list = hostsBySessionId.get(host.activity_session_id) || [];
-        list.push(host);
-        hostsBySessionId.set(host.activity_session_id, list);
-      }
       const participantUserIdsByKey = new Map<string, string[]>();
       for (const [key, rows] of registrationsByKey.entries()) {
-        const sessionIdForKey = key.split(":")[0];
-        const hostOrder = new Map((hostsBySessionId.get(sessionIdForKey) || []).map((host, index) => [host.customer_id, Number(host.sort_order ?? index)]));
-        const orderedRows = [...rows].sort((a, b) => {
-          const aHost = a.customer_id ? hostOrder.get(a.customer_id) : undefined;
-          const bHost = b.customer_id ? hostOrder.get(b.customer_id) : undefined;
-          if (aHost != null && bHost != null) return aHost - bHost;
-          if (aHost != null) return -1;
-          if (bHost != null) return 1;
-          return 0;
-        });
         participantUserIdsByKey.set(
           key,
-          [...new Set(orderedRows.map((row) => row.user_id).filter(Boolean) as string[])].slice(0, 3),
+          [...new Set(rows.map((row) => row.user_id).filter(Boolean) as string[])].slice(0, 3),
         );
       }
       const participantUserIds = [...new Set([...participantUserIdsByKey.values()].flat())];

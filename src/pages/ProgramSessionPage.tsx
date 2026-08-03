@@ -348,28 +348,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const sessionHosts = useMemo(() => {
     return Array.isArray(session?.hosts) ? session.hosts : [];
   }, [session?.hosts]);
-  const hostOrderByCustomerId = useMemo(() => {
-    return new Map(sessionHosts.map((host: any, index: number) => [host.customer_id, Number(host.sort_order ?? index)]));
-  }, [sessionHosts]);
-  const hostCustomerIds = useMemo(() => new Set(sessionHosts.map((host: any) => host.customer_id).filter(Boolean)), [sessionHosts]);
-  const nonHostRegistrations = useMemo(
-    () => registrations.filter((row: any) => !row.customer_id || !hostCustomerIds.has(row.customer_id)),
-    [hostCustomerIds, registrations],
-  );
   const participantUserIds = useMemo(() => {
-    const orderedRegistrations = [...nonHostRegistrations].sort((a: any, b: any) => {
-      const aHost = a.customer_id ? hostOrderByCustomerId.get(a.customer_id) : undefined;
-      const bHost = b.customer_id ? hostOrderByCustomerId.get(b.customer_id) : undefined;
-      if (aHost != null && bHost != null) return Number(aHost) - Number(bHost);
-      if (aHost != null) return -1;
-      if (bHost != null) return 1;
-      return 0;
-    });
-    const ids = orderedRegistrations
+    const ids = registrations
       .map((row: any) => row.user_id)
       .filter(Boolean);
     return [...new Set(ids)].slice(0, 3);
-  }, [hostOrderByCustomerId, nonHostRegistrations]);
+  }, [registrations]);
 
   const { data: participantProfiles = [] } = useQuery({
     queryKey: ["program-session-participant-profiles", participantUserIds],
@@ -404,8 +388,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       isPlayingHostReason(currentRegistrationMetadata.role) ||
       isPlayingHostReason(currentRegistrationMetadata.entitlement_type) ||
       isPlayingHostReason(currentRegistrationMetadata.pricing_reason) ||
-      isPlayingHostReason(currentRegistrationMetadata.compensation_type) ||
-      (currentRegistration.customer_id && hostCustomerIds.has(currentRegistration.customer_id))
+      isPlayingHostReason(currentRegistrationMetadata.compensation_type)
     )
   );
   const [localCheckedIn, setLocalCheckedIn] = useState(false);
@@ -608,7 +591,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               avatarUrl: sessionHosts[0]?.avatar_url ?? null,
               count: sessionHosts.length,
               avatars: sessionHosts.map((host) => ({
-                id: host.customer_id || null,
+                id: null,
                 displayName: hostDisplayName(host),
                 avatarUrl: host.avatar_url || null,
               })),
