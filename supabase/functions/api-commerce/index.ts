@@ -1160,7 +1160,7 @@ const commerceHandler = async (req: Request) => {
             }).maybeSingle();
             const replacedRow = replaced as RpcVersionRow | null;
             if (replaceError || replacedRow?.version == null) {
-              if (!created && String(replaceError?.message || '').includes('stale_cart_version')) {
+              if (String(replaceError?.message || '').includes('stale_cart_version')) {
                 const converged = await findStandaloneDraft(admin, venueId, userId || null, idempotencyKeyHash);
                 if (!converged.order) throw new Error('Cart update failed');
                 order = converged.order;
