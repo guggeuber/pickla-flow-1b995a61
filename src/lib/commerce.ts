@@ -109,6 +109,24 @@ export interface CommerceOrderResponse {
   } | null;
 }
 
+export interface DeskFulfillmentItem {
+  line_id: string;
+  order_reference: string;
+  customer_name: string;
+  activity_title: string | null;
+  product_name: string;
+  quantity: number;
+  order_status: string;
+  fulfillment_status: string;
+  fulfilled_at: string | null;
+  pickup_instruction: string;
+  pickup_eligible: boolean;
+}
+
+export interface DeskFulfillmentResponse {
+  items: DeskFulfillmentItem[];
+}
+
 export const RACKET_PICKUP_INSTRUCTION_CODE = "desk_pickup_racket_by_name";
 export const COMMERCE_PICKUP_COPY = "Hämtas vid disken.";
 

@@ -11,6 +11,7 @@ import Customer360Drawer from "@/components/customers/Customer360Drawer";
 import { activityRegistrationCheckinEligibility, addManualBookingParticipant, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility, markBookingParticipantPaid } from "@/lib/deskOps";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
+import type { DeskFulfillmentItem, DeskFulfillmentResponse } from "@/lib/commerce";
 
 interface Props {
   venueId: string | undefined;
@@ -187,13 +188,13 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const { data: fulfillment } = useQuery({
     queryKey: ["commerce-fulfillment", venueId, "pending_pickup"],
     enabled: !!venueId && isToday,
-    queryFn: () => apiGet<{ items: any[] }>("api-commerce", "fulfillment", { venueId: venueId!, status: "pending_pickup" }),
+    queryFn: () => apiGet<DeskFulfillmentResponse>("api-commerce", "fulfillment", { venueId: venueId!, status: "pending_pickup" }),
     refetchInterval: 30000,
   });
   const { data: collectedFulfillment } = useQuery({
     queryKey: ["commerce-fulfillment", venueId, "collected"],
     enabled: !!venueId && isToday,
-    queryFn: () => apiGet<{ items: any[] }>("api-commerce", "fulfillment", { venueId: venueId!, status: "collected" }),
+    queryFn: () => apiGet<DeskFulfillmentResponse>("api-commerce", "fulfillment", { venueId: venueId!, status: "collected" }),
     refetchInterval: 30000,
   });
   const changeDateBy = (days: number) => {
@@ -247,11 +248,11 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
   });
   const collectMutation = useMutation({
-    mutationFn: (line: any) => apiPatch("api-commerce", "fulfillment", { venue_id: venueId, line_id: line.id, status: "collected" }),
+    mutationFn: (line: DeskFulfillmentItem) => apiPatch("api-commerce", "fulfillment", { venue_id: venueId, line_id: line.line_id, status: "collected" }),
     onSuccess: (_result, line) => {
       toast.success("Uthämtningen är klar");
-      qc.setQueryData<{ items: any[] }>(["commerce-fulfillment", venueId, "pending_pickup"], (current) => current
-        ? { ...current, items: current.items.filter((item) => item.id !== line.id) }
+      qc.setQueryData<DeskFulfillmentResponse>(["commerce-fulfillment", venueId, "pending_pickup"], (current) => current
+        ? { ...current, items: current.items.filter((item) => item.line_id !== line.line_id) }
         : current);
       qc.invalidateQueries({ queryKey: ["commerce-fulfillment", venueId] });
       qc.invalidateQueries({ queryKey: ["commerce-my-orders"] });
@@ -294,11 +295,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     }
     return Array.from(map.values()).sort((a: any, b: any) => +new Date(a.start_time) - +new Date(b.start_time)).slice(0, 8);
   }, [activityRows]);
-  const activityNameById = useMemo(() => new Map(activityGroups.map((activity: any) => [
-    String(activity.activity_session_id || activity.activity_session?.id || ""),
-    String(activity.activity_session?.name || activity.notes || "Aktivitet"),
-  ])), [activityGroups]);
-  const recentlyCollected = useMemo(() => (collectedFulfillment?.items || []).filter((line: any) => {
+  const recentlyCollected = useMemo(() => (collectedFulfillment?.items || []).filter((line) => {
     if (!line.fulfilled_at) return false;
     return DateTime.fromISO(line.fulfilled_at, { zone: "utc" }).setZone(STOCKHOLM_ZONE).toISODate() === today;
   }).slice(-8), [collectedFulfillment?.items, today]);
@@ -445,17 +442,16 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
             <div className="grid gap-2 lg:grid-cols-2">
               {[...(fulfillment?.items || []), ...recentlyCollected].map((line) => {
                 const collected = line.fulfillment_status === "collected";
-                const activityName = activityNameById.get(String(line.activity_session_id || ""));
-                const collecting = collectMutation.isPending && collectMutation.variables?.id === line.id;
+                const collecting = collectMutation.isPending && collectMutation.variables?.line_id === line.line_id;
                 return (
-                  <AxCard key={line.id} className="flex items-center gap-3 p-3">
+                  <AxCard key={line.line_id} className="flex items-center gap-3 p-3">
                     <button type="button" role="checkbox" aria-checked={collected} aria-label={`Markera ${line.product_name} som utlämnad`} onClick={() => !collected && collectMutation.mutate(line)} disabled={collected || collecting} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border disabled:opacity-100" style={{ borderColor: collected ? ax("lime") : ax("borderSoft"), color: collected ? ax("lime") : ax("muted") }}>
                       {collecting ? <Loader2 className="h-5 w-5 animate-spin" /> : collected ? <Check className="h-5 w-5" /> : <Square className="h-5 w-5" />}
                     </button>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-black text-white">{line.order?.customer_name || "Kund"}</p>
+                      <p className="truncate text-sm font-black text-white">{line.customer_name || "Kund"}</p>
                       <p className="truncate text-xs font-bold" style={{ color: ax("electricSoft") }}>{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p>
-                      <p className="truncate text-[11px]" style={{ color: ax("muted") }}>{activityName || `Order ${String(line.commerce_order_id).slice(0, 8)}`} · {line.order?.status === "paid" ? "Betald" : "Bekräftad"} · {collected ? "Utlämnad" : "Ej utlämnad"}</p>
+                      <p className="truncate text-[11px]" style={{ color: ax("muted") }}>{line.activity_title || `Order ${line.order_reference}`} · {line.order_status === "paid" ? "Betald" : "Bekräftad"} · {collected ? "Utlämnad" : "Ej utlämnad"}</p>
                     </div>
                   </AxCard>
                 );

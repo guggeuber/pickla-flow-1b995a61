@@ -48,6 +48,52 @@ type RpcVersionRow = {
   total_inc_vat_minor?: number | string | null;
 };
 
+type DeskFulfillmentOrderRow = {
+  id: string;
+  customer_id: string | null;
+  guest_name: string | null;
+  status: string;
+  booking_receipts: { receipt_number: string } | Array<{ receipt_number: string }> | null;
+};
+
+type DeskFulfillmentLineRow = {
+  id: string;
+  commerce_order_id: string;
+  product_name: string;
+  quantity: number;
+  fulfillment_status: string;
+  fulfilled_at: string | null;
+  activity_session_id: string | null;
+};
+
+type DeskFulfillmentCustomerRow = {
+  id: string;
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+};
+
+type DeskFulfillmentActivityRow = {
+  id: string;
+  name: string;
+};
+
+type DeskFulfillmentItem = {
+  line_id: string;
+  order_reference: string;
+  customer_name: string;
+  activity_title: string | null;
+  product_name: string;
+  quantity: number;
+  order_status: string;
+  fulfillment_status: string;
+  fulfilled_at: string | null;
+  pickup_instruction: string;
+  pickup_eligible: boolean;
+};
+
+const DESK_PICKUP_INSTRUCTION = 'Hämtas vid disken.';
+
 function appendStripeFormValue(body: URLSearchParams, key: string, value: unknown) {
   if (value === undefined || value === null) return;
   if (Array.isArray(value)) {
@@ -870,6 +916,87 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
     claim_expires_at: userId ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
   }).eq('id', order.id);
   return committed.registration_id;
+}
+
+function deskOrderReference(order: DeskFulfillmentOrderRow) {
+  const receipt = Array.isArray(order.booking_receipts) ? order.booking_receipts[0] : order.booking_receipts;
+  return receipt?.receipt_number || 'Butiksköp';
+}
+
+function serializeDeskFulfillmentItem(
+  line: DeskFulfillmentLineRow,
+  order: DeskFulfillmentOrderRow,
+  customerName: string,
+  activity: DeskFulfillmentActivityRow | null,
+): DeskFulfillmentItem {
+  return {
+    line_id: line.id,
+    order_reference: deskOrderReference(order),
+    customer_name: customerName,
+    activity_title: activity?.name || null,
+    product_name: line.product_name,
+    quantity: line.quantity,
+    order_status: order.status,
+    fulfillment_status: line.fulfillment_status,
+    fulfilled_at: line.fulfilled_at,
+    pickup_instruction: DESK_PICKUP_INSTRUCTION,
+    pickup_eligible: ['paid', 'attention'].includes(order.status)
+      && ['pending_pickup', 'attention'].includes(line.fulfillment_status),
+  };
+}
+
+async function loadDeskFulfillmentItems(
+  admin: AdminClient,
+  venueId: string,
+  filter: { status?: string; lineId?: string } = {},
+): Promise<DeskFulfillmentItem[]> {
+  const { data: orderData, error: orderError } = await admin
+    .from('commerce_orders')
+    .select('id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number)')
+    .eq('venue_id', venueId)
+    .in('status', ['paid', 'attention']);
+  if (orderError) throw new Error(orderError.message);
+  const orders = (orderData || []) as DeskFulfillmentOrderRow[];
+  const orderIds = orders.map((order) => order.id);
+  if (orderIds.length === 0) return [];
+
+  let lineQuery = admin.from('commerce_order_lines')
+    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id')
+    .in('commerce_order_id', orderIds)
+    .eq('fulfillment_type', 'desk_pickup')
+    .order('created_at');
+  if (filter.status) lineQuery = lineQuery.eq('fulfillment_status', filter.status);
+  if (filter.lineId) lineQuery = lineQuery.eq('id', filter.lineId);
+  const { data: lineData, error: lineError } = await lineQuery;
+  if (lineError) throw new Error(lineError.message);
+  const lines = (lineData || []) as DeskFulfillmentLineRow[];
+  if (lines.length === 0) return [];
+
+  const customerIds = Array.from(new Set(orders.map((order) => order.customer_id).filter((id): id is string => Boolean(id))));
+  const { data: customerData, error: customerError } = customerIds.length
+    ? await admin.from('customers').select('id, display_name, first_name, last_name').in('id', customerIds)
+    : { data: [], error: null };
+  if (customerError) throw new Error(customerError.message);
+  const customerById = new Map(((customerData || []) as DeskFulfillmentCustomerRow[]).map((customer) => [customer.id, customer]));
+
+  const activityIds = Array.from(new Set(lines.map((line) => line.activity_session_id).filter((id): id is string => Boolean(id))));
+  const { data: activityData, error: activityError } = activityIds.length
+    ? await admin.from('activity_sessions').select('id, name').in('id', activityIds)
+    : { data: [], error: null };
+  if (activityError) throw new Error(activityError.message);
+  const activityById = new Map(((activityData || []) as DeskFulfillmentActivityRow[]).map((activity) => [activity.id, activity]));
+  const orderById = new Map(orders.map((order) => [order.id, order]));
+
+  return lines.flatMap((line) => {
+    const order = orderById.get(line.commerce_order_id);
+    if (!order) return [];
+    const customer = order.customer_id ? customerById.get(order.customer_id) : null;
+    const customerName = order.guest_name || customer?.display_name
+      || [customer?.first_name, customer?.last_name].filter(Boolean).join(' ')
+      || 'Kund';
+    const activity = line.activity_session_id ? activityById.get(line.activity_session_id) || null : null;
+    return [serializeDeskFulfillmentItem(line, order, customerName, activity)];
+  });
 }
 
 const commerceHandler = async (req: Request) => {
@@ -1734,39 +1861,8 @@ const commerceHandler = async (req: Request) => {
       const venueId = url.searchParams.get('venueId') || '';
       await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff']);
       const status = url.searchParams.get('status') || 'pending_pickup';
-      const { data: orders, error: orderError } = await admin
-        .from('commerce_orders')
-        .select('id, venue_id, customer_id, guest_name, status, paid_at, booking_receipt_id')
-        .eq('venue_id', venueId)
-        .in('status', ['paid', 'attention']);
-      if (orderError) throw new Error(orderError.message);
-      const orderIds = (orders || []).map((order: any) => order.id);
-      const { data: lines, error: lineError } = orderIds.length
-        ? await admin.from('commerce_order_lines').select('*').in('commerce_order_id', orderIds)
-          .eq('fulfillment_type', 'desk_pickup').eq('fulfillment_status', status).order('created_at')
-        : { data: [], error: null };
-      if (lineError) throw new Error(lineError.message);
-      const customerIds = Array.from(new Set((orders || []).map((order: any) => order.customer_id).filter(Boolean)));
-      const { data: customers, error: customerError } = customerIds.length
-        ? await admin.from('customers').select('id, display_name, first_name, last_name').in('id', customerIds)
-        : { data: [], error: null };
-      if (customerError) throw new Error(customerError.message);
-      const customerById = new Map((customers || []).map((customer: any) => [customer.id, customer]));
-      const orderById = new Map((orders || []).map((order: any) => {
-        const customer = customerById.get(order.customer_id) as any;
-        const customerName = order.guest_name || customer?.display_name
-          || [customer?.first_name, customer?.last_name].filter(Boolean).join(' ')
-          || 'Kund';
-        return [order.id, {
-          id: order.id,
-          venue_id: order.venue_id,
-          status: order.status,
-          paid_at: order.paid_at,
-          booking_receipt_id: order.booking_receipt_id,
-          customer_name: customerName,
-        }];
-      }));
-      return jsonResponse({ items: (lines || []).map((line) => ({ ...line, order: orderById.get(line.commerce_order_id) })) }, 200, 5);
+      const items = await loadDeskFulfillmentItems(admin, venueId, { status });
+      return jsonResponse({ items }, 200, 5);
     }
 
     if (req.method === 'PATCH' && path === 'fulfillment') {
@@ -1780,7 +1876,7 @@ const commerceHandler = async (req: Request) => {
       if (lineError || !line) return errorResponse('Fulfillment line not found', 404);
       const linkedOrder = Array.isArray(line.commerce_orders) ? line.commerce_orders[0] : line.commerce_orders;
       if (linkedOrder?.venue_id !== venueId) return errorResponse('Forbidden', 403);
-      const { data, error } = await admin.rpc('transition_commerce_fulfillment', {
+      const { error } = await admin.rpc('transition_commerce_fulfillment', {
         p_line_id: body.line_id,
         p_next_status: body.status,
         p_actor_user_id: userId,
@@ -1788,7 +1884,9 @@ const commerceHandler = async (req: Request) => {
         p_metadata: { source: 'api-commerce' },
       });
       if (error) throw new Error(error.message);
-      return jsonResponse({ item: data }, 200, 0);
+      const [item] = await loadDeskFulfillmentItems(admin, venueId, { lineId: body.line_id });
+      if (!item) throw new Error('Fulfillment line not found');
+      return jsonResponse({ item }, 200, 0);
     }
 
     return errorResponse('Not found', 404);

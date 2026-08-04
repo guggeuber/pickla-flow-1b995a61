@@ -31,6 +31,26 @@ const results = [];
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+
+const forbiddenDeskKeyFragments = [
+  "email", "phone", "customer_id", "user_id", "auth_user_id", "paid_at",
+  "booking_receipt_id", "stripe", "payment", "resolver_snapshot", "metadata",
+  "beneficiary", "storage_path",
+];
+
+function assertDeskPayloadPrivate(value, path = "payload") {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertDeskPayloadPrivate(item, `${path}[${index}]`));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    const normalized = key.toLowerCase();
+    const forbidden = forbiddenDeskKeyFragments.find((fragment) => normalized.includes(fragment));
+    assert(!forbidden, `Desk response exposed forbidden key ${path}.${key}`);
+    assertDeskPayloadPrivate(child, `${path}.${key}`);
+  }
+}
 function pass(name, detail = "ok") {
   results.push({ name, detail });
   process.stdout.write(`PASS ${name}: ${detail}\n`);
@@ -334,15 +354,36 @@ await rest("venue_staff", "", { method: "POST", body: [
   { venue_id: ids.venue, user_id: deskUser.id, role: "desk_staff", is_active: true },
   { venue_id: ids.capacityVenue, user_id: deskUser.id, role: "desk_staff", is_active: true },
 ] });
-await fn("fulfillment", { method: "PATCH", token: deskUser.token, body: { venue_id: ids.venue, line_id: guestRacketLine.id, status: "collected" } });
+const pendingDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { token: deskUser.token })).payload;
+assertDeskPayloadPrivate(pendingDeskPayload);
+const pendingDeskItem = pendingDeskPayload.items.find((item) => item.line_id === guestRacketLine.id);
+const publicReceipt = (await rest("booking_receipts", `id=eq.${guestOrder.booking_receipt_id}&select=receipt_number`)).payload[0];
+const deskAllowlist = [
+  "activity_title", "customer_name", "fulfilled_at", "fulfillment_status", "line_id",
+  "order_reference", "order_status", "pickup_eligible", "pickup_instruction", "product_name", "quantity",
+];
+assert(JSON.stringify(Object.keys(pendingDeskItem || {}).sort()) === JSON.stringify(deskAllowlist), "Desk response does not match the strict allowlist");
+assert(pendingDeskItem?.customer_name === guestName, "Desk response is missing the customer display name");
+assert(pendingDeskItem?.product_name === "Hyrrack" && pendingDeskItem?.quantity === 1, "Desk response is missing product or quantity");
+assert(pendingDeskItem?.activity_title === "Open Play R1" && pendingDeskItem?.order_reference === publicReceipt.receipt_number, "Desk response is missing public order/activity context");
+assert(pendingDeskItem?.fulfillment_status === "pending_pickup" && pendingDeskItem?.pickup_eligible === true, "Desk response is missing pickup state");
+assert(pendingDeskItem?.pickup_instruction === "Hämtas vid disken.", "Desk response is missing the pickup instruction");
+
+const collectedResponse = (await fn("fulfillment", { method: "PATCH", token: deskUser.token, body: { venue_id: ids.venue, line_id: guestRacketLine.id, status: "collected" } })).payload;
+assertDeskPayloadPrivate(collectedResponse);
+assert(collectedResponse.item?.fulfillment_status === "collected" && collectedResponse.item?.pickup_eligible === false, "Desk transition response is missing collected state");
 const collectedOnce = (await rest("commerce_order_lines", `id=eq.${guestRacketLine.id}&select=fulfilled_at,fulfilled_by,fulfillment_status`)).payload[0];
-await fn("fulfillment", { method: "PATCH", token: deskUser.token, body: { venue_id: ids.venue, line_id: guestRacketLine.id, status: "collected" } });
+const repeatedCollectedResponse = (await fn("fulfillment", { method: "PATCH", token: deskUser.token, body: { venue_id: ids.venue, line_id: guestRacketLine.id, status: "collected" } })).payload;
+assertDeskPayloadPrivate(repeatedCollectedResponse);
 const collectedTwice = (await rest("commerce_order_lines", `id=eq.${guestRacketLine.id}&select=fulfilled_at,fulfilled_by,fulfillment_status`)).payload[0];
 const fulfillmentAudits = (await rest("audit_log", `entity_id=eq.${guestRacketLine.id}&action=eq.commerce.fulfillment.transition&select=id`)).payload;
 assert(collectedOnce.fulfilled_at === collectedTwice.fulfilled_at, "fulfillment retry changed fulfilled_at");
 assert(collectedOnce.fulfilled_by === collectedTwice.fulfilled_by && fulfillmentAudits.length === 1, "fulfillment retry changed actor or duplicated audit");
+const collectedDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=collected`, { token: deskUser.token })).payload;
+assertDeskPayloadPrivate(collectedDeskPayload);
+assert(collectedDeskPayload.items.some((item) => item.line_id === guestRacketLine.id && item.fulfillment_status === "collected"), "collected Desk state did not persist after reload");
 await fn("fulfillment", { method: "PATCH", token: deskUser.token, expected: 403, body: { venue_id: ids.capacityVenue, line_id: guestRacketLine.id, status: "collected" } });
-pass("R1B fulfillment", "collected transition, retry idempotency, audit-once and cross-venue denial");
+pass("R1B fulfillment", "strict recursive privacy contract, reload, collected retry, audit-once and cross-venue denial");
 
 const claimed = (await fn("claim", { method: "POST", body: { token: guestCart.cart_token, display_name: "Ada R1" } })).payload;
 assert(claimed.order.guest_claimed === true, "display name claim did not issue ticket");
