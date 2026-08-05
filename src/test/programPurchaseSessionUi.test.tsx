@@ -21,6 +21,10 @@ vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => mocks.auth,
 }));
 
+vi.mock("@/components/PicklaTopBar", () => ({
+  PicklaTopBar: () => <div data-testid="pickla-top-bar" />,
+}));
+
 vi.mock("@/lib/api", () => ({
   apiPost: mocks.apiPost,
 }));
@@ -37,6 +41,7 @@ vi.mock("@/lib/commerce", () => ({
   fetchCommerceOrder: mocks.fetchOrder,
   formatCommerceMoney: (minor: number) => `${minor / 100} kr`,
   isCommerceOrderIdReference: () => false,
+  notifyStandaloneCartUpdated: vi.fn(),
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({

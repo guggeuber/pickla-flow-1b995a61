@@ -8,6 +8,7 @@ import {
   commerceJourneyId,
   createCommerceCart,
   fetchCommerceOrder,
+  notifyStandaloneCartUpdated,
   readStandaloneCartIdentity,
   updateCommerceCart,
   writeStandaloneCartIdentity,
@@ -137,6 +138,7 @@ export function useStandaloneShopCart(venueId?: string | null) {
         : { order: updated.order, lines: [], checkout_ready: false };
       const canonical: CommerceOrderResponse = { ...updated, order: { ...updated.order, version: resolved.order.version }, lines: resolved.lines };
       queryClient.setQueryData(queryKey, canonical);
+      notifyStandaloneCartUpdated(venueId);
       if (typeof BroadcastChannel !== "undefined") {
         const channel = new BroadcastChannel(`pickla-commerce-shop:${venueId}`);
         channel.postMessage({ version: canonical.order.version });

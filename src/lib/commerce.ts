@@ -240,6 +240,12 @@ export type StandaloneCartIdentity = {
 };
 
 const SHOP_CART_STORAGE_PREFIX = "pickla:commerce:r1b:shop-cart";
+export const STANDALONE_CART_UPDATED_EVENT = "pickla:standalone-cart-updated";
+
+export function notifyStandaloneCartUpdated(venueId: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(STANDALONE_CART_UPDATED_EVENT, { detail: { venueId } }));
+}
 
 function newStandaloneCartKey() {
   if (typeof crypto?.randomUUID === "function") return `${crypto.randomUUID()}${crypto.randomUUID()}`;
@@ -274,6 +280,7 @@ export function writeStandaloneCartIdentity(venueId: string, identity: Standalon
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(standaloneCartStorageKey(venueId), JSON.stringify(identity));
+    notifyStandaloneCartUpdated(venueId);
   } catch {
     // The server cart remains authoritative if local persistence is unavailable.
   }
@@ -283,6 +290,7 @@ export function clearStandaloneCartIdentity(venueId: string) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.removeItem(standaloneCartStorageKey(venueId));
+    notifyStandaloneCartUpdated(venueId);
   } catch {
     // Nothing else to clean up.
   }

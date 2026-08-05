@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => mocks.auth }));
+vi.mock("@/components/PicklaTopBar", () => ({
+  PicklaTopBar: () => <div data-testid="pickla-top-bar" />,
+}));
 vi.mock("@/lib/activityTiming", () => ({ activityCheckInAvailable: () => false }));
 vi.mock("@/lib/entryResolver", () => ({ preserveIntendedRoute: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));

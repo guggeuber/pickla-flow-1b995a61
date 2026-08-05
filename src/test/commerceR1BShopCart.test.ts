@@ -69,16 +69,23 @@ describe("Commerce R1B standalone cart", () => {
   it("keeps the approved UI and backend contracts in their isolated surfaces", () => {
     const shop = readFileSync("src/pages/CommerceShopPage.tsx", "utf8");
     const cart = readFileSync("src/pages/CommerceCartPage.tsx", "utf8");
+    const order = readFileSync("src/pages/CommerceOrderPage.tsx", "utf8");
     const nav = readFileSync("src/components/PicklaTopBar.tsx", "utf8");
+    const globalCart = readFileSync("src/hooks/useGlobalShopCartIndicator.ts", "utf8");
     const myPage = readFileSync("src/pages/MyPage.tsx", "utf8");
     const desk = readFileSync("src/components/desk/shell/DeskToday.tsx", "utf8");
     const commerceApi = readFileSync("supabase/functions/api-commerce/index.ts", "utf8");
     const migration = readFileSync("supabase/migrations/20260803120000_commerce_r1b_standalone_shop_carts.sql", "utf8");
 
     expect(nav).toContain("Butik");
+    expect(nav).toContain("useGlobalShopCartIndicator");
+    expect(nav).toContain("Öppna varukorg");
     expect(shop).toContain("useStandaloneShopCart");
+    expect(shop).toContain("<PicklaTopBar");
     expect(cart).toContain("Din varukorg");
+    expect(cart).toContain("<PicklaTopBar");
     expect(cart).toContain("Till kassan ·");
+    expect(order).toContain("<PicklaTopBar");
     expect(cart).not.toMatch(/Varav moms|Moms ingår/);
     expect(myPage).toContain("Hämtas vid disken. · Order");
     expect(myPage).toContain("Visa tidigare bokningar");
@@ -88,5 +95,7 @@ describe("Commerce R1B standalone cart", () => {
     expect(migration).toContain("idx_commerce_orders_active_shop_user_draft");
     expect(migration).toContain("idx_commerce_orders_active_shop_guest_draft");
     expect(migration).toContain("IF v_before.fulfillment_status = 'collected'");
+    expect(globalCart).toContain("readStandaloneCartIdentity");
+    expect(globalCart).not.toContain("createCommerceCart");
   });
 });

@@ -11,6 +11,7 @@ import { buildBookingHistory, formatBookingHistoryTime } from "@/lib/bookingHist
 import { useMyBookings } from "@/hooks/useMyBookings";
 import { BookingStatusChip } from "@/components/bookings/BookingStatusChip";
 import { useVenueStatusBySlug } from "@/lib/venueStatus";
+import { useGlobalShopCartIndicator } from "@/hooks/useGlobalShopCartIndicator";
 import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
@@ -36,7 +37,8 @@ export function PicklaTopBar({
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const { data: bookingRows = [] } = useMyBookings();
   const visibleBookings = useMemo(() => buildBookingHistory(bookingRows), [bookingRows]);
-  const { venue, status } = useVenueStatusBySlug(showVenue ? slug : undefined);
+  const { venue, status } = useVenueStatusBySlug(slug);
+  const shopCart = useGlobalShopCartIndicator(venue?.id);
   const resolvedVenueName = venueName
     || venue?.name?.replace("Pickla Arena ", "Pickla ")
     || "Pickla Stockholm";
@@ -55,6 +57,11 @@ export function PicklaTopBar({
     navigate(href);
   };
 
+  const openCart = () => {
+    if (!shopCart.reference) return;
+    navigate(`/cart?token=${encodeURIComponent(shopCart.reference)}&v=${encodeURIComponent(slug)}`);
+  };
+
 
   return (
     <>
@@ -62,7 +69,7 @@ export function PicklaTopBar({
         className="fixed left-0 right-0 top-0 z-50 border-b border-black/5 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-xl"
         style={{ background: `${background}f2` }}
       >
-        <div className={`mx-auto grid max-w-md items-center gap-3 ${showVenue ? "grid-cols-[40px_auto_minmax(0,1fr)]" : "grid-cols-[40px_1fr_40px]"}`}>
+        <div className={`mx-auto grid max-w-md items-center gap-3 ${showVenue ? shopCart.count > 0 ? "grid-cols-[40px_auto_minmax(0,1fr)_40px]" : "grid-cols-[40px_auto_minmax(0,1fr)]" : "grid-cols-[40px_1fr_40px]"}`}>
           <button
             type="button"
             onClick={() => setOpen(true)}
@@ -96,7 +103,19 @@ export function PicklaTopBar({
           )}
 
 
-          {!showVenue && <div className="h-10 w-10" />}
+          {shopCart.count > 0 ? (
+            <button
+              type="button"
+              onClick={openCart}
+              aria-label={`Öppna varukorg, ${shopCart.count} ${shopCart.count === 1 ? "artikel" : "artiklar"}`}
+              className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/10 bg-white text-neutral-950 shadow-sm active:scale-[0.98]"
+            >
+              <ShoppingBag className="h-5 w-5" />
+              <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-neutral-950 px-1 text-[10px] font-bold leading-none text-white">
+                {shopCart.count > 99 ? "99+" : shopCart.count}
+              </span>
+            </button>
+          ) : !showVenue ? <div className="h-10 w-10" /> : null}
         </div>
       </header>
 

@@ -4,6 +4,7 @@ import { Check, Loader2, MessageCircle, ReceiptText, Share2, Ticket, XCircle } f
 import { DateTime } from "luxon";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { useAuth } from "@/hooks/useAuth";
 import { activityCheckInAvailable } from "@/lib/activityTiming";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
@@ -32,6 +33,7 @@ export default function CommerceOrderPage() {
   const { user, loading: authLoading } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const token = routeParams.token || params.get("token") || "";
+  const venueSlug = params.get("v") || "pickla-arena-sthlm";
   const query = useQuery({ queryKey: ["commerce-order", token, user?.id || "guest"], queryFn: () => fetchCommerceOrder(token), enabled: token.length >= 32 && !authLoading, refetchInterval: (state) => state.state.data?.order.status === "checkout_pending" ? 1200 : false });
   const confirmIdentity = useMutation({
     mutationFn: () => confirmCommerceGuestIdentity(token, displayName.trim()),
@@ -62,8 +64,8 @@ export default function CommerceOrderPage() {
     preserveIntendedRoute(currentPath);
     navigate(`/auth?redirect=${encodeURIComponent(currentPath)}`);
   };
-  if (query.isLoading || authLoading) return <div className="grid min-h-[100dvh] place-items-center bg-white"><Loader2 className="h-6 w-6 animate-spin" /></div>;
-  if (!query.data) return <div className="grid min-h-[100dvh] place-items-center bg-white px-6 text-center">Ordern kunde inte öppnas.</div>;
+  if (query.isLoading || authLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center pt-20"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
+  if (!query.data) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center">Ordern kunde inte öppnas.</div></div>;
   const { order, lines, receipt } = query.data;
   const dayPassLine = lines.find((line) => line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass");
   const isDayPassPurchase = Boolean(dayPassLine);
@@ -92,6 +94,7 @@ export default function CommerceOrderPage() {
   const activityPath = activity?.venue_slug
     ? `/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`
     : null;
+  const resolvedVenueSlug = activity?.venue_slug || venueSlug;
   const shareActivity = async () => {
     if (!activity || !activityPath) return;
     const shareUrl = `${window.location.origin}${activityPath.replace(/&ticket=1$/, "")}`;
@@ -131,7 +134,8 @@ export default function CommerceOrderPage() {
             ? "Platsen och eventuella uthämtningsprodukter är återkallade."
             : "Gå tillbaka till ordersammanfattningen för att slutföra betalningen.";
   return (
-    <div className="min-h-[100dvh] bg-white px-4 pb-12 pt-[calc(env(safe-area-inset-top,0px)+36px)] text-slate-950">
+    <div className="min-h-[100dvh] bg-white px-4 pb-12 pt-[calc(env(safe-area-inset-top,0px)+104px)] text-slate-950">
+      <PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" />
       <main className="relative mx-auto max-w-lg">
         {purchaseConfirmed && activity ? (
           <div className="absolute right-0 top-0 flex items-center gap-1" data-testid="commerce-success-actions">
@@ -193,7 +197,7 @@ export default function CommerceOrderPage() {
           })}
         </section> : null}
         {!(purchaseConfirmed && hasParticipation) ? <section className="py-5"><div className="flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><strong className="text-xl">{formatCommerceMoney(order.total_inc_vat_minor)}</strong></div>{receiptNumber ? <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ReceiptText className="h-4 w-4" /> Kvitto {receiptNumber}</p> : null}</section> : null}
-        {!(purchaseConfirmed && hasParticipation) ? <div className="mt-6 grid gap-2">{user && !canManageBooking ? <Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link> : null}<Link to="/shop" className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div> : null}
+        {!(purchaseConfirmed && hasParticipation) ? <div className="mt-6 grid gap-2">{user && !canManageBooking ? <Link to="/my" className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-bold text-white">Till Min sida</Link> : null}<Link to={`/shop?v=${encodeURIComponent(resolvedVenueSlug)}`} className="flex h-12 items-center justify-center rounded-2xl border border-black/10 bg-white font-bold">Fortsätt handla</Link></div> : null}
       </main>
     </div>
   );

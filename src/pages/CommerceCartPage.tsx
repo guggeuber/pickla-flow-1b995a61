@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Minus, Plus, ShoppingBag, Ticket, Trash2 } from "lucide-react";
+import { Loader2, Minus, Plus, ShoppingBag, Ticket, Trash2 } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
+import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { apiPost } from "@/lib/api";
 import {
   COMMERCE_PICKUP_COPY,
@@ -14,6 +15,7 @@ import {
   fetchCommerceOrder,
   formatCommerceMoney,
   isCommerceOrderIdReference,
+  notifyStandaloneCartUpdated,
   updateCommerceCart,
   type CommerceOrderLine,
 } from "@/lib/commerce";
@@ -177,6 +179,7 @@ export default function CommerceCartPage() {
           checkout_ready: false,
         });
       }
+      notifyStandaloneCartUpdated(latest.order.venue_id);
     }).catch(async (error: Error) => {
       setStandaloneQuantities(null);
       await orderQuery.refetch();
@@ -196,8 +199,8 @@ export default function CommerceCartPage() {
         guest_email: email.trim() || null,
         guest_name: name.trim() || null,
         journey_id: commerceJourneyId(),
-        success_path: `/commerce/confirmed?token=${encodeURIComponent(token)}`,
-        cancel_path: `/cart?token=${encodeURIComponent(token)}`,
+        success_path: `/commerce/confirmed?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`,
+        cancel_path: `/cart?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`,
       }, { auth });
       const request = runAsGuest
         ? sendCheckout("omit")
@@ -241,11 +244,12 @@ export default function CommerceCartPage() {
     },
   });
 
-  if (orderQuery.isLoading || authLoading) return <div className="grid min-h-[100dvh] place-items-center bg-white"><Loader2 className="h-6 w-6 animate-spin" /></div>;
-  if (authenticatedDraftReference && !user) return <div className="grid min-h-[100dvh] place-items-center bg-white px-6 text-center"><div><p className="mb-4 font-bold">Logga in för att fortsätta ditt köp.</p><button type="button" onClick={() => { preserveIntendedRoute(`/cart?token=${encodeURIComponent(token)}`); navigate("/auth"); }} className="h-12 rounded-2xl bg-slate-950 px-6 font-black text-white">Logga in</button></div></div>;
-  if (!token || orderQuery.error || !orderQuery.data) return <div className="grid min-h-[100dvh] place-items-center bg-white px-6 text-center"><p>{orderQuery.error instanceof PurchaseSessionError ? PURCHASE_SESSION_ERROR_MESSAGE : "Varukorgen kunde inte öppnas."}</p></div>;
+  const resolvedVenueSlug = activity?.venue_slug || venueSlug;
+  if (orderQuery.isLoading || authLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center pt-20"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
+  if (authenticatedDraftReference && !user) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center"><div><p className="mb-4 font-bold">Logga in för att fortsätta ditt köp.</p><button type="button" onClick={() => { preserveIntendedRoute(`/cart?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`); navigate("/auth"); }} className="h-12 rounded-2xl bg-slate-950 px-6 font-black text-white">Logga in</button></div></div></div>;
+  if (!token || orderQuery.error || !orderQuery.data) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center"><p>{orderQuery.error instanceof PurchaseSessionError ? PURCHASE_SESSION_ERROR_MESSAGE : "Varukorgen kunde inte öppnas."}</p></div></div>;
   if (orderQuery.data.order.status !== "draft") {
-    navigate(`/commerce/confirmed?token=${encodeURIComponent(token)}`, { replace: true });
+    navigate(`/commerce/confirmed?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`, { replace: true });
     return null;
   }
 
@@ -255,12 +259,12 @@ export default function CommerceCartPage() {
 
   return (
     <div className="min-h-[100dvh] bg-white text-slate-950">
-      <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-black/10 bg-white/95 px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur">
-        <button type="button" onClick={() => standaloneShopCart ? navigate(`/shop?v=${encodeURIComponent(venueSlug)}`) : navigate(-1)} className="grid h-11 w-11 place-items-center rounded-full border border-black/10 bg-white" aria-label="Tillbaka"><ArrowLeft className="h-5 w-5" /></button>
-        <div className="min-w-0 flex-1"><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Pickla</p><h1 className="text-xl font-black">{standaloneShopCart ? "Din varukorg" : "Ordersammanfattning"}</h1></div>
-        {standaloneShopCart ? <span className="text-sm font-bold text-slate-500">{visibleItemCount} {visibleItemCount === 1 ? "artikel" : "artiklar"}</span> : null}
-      </header>
-      <main className={`mx-auto w-full max-w-xl px-5 py-6 ${standaloneShopCart && visibleLines.length === 0 ? "pb-16" : "pb-52"}`}>
+      <PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" />
+      <main className={`mx-auto w-full max-w-xl px-5 pt-[calc(env(safe-area-inset-top,0px)+96px)] ${standaloneShopCart && visibleLines.length === 0 ? "pb-16" : "pb-52"}`}>
+        <div className="mb-5 flex items-end justify-between gap-4">
+          <h1 className="text-2xl font-black">{standaloneShopCart ? "Din varukorg" : "Ordersammanfattning"}</h1>
+          {standaloneShopCart ? <span className="shrink-0 text-sm font-bold text-slate-500">{visibleItemCount} {visibleItemCount === 1 ? "artikel" : "artiklar"}</span> : null}
+        </div>
         {activity ? (
           <section className="pb-6">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Aktivitet</p>

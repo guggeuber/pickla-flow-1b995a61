@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Minus, Plus, ShoppingBag } from "lucide-react";
+import { Loader2, Minus, Plus, ShoppingBag } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { useStandaloneShopCart } from "@/hooks/useStandaloneShopCart";
 import { apiGet } from "@/lib/api";
 import {
@@ -42,13 +43,10 @@ export default function CommerceShopPage() {
 
   return (
     <div className="min-h-[100dvh] bg-white text-slate-950">
-      <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-black/10 bg-white/95 px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur">
-        <button type="button" onClick={() => navigate(-1)} className="grid h-11 w-11 place-items-center rounded-full border border-black/10 bg-white" aria-label="Tillbaka"><ArrowLeft className="h-5 w-5" /></button>
-        <div className="min-w-0 flex-1"><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Pickla</p><h1 className="text-xl font-black">Butik</h1></div>
-        {cart.lineCount > 0 ? <span aria-label={`${cart.lineCount} artiklar i varukorgen`} className="grid min-w-8 place-items-center rounded-full border border-black/10 px-2 py-1 text-sm font-black">{cart.lineCount}</span> : null}
-      </header>
+      <PicklaTopBar slug={slug} background="#ffffff" />
 
-      <main className="mx-auto max-w-xl px-4 py-5 pb-36">
+      <main className="mx-auto max-w-xl px-4 pb-36 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
+        <h1 className="mb-5 text-2xl font-black">Butik</h1>
         {catalog.isLoading || venue.isLoading || cart.isLoading ? <Loader2 className="mx-auto mt-12 h-6 w-6 animate-spin" /> : catalog.data && !catalog.data.commerce_available ? (
           <div className="border-y border-black/10 py-8 text-center text-sm text-slate-500">{catalog.data.message || "Pickla Butik är inte öppen just nu."}</div>
         ) : products.length === 0 ? (

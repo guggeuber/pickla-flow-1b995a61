@@ -17,6 +17,10 @@ vi.mock("@/lib/api", () => ({
   apiPut: api.put,
 }));
 
+vi.mock("@/components/PicklaTopBar", () => ({
+  PicklaTopBar: () => <div data-testid="pickla-top-bar" />,
+}));
+
 vi.mock("@/hooks/useStandaloneShopCart", () => ({
   useStandaloneShopCart: () => ({
     quantities: {}, lineCount: 0, resolvedTotalMinor: 0, reference: "cart-token-cart-token-cart-token-12",
@@ -82,6 +86,7 @@ describe("CommerceShopPage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Pink Pickla Bag" })).toBeInTheDocument();
+    expect(screen.getByTestId("pickla-top-bar")).toBeInTheDocument();
     await waitFor(() => expect(api.get).toHaveBeenCalledWith("api-commerce", "catalog", { venueId }));
 
     fireEvent.click(screen.getByRole("button", { name: "Öka Pink Pickla Bag" }));
