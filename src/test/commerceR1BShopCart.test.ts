@@ -10,9 +10,14 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import {
+  canonicalStandaloneShopCartCount,
   clearStandaloneCartIdentity,
   createCommerceCart,
+  isStaleCommerceCartVersion,
+  isStandaloneCartOwnerConflict,
   readStandaloneCartIdentity,
+  reconcileStandaloneCartUpdate,
+  rebaseCommerceCartQuantities,
   standaloneCartStorageKey,
   updateCommerceCart,
   writeStandaloneCartIdentity,
@@ -64,6 +69,81 @@ describe("Commerce R1B standalone cart", () => {
       expected_version: 2,
       items: [],
     }), { auth: "omit" });
+  });
+
+  it("rebases one stale-version mutation onto the canonical cart and retries exactly once", async () => {
+    const staleVersion = Object.assign(new Error("Cart changed — review it again."), { status: 409 });
+    const apply = vi.fn()
+      .mockRejectedValueOnce(staleVersion)
+      .mockResolvedValueOnce("updated");
+    const canonical = {
+      order: {
+        id: "order-1",
+        venue_id: venueId,
+        status: "draft",
+        version: 2,
+        currency: "SEK",
+        total_inc_vat_minor: 0,
+        total_ex_vat_minor: 0,
+        vat_amount_minor: 0,
+        draft_scope: "shop",
+      },
+      lines: [{ product_id: "product-1", quantity: 3 }],
+    } as Awaited<ReturnType<Parameters<typeof reconcileStandaloneCartUpdate>[0]["loadCanonical"]>>;
+    const loadCanonical = vi.fn().mockResolvedValue(canonical);
+
+    await expect(reconcileStandaloneCartUpdate({
+      baseQuantities: { "product-1": 1 },
+      desiredQuantities: { "product-1": 2 },
+      currentVersion: 1,
+      loadCanonical,
+      apply,
+    })).resolves.toBe("updated");
+
+    expect(loadCanonical).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenNthCalledWith(1, { "product-1": 2 }, 1);
+    expect(apply).toHaveBeenNthCalledWith(2, { "product-1": 4 }, 2);
+  });
+
+  it("does not retry or merge an owner conflict", async () => {
+    const ownerConflict = Object.assign(new Error("Shop cart owner conflict"), { status: 409 });
+    const apply = vi.fn().mockRejectedValue(ownerConflict);
+    const loadCanonical = vi.fn();
+
+    await expect(reconcileStandaloneCartUpdate({
+      baseQuantities: { "product-1": 1 },
+      desiredQuantities: { "product-1": 2 },
+      currentVersion: 1,
+      loadCanonical,
+      apply,
+    })).rejects.toBe(ownerConflict);
+
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(loadCanonical).not.toHaveBeenCalled();
+    expect(isStandaloneCartOwnerConflict(ownerConflict)).toBe(true);
+    expect(isStaleCommerceCartVersion(ownerConflict)).toBe(false);
+  });
+
+  it("clears the final line and counts only a canonical active Shop cart", () => {
+    expect(rebaseCommerceCartQuantities(
+      { "product-1": 1 },
+      { "product-1": 0 },
+      { "product-1": 1 },
+    )).toEqual({});
+    expect(canonicalStandaloneShopCartCount({
+      order: {
+        id: "order-1",
+        venue_id: venueId,
+        status: "draft",
+        version: 1,
+        currency: "SEK",
+        total_inc_vat_minor: 0,
+        total_ex_vat_minor: 0,
+        vat_amount_minor: 0,
+        draft_scope: "shop",
+      },
+      lines: [{ quantity: 2 }, { quantity: 1 }],
+    } as never, venueId)).toBe(3);
   });
 
   it("keeps the approved UI and backend contracts in their isolated surfaces", () => {

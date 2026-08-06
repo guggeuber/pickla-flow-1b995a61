@@ -242,9 +242,93 @@ export type StandaloneCartIdentity = {
 const SHOP_CART_STORAGE_PREFIX = "pickla:commerce:r1b:shop-cart";
 export const STANDALONE_CART_UPDATED_EVENT = "pickla:standalone-cart-updated";
 
-export function notifyStandaloneCartUpdated(venueId: string) {
+export function notifyStandaloneCartUpdated(venueId: string, options: { broadcast?: boolean } = {}) {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent(STANDALONE_CART_UPDATED_EVENT, { detail: { venueId } }));
+  const updateId = typeof crypto?.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random()}`;
+  const detail = { venueId, updateId };
+  window.dispatchEvent(new CustomEvent(STANDALONE_CART_UPDATED_EVENT, { detail }));
+  if (options.broadcast !== false && typeof BroadcastChannel !== "undefined") {
+    const channel = new BroadcastChannel(`pickla-commerce-shop:${venueId}`);
+    channel.postMessage(detail);
+    channel.close();
+  }
+}
+
+export function commerceCartQuantitiesFromLines(lines: CommerceOrderLine[]) {
+  return Object.fromEntries(lines.map((line) => [
+    String(line.product_id || ""),
+    Math.max(0, Number(line.quantity || 0)),
+  ]).filter(([productId]) => Boolean(productId)));
+}
+
+export function rebaseCommerceCartQuantities(
+  base: Record<string, number>,
+  desired: Record<string, number>,
+  canonical: Record<string, number>,
+) {
+  const productIds = new Set([...Object.keys(base), ...Object.keys(desired), ...Object.keys(canonical)]);
+  return Object.fromEntries(Array.from(productIds).map((productId) => {
+    const delta = Number(desired[productId] || 0) - Number(base[productId] || 0);
+    return [productId, Math.max(0, Number(canonical[productId] || 0) + delta)];
+  }).filter(([, quantity]) => Number(quantity) > 0));
+}
+
+export function isCanonicalStandaloneShopCart(
+  response: CommerceOrderResponse | null | undefined,
+  venueId?: string | null,
+  now = Date.now(),
+) {
+  if (!response || response.order.status !== "draft" || response.order.draft_scope !== "shop") return false;
+  if (venueId && response.order.venue_id !== venueId) return false;
+  if (response.order.expires_at && new Date(response.order.expires_at).getTime() <= now) return false;
+  return true;
+}
+
+export function canonicalStandaloneShopCartCount(
+  response: CommerceOrderResponse | null | undefined,
+  venueId?: string | null,
+) {
+  if (!isCanonicalStandaloneShopCart(response, venueId)) return 0;
+  return response.lines.reduce((sum, line) => sum + Math.max(0, Number(line.quantity || 0)), 0);
+}
+
+export function isStaleCommerceCartVersion(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { message?: unknown; status?: unknown };
+  return Number(candidate.status || 0) === 409
+    && /cart changed|stale_cart_version|review it again/i.test(String(candidate.message || ""));
+}
+
+export function isStandaloneCartOwnerConflict(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { message?: unknown; status?: unknown };
+  return Number(candidate.status || 0) === 409
+    && /shop cart owner conflict/i.test(String(candidate.message || ""));
+}
+
+export async function reconcileStandaloneCartUpdate<T>(input: {
+  baseQuantities: Record<string, number>;
+  desiredQuantities: Record<string, number>;
+  currentVersion: number;
+  loadCanonical: () => Promise<CommerceOrderResponse>;
+  apply: (quantities: Record<string, number>, expectedVersion: number) => Promise<T>;
+  onCanonicalLoaded?: (cart: CommerceOrderResponse) => void;
+}) {
+  try {
+    return await input.apply(input.desiredQuantities, input.currentVersion);
+  } catch (error) {
+    if (!isStaleCommerceCartVersion(error)) throw error;
+    const canonical = await input.loadCanonical();
+    input.onCanonicalLoaded?.(canonical);
+    const rebased = rebaseCommerceCartQuantities(
+      input.baseQuantities,
+      input.desiredQuantities,
+      commerceCartQuantitiesFromLines(canonical.lines),
+    );
+    return input.apply(rebased, canonical.order.version);
+  }
 }
 
 function newStandaloneCartKey() {
@@ -280,7 +364,7 @@ export function writeStandaloneCartIdentity(venueId: string, identity: Standalon
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(standaloneCartStorageKey(venueId), JSON.stringify(identity));
-    notifyStandaloneCartUpdated(venueId);
+    notifyStandaloneCartUpdated(venueId, { broadcast: false });
   } catch {
     // The server cart remains authoritative if local persistence is unavailable.
   }
@@ -290,7 +374,7 @@ export function clearStandaloneCartIdentity(venueId: string) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.removeItem(standaloneCartStorageKey(venueId));
-    notifyStandaloneCartUpdated(venueId);
+    notifyStandaloneCartUpdated(venueId, { broadcast: false });
   } catch {
     // Nothing else to clean up.
   }

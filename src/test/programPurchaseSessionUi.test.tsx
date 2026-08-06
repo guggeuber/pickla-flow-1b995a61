@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refreshSession: vi.fn(),
   toastError: vi.fn(),
   toastInfo: vi.fn(),
+  notifyCart: vi.fn(),
   auth: {
     loading: false,
     user: { id: "user-1" } as { id: string } | null,
@@ -41,7 +42,7 @@ vi.mock("@/lib/commerce", () => ({
   fetchCommerceOrder: mocks.fetchOrder,
   formatCommerceMoney: (minor: number) => `${minor / 100} kr`,
   isCommerceOrderIdReference: () => false,
-  notifyStandaloneCartUpdated: vi.fn(),
+  notifyStandaloneCartUpdated: mocks.notifyCart,
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -71,6 +72,7 @@ beforeEach(() => {
   mocks.refreshSession.mockReset();
   mocks.toastError.mockReset();
   mocks.toastInfo.mockReset();
+  mocks.notifyCart.mockReset();
   mocks.auth.loading = false;
   mocks.auth.user = { id: "user-1" };
   mocks.fetchOrder.mockResolvedValue({
@@ -326,6 +328,51 @@ describe("program purchase request UI guard", () => {
 
     finishCheckout({});
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith("Kassan kunde inte öppnas"));
+  });
+
+  it("notifies every tab when a standalone Shop checkout completes", async () => {
+    const shopOrder = {
+      order: {
+        id: "order-shop",
+        venue_id: "venue-1",
+        status: "draft",
+        version: 1,
+        currency: "SEK",
+        total_inc_vat_minor: 5000,
+        total_ex_vat_minor: 4000,
+        vat_amount_minor: 1000,
+        draft_scope: "shop",
+      },
+      lines: [{
+        id: "line-shop",
+        product_id: "product-shop",
+        product_key: "bag",
+        product_name: "Pink Pickla Bag",
+        commerce_kind: "merchandise",
+        quantity: 1,
+        unit_price_minor: 5000,
+        line_total_inc_vat_minor: 5000,
+        vat_rate: 25,
+        vat_amount_minor: 1000,
+        fulfillment_type: "desk_pickup",
+        fulfillment_status: "pending",
+      }],
+    };
+    mocks.fetchOrder.mockResolvedValue(shopOrder);
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") {
+        return { order: { id: "order-shop", version: 1, currency: "SEK" }, lines: shopOrder.lines };
+      }
+      if (endpoint === "checkout") return { free: true, redirect: "/my" };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+    const checkoutButton = await screen.findByRole("button", { name: "Till kassan · 50 kr" });
+    await waitFor(() => expect(checkoutButton).toBeEnabled());
+    fireEvent.click(checkoutButton);
+
+    await waitFor(() => expect(mocks.notifyCart).toHaveBeenCalledWith("venue-1"));
   });
 
   it("refreshes once and retries the exact checkout endpoint after the production JWT failure", async () => {

@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import { ApiRequestError, apiPost, type ApiRequestOptions } from "@/lib/api";
+import { apiPost, type ApiRequestOptions } from "@/lib/api";
 import {
   clearStandaloneCartIdentity,
+  commerceCartQuantitiesFromLines,
   commerceCartItemsFromLines,
   commerceJourneyId,
   createCommerceCart,
   fetchCommerceOrder,
+  isCanonicalStandaloneShopCart,
+  isStaleCommerceCartVersion,
+  isStandaloneCartOwnerConflict,
   notifyStandaloneCartUpdated,
   readStandaloneCartIdentity,
+  reconcileStandaloneCartUpdate,
+  standaloneCartStorageKey,
   updateCommerceCart,
   writeStandaloneCartIdentity,
   type CommerceCartItemInput,
@@ -33,9 +39,9 @@ async function resolveStandaloneCart(reference: string, userId?: string | null) 
 }
 
 async function withResolvedLines(response: CommerceOrderResponse, reference: string, userId?: string | null) {
-  if (response.lines.length === 0) return response;
+  if (response.lines.length === 0) return { ...response, cart_token: reference };
   const resolved = await resolveStandaloneCart(reference, userId);
-  return { ...response, order: { ...response.order, version: resolved.order.version }, lines: resolved.lines };
+  return { ...response, cart_token: reference, order: { ...response.order, version: resolved.order.version }, lines: resolved.lines };
 }
 
 export function useStandaloneShopCart(venueId?: string | null) {
@@ -44,8 +50,12 @@ export function useStandaloneShopCart(venueId?: string | null) {
   const queryClient = useQueryClient();
   const [optimisticQuantities, setOptimisticQuantities] = useState<Record<string, number> | null>(null);
   const [pendingUpdates, setPendingUpdates] = useState(0);
+  const [identityRevision, setIdentityRevision] = useState(0);
   const queue = useRef<Promise<void>>(Promise.resolve());
-  const queryKey = useMemo(() => ["standalone-shop-cart", venueId, userId || "guest"] as const, [venueId, userId]);
+  const queryKey = useMemo(
+    () => ["standalone-shop-cart", venueId, userId || "guest", identityRevision] as const,
+    [identityRevision, venueId, userId],
+  );
 
   const cartQuery = useQuery({
     queryKey,
@@ -57,7 +67,7 @@ export function useStandaloneShopCart(venueId?: string | null) {
       if (identity.reference) {
         try {
           const existing = await fetchCommerceOrder(identity.reference, options);
-          if (existing.order.status === "draft") {
+          if (isCanonicalStandaloneShopCart(existing, venueId)) {
             identity = { ...identity, owner: userId || "guest" };
             writeStandaloneCartIdentity(venueId!, identity);
             return withResolvedLines(existing, identity.reference, userId);
@@ -96,9 +106,10 @@ export function useStandaloneShopCart(venueId?: string | null) {
     },
   });
 
-  const serverQuantities = useMemo(() => Object.fromEntries(
-    (cartQuery.data?.lines || []).map((line) => [String(line.product_id || ""), Number(line.quantity || 0)]),
-  ), [cartQuery.data?.lines]);
+  const serverQuantities = useMemo(
+    () => commerceCartQuantitiesFromLines(cartQuery.data?.lines || []),
+    [cartQuery.data?.lines],
+  );
   const quantities = optimisticQuantities || serverQuantities;
   const refetchCart = cartQuery.refetch;
 
@@ -114,49 +125,77 @@ export function useStandaloneShopCart(venueId?: string | null) {
     return () => channel.close();
   }, [venueId, refetchCart]);
 
+  useEffect(() => {
+    if (!venueId || typeof window === "undefined") return;
+    const refreshFromStorage = (event: StorageEvent) => {
+      if (event.key !== standaloneCartStorageKey(venueId)) return;
+      setOptimisticQuantities(null);
+      setIdentityRevision((value) => value + 1);
+    };
+    window.addEventListener("storage", refreshFromStorage);
+    return () => window.removeEventListener("storage", refreshFromStorage);
+  }, [venueId]);
+
   const queueQuantities = useCallback((next: Record<string, number>) => {
     if (!venueId || !cartQuery.data) return Promise.reject(new Error("Varukorgen är inte klar."));
+    const baseQuantities = { ...quantities };
     const normalized = Object.fromEntries(Object.entries(next).filter(([, quantity]) => Number(quantity) > 0));
     setOptimisticQuantities(normalized);
     setPendingUpdates((count) => count + 1);
 
     const task = queue.current.then(async () => {
       const current = queryClient.getQueryData<CommerceOrderResponse>(queryKey) || cartQuery.data;
-      const reference = readStandaloneCartIdentity(venueId, userId).reference;
+      const reference = current.cart_token || readStandaloneCartIdentity(venueId, userId).reference;
       if (!reference) throw new Error("Varukorgen kunde inte öppnas.");
-      const items: CommerceCartItemInput[] = Object.entries(normalized).map(([productId, quantity]) => ({
-        product_id: productId,
-        quantity,
-      }));
-      const updated = await updateCommerceCart({
-        reference,
-        expectedVersion: current.order.version,
-        items,
-      }, authOptions(userId));
-      const resolved = items.length > 0
-        ? await resolveStandaloneCart(reference, userId)
-        : { order: updated.order, lines: [], checkout_ready: false };
-      const canonical: CommerceOrderResponse = { ...updated, order: { ...updated.order, version: resolved.order.version }, lines: resolved.lines };
+
+      const loadCanonical = async () => {
+        const fetched = await fetchCommerceOrder(reference, authOptions(userId));
+        if (!isCanonicalStandaloneShopCart(fetched, venueId)) throw new Error("Varukorgen är inte längre aktiv.");
+        return withResolvedLines(fetched, reference, userId);
+      };
+      const apply = async (quantitiesToApply: Record<string, number>, expectedVersion: number) => {
+        const items: CommerceCartItemInput[] = Object.entries(quantitiesToApply).map(([productId, quantity]) => ({
+          product_id: productId,
+          quantity,
+        }));
+        const updated = await updateCommerceCart({ reference, expectedVersion, items }, authOptions(userId));
+        const resolved = items.length > 0
+          ? await resolveStandaloneCart(reference, userId)
+          : { order: updated.order, lines: [], checkout_ready: false };
+        return {
+          ...updated,
+          cart_token: reference,
+          order: { ...updated.order, version: resolved.order.version },
+          lines: resolved.lines,
+        } satisfies CommerceOrderResponse;
+      };
+
+      const canonical = await reconcileStandaloneCartUpdate({
+        baseQuantities,
+        desiredQuantities: normalized,
+        currentVersion: current.order.version,
+        loadCanonical,
+        apply,
+        onCanonicalLoaded: (loaded) => {
+          queryClient.setQueryData(queryKey, loaded);
+        },
+      });
       queryClient.setQueryData(queryKey, canonical);
       notifyStandaloneCartUpdated(venueId);
-      if (typeof BroadcastChannel !== "undefined") {
-        const channel = new BroadcastChannel(`pickla-commerce-shop:${venueId}`);
-        channel.postMessage({ version: canonical.order.version });
-        channel.close();
-      }
     }).catch(async (error) => {
       await cartQuery.refetch();
       setOptimisticQuantities(null);
-      if (error instanceof ApiRequestError && error.status === 409) {
+      if (isStaleCommerceCartVersion(error)) {
         throw new Error("Varukorgen ändrades i en annan flik. Kontrollera den igen.");
       }
+      if (isStandaloneCartOwnerConflict(error)) throw new Error("Varukorgen tillhör en annan session. Ladda om och försök igen.");
       throw error;
     }).finally(() => {
       setPendingUpdates((count) => Math.max(0, count - 1));
     });
     queue.current = task.catch(() => undefined);
     return task;
-  }, [cartQuery, queryClient, queryKey, userId, venueId]);
+  }, [cartQuery, quantities, queryClient, queryKey, userId, venueId]);
 
   const lineCount = useMemo(() => Object.values(quantities).reduce((sum, quantity) => sum + Number(quantity || 0), 0), [quantities]);
   const resolvedTotalMinor = useMemo(() => (cartQuery.data?.lines || []).reduce(
@@ -171,7 +210,7 @@ export function useStandaloneShopCart(venueId?: string | null) {
     resolvedTotalMinor,
     isUpdating: pendingUpdates > 0,
     queueQuantities,
-    reference: venueId ? readStandaloneCartIdentity(venueId, userId).reference : "",
+    reference: cartQuery.data?.cart_token || "",
     items: commerceCartItemsFromLines(cartQuery.data?.lines || []),
   };
 }

@@ -224,6 +224,9 @@ export default function CommerceCartPage() {
       return request;
     },
     onSuccess: (result) => {
+      if (standaloneShopCart && (result.free || result.url) && orderQuery.data?.order.venue_id) {
+        notifyStandaloneCartUpdated(orderQuery.data.order.venue_id);
+      }
       if (result.free && result.redirect) navigate(result.redirect, { replace: true });
       else if (result.url) window.location.assign(result.url);
       else toast.error("Kassan kunde inte öppnas");
