@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LogIn, UserPlus, Loader2, Mail, Lock, User, ArrowLeft } from "lucide-react";
 import { authRedirectOrigin, useAuth } from "@/hooks/useAuth";
@@ -34,6 +34,7 @@ const Auth = () => {
   const [resetSent, setResetSent] = useState(false);
   const [confirmationEmail, setConfirmationEmail] = useState("");
   const [resendingConfirmation, setResendingConfirmation] = useState(false);
+  const submitLock = useRef(false);
 
   if (loading) {
     return (
@@ -55,35 +56,41 @@ const Auth = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
+    if (submitLock.current) return;
 
-    if (mode === "login") {
-      const { error } = await signIn(email, password);
-      if (error) toast.error(error.message);
-    } else {
-      if (!displayName.trim()) {
-        toast.error("Ange ditt namn");
-        setSubmitting(false);
-        return;
-      }
-      const { error } = await signUp(email, password, displayName);
-      if (error) {
-        if (looksLikeExistingUnconfirmedAccount(error.message)) {
-          setConfirmationEmail(email);
-          setMode("login");
-          toast.message("Kontot finns redan. Skicka en ny bekräftelselänk om mejlet inte kom fram.");
-        } else {
-          toast.error(error.message);
-        }
-      } else {
-        if (!getPreservedIntendedRoute() && !fullRedirect) markFirstRunWelcome();
-        if (fullRedirect) preserveIntendedRoute(fullRedirect);
-        setConfirmationEmail(email);
-        toast.success("Konto skapat! Kolla din e-post för att verifiera.");
-        setMode("login");
-      }
+    if (mode === "signup" && !displayName.trim()) {
+      toast.error("Ange ditt namn");
+      return;
     }
-    setSubmitting(false);
+
+    submitLock.current = true;
+    setSubmitting(true);
+    try {
+      if (mode === "login") {
+        const { error } = await signIn(email, password);
+        if (error) toast.error(error.message);
+      } else {
+        const { error } = await signUp(email, password, displayName);
+        if (error) {
+          if (looksLikeExistingUnconfirmedAccount(error.message)) {
+            setConfirmationEmail(email);
+            setMode("login");
+            toast.message("Kontot finns redan. Skicka en ny bekräftelselänk om mejlet inte kom fram.");
+          } else {
+            toast.error(error.message);
+          }
+        } else {
+          if (!getPreservedIntendedRoute() && !fullRedirect) markFirstRunWelcome();
+          if (fullRedirect) preserveIntendedRoute(fullRedirect);
+          setConfirmationEmail(email);
+          toast.success("Konto skapat! Kolla din e-post för att verifiera.");
+          setMode("login");
+        }
+      }
+    } finally {
+      submitLock.current = false;
+      setSubmitting(false);
+    }
   };
 
   const isDesk = redirectTo.startsWith("/desk") || redirectTo.startsWith("/hub");
@@ -151,7 +158,9 @@ const Auth = () => {
           {(["login", "signup"] as const).map((m) => (
             <button
               key={m}
+              type="button"
               onClick={() => setMode(m)}
+              disabled={submitting}
               className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all ${
                 mode === m
                   ? "bg-neutral-900 text-white"
@@ -183,13 +192,8 @@ const Auth = () => {
         )}
 
         {/* Form */}
-        {mode !== "forgot" && <AnimatePresence mode="wait">
-          <motion.form
-            key={mode}
-            initial={{ opacity: 0, x: mode === "login" ? -16 : 16 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: mode === "login" ? 16 : -16 }}
-            transition={{ duration: 0.25 }}
+        {mode !== "forgot" && (
+          <form
             onSubmit={handleSubmit}
             className="space-y-3"
           >
@@ -280,8 +284,8 @@ const Auth = () => {
                 .
               </p>
             )}
-          </motion.form>
-        </AnimatePresence>}
+          </form>
+        )}
 
         {/* Forgot password view */}
         <AnimatePresence>
