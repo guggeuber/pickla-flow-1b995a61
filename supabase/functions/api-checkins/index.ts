@@ -16,7 +16,9 @@ const entitlementPriority: Record<string, number> = {
   membership: 3,
   membership_access: 3,
   day_access: 4,
-  day_pass: 5,
+  punch_card: 5,
+  partner_access: 6,
+  day_pass: 7,
 };
 
 function stockholmNow() {
@@ -36,7 +38,7 @@ function nameFromBookingNotes(notes?: string | null) {
 async function getProfile(serviceClient: any, userId: string) {
   const { data } = await serviceClient
     .from('player_profiles')
-    .select('id, auth_user_id, display_name, first_name, last_name, phone, avatar_url')
+    .select('id, auth_user_id, customer_id, display_name, first_name, last_name, phone, avatar_url')
     .eq('auth_user_id', userId)
     .maybeSingle();
   return data;
@@ -71,6 +73,7 @@ async function canStaffOperateVenue(serviceClient: any, userId: string, venueId:
 async function resolveUserAccess(serviceClient: any, venueId: string, targetUserId: string) {
   const { today, nowIso, bookingWindowEndIso } = stockholmNow();
   const profile = await getProfile(serviceClient, targetUserId);
+  const customerId = profile?.customer_id || await resolveCustomerIdForUser(serviceClient, targetUserId);
   const entitlements: any[] = [];
 
   const { data: existingCheckin } = await serviceClient
@@ -195,13 +198,15 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
     });
   }
 
-  const { data: accessRows } = await serviceClient
+  let accessQuery = serviceClient
     .from('access_entitlements')
-    .select('id, entitlement_type, source_type, source_id, valid_date, valid_from, valid_until, activity_session_id, session_date, includes_session_types, metadata')
-    .eq('user_id', targetUserId)
+    .select('id, customer_id, entitlement_type, source_type, source_id, status, valid_date, valid_from, valid_until, activity_session_id, session_date, includes_session_types, metadata, model_version, scope_type, meter_type, starts_at, expires_at, service_date, funding_type, access_reason, requires_consumption, uses_limit, uses_count')
     .eq('venue_id', venueId)
-    .eq('status', 'active')
-    .or(`valid_date.eq.${today},valid_date.is.null`);
+    .eq('status', 'active');
+  accessQuery = customerId
+    ? accessQuery.or(`user_id.eq.${targetUserId},customer_id.eq.${customerId}`)
+    : accessQuery.eq('user_id', targetUserId);
+  const { data: accessRows } = await accessQuery;
 
   for (const access of accessRows || []) {
     const validFrom = access.valid_from ? DateTime.fromISO(access.valid_from, { zone: 'utc' }).toMillis() : null;
@@ -214,15 +219,28 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
     entitlements.push({
       type: access.entitlement_type,
       id: access.id,
+      canonical_entitlement_id: access.id,
+      customer_id: access.customer_id || customerId || null,
       source_type: access.source_type,
       source_id: access.source_id,
-      label: access.entitlement_type === 'day_access'
-        ? 'Dagstillgång'
-        : access.metadata?.session_name || 'Aktivitetsbiljett',
+      metadata: access.metadata || {},
+      label: access.access_reason || (access.entitlement_type === 'day_access'
+        ? 'Heldagspass'
+        : access.entitlement_type === 'punch_card'
+          ? `Klippkort · ${Math.max(Number(access.uses_limit || 0) - Number(access.uses_count || 0), 0)} gånger kvar`
+          : access.entitlement_type === 'partner_access'
+            ? 'Ingår via partner'
+            : access.metadata?.session_name || 'Aktivitetsbiljett'),
       valid_date: access.valid_date,
       activity_session_id: access.activity_session_id,
       session_date: access.session_date,
       includes_session_types: access.includes_session_types || [],
+      meter_type: access.meter_type,
+      remaining_uses: access.meter_type === 'occurrences'
+        ? Math.max(Number(access.uses_limit || 0) - Number(access.uses_count || 0), 0)
+        : null,
+      funding_type: access.funding_type,
+      consumption_required: Boolean(access.requires_consumption),
       priority: entitlementPriority[access.entitlement_type] || 50,
     });
   }
@@ -259,6 +277,47 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
     allowed: !!existingCheckin || entitlements.length > 0,
     today,
   };
+}
+
+async function checkInCanonicalEntitlement(serviceClient: any, params: {
+  entitlement: any;
+  customerId: string;
+  venueId: string;
+  sessionDate: string;
+  userId?: string | null;
+  playerName?: string | null;
+  playerPhone?: string | null;
+  checkedInBy?: string | null;
+}) {
+  const entitlementId = String(params.entitlement?.canonical_entitlement_id || '');
+  if (!entitlementId) return null;
+
+  const sessionType = params.entitlement?.includes_session_types?.[0]
+    || params.entitlement?.metadata?.session_type
+    || (params.entitlement?.type === 'day_access' ? 'open_play' : null);
+  const { data, error } = await serviceClient.rpc('check_in_with_entitlement', {
+    p_entitlement_id: entitlementId,
+    p_customer_id: params.customerId,
+    p_venue_id: params.venueId,
+    p_entry_type: params.entitlement.type,
+    p_session_date: params.sessionDate,
+    p_user_id: params.userId || null,
+    p_player_name: params.playerName || null,
+    p_player_phone: params.playerPhone || null,
+    p_checked_in_by: params.checkedInBy || null,
+    p_activity_session_id: params.entitlement.activity_session_id || null,
+    p_registration_id: params.entitlement.source_type === 'session_registration'
+      ? params.entitlement.source_id || null
+      : null,
+    p_commerce_order_id: params.entitlement.metadata?.commerce_order_id || null,
+    p_access_context: {
+      session_type: sessionType,
+      sport_type: params.entitlement.metadata?.sport_type || 'pickleball',
+      product_key: params.entitlement.metadata?.product_key || null,
+    },
+  });
+  if (error) throw new Error(error.message);
+  return data as { checkin: any; consumption?: any; already_checked_in: boolean };
 }
 
 async function resolveVenueForSelfCheckin(serviceClient: any, params: { venueId?: string | null; venueSlug?: string | null }) {
@@ -610,6 +669,41 @@ Deno.serve(async (req) => {
       if (!best) return errorResponse('Ingen giltig access hittades', 403);
       const playerName = profileName(profile);
       const customerId = await resolveCustomerIdForUser(serviceClient, userId);
+      if (best.canonical_entitlement_id) {
+        if (!customerId) return errorResponse('Kunden behöver identifieras innan incheckning', 409);
+        try {
+          const canonicalResult = await checkInCanonicalEntitlement(serviceClient, {
+            entitlement: best,
+            customerId,
+            venueId: venue.id,
+            sessionDate: access.today,
+            userId,
+            playerName,
+            checkedInBy: userId,
+          });
+          const canonicalCheckin = canonicalResult?.checkin;
+          if (!canonicalCheckin) return errorResponse('Incheckningen kunde inte slutföras', 500);
+          await markSessionRegistrationCheckedIn(serviceClient, {
+            venueId: venue.id,
+            entryType: canonicalCheckin.entry_type,
+            entitlementId: canonicalCheckin.entitlement_id,
+          });
+          return jsonResponse({
+            checked_in: true,
+            already_checked_in: Boolean(canonicalResult?.already_checked_in),
+            checkin: canonicalCheckin,
+            consumption: canonicalResult?.consumption || null,
+            access: {
+              ...access,
+              existingCheckin: canonicalCheckin,
+              already_checked_in: true,
+            },
+            venue,
+          }, canonicalResult?.already_checked_in ? 200 : 201);
+        } catch (canonicalError) {
+          return errorResponse((canonicalError as Error).message || 'Rättigheten kunde inte användas', 409);
+        }
+      }
       const existingCheckin = await findActiveCheckin(serviceClient, {
         venueId: venue.id,
         today: access.today,
@@ -943,13 +1037,40 @@ Deno.serve(async (req) => {
       if (!venue_id || !entry_type) return errorResponse('Missing required fields');
 
       const serviceClient = getServiceClient();
+      if (!await canStaffOperateVenue(serviceClient, userId, venue_id)) return errorResponse('Forbidden', 403);
       const { today } = stockholmNow();
       const customerId = requestedCustomerId || (target_user_id ? await resolveCustomerIdForUser(serviceClient, target_user_id) : null);
+      let canonicalEntitlement: any = null;
 
       if (target_user_id) {
         const access = await resolveUserAccess(serviceClient, venue_id, target_user_id);
 
         if (access.already_checked_in && access.existingCheckin) {
+          const existingCanonical = access.entitlements.find(
+            (ent) => ent.canonical_entitlement_id === access.existingCheckin.entitlement_id,
+          );
+          if (existingCanonical && customerId) {
+            try {
+              const canonicalResult = await checkInCanonicalEntitlement(serviceClient, {
+                entitlement: existingCanonical,
+                customerId,
+                venueId: venue_id,
+                sessionDate: today,
+                userId: target_user_id,
+                playerName: player_name || profileName(access.profile),
+                playerPhone: player_phone,
+                checkedInBy: userId,
+              });
+              return jsonResponse({
+                ...(canonicalResult?.checkin || access.existingCheckin),
+                already_checked_in: true,
+                consumption: canonicalResult?.consumption || null,
+                access,
+              });
+            } catch (canonicalError) {
+              return errorResponse((canonicalError as Error).message || 'Rättigheten kunde inte användas', 409);
+            }
+          }
           await markSessionRegistrationCheckedIn(serviceClient, {
             venueId: venue_id,
             entryType: access.existingCheckin.entry_type,
@@ -974,6 +1095,9 @@ Deno.serve(async (req) => {
         } else if (!access.allowed && entry_type !== 'manual') {
           return errorResponse('Ingen giltig access hittades', 403);
         }
+        canonicalEntitlement = access.entitlements.find(
+          (ent) => ent.type === entry_type && ent.id === entitlement_id && ent.canonical_entitlement_id,
+        ) || null;
       }
 
       if (String(entry_type || '') === 'booking_participant' && entitlement_id) {
@@ -990,6 +1114,36 @@ Deno.serve(async (req) => {
         }
         if (!['paid', 'free'].includes(String(participant.payment_status || '').toLowerCase())) {
           return errorResponse('Biljetten är inte betald', 409);
+        }
+      }
+
+      if (canonicalEntitlement) {
+        if (!customerId) return errorResponse('Kunden behöver identifieras innan incheckning', 409);
+        try {
+          const canonicalResult = await checkInCanonicalEntitlement(serviceClient, {
+            entitlement: canonicalEntitlement,
+            customerId,
+            venueId: venue_id,
+            sessionDate: today,
+            userId: target_user_id || null,
+            playerName: player_name || null,
+            playerPhone: player_phone || null,
+            checkedInBy: userId,
+          });
+          const canonicalCheckin = canonicalResult?.checkin;
+          if (!canonicalCheckin) return errorResponse('Incheckningen kunde inte slutföras', 500);
+          await markSessionRegistrationCheckedIn(serviceClient, {
+            venueId: venue_id,
+            entryType: canonicalCheckin.entry_type,
+            entitlementId: canonicalCheckin.entitlement_id,
+          });
+          return jsonResponse({
+            ...canonicalCheckin,
+            already_checked_in: Boolean(canonicalResult?.already_checked_in),
+            consumption: canonicalResult?.consumption || null,
+          }, canonicalResult?.already_checked_in ? 200 : 201);
+        } catch (canonicalError) {
+          return errorResponse((canonicalError as Error).message || 'Rättigheten kunde inte användas', 409);
         }
       }
 
