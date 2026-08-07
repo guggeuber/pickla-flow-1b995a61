@@ -37,7 +37,7 @@ export function useAccessSnapshot({
         sessionDate
           ? supabase
               .from("access_entitlements")
-              .select("id, source_id, entitlement_type, valid_date, updated_at")
+              .select("id, entitlement_type, valid_date, updated_at")
               .eq("user_id", user!.id)
               .eq("venue_id", venueId)
               .eq("entitlement_type", "day_access")

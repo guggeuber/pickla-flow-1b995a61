@@ -15,6 +15,8 @@ const checkinLabels: Record<string, string> = {
   membership: "Medlem",
   membership_access: "Medlem",
   day_access: "Dagstillgång",
+  punch_card: "Klippkort",
+  partner_access: "Partner",
   session_ticket: "Aktivitet",
   day_pass: "Dagspass",
   manual: "Manuell",

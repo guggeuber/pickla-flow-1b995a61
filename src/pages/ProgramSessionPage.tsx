@@ -210,6 +210,17 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const room = data?.room;
   const occurrenceDate = data?.occurrence_date || requestedDate || session?.session_date || null;
   const venueId = session?.venue_id || data?.venue?.id;
+  const { data: partnerSessionLabels } = useQuery({
+    queryKey: ["program-session-partner-labels", venueId, sessionId],
+    enabled: !!venueId && !!sessionId,
+    staleTime: 30000,
+    queryFn: () => apiGet<{ labels: Array<{ label: string }> }>(
+      "api-entitlements",
+      "session-labels",
+      { venueId: venueId!, sessionId: sessionId! },
+      { auth: "omit" },
+    ),
+  });
   const commerceCatalog = useQuery({
     queryKey: ["commerce-catalog", venueId],
     queryFn: () => fetchCommerceCatalog(venueId!),
@@ -1049,6 +1060,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         >
           {commerceStep === "product" || !purchaseMode || !commercePilotEnabled ? (
             <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={purchaseMode} />
+          ) : null}
+
+          {!isRegistered && commerceStep === "product" && partnerSessionLabels?.labels?.length ? (
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 px-2 text-[12px] font-bold text-slate-600" data-testid="partner-session-labels">
+              {partnerSessionLabels.labels.map(({ label }) => <span key={label}>{label}</span>)}
+            </div>
           ) : null}
 
           {isRegistered ? (

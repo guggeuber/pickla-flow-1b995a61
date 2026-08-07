@@ -1933,6 +1933,48 @@ function DayPassSection() {
   );
 }
 
+type CustomerAccessRight = {
+  id: string;
+  type: "punch_card" | "partner_access";
+  status: string;
+  label: string;
+  remaining_uses: number | null;
+  starts_at: string | null;
+  expires_at: string | null;
+  service_date: string | null;
+  venue: { id: string; name: string | null; slug: string | null } | null;
+};
+
+function AccessRightsSection() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["my-access-rights"],
+    queryFn: () => apiGet<{ rights: CustomerAccessRight[] }>("api-entitlements", "my"),
+    staleTime: 30000,
+  });
+  const rights = data?.rights || [];
+  if (isLoading || rights.length === 0) return null;
+
+  return (
+    <motion.div variants={item}>
+      <div className="mb-2 flex items-center gap-2">
+        <Ticket className="h-4 w-4" style={{ color: TEXT_PRIMARY }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Dina pass</span>
+      </div>
+      <div className="overflow-hidden rounded-2xl" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+        {rights.map((right, index) => (
+          <div key={right.id} className="flex items-center justify-between gap-3 px-4 py-3" style={index > 0 ? { borderTop: `1px solid ${CARD_BORDER}` } : undefined}>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>{right.label}</p>
+              {right.venue?.name ? <p className="mt-0.5 text-[11px]" style={{ color: TEXT_SECONDARY }}>{right.venue.name}</p> : null}
+            </div>
+            <span className="shrink-0 text-[11px] font-semibold" style={{ color: TEXT_SECONDARY }}>Aktiv</span>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
 const CARD_BRAND_LABEL: Record<string, string> = {
   visa: "Visa", mastercard: "Mastercard", amex: "Amex",
   discover: "Discover", jcb: "JCB", unionpay: "UnionPay",
@@ -2871,6 +2913,8 @@ const MyPage = () => {
 
           {/* Day passes — directly under bookings */}
           <DayPassSection />
+
+          {!isActivityPage && <AccessRightsSection />}
 
           {!isActivityPage && (
             <motion.button

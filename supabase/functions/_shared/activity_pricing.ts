@@ -357,7 +357,7 @@ export async function resolveActivityPricingDecision({
   } else if (userId && finalAmountSek > 0) {
     const { data: dayAccess } = await client
       .from('access_entitlements')
-      .select('id, source_id')
+      .select('id')
       .eq('user_id', userId)
       .eq('venue_id', venueId)
       .eq('entitlement_type', 'day_access')

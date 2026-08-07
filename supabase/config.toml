@@ -21,6 +21,9 @@ verify_jwt = false
 [functions.api-events]
 verify_jwt = false
 
+[functions.api-entitlements]
+verify_jwt = false
+
 [functions.api-admin]
 verify_jwt = false
 

@@ -77,6 +77,21 @@ type ScheduleProductOption = {
   [key: string]: unknown;
 };
 
+type PartnerProgramAdmin = {
+  id: string;
+  name: string;
+  activity_label: string;
+  status: string;
+};
+
+type PartnerSessionEligibility = {
+  id: string;
+  partner_program_id: string;
+  activity_session_id: string;
+  status: "eligible" | "ineligible";
+  reimbursement_amount_minor: number | null;
+};
+
 function ScheduleAddonSelector({
   sourceProduct,
   products,
@@ -564,6 +579,16 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     queryFn: () => apiGet("api-admin", "activity-sessions", { venueId }),
   });
 
+  const { data: partnerAccessConfig } = useQuery<{
+    programs: PartnerProgramAdmin[];
+    session_eligibility: PartnerSessionEligibility[];
+  }>({
+    queryKey: ["admin-partner-access-programs", venueId],
+    enabled: !!venueId,
+    queryFn: () => apiGet("api-entitlements", "programs", { venueId }),
+  });
+  const activePartnerPrograms = (partnerAccessConfig?.programs || []).filter((program) => program.status === "active");
+
   const { data: venueCourts = [] } = useQuery<VenueCourtOption[]>({
     queryKey: ["admin-venue-courts", venueId],
     enabled: !!venueId,
@@ -650,6 +675,18 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       toast.success("Pass uppdaterat");
     },
     onError: (e: any) => toast.error(e.message),
+  });
+
+  const updatePartnerSessionEligibility = useMutation({
+    mutationFn: ({ sessionId, programId, eligible }: { sessionId: string; programId: string; eligible: boolean }) => apiPost(
+      "api-entitlements",
+      "session-eligibility",
+      { venueId, sessionId, programId, eligible },
+    ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-partner-access-programs", venueId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
   });
 
   const deleteSession = useMutation({
@@ -1452,6 +1489,40 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       />
                     </label>
                   </div>
+                  {activePartnerPrograms.length > 0 ? (
+                    <div className="rounded-xl bg-muted/40 p-3 space-y-2">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Rättigheter</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">Välj vilka partnerprogram som gäller för just detta pass.</p>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {activePartnerPrograms.map((program) => {
+                          const eligibility = (partnerAccessConfig?.session_eligibility || []).find((row) => (
+                            row.partner_program_id === program.id && row.activity_session_id === session.id
+                          ));
+                          const eligible = eligibility?.status === "eligible";
+                          return (
+                            <label key={program.id} className="flex items-center justify-between gap-3 rounded-xl bg-background px-3 py-2 text-xs font-semibold">
+                              <span>
+                                <span className="block text-foreground">{program.name}</span>
+                                <span className="block text-[10px] font-normal text-muted-foreground">{program.activity_label}</span>
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={eligible}
+                                disabled={updatePartnerSessionEligibility.isPending}
+                                onChange={(event) => updatePartnerSessionEligibility.mutate({
+                                  sessionId: session.id,
+                                  programId: program.id,
+                                  eligible: event.target.checked,
+                                })}
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="rounded-xl bg-muted/40 p-3 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>

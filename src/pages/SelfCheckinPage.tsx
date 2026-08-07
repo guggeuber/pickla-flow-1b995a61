@@ -40,6 +40,8 @@ function entryLabel(type?: string | null) {
   if (type === "session_ticket") return "Aktivitet";
   if (type === "membership" || type === "membership_access") return "Medlemskap";
   if (type === "day_access" || type === "day_pass") return "Dagstillgång";
+  if (type === "punch_card") return "Klippkort";
+  if (type === "partner_access") return "Partner";
   return type || "Access";
 }
 

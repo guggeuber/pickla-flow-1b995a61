@@ -33,6 +33,8 @@ const entitlementIcon = (type: string) => {
     case "membership": return Crown;
     case "membership_access": return Crown;
     case "day_access": return Ticket;
+    case "punch_card": return Ticket;
+    case "partner_access": return Check;
     case "session_ticket": return Calendar;
     case "day_pass": return Ticket;
     case "booking": return Calendar;
@@ -46,7 +48,9 @@ const entitlementPriority: Record<string, number> = {
   membership: 3,
   membership_access: 3,
   day_access: 4,
-  day_pass: 5,
+  punch_card: 5,
+  partner_access: 6,
+  day_pass: 7,
 };
 
 const QrScanner = ({ venueId, onClose, onCheckedIn }: QrScannerProps) => {
