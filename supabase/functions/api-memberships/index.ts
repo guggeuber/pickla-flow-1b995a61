@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { findAuthUserByEmail } from '../_shared/bookings.ts';
+import { resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
 
 async function assertVenueAdmin(admin: ReturnType<typeof getServiceClient>, userId: string, venueId: string): Promise<boolean> {
   const { data: role } = await admin.from('user_roles').select('role').eq('user_id', userId).eq('role', 'super_admin').maybeSingle();
@@ -363,8 +364,12 @@ Deno.serve(async (req) => {
         .update({ status: 'cancelled' })
         .eq('user_id', customerUserId).eq('venue_id', venueId).eq('status', 'active');
 
+      const customerId = await resolveOrCreateCustomerIdForUser(admin, customerUserId, venueId, 'admin_membership_assignment');
+      if (!customerId) return errorResponse('Kunden kunde inte kopplas till medlemskapet', 409);
+
       const { data, error: iErr } = await admin.from('memberships').insert({
         user_id: customerUserId,
+        customer_id: customerId,
         venue_id: venueId,
         tier_id: tierId,
         status: 'active',
@@ -435,8 +440,12 @@ Deno.serve(async (req) => {
         .update({ status: 'cancelled' })
         .eq('user_id', targetUserId).eq('venue_id', venueId).eq('status', 'active');
 
+      const customerId = await resolveOrCreateCustomerIdForUser(admin, targetUserId, venueId, 'admin_membership_assignment');
+      if (!customerId) return errorResponse('Kunden kunde inte kopplas till medlemskapet', 409);
+
       const { data, error: iErr } = await admin.from('memberships').insert({
         user_id: targetUserId,
+        customer_id: customerId,
         venue_id: venueId,
         tier_id: tierId,
         status: 'active',

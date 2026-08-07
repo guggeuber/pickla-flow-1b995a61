@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
-import { resolveCustomerIdForUser } from '../_shared/customers.ts';
+import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
+import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 function randomVoucherCode() {
@@ -511,6 +512,13 @@ Deno.serve(async (req) => {
 
       const validDate = now.toISODate()!;
       const claimedAt = now.toUTC().toISO();
+      const customerId = await resolveOrCreateCustomerIdForUser(
+        adminClient,
+        claimUserId,
+        voucher.venue_id,
+        'founder_guest_voucher_claim',
+      );
+      if (!customerId) return errorResponse('Kunden kunde inte kopplas till passet', 409);
       const { data: claimedVoucher, error: claimErr } = await adminClient
         .from('access_vouchers')
         .update({
@@ -539,6 +547,7 @@ Deno.serve(async (req) => {
       const { data: entitlement, error: entitlementErr } = await adminClient.from('access_entitlements').insert({
         venue_id: voucher.venue_id,
         user_id: claimUserId,
+        customer_id: customerId,
         entitlement_type: 'day_access',
         status: 'active',
         source_type: 'founder_guest_voucher',
@@ -551,6 +560,15 @@ Deno.serve(async (req) => {
           purchaser_user_id: voucher.purchaser_user_id,
           claimed_as: 'founder_guest_voucher',
         },
+        ...canonicalEntitlementFields({
+          customerId,
+          scopeType: 'open_play',
+          meterType: 'valid_day',
+          fundingType: 'house_granted',
+          accessReason: 'Heldagspass',
+          serviceDate: validDate,
+          requiresConsumption: true,
+        }),
       }).select('id').single();
       if (entitlementErr) {
         await adminClient.from('access_vouchers').update({

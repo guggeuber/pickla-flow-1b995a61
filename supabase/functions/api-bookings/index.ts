@@ -8,6 +8,7 @@ import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { auditMutation, canOperateVenue } from '../_shared/authorization.ts';
 import { canonicalPublicOrigin, canonicalPublicUrl } from '../_shared/canonical_origin.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -1330,6 +1331,7 @@ async function createFreeEntitlementBookingResponse({
       await adminFree.from('access_entitlements').upsert({
         venue_id,
         user_id: entitlementUserId,
+        customer_id: entitlementCustomerId,
         entitlement_type: 'day_access',
         status: 'active',
         source_type: 'day_pass',
@@ -1340,6 +1342,15 @@ async function createFreeEntitlementBookingResponse({
           legacy_day_pass_id: dayPass.id,
           source: 'membership_free_pass',
         },
+        ...canonicalEntitlementFields({
+          customerId: entitlementCustomerId,
+          scopeType: 'open_play',
+          meterType: 'valid_day',
+          fundingType: 'subscription',
+          accessReason: 'Heldagspass',
+          serviceDate: validDate,
+          requiresConsumption: true,
+        }),
       }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
 
       const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
@@ -1436,6 +1447,7 @@ async function createFreeEntitlementBookingResponse({
     await adminFree.from('access_entitlements').upsert({
       venue_id,
       user_id: entitlementUserId,
+      customer_id: entitlementCustomerId,
       entitlement_type: 'membership_access',
       status: 'active',
       source_type: 'membership',
@@ -1449,6 +1461,17 @@ async function createFreeEntitlementBookingResponse({
         session_name: meta.session_name || null,
         session_type: meta.session_type || 'open_play',
       },
+      ...canonicalEntitlementFields({
+        customerId: entitlementCustomerId,
+        scopeType: 'open_play',
+        meterType: 'unlimited',
+        fundingType: 'subscription',
+        accessReason: String(meta.membership_tier_name || '').toLowerCase() === 'founder'
+          ? 'Founder'
+          : 'Ingår i ditt medlemskap',
+        serviceDate: null,
+        requiresConsumption: true,
+      }),
     }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
 
     return jsonResponse({ free: true, redirect: safeLocalPath(meta.redirect_path) || '/my' });

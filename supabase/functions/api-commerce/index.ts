@@ -11,6 +11,7 @@ import {
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { evaluateCommerceAvailability, type CommerceProductLike } from '../_shared/commerce_availability.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import { canonicalEntitlementFields, type EntitlementFundingType } from '../_shared/entitlements.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const CART_TOKEN_BYTES = 32;
@@ -902,6 +903,27 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
     valid_date: validDate,
     includes_session_types: ['open_play'],
     metadata: entitlementMetadata,
+    ...canonicalEntitlementFields({
+      customerId,
+      scopeType: purchaseKind === 'day_pass' ? 'open_play' : 'exact_session',
+      meterType: purchaseKind === 'day_pass' ? 'valid_day' : 'exact_session',
+      fundingType: (() => {
+        const pricingReason = String(resolvedLine?.resolver_snapshot?.pricing_reason || '');
+        if (pricingReason === 'playing_host' || pricingReason === 'host_comp') return 'house_granted';
+        if (pricingReason.includes('membership')) return 'subscription';
+        if (pricingReason === 'active_day_access') return 'customer_prepaid';
+        return 'commerce_purchase';
+      })() as EntitlementFundingType,
+      accessReason: purchaseKind === 'day_pass'
+        ? 'Heldagspass'
+        : String(resolvedLine?.resolver_snapshot?.membership_tier_name || '').toLowerCase() === 'founder'
+          ? 'Founder'
+          : String(resolvedLine?.resolver_snapshot?.pricing_reason || '').includes('membership')
+            ? 'Ingår i ditt medlemskap'
+            : 'Personlig plats',
+      serviceDate: line.session_date,
+      requiresConsumption: true,
+    }),
   };
   await admin.from('access_entitlements').upsert(entitlement, {
     onConflict: userId

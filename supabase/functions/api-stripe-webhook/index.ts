@@ -16,6 +16,7 @@ import {
   paidFulfillmentIncidentIdentity,
 } from './commerce_participation.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
+import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
@@ -511,6 +512,15 @@ async function handleCommerceOrder(
               day_pass_id: dayPassId,
               stripe_session_id: session.id,
             },
+            ...canonicalEntitlementFields({
+              customerId,
+              scopeType: 'open_play',
+              meterType: 'valid_day',
+              fundingType: 'commerce_purchase',
+              accessReason: 'Heldagspass',
+              serviceDate: participation.session_date,
+              requiresConsumption: true,
+            }),
           }, {
             onConflict: order.user_id
               ? 'source_type,source_id,user_id,entitlement_type'
@@ -536,6 +546,15 @@ async function handleCommerceOrder(
             commerce_order_line_id: participation.id,
             stripe_session_id: session.id,
           },
+          ...canonicalEntitlementFields({
+            customerId,
+            scopeType: 'exact_session',
+            meterType: 'exact_session',
+            fundingType: 'commerce_purchase',
+            accessReason: 'Personlig plats',
+            serviceDate: participation.session_date,
+            requiresConsumption: true,
+          }),
         };
         const { error } = await serviceClient.from('access_entitlements').upsert(entitlement, {
           onConflict: order.user_id
@@ -1971,6 +1990,7 @@ async function handleDayPass(
     .maybeSingle();
 
   const resolvedUserId = existing?.user_id || await resolveUserId(session, user_id, serviceClient);
+  const customerId = await resolveOrCreateCustomerIdForUser(serviceClient, resolvedUserId, venue_id, 'stripe_day_pass');
   const priceSek = Math.round((session.amount_total || 0) / 100);
   const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
 
@@ -1979,6 +1999,7 @@ async function handleDayPass(
     const { data: insertedDayPass, error } = await serviceClient.from('day_passes').insert({
       venue_id,
       user_id:           resolvedUserId,
+      customer_id:       customerId,
       valid_date:        date,
       price:             priceSek,
       status:            'active',
@@ -2067,6 +2088,7 @@ async function handleDayPass(
     await serviceClient.from('access_entitlements').upsert({
       venue_id,
       user_id: resolvedUserId,
+      customer_id: customerId,
       entitlement_type: includesDayAccess ? 'day_access' : 'session_ticket',
       status: 'active',
       source_type: 'day_pass',
@@ -2081,6 +2103,15 @@ async function handleDayPass(
         session_type: kind,
         stripe_session_id: session.id,
       },
+      ...canonicalEntitlementFields({
+        customerId,
+        scopeType: includesDayAccess ? 'open_play' : 'exact_session',
+        meterType: includesDayAccess ? 'valid_day' : 'exact_session',
+        fundingType: 'commerce_purchase',
+        accessReason: includesDayAccess ? 'Heldagspass' : 'Personlig plats',
+        serviceDate: date,
+        requiresConsumption: true,
+      }),
     }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
   }
 
@@ -2114,6 +2145,7 @@ async function handleActivityTicket(
     .maybeSingle();
 
   const resolvedUserId = existing?.user_id || await resolveUserId(session, user_id, serviceClient, meta.customer_email);
+  const customerId = await resolveOrCreateCustomerIdForUser(serviceClient, resolvedUserId, venue_id, 'stripe_activity_ticket');
   const priceSek = Math.round((session.amount_total || 0) / 100);
   const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
   const kind = session_type || 'open_play';
@@ -2224,6 +2256,7 @@ async function handleActivityTicket(
       .upsert({
         venue_id,
         user_id: resolvedUserId,
+        customer_id: customerId,
         entitlement_type: 'session_ticket',
         status: 'active',
         source_type: 'session_ticket',
@@ -2237,6 +2270,15 @@ async function handleActivityTicket(
           session_type: kind,
           stripe_session_id: session.id,
         },
+        ...canonicalEntitlementFields({
+          customerId,
+          scopeType: 'exact_session',
+          meterType: 'exact_session',
+          fundingType: 'commerce_purchase',
+          accessReason: 'Personlig plats',
+          serviceDate: date,
+          requiresConsumption: true,
+        }),
       }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
 
     if (entitlementErr) {
