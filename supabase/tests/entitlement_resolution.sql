@@ -52,7 +52,8 @@ BEGIN
   SELECT * INTO v_entitlement FROM public.issue_access_entitlement(
     p_customer_id => v_customer, p_venue_id => v_venue,
     p_entitlement_type => 'session_ticket', p_scope_type => 'exact_session',
-    p_meter_type => 'exact_session', p_funding_type => 'commerce_purchase',
+    p_meter_type => 'exact_session', p_funding_type => 'commerce_purchase', p_funder => 'self_prepaid',
+    p_resolution_priority => 10, p_occurrence_origin => 'paid',
     p_access_reason => 'Personlig plats', p_activity_session_id => v_session,
     p_service_date => '2026-08-06', p_session_date => '2026-08-06',
     p_uses_limit => 1, p_issuance_key => 'resolver-exact'
@@ -94,7 +95,8 @@ BEGIN
   PERFORM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000032', p_venue_id => v_venue,
     p_entitlement_type => 'membership_access', p_scope_type => 'venue', p_meter_type => 'unlimited',
-    p_funding_type => 'subscription', p_access_reason => 'Ingår i ditt medlemskap',
+    p_funding_type => 'subscription', p_funder => 'subscription', p_resolution_priority => 20,
+    p_access_reason => 'Ingår i ditt medlemskap',
     p_starts_at => '2026-08-07T00:00:00Z', p_issuance_key => 'resolver-not-yet'
   );
   SELECT public.resolve_access_entitlement(v_venue, 'ef100000-0000-4000-8000-000000000032', NULL, v_session, '2026-08-06', v_at)
@@ -104,7 +106,8 @@ BEGIN
   PERFORM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000033', p_venue_id => v_venue,
     p_entitlement_type => 'membership_access', p_scope_type => 'venue', p_meter_type => 'unlimited',
-    p_funding_type => 'subscription', p_access_reason => 'Ingår i ditt medlemskap',
+    p_funding_type => 'subscription', p_funder => 'subscription', p_resolution_priority => 20,
+    p_access_reason => 'Ingår i ditt medlemskap',
     p_expires_at => '2026-08-06T09:00:00Z', p_issuance_key => 'resolver-expired'
   );
   SELECT public.resolve_access_entitlement(v_venue, 'ef100000-0000-4000-8000-000000000033', NULL, v_session, '2026-08-06', v_at)
@@ -114,7 +117,8 @@ BEGIN
   SELECT * INTO v_entitlement FROM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000034', p_venue_id => v_venue,
     p_entitlement_type => 'punch_card', p_scope_type => 'open_play', p_meter_type => 'occurrences',
-    p_funding_type => 'customer_prepaid', p_access_reason => 'Klippkort · 0 gånger kvar',
+    p_funding_type => 'customer_prepaid', p_funder => 'self_prepaid', p_resolution_priority => 40,
+    p_occurrence_origin => 'paid', p_access_reason => 'Klippkort · 0 gånger kvar',
     p_uses_limit => 1, p_issuance_key => 'resolver-exhausted'
   );
   UPDATE public.access_entitlements SET uses_count = 1, status = 'exhausted' WHERE id = v_entitlement.id;
@@ -125,7 +129,8 @@ BEGIN
   SELECT * INTO v_entitlement FROM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000035', p_venue_id => v_venue,
     p_entitlement_type => 'membership_access', p_scope_type => 'venue', p_meter_type => 'unlimited',
-    p_funding_type => 'house_granted', p_access_reason => 'Founder', p_issuance_key => 'resolver-revoked'
+    p_funding_type => 'house_granted', p_funder => 'house_comped', p_resolution_priority => 20,
+    p_access_reason => 'Founder', p_issuance_key => 'resolver-revoked'
   );
   UPDATE public.access_entitlements SET status = 'revoked' WHERE id = v_entitlement.id;
   SELECT public.resolve_access_entitlement(v_venue, 'ef100000-0000-4000-8000-000000000035', NULL, v_session, '2026-08-06', v_at)
@@ -135,7 +140,8 @@ BEGIN
   SELECT * INTO v_entitlement FROM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000036', p_venue_id => v_venue,
     p_entitlement_type => 'membership_access', p_scope_type => 'venue', p_meter_type => 'unlimited',
-    p_funding_type => 'house_granted', p_access_reason => 'Manuell kontroll', p_issuance_key => 'resolver-suspended'
+    p_funding_type => 'house_granted', p_funder => 'house_comped', p_resolution_priority => 20,
+    p_access_reason => 'Manuell kontroll', p_issuance_key => 'resolver-suspended'
   );
   UPDATE public.access_entitlements SET status = 'suspended' WHERE id = v_entitlement.id;
   SELECT public.resolve_access_entitlement(v_venue, 'ef100000-0000-4000-8000-000000000036', NULL, v_session, '2026-08-06', v_at)
@@ -145,7 +151,8 @@ BEGIN
   PERFORM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000037', p_venue_id => v_venue,
     p_entitlement_type => 'membership_access', p_scope_type => 'venue', p_meter_type => 'unlimited',
-    p_funding_type => 'subscription', p_access_reason => 'Ingår i ditt medlemskap', p_issuance_key => 'resolver-unlimited'
+    p_funding_type => 'subscription', p_funder => 'subscription', p_resolution_priority => 20,
+    p_access_reason => 'Ingår i ditt medlemskap', p_issuance_key => 'resolver-unlimited'
   );
   SELECT public.resolve_access_entitlement(v_venue, 'ef100000-0000-4000-8000-000000000037', NULL, v_session, '2026-08-06', v_at)
   INTO v_result;
@@ -156,7 +163,8 @@ BEGIN
   PERFORM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000038', p_venue_id => v_venue,
     p_entitlement_type => 'punch_card', p_scope_type => 'open_play', p_meter_type => 'occurrences',
-    p_funding_type => 'customer_prepaid', p_access_reason => 'Klippkort · 4 gånger kvar',
+    p_funding_type => 'customer_prepaid', p_funder => 'self_prepaid', p_resolution_priority => 40,
+    p_occurrence_origin => 'paid', p_access_reason => 'Klippkort · 4 gånger kvar',
     p_uses_limit => 4, p_issuance_key => 'resolver-occurrences'
   );
   SELECT public.resolve_access_entitlement(v_venue, 'ef100000-0000-4000-8000-000000000038', NULL, v_session, '2026-08-06', v_at)
@@ -170,7 +178,8 @@ BEGIN
   PERFORM public.issue_access_entitlement(
     p_customer_id => v_customer, p_venue_id => v_venue,
     p_entitlement_type => 'punch_card', p_scope_type => 'open_play', p_meter_type => 'occurrences',
-    p_funding_type => 'customer_prepaid', p_access_reason => 'Klippkort · 2 gånger kvar',
+    p_funding_type => 'customer_prepaid', p_funder => 'self_prepaid', p_resolution_priority => 40,
+    p_occurrence_origin => 'paid', p_access_reason => 'Klippkort · 2 gånger kvar',
     p_uses_limit => 2, p_issuance_key => 'resolver-filtered-punch'
   );
   SELECT public.resolve_access_entitlement(
@@ -186,7 +195,8 @@ BEGIN
   PERFORM public.issue_access_entitlement(
     p_customer_id => 'ef100000-0000-4000-8000-000000000039', p_venue_id => v_venue,
     p_entitlement_type => 'day_access', p_scope_type => 'open_play', p_meter_type => 'valid_day',
-    p_funding_type => 'commerce_purchase', p_access_reason => 'Heldagspass',
+    p_funding_type => 'commerce_purchase', p_funder => 'self_prepaid', p_resolution_priority => 30,
+    p_access_reason => 'Heldagspass',
     p_service_date => '2026-08-07', p_issuance_key => 'resolver-local-day'
   );
   SELECT public.resolve_access_entitlement(
@@ -202,7 +212,8 @@ BEGIN
     PERFORM public.issue_access_entitlement(
       p_customer_id => v_other_customer, p_venue_id => v_venue,
       p_entitlement_type => 'membership_access', p_scope_type => 'venue', p_meter_type => 'unlimited',
-      p_funding_type => 'subscription', p_access_reason => 'Mismatch',
+      p_funding_type => 'subscription', p_funder => 'subscription', p_resolution_priority => 20,
+      p_access_reason => 'Mismatch',
       p_user_id => 'ef100000-0000-4000-8000-000000000001', p_issuance_key => 'resolver-user-mismatch'
     );
     RAISE EXCEPTION 'user/customer mismatch accepted';

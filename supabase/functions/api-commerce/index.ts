@@ -11,7 +11,11 @@ import {
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { evaluateCommerceAvailability, type CommerceProductLike } from '../_shared/commerce_availability.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
-import { canonicalEntitlementFields, type EntitlementFundingType } from '../_shared/entitlements.ts';
+import {
+  canonicalEntitlementFields,
+  type EntitlementFunder,
+  type EntitlementFundingType,
+} from '../_shared/entitlements.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const CART_TOKEN_BYTES = 32;
@@ -744,6 +748,7 @@ async function resolveLines(
         source_entitlement_id: decision.accessDecision === 'entitlement_included' ? decision.sourceId : null,
         access_reason: decision.accessReason,
         funding_type: decision.fundingType,
+        funder: decision.funder,
         consumption_required: decision.consumptionRequired,
         membership_id: decision.membershipId,
         membership_tier_name: decision.membershipTierName,
@@ -925,6 +930,14 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
         if (pricingReason === 'active_day_access') return 'customer_prepaid';
         return 'commerce_purchase';
       })() as EntitlementFundingType,
+      funder: (() => {
+        const pricingReason = String(resolvedLine?.resolver_snapshot?.pricing_reason || '');
+        const resolvedFunder = String(resolvedLine?.resolver_snapshot?.funder || '');
+        if (pricingReason === 'playing_host' || pricingReason === 'host_comp') return 'house_comped';
+        if (pricingReason.includes('membership')) return 'subscription';
+        if (pricingReason === 'active_day_access') return resolvedFunder || null;
+        return 'house_comped';
+      })() as EntitlementFunder | null,
       accessReason: purchaseKind === 'day_pass'
         ? 'Heldagspass'
         : String(resolvedLine?.resolver_snapshot?.membership_tier_name || '').toLowerCase() === 'founder'
@@ -934,6 +947,12 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
             : 'Personlig plats',
       serviceDate: line.session_date,
       requiresConsumption: true,
+      occurrenceOrigin: (() => {
+        const pricingReason = String(resolvedLine?.resolver_snapshot?.pricing_reason || '');
+        if (pricingReason === 'playing_host' || pricingReason === 'host_comp') return 'house_comped';
+        return 'promotional';
+      })(),
+      resolutionPriority: purchaseKind === 'day_pass' ? 30 : 10,
     }),
   };
   if (!canonicalEntitlementId) {

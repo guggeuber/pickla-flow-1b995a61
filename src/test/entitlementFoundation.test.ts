@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 const migration = readFileSync("supabase/migrations/20260806120000_converge_canonical_entitlements.sql", "utf8");
 const consumptionMigration = readFileSync("supabase/migrations/20260806130000_entitlement_consumption_contracts.sql", "utf8");
 const programMigration = readFileSync("supabase/migrations/20260806140000_partner_and_punch_card_readiness.sql", "utf8");
+const constitutionMigration = readFileSync("supabase/migrations/20260808120000_entitlement_constitution_v11.sql", "utf8");
+const entitlementFields = readFileSync("supabase/functions/_shared/entitlements.ts", "utf8");
+const constitution = readFileSync("docs/entitlement-constitution.md", "utf8");
 const entitlementApi = readFileSync("supabase/functions/api-entitlements/index.ts", "utf8");
 const checkinApi = readFileSync("supabase/functions/api-checkins/index.ts", "utf8");
 const activityPricing = readFileSync("supabase/functions/_shared/activity_pricing.ts", "utf8");
@@ -61,6 +64,64 @@ describe("canonical entitlement foundation", () => {
     expect(commerceWebhook).toContain("p_source_type: canonicalEntitlementId ? canonicalEntitlementType : 'commerce_order'");
     expect(commerceWebhook).toContain("if (canonicalEntitlementId) return;");
     expect(checkinApi).toContain("registration?.source_id === access.id ? registration.id : null");
+  });
+});
+
+describe("entitlement constitution v1.1", () => {
+  it("makes funder first-class without deriving it from funding provenance", () => {
+    for (const funder of ["self_prepaid", "subscription", "house_comped", "partner", "employer", "sponsor"]) {
+      expect(constitutionMigration).toContain(`'${funder}'`);
+      expect(entitlementFields).toContain(`'${funder}'`);
+    }
+    expect(constitutionMigration).toContain("entitlement_funder_required");
+    expect(constitutionMigration).toContain("access_entitlements_v11_canonical_required");
+    expect(entitlementFields).toContain("funding_type is provenance; it never determines funder");
+    expect(constitutionMigration).not.toMatch(/CASE\s+[^;]*funding_type[^;]*THEN[^;]*funder/is);
+  });
+
+  it("models trigger, no-show and occurrence origin without activating behavior", () => {
+    for (const trigger of ["on_checkin", "on_commitment", "on_session_end"]) {
+      expect(constitutionMigration).toContain(`'${trigger}'`);
+    }
+    for (const origin of ["paid", "promotional", "house_comped", "legacy_import"]) {
+      expect(constitutionMigration).toContain(`'${origin}'`);
+    }
+    expect(constitutionMigration).toContain("DEFAULT 'on_checkin'");
+    expect(constitutionMigration).toContain("DEFAULT 'do_not_consume'");
+    expect(constitution).toMatch(/does not execute\s+them/);
+  });
+
+  it("supports structured scope and property-driven ordering", () => {
+    expect(constitutionMigration).toContain("'activity_format'");
+    expect(constitutionMigration).toContain("'channel'");
+    expect(constitutionMigration).toContain("valid_from TIMESTAMPTZ");
+    expect(constitutionMigration).toContain("valid_until TIMESTAMPTZ");
+    expect(constitutionMigration).toMatch(/ORDER BY\s+entitlement\.resolution_priority,[\s\S]+entitlement\.resolution_expiry_at ASC NULLS LAST/);
+    expect(constitutionMigration).toContain("CASE entitlement.scarcity_class WHEN 'non_scarce' THEN 0 ELSE 1 END");
+    expect(constitutionMigration).toContain("entitlement.resolution_origin_priority");
+  });
+
+  it("freezes partner reimbursement terms on append-only consumption", () => {
+    for (const field of [
+      "partner_program_id",
+      "partner_reference",
+      "reimbursement_rate_minor",
+      "reimbursement_agreement_version",
+      "reimbursement_effective_date",
+    ]) {
+      expect(constitutionMigration).toContain(field);
+    }
+    expect(constitutionMigration).toContain("freeze_entitlement_consumption_terms");
+    expect(constitutionMigration).toContain("NEW.reimbursement_rate_minor := v_original.reimbursement_rate_minor");
+    expect(constitutionMigration).toContain("NEW.reimbursement_agreement_version := v_program.agreement_version");
+  });
+
+  it("states the ledger boundary without adding adjacent products", () => {
+    expect(constitution).toContain("Buying an entitlement creates deferred revenue");
+    expect(constitution).toMatch(/Consuming an entitlement\s+recognises revenue/);
+    expect(constitution).toContain("Stored Value never grants participation");
+    expect(constitution).toContain("Payment Sources never create rights");
+    expect(constitution).toContain("adds no Bruce UI, Epassi flow, punch-card UI");
   });
 });
 

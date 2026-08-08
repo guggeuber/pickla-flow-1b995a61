@@ -210,6 +210,7 @@ await fn("legacy-punch-card", {
     scopeType: "open_play",
     legacySourceRef: `legacy-${run}`,
     operatorNote: "Forbidden self-import",
+    funder: "self_prepaid",
   },
   expected: 403,
 });
@@ -223,6 +224,7 @@ const imported = await fn("legacy-punch-card", {
     scopeType: "open_play",
     legacySourceRef: `legacy-${run}`,
     operatorNote: "Physical card verified",
+    funder: "self_prepaid",
   },
 });
 assert(imported.payload.remaining_uses === 1, "legacy import did not preserve remaining visits");

@@ -6,6 +6,7 @@ type ServiceClient = ReturnType<typeof getServiceClient>;
 
 const PROGRAM_STATUSES = new Set(['active', 'inactive', 'archived']);
 const PUNCH_SCOPES = new Set(['open_play', 'session_type', 'product_key', 'venue', 'selected_venues', 'allowlist']);
+const FUNDERS = new Set(['self_prepaid', 'subscription', 'house_comped', 'partner', 'employer', 'sponsor']);
 
 async function canOperateVenue(admin: ServiceClient, userId: string, venueId: string) {
   const [{ data: role }, { data: staff }] = await Promise.all([
@@ -153,7 +154,7 @@ Deno.serve(async (req) => {
 
       const [{ data: programs, error: programError }, { data: eligibility, error: eligibilityError }] = await Promise.all([
         admin.from('partner_programs')
-          .select('id, program_key, name, activity_label, access_reason, desk_label, reimbursement_amount_minor, currency, settlement_rule, status, valid_from, valid_until')
+          .select('id, program_key, name, activity_label, access_reason, desk_label, reimbursement_amount_minor, currency, settlement_rule, agreement_version, agreement_effective_date, status, valid_from, valid_until')
           .eq('organization_id', organizationId)
           .neq('status', 'archived')
           .order('name'),
@@ -216,10 +217,12 @@ Deno.serve(async (req) => {
         funding_counterparty_ref: String(body.fundingCounterpartyRef).trim(),
         reimbursement_amount_minor: amount,
         settlement_rule: body.settlementRule && typeof body.settlementRule === 'object' ? body.settlementRule : {},
+        ...(body.agreementVersion ? { agreement_version: String(body.agreementVersion).trim() } : {}),
+        ...(body.agreementEffectiveDate ? { agreement_effective_date: String(body.agreementEffectiveDate) } : {}),
         valid_from: body.validFrom || null,
         valid_until: body.validUntil || null,
         created_by: userId,
-      }).select('id, program_key, name, activity_label, access_reason, desk_label, reimbursement_amount_minor, currency, settlement_rule, status, valid_from, valid_until').single();
+      }).select('id, program_key, name, activity_label, access_reason, desk_label, reimbursement_amount_minor, currency, settlement_rule, agreement_version, agreement_effective_date, status, valid_from, valid_until').single();
       if (error) throw new Error(error.message);
       return jsonResponse(data, 201);
     }
@@ -238,6 +241,7 @@ Deno.serve(async (req) => {
       const fields: Record<string, string> = {
         name: 'name', activityLabel: 'activity_label', accessReason: 'access_reason', deskLabel: 'desk_label',
         fundingCounterpartyRef: 'funding_counterparty_ref', settlementRule: 'settlement_rule',
+        agreementVersion: 'agreement_version', agreementEffectiveDate: 'agreement_effective_date',
         validFrom: 'valid_from', validUntil: 'valid_until', reimbursementAmountMinor: 'reimbursement_amount_minor', status: 'status',
       };
       for (const [input, column] of Object.entries(fields)) {
@@ -250,7 +254,7 @@ Deno.serve(async (req) => {
         updates.reimbursement_amount_minor = amount;
       }
       const { data, error } = await admin.from('partner_programs').update(updates).eq('id', programId)
-        .select('id, program_key, name, activity_label, access_reason, desk_label, reimbursement_amount_minor, currency, settlement_rule, status, valid_from, valid_until')
+        .select('id, program_key, name, activity_label, access_reason, desk_label, reimbursement_amount_minor, currency, settlement_rule, agreement_version, agreement_effective_date, status, valid_from, valid_until')
         .single();
       if (error) throw new Error(error.message);
       return jsonResponse(data);
@@ -315,7 +319,8 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const venueId = String(body.venueId || '');
       const scopeType = String(body.scopeType || '');
-      if (!venueId || !PUNCH_SCOPES.has(scopeType) || !body.legacySourceRef || !body.operatorNote) {
+      const funder = String(body.funder || '');
+      if (!venueId || !PUNCH_SCOPES.has(scopeType) || !FUNDERS.has(funder) || !body.legacySourceRef || !body.operatorNote) {
         return errorResponse('Missing or invalid legacy punch-card fields');
       }
       if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
@@ -330,6 +335,7 @@ Deno.serve(async (req) => {
         p_legacy_source_ref: body.legacySourceRef,
         p_operator_note: body.operatorNote,
         p_imported_by: userId,
+        p_funder: funder,
         p_valid_from: body.validFrom || null,
         p_valid_until: body.validUntil || null,
         p_includes_session_types: Array.isArray(body.includesSessionTypes) ? body.includesSessionTypes : ['open_play'],

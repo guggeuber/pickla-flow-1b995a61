@@ -133,6 +133,7 @@ export type ActivityPricingDecision = {
   entitlementType: string;
   accessReason: string | null;
   fundingType: string | null;
+  funder: string | null;
   consumptionRequired: boolean;
   membershipId: string | null;
   membershipTierName: string | null;
@@ -263,6 +264,7 @@ export async function resolveActivityPricingDecision({
   let entitlementType = '';
   let accessReason: string | null = null;
   let fundingType: string | null = null;
+  let funder: string | null = null;
   let consumptionRequired = false;
   let membershipId: string | null = null;
   let membershipTierName: string | null = null;
@@ -348,6 +350,7 @@ export async function resolveActivityPricingDecision({
         entitlementType = PLAYING_HOST_ROLE;
         pricingReason = PLAYING_HOST_ROLE;
         sourceId = hostAssignment.id;
+        funder = 'house_comped';
         debug.playing_host = true;
         debug.host_customer_id = entitlementCustomerId;
         debug.host_assignment_id = hostAssignment.id;
@@ -365,7 +368,7 @@ export async function resolveActivityPricingDecision({
   } else if (userId && finalAmountSek > 0) {
     const { data: dayAccess } = await client
       .from('access_entitlements')
-      .select('id')
+      .select('id, funder')
       .eq('user_id', userId)
       .eq('venue_id', venueId)
       .eq('entitlement_type', 'day_access')
@@ -380,6 +383,7 @@ export async function resolveActivityPricingDecision({
       entitlementType = 'day_access';
       pricingReason = 'active_day_access';
       sourceId = dayAccess.id;
+      funder = String(dayAccess.funder || '') || null;
       debug.day_access_entitlement_id = dayAccess.id;
     }
 
@@ -406,6 +410,7 @@ export async function resolveActivityPricingDecision({
         if (finalAmountSek <= 0) {
           accessDecision = 'membership_included';
           entitlementType = 'session_member_discount';
+          funder = 'subscription';
         }
         pricingReason = 'session_member_discount';
         debug.membership_tier_name = membershipTierName;
@@ -452,6 +457,7 @@ export async function resolveActivityPricingDecision({
           accessDecision = 'membership_included';
           entitlementType = 'open_play_unlimited';
           pricingReason = 'membership_open_play_unlimited';
+          funder = 'subscription';
           debug.entitlement = 'open_play_unlimited';
         }
 
@@ -506,6 +512,7 @@ export async function resolveActivityPricingDecision({
         entitlementType = String(canonicalAccess.entitlement_type);
         accessReason = String(canonicalAccess.access_reason || '') || null;
         fundingType = String(canonicalAccess.funding_type || '') || null;
+        funder = String(canonicalAccess.funder || '') || null;
         consumptionRequired = Boolean(canonicalAccess.consumption_required);
         sourceId = String(canonicalAccess.entitlement_id || '') || null;
         pricingReason = entitlementType;
@@ -517,6 +524,7 @@ export async function resolveActivityPricingDecision({
           meter_type: canonicalAccess.meter_type || null,
           remaining_uses: canonicalAccess.remaining_uses ?? null,
           funding_type: fundingType,
+          funder,
           consumption_required: consumptionRequired,
         };
       }
@@ -558,6 +566,7 @@ export async function resolveActivityPricingDecision({
     entitlementType,
     accessReason,
     fundingType,
+    funder,
     consumptionRequired,
     membershipId,
     membershipTierName,

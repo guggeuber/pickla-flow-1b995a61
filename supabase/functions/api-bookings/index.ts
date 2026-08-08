@@ -1347,9 +1347,12 @@ async function createFreeEntitlementBookingResponse({
           scopeType: 'open_play',
           meterType: 'valid_day',
           fundingType: 'subscription',
+          funder: 'subscription',
           accessReason: 'Heldagspass',
           serviceDate: validDate,
           requiresConsumption: true,
+          occurrenceOrigin: null,
+          resolutionPriority: 30,
         }),
       }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
 
@@ -1466,11 +1469,14 @@ async function createFreeEntitlementBookingResponse({
         scopeType: 'open_play',
         meterType: 'unlimited',
         fundingType: 'subscription',
+        funder: 'subscription',
         accessReason: String(meta.membership_tier_name || '').toLowerCase() === 'founder'
           ? 'Founder'
           : 'Ingår i ditt medlemskap',
         serviceDate: null,
         requiresConsumption: true,
+        occurrenceOrigin: null,
+        resolutionPriority: 20,
       }),
     }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
 

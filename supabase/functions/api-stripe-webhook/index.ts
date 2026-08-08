@@ -524,9 +524,12 @@ async function handleCommerceOrder(
               scopeType: 'open_play',
               meterType: 'valid_day',
               fundingType: 'commerce_purchase',
+              funder: 'self_prepaid',
               accessReason: 'Heldagspass',
               serviceDate: participation.session_date,
               requiresConsumption: true,
+              occurrenceOrigin: null,
+              resolutionPriority: 30,
             }),
           }, {
             onConflict: order.user_id
@@ -558,9 +561,12 @@ async function handleCommerceOrder(
             scopeType: 'exact_session',
             meterType: 'exact_session',
             fundingType: 'commerce_purchase',
+            funder: 'self_prepaid',
             accessReason: 'Personlig plats',
             serviceDate: participation.session_date,
             requiresConsumption: true,
+            occurrenceOrigin: 'paid',
+            resolutionPriority: 10,
           }),
         };
         const { error } = await serviceClient.from('access_entitlements').upsert(entitlement, {
@@ -2115,9 +2121,12 @@ async function handleDayPass(
         scopeType: includesDayAccess ? 'open_play' : 'exact_session',
         meterType: includesDayAccess ? 'valid_day' : 'exact_session',
         fundingType: 'commerce_purchase',
+        funder: 'self_prepaid',
         accessReason: includesDayAccess ? 'Heldagspass' : 'Personlig plats',
         serviceDate: date,
         requiresConsumption: true,
+        occurrenceOrigin: includesDayAccess ? null : 'paid',
+        resolutionPriority: includesDayAccess ? 30 : 10,
       }),
     }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
   }
@@ -2282,9 +2291,12 @@ async function handleActivityTicket(
           scopeType: 'exact_session',
           meterType: 'exact_session',
           fundingType: 'commerce_purchase',
+          funder: 'self_prepaid',
           accessReason: 'Personlig plats',
           serviceDate: date,
           requiresConsumption: true,
+          occurrenceOrigin: 'paid',
+          resolutionPriority: 10,
         }),
       }, { onConflict: 'source_type,source_id,user_id,entitlement_type' });
 

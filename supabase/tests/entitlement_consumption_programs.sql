@@ -49,7 +49,8 @@ BEGIN
   SELECT * INTO v_digital FROM public.issue_access_entitlement(
     p_customer_id => v_customer, p_venue_id => v_venue,
     p_entitlement_type => 'punch_card', p_scope_type => 'open_play', p_meter_type => 'occurrences',
-    p_funding_type => 'commerce_purchase', p_access_reason => 'Klippkort · 2 gånger kvar',
+    p_funding_type => 'commerce_purchase', p_funder => 'self_prepaid', p_resolution_priority => 40,
+    p_occurrence_origin => 'paid', p_access_reason => 'Klippkort · 2 gånger kvar',
     p_uses_limit => 2, p_issuance_key => 'digital-punch-fixture'
   );
   SELECT public.consume_access_entitlement(
@@ -122,9 +123,11 @@ BEGIN
     p_customer_id => v_customer, p_venue_id => v_venue, p_remaining_visits => 4,
     p_scope_type => 'open_play', p_legacy_source_ref => 'legacy-card-fixture-1',
     p_operator_note => 'Physical card verified at desk',
-    p_imported_by => 'ef200000-0000-4000-8000-000000000001'
+    p_imported_by => 'ef200000-0000-4000-8000-000000000001', p_funder => 'self_prepaid'
   );
-  IF v_legacy.funding_type <> 'legacy_import' OR v_legacy.uses_limit <> 4 OR v_legacy.uses_count <> 0
+  IF v_legacy.funding_type <> 'legacy_import' OR v_legacy.funder <> 'self_prepaid'
+     OR v_legacy.occurrence_origin <> 'legacy_import'
+     OR v_legacy.uses_limit <> 4 OR v_legacy.uses_count <> 0
      OR v_legacy.imported_by <> 'ef200000-0000-4000-8000-000000000001' THEN
     RAISE EXCEPTION 'legacy import provenance failed';
   END IF;
@@ -132,7 +135,8 @@ BEGIN
     PERFORM public.import_legacy_punch_card(
       p_customer_id => v_customer, p_venue_id => v_venue, p_remaining_visits => 4,
       p_scope_type => 'open_play', p_legacy_source_ref => 'legacy-card-fixture-1',
-      p_operator_note => 'Duplicate', p_imported_by => 'ef200000-0000-4000-8000-000000000001'
+      p_operator_note => 'Duplicate', p_imported_by => 'ef200000-0000-4000-8000-000000000001',
+      p_funder => 'self_prepaid'
     );
     RAISE EXCEPTION 'duplicate legacy import accepted';
   EXCEPTION WHEN OTHERS THEN
@@ -154,10 +158,12 @@ BEGIN
   -- Bruce is a configured partner program, never a boolean or separate entitlement table.
   INSERT INTO public.partner_programs (
     organization_id, program_key, name, activity_label, access_reason, desk_label,
-    funding_counterparty_ref, reimbursement_amount_minor, settlement_rule, created_by
+    funding_counterparty_ref, reimbursement_amount_minor, settlement_rule,
+    agreement_version, agreement_effective_date, created_by
   ) VALUES (
     v_org, 'bruce', 'Bruce', 'Bruce gäller', 'Ingår via Bruce', 'Bruce',
     'bruce-fixture-contract', 12500, '{"version":"1","basis":"valid_attendance"}',
+    'bruce-v1', current_date,
     'ef200000-0000-4000-8000-000000000001'
   ) RETURNING id INTO v_program;
   INSERT INTO public.partner_program_sessions (
@@ -182,7 +188,11 @@ BEGIN
     p_activity_session_id => v_session, p_service_date => current_date,
     p_external_reference => 'bruce-booking-fixture-1'
   );
-  IF v_partner.funding_type <> 'partner_funded' OR v_partner.access_reason <> 'Ingår via Bruce'
+  IF v_partner.funding_type <> 'partner_funded' OR v_partner.funder <> 'partner'
+     OR v_partner.consumption_trigger <> 'on_checkin'
+     OR v_partner.no_show_policy <> 'do_not_consume'
+     OR v_partner.occurrence_origin <> 'paid'
+     OR v_partner.access_reason <> 'Ingår via Bruce'
      OR v_partner.uses_limit <> 1 OR v_partner.uses_count <> 0 THEN
     RAISE EXCEPTION 'partner-funded entitlement shape failed';
   END IF;
@@ -216,6 +226,17 @@ BEGIN
   END IF;
   SELECT id INTO v_consumption FROM public.entitlement_consumptions
   WHERE entitlement_id = v_partner.id AND event_type = 'use';
+  UPDATE public.partner_programs
+  SET reimbursement_amount_minor = 99900,
+      agreement_version = 'bruce-v2',
+      agreement_effective_date = current_date + 1
+  WHERE id = v_program;
+  IF (SELECT reimbursement_rate_minor FROM public.entitlement_consumptions WHERE id = v_consumption) <> 12500
+     OR (SELECT reimbursement_agreement_version FROM public.entitlement_consumptions WHERE id = v_consumption) <> 'bruce-v1'
+     OR (SELECT reimbursement_effective_date FROM public.entitlement_consumptions WHERE id = v_consumption) <> current_date
+     OR (SELECT partner_reference FROM public.entitlement_consumptions WHERE id = v_consumption) <> 'bruce-fixture-contract' THEN
+    RAISE EXCEPTION 'partner reimbursement snapshot changed with agreement';
+  END IF;
   PERFORM public.reverse_entitlement_consumption(
     v_consumption, 'partner-reversal-1', 'Attendance corrected', now(),
     'ef200000-0000-4000-8000-000000000001'

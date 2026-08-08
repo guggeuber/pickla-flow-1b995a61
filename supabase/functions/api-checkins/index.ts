@@ -11,14 +11,14 @@ const STOCKHOLM_ZONE = 'Europe/Stockholm';
 const entitlementPriority: Record<string, number> = {
   booking: 1,
   booking_participant: 1,
-  session_ticket: 2,
-  activity_registration: 2,
-  membership: 3,
-  membership_access: 3,
-  day_access: 4,
-  punch_card: 5,
-  partner_access: 6,
-  day_pass: 7,
+  session_ticket: 10,
+  activity_registration: 10,
+  membership: 20,
+  membership_access: 20,
+  day_access: 30,
+  punch_card: 40,
+  partner_access: 50,
+  day_pass: 55,
 };
 
 function stockholmNow() {
@@ -200,7 +200,7 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
 
   let accessQuery = serviceClient
     .from('access_entitlements')
-    .select('id, customer_id, entitlement_type, source_type, source_id, status, valid_date, valid_from, valid_until, activity_session_id, session_date, includes_session_types, metadata, model_version, scope_type, meter_type, starts_at, expires_at, service_date, funding_type, access_reason, requires_consumption, uses_limit, uses_count')
+    .select('id, customer_id, entitlement_type, source_type, source_id, status, valid_date, valid_from, valid_until, activity_session_id, session_date, includes_session_types, metadata, model_version, scope_type, meter_type, starts_at, expires_at, service_date, funding_type, funder, access_reason, requires_consumption, consumption_trigger, no_show_policy, occurrence_origin, resolution_priority, scarcity_class, resolution_origin_priority, resolution_expiry_at, uses_limit, uses_count')
     .eq('venue_id', venueId)
     .eq('status', 'active');
   accessQuery = customerId
@@ -241,8 +241,12 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
         ? Math.max(Number(access.uses_limit || 0) - Number(access.uses_count || 0), 0)
         : null,
       funding_type: access.funding_type,
+      funder: access.funder,
       consumption_required: Boolean(access.requires_consumption),
-      priority: entitlementPriority[access.entitlement_type] || 50,
+      priority: Number(access.resolution_priority || entitlementPriority[access.entitlement_type] || 60),
+      scarcity_priority: access.scarcity_class === 'scarce' ? 1 : 0,
+      origin_priority: Number(access.resolution_origin_priority || 0),
+      expiry_priority: access.resolution_expiry_at ? DateTime.fromISO(access.resolution_expiry_at).toMillis() : Number.POSITIVE_INFINITY,
     });
   }
 
@@ -267,7 +271,16 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
     });
   }
 
-  entitlements.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+  entitlements.sort((a, b) => {
+    const priority = (a.priority || 99) - (b.priority || 99);
+    if (priority !== 0) return priority;
+    const scarcity = Number(a.scarcity_priority || 0) - Number(b.scarcity_priority || 0);
+    if (scarcity !== 0) return scarcity;
+    const origin = Number(a.origin_priority || 0) - Number(b.origin_priority || 0);
+    if (origin !== 0) return origin;
+    return Number(a.expiry_priority ?? Number.POSITIVE_INFINITY)
+      - Number(b.expiry_priority ?? Number.POSITIVE_INFINITY);
+  });
 
   return {
     profile,

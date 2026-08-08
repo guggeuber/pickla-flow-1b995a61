@@ -565,9 +565,12 @@ Deno.serve(async (req) => {
           scopeType: 'open_play',
           meterType: 'valid_day',
           fundingType: 'house_granted',
+          funder: 'house_comped',
           accessReason: 'Heldagspass',
           serviceDate: validDate,
           requiresConsumption: true,
+          occurrenceOrigin: null,
+          resolutionPriority: 30,
         }),
       }).select('id').single();
       if (entitlementErr) {
