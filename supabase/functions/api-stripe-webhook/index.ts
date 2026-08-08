@@ -398,6 +398,12 @@ async function handleCommerceOrder(
     const purchaseKind = String(participation.resolver_snapshot?.purchase_kind || (
       participation.product_key === 'day_access' ? 'day_pass' : 'activity_ticket'
     ));
+    const canonicalEntitlementType = ['punch_card', 'partner_access'].includes(String(participation.resolver_snapshot?.entitlement_type || ''))
+      ? String(participation.resolver_snapshot.entitlement_type)
+      : null;
+    const canonicalEntitlementId = canonicalEntitlementType
+      ? String(participation.resolver_snapshot?.source_entitlement_id || '') || null
+      : null;
     if (!order.user_id && !customerId) throw new Error('Commerce participation has no owner');
     const { data: activity } = await serviceClient
       .from('activity_sessions')
@@ -415,8 +421,8 @@ async function handleCommerceOrder(
         p_customer_id: customerId,
         p_status: 'confirmed',
         p_stripe_session_id: session.id,
-        p_source_type: 'commerce_order',
-        p_source_id: participation.id,
+        p_source_type: canonicalEntitlementId ? canonicalEntitlementType : 'commerce_order',
+        p_source_id: canonicalEntitlementId || participation.id,
         p_metadata: {
           commerce_order_id: orderId,
           commerce_order_line_id: participation.id,
@@ -484,6 +490,7 @@ async function handleCommerceOrder(
         if (error) throw new Error(error.message);
       },
       upsertEntitlement: async (registrationId) => {
+        if (canonicalEntitlementId) return;
         if (purchaseKind === 'day_pass') {
           const dayPassId = await upsertCommerceDayPass(serviceClient, {
             orderId,

@@ -377,6 +377,7 @@ function projectOrderLine(line: DbRecord) {
       quote_changed: resolver.quote_changed === true,
       access_decision: resolver.access_decision || null,
       entitlement_type: resolver.entitlement_type || null,
+      access_reason: resolver.access_reason || null,
       membership_tier_name: resolver.membership_tier_name || null,
       debug: {
         base_amount_sek: Number(debug.base_amount_sek || productSnapshot.base_price_sek || 0),
@@ -740,6 +741,10 @@ async function resolveLines(
         pricing_reason: decision.pricingReason,
         access_decision: decision.accessDecision,
         entitlement_type: decision.entitlementType,
+        source_entitlement_id: decision.accessDecision === 'entitlement_included' ? decision.sourceId : null,
+        access_reason: decision.accessReason,
+        funding_type: decision.fundingType,
+        consumption_required: decision.consumptionRequired,
         membership_id: decision.membershipId,
         membership_tier_name: decision.membershipTierName,
         applied_price_type: decision.pricingReason,
@@ -845,6 +850,12 @@ async function releaseHold(admin: AdminClient, holdId?: string | null, reason = 
 }
 
 async function commitFreeParticipation(admin: AdminClient, order: any, line: any, resolvedLine: any, userId: string | null, customerId: string | null, holdId: string) {
+  const canonicalEntitlementType = ['punch_card', 'partner_access'].includes(String(resolvedLine?.resolver_snapshot?.entitlement_type || ''))
+    ? String(resolvedLine.resolver_snapshot.entitlement_type)
+    : null;
+  const canonicalEntitlementId = canonicalEntitlementType
+    ? String(resolvedLine?.resolver_snapshot?.source_entitlement_id || '') || null
+    : null;
   const { data, error } = await admin.rpc('commit_activity_registration_capacity', {
     p_venue_id: order.venue_id,
     p_activity_session_id: line.activity_session_id,
@@ -854,8 +865,8 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
     p_status: 'confirmed',
     p_price_paid_sek: 0,
     p_stripe_session_id: null,
-    p_source_type: 'commerce_order',
-    p_source_id: line.id,
+    p_source_type: canonicalEntitlementId ? canonicalEntitlementType : 'commerce_order',
+    p_source_id: canonicalEntitlementId || line.id,
     p_metadata: { commerce_order_id: order.id, commerce_order_line_id: line.id, ...(resolvedLine.resolver_snapshot || {}) },
     p_hold_id: holdId,
   }).maybeSingle();
@@ -925,11 +936,13 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
       requiresConsumption: true,
     }),
   };
-  await admin.from('access_entitlements').upsert(entitlement, {
-    onConflict: userId
-      ? 'source_type,source_id,user_id,entitlement_type'
-      : 'source_type,source_id,customer_id,entitlement_type',
-  });
+  if (!canonicalEntitlementId) {
+    await admin.from('access_entitlements').upsert(entitlement, {
+      onConflict: userId
+        ? 'source_type,source_id,user_id,entitlement_type'
+        : 'source_type,source_id,customer_id,entitlement_type',
+    });
+  }
   await admin.from('commerce_orders').update({
     status: 'paid',
     paid_at: new Date().toISOString(),

@@ -144,7 +144,7 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
 
   const { data: registrations } = await serviceClient
     .from('session_registrations')
-    .select('id, activity_session_id, session_date, status, price_paid_sek, activity_sessions(name, session_type, start_time, end_time)')
+    .select('id, activity_session_id, session_date, status, price_paid_sek, source_type, source_id, activity_sessions(name, session_type, start_time, end_time)')
     .eq('user_id', targetUserId)
     .eq('venue_id', venueId)
     .eq('session_date', today)
@@ -160,7 +160,7 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
     return now >= occurrence.start.minus({ minutes: 30 }) && now < occurrence.end;
   });
 
-  if (registration) {
+  if (registration && !['punch_card', 'partner_access'].includes(String(registration.source_type || ''))) {
     const session = (registration as any).activity_sessions;
     entitlements.push({
       type: 'session_ticket',
@@ -223,6 +223,7 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
       customer_id: access.customer_id || customerId || null,
       source_type: access.source_type,
       source_id: access.source_id,
+      registration_id: registration?.source_id === access.id ? registration.id : null,
       metadata: access.metadata || {},
       label: access.access_reason || (access.entitlement_type === 'day_access'
         ? 'Heldagspass'
@@ -306,9 +307,8 @@ async function checkInCanonicalEntitlement(serviceClient: any, params: {
     p_player_phone: params.playerPhone || null,
     p_checked_in_by: params.checkedInBy || null,
     p_activity_session_id: params.entitlement.activity_session_id || null,
-    p_registration_id: params.entitlement.source_type === 'session_registration'
-      ? params.entitlement.source_id || null
-      : null,
+    p_registration_id: params.entitlement.registration_id
+      || (params.entitlement.source_type === 'session_registration' ? params.entitlement.source_id || null : null),
     p_commerce_order_id: params.entitlement.metadata?.commerce_order_id || null,
     p_access_context: {
       session_type: sessionType,

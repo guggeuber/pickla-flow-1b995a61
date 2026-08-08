@@ -5,7 +5,7 @@ import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 type ServiceClient = ReturnType<typeof getServiceClient>;
 
 const PROGRAM_STATUSES = new Set(['active', 'inactive', 'archived']);
-const PUNCH_SCOPES = new Set(['open_play', 'session_type', 'product_key', 'venue', 'selected_venues', 'explicit_allowlist']);
+const PUNCH_SCOPES = new Set(['open_play', 'session_type', 'product_key', 'venue', 'selected_venues', 'allowlist']);
 
 async function canOperateVenue(admin: ServiceClient, userId: string, venueId: string) {
   const [{ data: role }, { data: staff }] = await Promise.all([

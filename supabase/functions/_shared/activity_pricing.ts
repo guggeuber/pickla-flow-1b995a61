@@ -1,4 +1,5 @@
 import { resolveCustomerIdForUser } from './customers.ts';
+import { activitySessionOccurrenceInterval } from './activity_session_time.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -128,8 +129,11 @@ export type ActivityPricingDecision = {
   requiresCheckout: boolean;
   checkoutLabel: string;
   pricingReason: string;
-  accessDecision: 'paid' | 'membership_included' | 'day_access_included' | 'free_day_pass';
+  accessDecision: 'paid' | 'membership_included' | 'day_access_included' | 'free_day_pass' | 'entitlement_included';
   entitlementType: string;
+  accessReason: string | null;
+  fundingType: string | null;
+  consumptionRequired: boolean;
   membershipId: string | null;
   membershipTierName: string | null;
   sourceId: string | null;
@@ -167,7 +171,7 @@ export async function resolveActivityPricingDecision({
     ? providedSession
     : (await client
       .from('activity_sessions')
-      .select('id, venue_id, name, session_type, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode')
+      .select('id, venue_id, name, session_type, session_date, start_time, end_time, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode')
       .eq('id', activitySessionId)
       .maybeSingle()).data;
 
@@ -257,10 +261,14 @@ export async function resolveActivityPricingDecision({
   let finalAmountSek = baseAmountSek;
   let accessDecision: ActivityPricingDecision['accessDecision'] = 'paid';
   let entitlementType = '';
+  let accessReason: string | null = null;
+  let fundingType: string | null = null;
+  let consumptionRequired = false;
   let membershipId: string | null = null;
   let membershipTierName: string | null = null;
   let sourceId: string | null = null;
   let pricingReason = 'regular_price';
+  let entitlementCustomerId: string | null = null;
   const rawPricingMode = String(sessionMetadata.pricing_mode || 'standard');
   const pricingMode = rawPricingMode === 'fixed_ticket' || rawPricingMode === 'member_discount'
     ? rawPricingMode
@@ -319,14 +327,14 @@ export async function resolveActivityPricingDecision({
   };
 
   if (purchaseKind === 'activity_ticket' && userId) {
-    const customerId = await resolveCustomerIdForUser(client, userId);
-    if (customerId) {
+    entitlementCustomerId = await resolveCustomerIdForUser(client, userId);
+    if (entitlementCustomerId) {
       const { data: hostAssignment, error: hostError } = await client
         .from('activity_session_hosts')
         .select('id, customer_id')
         .eq('venue_id', venueId)
         .eq('activity_session_id', activitySessionId)
-        .eq('customer_id', customerId)
+        .eq('customer_id', entitlementCustomerId)
         .eq('status', 'active')
         .maybeSingle();
 
@@ -341,7 +349,7 @@ export async function resolveActivityPricingDecision({
         pricingReason = PLAYING_HOST_ROLE;
         sourceId = hostAssignment.id;
         debug.playing_host = true;
-        debug.host_customer_id = customerId;
+        debug.host_customer_id = entitlementCustomerId;
         debug.host_assignment_id = hostAssignment.id;
         debug.pricing_source = PLAYING_HOST_ROLE;
         debug.channel_prices = {
@@ -473,6 +481,48 @@ export async function resolveActivityPricingDecision({
     }
   }
 
+  // Existing Founder, membership and day-access semantics above remain authoritative.
+  // Only the new occurrence/partner types enter through the canonical resolver, and
+  // they override paid/member-discount amounts before Early Bird is considered.
+  if (purchaseKind === 'activity_ticket' && userId && finalAmountSek > 0) {
+    entitlementCustomerId ||= await resolveCustomerIdForUser(client, userId);
+    if (entitlementCustomerId) {
+      const occurrence = activitySessionOccurrenceInterval(sessionDate, session.start_time, session.end_time);
+      const { data: canonicalAccess, error: canonicalError } = await client.rpc('resolve_access_entitlement', {
+        p_venue_id: venueId,
+        p_customer_id: entitlementCustomerId,
+        p_user_id: userId,
+        p_activity_session_id: activitySessionId,
+        p_service_date: sessionDate,
+        p_at: occurrence?.startISO || new Date().toISOString(),
+        p_product_key: productKey,
+        p_access_context: { entitlement_types: ['punch_card', 'partner_access'] },
+      });
+      if (canonicalError) {
+        console.error('canonical activity entitlement lookup failed', canonicalError.message);
+      } else if (canonicalAccess?.covered && ['punch_card', 'partner_access'].includes(String(canonicalAccess.entitlement_type || ''))) {
+        finalAmountSek = 0;
+        accessDecision = 'entitlement_included';
+        entitlementType = String(canonicalAccess.entitlement_type);
+        accessReason = String(canonicalAccess.access_reason || '') || null;
+        fundingType = String(canonicalAccess.funding_type || '') || null;
+        consumptionRequired = Boolean(canonicalAccess.consumption_required);
+        sourceId = String(canonicalAccess.entitlement_id || '') || null;
+        pricingReason = entitlementType;
+        debug.pricing_source = entitlementType;
+        debug.canonical_entitlement = {
+          id: sourceId,
+          type: entitlementType,
+          access_reason: accessReason,
+          meter_type: canonicalAccess.meter_type || null,
+          remaining_uses: canonicalAccess.remaining_uses ?? null,
+          funding_type: fundingType,
+          consumption_required: consumptionRequired,
+        };
+      }
+    }
+  }
+
   if (earlyBirdActive && earlyBirdPriceSek != null && finalAmountSek > 0) {
     if (earlyBirdPriceSek < finalAmountSek) {
       debug.before_early_bird_amount_sek = finalAmountSek;
@@ -490,7 +540,7 @@ export async function resolveActivityPricingDecision({
       ? 'Ingår — du är värd'
       : accessDecision === 'day_access_included'
       ? 'Ingår idag'
-      : 'Ingår'
+      : accessReason || 'Ingår'
     : formatSek(finalAmountSek);
 
   return {
@@ -506,6 +556,9 @@ export async function resolveActivityPricingDecision({
     pricingReason,
     accessDecision,
     entitlementType,
+    accessReason,
+    fundingType,
+    consumptionRequired,
     membershipId,
     membershipTierName,
     sourceId,

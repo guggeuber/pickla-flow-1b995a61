@@ -476,6 +476,15 @@ BEGIN
     FROM public.access_entitlements entitlement
     WHERE entitlement.organization_id = v_organization_id
       AND entitlement.customer_id = v_customer_id
+      AND (
+        NOT (COALESCE(p_access_context, '{}'::jsonb) ? 'entitlement_types')
+        OR (
+          jsonb_typeof(COALESCE(p_access_context, '{}'::jsonb)->'entitlement_types') = 'array'
+          AND entitlement.entitlement_type IN (
+            SELECT jsonb_array_elements_text(COALESCE(p_access_context, '{}'::jsonb)->'entitlement_types')
+          )
+        )
+      )
     ORDER BY
       CASE
         WHEN entitlement.scope_type = 'exact_session' OR entitlement.entitlement_type IN ('session_ticket', 'booking_access') THEN 10
@@ -535,26 +544,28 @@ BEGIN
       v_scope_matches := CASE v_entitlement.scope_type
         WHEN 'exact_session' THEN v_entitlement.activity_session_id = p_activity_session_id
           AND COALESCE(v_entitlement.service_date, v_entitlement.session_date, v_service_date) = v_service_date
-        WHEN 'activity_series' THEN EXISTS (
+        WHEN 'activity_series' THEN v_entitlement.venue_id = p_venue_id AND EXISTS (
           SELECT 1 FROM public.access_entitlement_scopes scope
           WHERE scope.entitlement_id = v_entitlement.id
             AND scope.scope_kind = 'activity_series'
             AND scope.activity_series_id = v_series_id
         )
-        WHEN 'session_type' THEN v_session_type = ANY(v_entitlement.includes_session_types)
+        WHEN 'session_type' THEN v_entitlement.venue_id = p_venue_id AND (
+          v_session_type = ANY(v_entitlement.includes_session_types)
           OR EXISTS (
             SELECT 1 FROM public.access_entitlement_scopes scope
             WHERE scope.entitlement_id = v_entitlement.id
               AND scope.scope_kind = 'session_type' AND scope.scope_value = v_session_type
           )
-        WHEN 'product_key' THEN EXISTS (
+        )
+        WHEN 'product_key' THEN v_entitlement.venue_id = p_venue_id AND EXISTS (
           SELECT 1 FROM public.access_entitlement_scopes scope
           LEFT JOIN public.access_products product ON product.id = scope.access_product_id
           WHERE scope.entitlement_id = v_entitlement.id
             AND scope.scope_kind = 'product_key'
             AND COALESCE(scope.scope_value, product.product_key) = v_product_key
         )
-        WHEN 'open_play' THEN v_session_type = 'open_play'
+        WHEN 'open_play' THEN v_entitlement.venue_id = p_venue_id AND v_session_type = 'open_play'
         WHEN 'venue' THEN v_entitlement.venue_id = p_venue_id
         WHEN 'selected_venues' THEN EXISTS (
           SELECT 1 FROM public.access_entitlement_scopes scope
@@ -562,7 +573,7 @@ BEGIN
             AND scope.scope_kind = 'venue' AND scope.venue_id = p_venue_id
         )
         WHEN 'brand' THEN v_entitlement.organization_id = v_organization_id
-        WHEN 'sport_type' THEN EXISTS (
+        WHEN 'sport_type' THEN v_entitlement.venue_id = p_venue_id AND EXISTS (
           SELECT 1 FROM public.access_entitlement_scopes scope
           WHERE scope.entitlement_id = v_entitlement.id
             AND scope.scope_kind = 'sport_type' AND scope.scope_value = v_sport_type
