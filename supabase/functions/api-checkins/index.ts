@@ -209,12 +209,35 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
   const { data: accessRows } = await accessQuery;
 
   for (const access of accessRows || []) {
-    const validFrom = access.valid_from ? DateTime.fromISO(access.valid_from, { zone: 'utc' }).toMillis() : null;
-    const validUntil = access.valid_until ? DateTime.fromISO(access.valid_until, { zone: 'utc' }).toMillis() : null;
+    const validFromValue = access.starts_at || access.valid_from;
+    const validUntilValue = access.expires_at || access.valid_until;
+    const validFrom = validFromValue ? DateTime.fromISO(validFromValue, { zone: 'utc' }).toMillis() : null;
+    const validUntil = validUntilValue ? DateTime.fromISO(validUntilValue, { zone: 'utc' }).toMillis() : null;
     const nowMs = DateTime.now().toMillis();
     if (validFrom && nowMs < validFrom) continue;
     if (validUntil && nowMs > validUntil) continue;
     if (access.valid_date && access.valid_date !== today) continue;
+
+    const committedRegistration = (registrations || []).find((row: any) => (
+      ['punch_card', 'partner_access'].includes(String(row.source_type || ''))
+      && String(row.source_id || '') === String(access.id)
+    ));
+    if (access.entitlement_type === 'partner_access') {
+      if (!committedRegistration) continue;
+      const { data: resolvedPartner, error: resolvedPartnerError } = await serviceClient.rpc('resolve_access_entitlement', {
+        p_venue_id: venueId,
+        p_customer_id: access.customer_id || customerId,
+        p_user_id: targetUserId,
+        p_activity_session_id: committedRegistration.activity_session_id,
+        p_service_date: committedRegistration.session_date,
+        p_at: nowIso,
+        p_product_key: null,
+        p_access_context: { entitlement_types: ['partner_access'], channel: 'checkin' },
+      });
+      if (resolvedPartnerError
+        || resolvedPartner?.covered !== true
+        || String(resolvedPartner?.entitlement_id || '') !== String(access.id)) continue;
+    }
 
     entitlements.push({
       type: access.entitlement_type,
@@ -223,7 +246,7 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
       customer_id: access.customer_id || customerId || null,
       source_type: access.source_type,
       source_id: access.source_id,
-      registration_id: registration?.source_id === access.id ? registration.id : null,
+      registration_id: committedRegistration?.id || null,
       metadata: access.metadata || {},
       label: access.access_reason || (access.entitlement_type === 'day_access'
         ? 'Heldagspass'
@@ -233,8 +256,8 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
             ? 'Ingår via partner'
             : access.metadata?.session_name || 'Aktivitetsbiljett'),
       valid_date: access.valid_date,
-      activity_session_id: access.activity_session_id,
-      session_date: access.session_date,
+      activity_session_id: committedRegistration?.activity_session_id || access.activity_session_id,
+      session_date: committedRegistration?.session_date || access.session_date,
       includes_session_types: access.includes_session_types || [],
       meter_type: access.meter_type,
       remaining_uses: access.meter_type === 'occurrences'
@@ -243,7 +266,9 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
       funding_type: access.funding_type,
       funder: access.funder,
       consumption_required: Boolean(access.requires_consumption),
-      priority: Number(access.resolution_priority || entitlementPriority[access.entitlement_type] || 60),
+      priority: committedRegistration
+        ? entitlementPriority.session_ticket
+        : Number(access.resolution_priority || entitlementPriority[access.entitlement_type] || 60),
       scarcity_priority: access.scarcity_class === 'scarce' ? 1 : 0,
       origin_priority: Number(access.resolution_origin_priority || 0),
       expiry_priority: access.resolution_expiry_at ? DateTime.fromISO(access.resolution_expiry_at).toMillis() : Number.POSITIVE_INFINITY,
@@ -324,6 +349,7 @@ async function checkInCanonicalEntitlement(serviceClient: any, params: {
       || (params.entitlement.source_type === 'session_registration' ? params.entitlement.source_id || null : null),
     p_commerce_order_id: params.entitlement.metadata?.commerce_order_id || null,
     p_access_context: {
+      channel: 'checkin',
       session_type: sessionType,
       sport_type: params.entitlement.metadata?.sport_type || 'pickleball',
       product_key: params.entitlement.metadata?.product_key || null,
@@ -1226,26 +1252,62 @@ Deno.serve(async (req) => {
 
     // GET /api-checkins/today — get today's venue checkins
     if (req.method === 'GET' && path === 'today') {
-      const { client, userId, error } = await getAuthenticatedClient(req);
-      if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+      const { userId, error } = await getAuthenticatedClient(req);
+      if (error || !userId) return errorResponse(error || 'Unauthorized', 401);
 
       const venueId = url.searchParams.get('venueId');
       if (!venueId) return errorResponse('Missing venueId');
+      const serviceClient = getServiceClient();
+      if (!await canStaffOperateVenue(serviceClient, userId, venueId)) return errorResponse('Forbidden', 403);
 
       const nowSthlm = DateTime.now().setZone('Europe/Stockholm');
       const today = nowSthlm.toISODate()!;
       const todayStartUtc = nowSthlm.startOf('day').toUTC().toISO()!;
       const todayEndUtc = nowSthlm.plus({ days: 1 }).startOf('day').toUTC().toISO()!;
-      const { data, error: qErr } = await client
+      const { data, error: qErr } = await serviceClient
         .from('venue_checkins')
-        .select('*')
+        .select('id, venue_id, customer_id, user_id, player_name, entry_type, checked_in_at, entitlement_id')
         .eq('venue_id', venueId)
         .or(`session_date.eq.${today},and(session_date.is.null,checked_in_at.gte.${todayStartUtc},checked_in_at.lt.${todayEndUtc})`)
         .is('checked_out_at', null)
         .order('checked_in_at', { ascending: false });
 
       if (qErr) return errorResponse(qErr.message);
-      return jsonResponse(data, 200, 5);
+      const partnerEntitlementIds = (data || [])
+        .filter((row: any) => row.entry_type === 'partner_access' && row.entitlement_id)
+        .map((row: any) => row.entitlement_id);
+      const { data: partnerRights, error: partnerRightsError } = partnerEntitlementIds.length
+        ? await serviceClient.from('access_entitlements')
+          .select('id, access_reason, activity_session_id, partner_program_id')
+          .eq('venue_id', venueId)
+          .eq('entitlement_type', 'partner_access')
+          .in('id', partnerEntitlementIds)
+        : { data: [], error: null };
+      if (partnerRightsError) return errorResponse(partnerRightsError.message);
+      const sessionIds = [...new Set((partnerRights || []).map((right: any) => right.activity_session_id).filter(Boolean))];
+      const programIds = [...new Set((partnerRights || []).map((right: any) => right.partner_program_id).filter(Boolean))];
+      const [{ data: sessions, error: sessionsError }, { data: programs, error: programsError }] = await Promise.all([
+        sessionIds.length
+          ? serviceClient.from('activity_sessions').select('id, name').eq('venue_id', venueId).in('id', sessionIds)
+          : Promise.resolve({ data: [], error: null }),
+        programIds.length
+          ? serviceClient.from('partner_programs').select('id, desk_label').in('id', programIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (sessionsError || programsError) return errorResponse(sessionsError?.message || programsError?.message || 'Desk projection unavailable');
+      const rightById = new Map((partnerRights || []).map((right: any) => [right.id, right]));
+      const sessionById = new Map((sessions || []).map((session: any) => [session.id, session]));
+      const programById = new Map((programs || []).map((program: any) => [program.id, program]));
+      return jsonResponse((data || []).map((row: any) => {
+        const right = rightById.get(row.entitlement_id);
+        if (!right) return row;
+        const deskLabel = programById.get(right.partner_program_id)?.desk_label;
+        return {
+          ...row,
+          access_reason: right.access_reason || (deskLabel ? `Ingår via ${deskLabel}` : 'Partner'),
+          activity_name: sessionById.get(right.activity_session_id)?.name || null,
+        };
+      }), 200, 5);
     }
 
     // GET /api-checkins/ops?venueId=X — deterministic desk attention signals.

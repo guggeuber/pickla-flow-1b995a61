@@ -32,6 +32,7 @@ async function request(url, { method = "GET", body, key = serviceKey, token, exp
       apikey: key,
       ...(token === null ? {} : { Authorization: `Bearer ${token || key}` }),
       ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...(method === "POST" && url.includes("/rest/v1/") ? { Prefer: "return=representation" } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -117,13 +118,16 @@ await rest("activity_sessions", "", { method: "POST", body: [
 
 const operator = await createUser("operator");
 const customer = await createUser("customer");
+const reconciliationCustomer = await createUser("reconciliation");
 const outsider = await createUser("outsider");
 await rest("venue_staff", "", { method: "POST", body: [
   { venue_id: ids.venue, user_id: operator.id, role: "venue_admin", is_active: true },
   { venue_id: ids.otherVenue, user_id: outsider.id, role: "venue_admin", is_active: true },
 ] });
 const customerRow = (await rest("customers", `auth_user_id=eq.${customer.id}&select=id`)).payload[0];
+const reconciliationCustomerRow = (await rest("customers", `auth_user_id=eq.${reconciliationCustomer.id}&select=id`)).payload[0];
 assert(customerRow?.id, "customer identity did not resolve");
+assert(reconciliationCustomerRow?.id, "reconciliation customer identity did not resolve");
 
 const createdProgram = await fn("programs", {
   method: "POST",
@@ -138,9 +142,17 @@ const createdProgram = await fn("programs", {
     fundingCounterpartyRef: `bruce-contract-${run}`,
     reimbursementAmountMinor: 12500,
     settlementRule: { version: "1", basis: "valid_attendance" },
+    agreementVersion: "bruce-v1",
+    agreementEffectiveDate: "2026-08-01",
+    consumptionTrigger: "on_checkin",
+    noShowPolicy: "do_not_consume",
   },
 });
-assert(createdProgram.payload.name === "Bruce", "program creation changed the configured program");
+assert(createdProgram.payload.name === "Bruce"
+  && createdProgram.payload.consumption_trigger === "on_checkin"
+  && createdProgram.payload.no_show_policy === "do_not_consume"
+  && createdProgram.payload.agreement_version === "bruce-v1",
+"program creation changed the configured Bruce terms");
 pass("program configuration", "generic partner program created by venue staff");
 
 const beforeLabel = await fn(`session-labels?venueId=${ids.venue}&sessionId=${ids.session}`, { token: null });
@@ -190,6 +202,34 @@ const resolution = await rpc("resolve_access_entitlement", {
 });
 assert(resolution.payload.covered === true && resolution.payload.pricing_consequence === "included", "partner access did not produce included pricing consequence");
 pass("partner access pricing", "participant consequence is included / 0 kr with provenance");
+
+await fn("session-eligibility", {
+  method: "POST", token: operator.token,
+  body: { venueId: ids.venue, sessionId: ids.session, programId: createdProgram.payload.id, eligible: false },
+});
+const disabledResolution = await rpc("resolve_access_entitlement", {
+  p_venue_id: ids.venue, p_customer_id: customerRow.id,
+  p_activity_session_id: ids.session, p_service_date: "2026-08-06", p_at: "2026-08-06T10:00:00Z",
+});
+assert(disabledResolution.payload.covered === false, "disabled Bruce session still resolved as covered");
+await fn("session-eligibility", {
+  method: "POST", token: operator.token,
+  body: { venueId: ids.venue, sessionId: ids.session, programId: createdProgram.payload.id, eligible: true },
+});
+await fn("programs", {
+  method: "PATCH", token: operator.token,
+  body: { venueId: ids.venue, programId: createdProgram.payload.id, status: "inactive" },
+});
+const inactiveResolution = await rpc("resolve_access_entitlement", {
+  p_venue_id: ids.venue, p_customer_id: customerRow.id,
+  p_activity_session_id: ids.session, p_service_date: "2026-08-06", p_at: "2026-08-06T10:00:00Z",
+});
+assert(inactiveResolution.payload.covered === false, "inactive Bruce program still resolved as covered");
+await fn("programs", {
+  method: "PATCH", token: operator.token,
+  body: { venueId: ids.venue, programId: createdProgram.payload.id, status: "active" },
+});
+pass("runtime program boundary", "disabled session and inactive program both deny partner coverage");
 
 const myRights = await fn("my", { token: customer.token });
 const myPartner = myRights.payload.rights.find((right) => right.id === partnerRight.payload.id);
@@ -295,5 +335,61 @@ await fn("reverse-consumption", {
 const reversed = (await rest("partner_receivable_events", `partner_program_id=eq.${createdProgram.payload.id}&select=event_type`)).payload;
 assert(reversed.filter((event) => event.event_type === "accrued").length === 1 && reversed.filter((event) => event.event_type === "reversal").length === 1, "partner reversal did not append exactly one finance reversal");
 pass("partner receivable lifecycle", "one accrued event, retry-safe, one explicit reversal");
+
+const reconciliationRight = await fn("partner-entitlement", {
+  method: "POST", token: operator.token,
+  body: {
+    venueId: ids.venue, programId: createdProgram.payload.id, sessionId: ids.session,
+    serviceDate: "2026-08-06", externalReference: `bruce-reconciliation-${run}`,
+    customerId: reconciliationCustomerRow.id,
+  },
+});
+const registration = (await rest("session_registrations", "", { method: "POST", body: {
+  venue_id: ids.venue,
+  activity_session_id: ids.session,
+  session_date: "2026-08-06",
+  user_id: reconciliationCustomer.id,
+  customer_id: reconciliationCustomerRow.id,
+  status: "confirmed",
+  price_paid_sek: 0,
+  source_type: "partner_access",
+  source_id: reconciliationRight.payload.id,
+} })).payload[0];
+await fn("reconcile-attendance", {
+  method: "POST", token: operator.token,
+  body: {
+    venueId: ids.venue,
+    entitlementId: reconciliationRight.payload.id,
+    registrationId: registration.id,
+    reason: "Missad incheckning i Desk",
+    idempotencyKey: `manual-reconciliation-${run}`,
+    occurredAt: "2026-08-06T10:25:00Z",
+  },
+});
+const reconciliationConsumption = (await rest(
+  "entitlement_consumptions",
+  `entitlement_id=eq.${reconciliationRight.payload.id}&select=id,reason,created_by`,
+)).payload[0];
+assert(reconciliationConsumption?.reason === "Missad incheckning i Desk"
+  && reconciliationConsumption.created_by === operator.id,
+"manual reconciliation did not freeze staff actor and reason");
+const operations = await fn(`operations?venueId=${ids.venue}`, { token: operator.token });
+const operationalAssignment = operations.payload.assignments.find((assignment) => assignment.id === reconciliationRight.payload.id);
+assert(operationalAssignment?.registration?.id === registration.id
+  && operationalAssignment.attendance?.reconciled === true,
+"operator view did not connect assignment, registration and reconciled attendance");
+await fn(`operations?venueId=${ids.venue}`, { token: outsider.token, expected: 403 });
+pass("manual attendance reconciliation", "staff actor/reason audited through canonical consumption and scoped operations view");
+
+await fn("revoke-partner-entitlement", {
+  method: "POST", token: operator.token,
+  body: { venueId: ids.venue, entitlementId: partnerRight.payload.id, reason: "E2E avslutad access" },
+});
+const revokedResolution = await rpc("resolve_access_entitlement", {
+  p_venue_id: ids.venue, p_customer_id: customerRow.id,
+  p_activity_session_id: ids.session, p_service_date: "2026-08-06", p_at: "2026-08-06T10:00:00Z",
+});
+assert(revokedResolution.payload.entitlement_id !== partnerRight.payload.id, "revoked Bruce entitlement remained selected");
+pass("partner access removal", "staff revocation removes the selected entitlement without deleting history");
 
 process.stdout.write("ENTITLEMENTS API E2E PASSED\n");

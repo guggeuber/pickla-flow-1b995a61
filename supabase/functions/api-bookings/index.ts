@@ -4552,6 +4552,7 @@ Deno.serve(async (req) => {
             price_paid_sek: registration.price_paid_sek,
             source_type: playingHost ? PLAYING_HOST_ROLE : registration.source_type || null,
             source_id: registration.source_id || null,
+            access_reason: registrationMetadata.access_reason || null,
             metadata: registrationMetadata,
             role: playingHost ? PLAYING_HOST_ROLE : null,
             is_playing_host: playingHost,

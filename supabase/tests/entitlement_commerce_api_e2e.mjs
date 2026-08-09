@@ -221,7 +221,10 @@ const program = (await rest("partner_programs", "", { method: "POST", body: {
   organization_id: organization.id, program_key: `bruce-${run}`, name: "Bruce",
   activity_label: "Bruce gäller", access_reason: "Ingår via Bruce", desk_label: "Bruce",
   funding_counterparty_ref: `bruce-contract-${run}`, reimbursement_amount_minor: 12500,
-  settlement_rule: { version: "1", basis: "valid_attendance" }, created_by: operator.id,
+  settlement_rule: { version: "1", basis: "valid_attendance" },
+  agreement_version: "bruce-v1", agreement_effective_date: today,
+  consumption_trigger: "on_checkin", no_show_policy: "do_not_consume",
+  created_by: operator.id,
 } })).payload[0];
 await rest("partner_program_sessions", "", { method: "POST", body: {
   partner_program_id: program.id, organization_id: organization.id, venue_id: ids.venue,
@@ -283,6 +286,18 @@ assert(firstCheckin.already_checked_in === false && retryCheckin.already_checked
 assert(partnerAfterCheckin.status === "exhausted" && partnerAfterCheckin.uses_count === 1
   && consumptions.length === 1 && consumptions[0].registration_id === partnerRegistration.id && receivables.length === 1,
   "actual attendance did not consume once with registration and receivable provenance");
+const deskToday = await fn(checkinsUrl, `today?venueId=${ids.venue}`, { token: operator.token });
+const partnerArrival = deskToday.find((row) => row.entitlement_id === partner.id);
+const allowedDeskKeys = new Set([
+  "id", "venue_id", "customer_id", "user_id", "player_name", "entry_type",
+  "checked_in_at", "entitlement_id", "access_reason", "activity_name",
+]);
+assert(partnerArrival?.access_reason === "Ingår via Bruce"
+  && partnerArrival.activity_name === "Entitlement Open Play",
+"Desk did not receive the compact Bruce operational label");
+assert(Object.keys(partnerArrival).every((key) => allowedDeskKeys.has(key)),
+  `Desk response overexposed fields: ${Object.keys(partnerArrival).filter((key) => !allowedDeskKeys.has(key)).join(", ")}`);
 pass("partner purchase-to-attendance", "0 kr activity + paid add-on, one original right, one check-in consumption, one receivable");
+pass("Desk Bruce projection", "customer, activity, access reason and check-in only; no partner finance internals");
 
 process.stdout.write("ENTITLEMENT_COMMERCE_API_E2E_PASSED\n");

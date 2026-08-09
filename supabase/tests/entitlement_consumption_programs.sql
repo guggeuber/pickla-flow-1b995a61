@@ -23,12 +23,14 @@ DECLARE
   v_legacy public.access_entitlements;
   v_partner public.access_entitlements;
   v_no_show public.access_entitlements;
+  v_manual public.access_entitlements;
   v_first JSONB;
   v_retry JSONB;
   v_checkin JSONB;
   v_checkin_retry JSONB;
   v_reversal JSONB;
   v_consumption UUID;
+  v_manual_registration UUID;
 BEGIN
   SELECT id INTO v_org FROM public.organizations ORDER BY created_at LIMIT 1;
   INSERT INTO public.venues (id, organization_id, name, slug, timezone)
@@ -159,11 +161,12 @@ BEGIN
   INSERT INTO public.partner_programs (
     organization_id, program_key, name, activity_label, access_reason, desk_label,
     funding_counterparty_ref, reimbursement_amount_minor, settlement_rule,
-    agreement_version, agreement_effective_date, created_by
+    agreement_version, agreement_effective_date, consumption_trigger,
+    no_show_policy, created_by
   ) VALUES (
     v_org, 'bruce', 'Bruce', 'Bruce gäller', 'Ingår via Bruce', 'Bruce',
     'bruce-fixture-contract', 12500, '{"version":"1","basis":"valid_attendance"}',
-    'bruce-v1', current_date,
+    'bruce-v1', current_date, 'on_checkin', 'do_not_consume',
     'ef200000-0000-4000-8000-000000000001'
   ) RETURNING id INTO v_program;
   INSERT INTO public.partner_program_sessions (
@@ -203,6 +206,39 @@ BEGIN
     p_activity_session_id => v_session, p_service_date => current_date,
     p_external_reference => 'bruce-no-show-fixture'
   );
+  SELECT public.resolve_access_entitlement(
+    p_venue_id => v_venue, p_customer_id => v_other_customer,
+    p_activity_session_id => v_session, p_service_date => current_date,
+    p_at => now()
+  ) INTO v_first;
+  IF NOT (v_first->>'covered')::boolean OR v_first->>'entitlement_id' <> v_no_show.id::text THEN
+    RAISE EXCEPTION 'active eligible partner resolver failed: %', v_first;
+  END IF;
+  UPDATE public.partner_program_sessions SET status = 'ineligible'
+  WHERE partner_program_id = v_program AND activity_session_id = v_session;
+  SELECT public.resolve_access_entitlement(
+    p_venue_id => v_venue, p_customer_id => v_other_customer,
+    p_activity_session_id => v_session, p_service_date => current_date,
+    p_at => now()
+  ) INTO v_first;
+  IF (v_first->>'covered')::boolean THEN RAISE EXCEPTION 'disabled partner session still covered: %', v_first; END IF;
+  UPDATE public.partner_program_sessions SET status = 'eligible'
+  WHERE partner_program_id = v_program AND activity_session_id = v_session;
+  UPDATE public.partner_programs SET status = 'inactive' WHERE id = v_program;
+  SELECT public.resolve_access_entitlement(
+    p_venue_id => v_venue, p_customer_id => v_other_customer,
+    p_activity_session_id => v_session, p_service_date => current_date,
+    p_at => now()
+  ) INTO v_first;
+  IF (v_first->>'covered')::boolean THEN RAISE EXCEPTION 'inactive partner program still covered: %', v_first; END IF;
+  UPDATE public.partner_programs SET status = 'active' WHERE id = v_program;
+  UPDATE public.access_entitlements SET status = 'revoked' WHERE id = v_no_show.id;
+  SELECT public.resolve_access_entitlement(
+    p_venue_id => v_venue, p_customer_id => v_other_customer,
+    p_activity_session_id => v_session, p_service_date => current_date,
+    p_at => now()
+  ) INTO v_first;
+  IF (v_first->>'covered')::boolean THEN RAISE EXCEPTION 'revoked partner entitlement still covered: %', v_first; END IF;
   IF v_no_show.uses_count <> 0 OR EXISTS (
     SELECT 1 FROM public.partner_receivable_events WHERE partner_program_id = v_program
   ) THEN RAISE EXCEPTION 'issuance/no-show created consumption or receivable'; END IF;
@@ -251,6 +287,46 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM = 'partner receivable delete accepted' THEN RAISE; END IF;
   END;
+
+  -- Missed attendance uses the same canonical consumption path and requires a
+  -- staff actor plus reason. It appends the ordinary frozen receivable truth.
+  SELECT * INTO v_manual FROM public.issue_partner_entitlement(
+    p_partner_program_id => v_program, p_customer_id => v_other_customer, p_venue_id => v_venue,
+    p_activity_session_id => v_session, p_service_date => current_date,
+    p_external_reference => 'bruce-manual-reconciliation'
+  );
+  INSERT INTO public.session_registrations (
+    venue_id, activity_session_id, session_date, customer_id, status,
+    source_type, source_id, price_paid_sek
+  ) VALUES (
+    v_venue, v_session, current_date, v_other_customer, 'confirmed',
+    'partner_access', v_manual.id, 0
+  ) RETURNING id INTO v_manual_registration;
+  BEGIN
+    PERFORM public.consume_access_entitlement(
+      p_entitlement_id => v_manual.id, p_customer_id => v_other_customer, p_venue_id => v_venue,
+      p_idempotency_key => 'manual-missing-audit', p_activity_session_id => v_session,
+      p_session_date => current_date, p_registration_id => v_manual_registration,
+      p_access_context => '{"source":"manual_reconciliation"}'::jsonb
+    );
+    RAISE EXCEPTION 'manual reconciliation without actor/reason accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'manual reconciliation without actor/reason accepted' THEN RAISE; END IF;
+  END;
+  SELECT public.consume_access_entitlement(
+    p_entitlement_id => v_manual.id, p_customer_id => v_other_customer, p_venue_id => v_venue,
+    p_idempotency_key => 'manual-with-audit', p_activity_session_id => v_session,
+    p_session_date => current_date, p_registration_id => v_manual_registration,
+    p_access_context => '{"source":"manual_reconciliation","reason":"Missad desk-incheckning","channel":"admin"}'::jsonb,
+    p_created_by => 'ef200000-0000-4000-8000-000000000001'
+  ) INTO v_first;
+  IF (SELECT reason FROM public.entitlement_consumptions WHERE id = (v_first->>'consumption_id')::uuid) <> 'Missad desk-incheckning'
+     OR (SELECT created_by FROM public.entitlement_consumptions WHERE id = (v_first->>'consumption_id')::uuid)
+       <> 'ef200000-0000-4000-8000-000000000001'
+     OR (SELECT count(*) FROM public.partner_receivable_events
+         WHERE entitlement_consumption_id = (v_first->>'consumption_id')::uuid AND event_type = 'accrued') <> 1 THEN
+    RAISE EXCEPTION 'manual reconciliation audit/receivable failed';
+  END IF;
 END $$;
 
 ROLLBACK;
