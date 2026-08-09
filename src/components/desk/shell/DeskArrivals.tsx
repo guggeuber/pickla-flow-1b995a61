@@ -32,6 +32,8 @@ interface TodayCheckin {
   entry_type: string;
   checked_in_at: string;
   entitlement_id: string | null;
+  access_reason?: string | null;
+  activity_name?: string | null;
 }
 
 interface Props {
@@ -113,7 +115,7 @@ export default function DeskArrivals({ venueId }: Props) {
       ) : (
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {list.map((c) => {
-            const label = checkinLabels[c.entry_type] || c.entry_type;
+            const label = c.access_reason || checkinLabels[c.entry_type] || c.entry_type;
             const name = c.player_name || (c.entry_type === "booking_code" ? "Bokningskod" : "Gäst");
             const isNew = newIds.has(c.id);
             const at = DateTime.fromISO(c.checked_in_at, { zone: "utc" })
@@ -149,7 +151,7 @@ export default function DeskArrivals({ venueId }: Props) {
                         {isNew && <AxChip tone="lime">Ny</AxChip>}
                       </div>
                       <p className={`${AX_TYPE.meta} font-mono`} style={{ color: ax("muted") }}>
-                        {label} · {at}
+                        {label}{c.activity_name ? ` · ${c.activity_name}` : ""} · {at}
                       </p>
                     </div>
                   </div>

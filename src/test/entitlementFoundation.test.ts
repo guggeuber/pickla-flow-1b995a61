@@ -5,6 +5,7 @@ const migration = readFileSync("supabase/migrations/20260806120000_converge_cano
 const consumptionMigration = readFileSync("supabase/migrations/20260806130000_entitlement_consumption_contracts.sql", "utf8");
 const programMigration = readFileSync("supabase/migrations/20260806140000_partner_and_punch_card_readiness.sql", "utf8");
 const constitutionMigration = readFileSync("supabase/migrations/20260808120000_entitlement_constitution_v11.sql", "utf8");
+const bruceOperationsMigration = readFileSync("supabase/migrations/20260809120000_bruce_partner_program_operations.sql", "utf8");
 const entitlementFields = readFileSync("supabase/functions/_shared/entitlements.ts", "utf8");
 const constitution = readFileSync("docs/entitlement-constitution.md", "utf8");
 const entitlementApi = readFileSync("supabase/functions/api-entitlements/index.ts", "utf8");
@@ -17,6 +18,8 @@ const myPage = readFileSync("src/pages/MyPage.tsx", "utf8");
 const adminSchedule = readFileSync("src/components/admin/AdminSchedule.tsx", "utf8");
 const scanner = readFileSync("src/components/desk/QrScanner.tsx", "utf8");
 const arrivals = readFileSync("src/components/desk/shell/DeskArrivals.tsx", "utf8");
+const deskToday = readFileSync("src/components/desk/shell/DeskToday.tsx", "utf8");
+const partnerAdmin = readFileSync("src/components/admin/AdminPartnerPrograms.tsx", "utf8");
 
 describe("canonical entitlement foundation", () => {
   it("expresses scope, meter, validity, funding and customer ownership independently", () => {
@@ -63,7 +66,48 @@ describe("canonical entitlement foundation", () => {
     expect(commerceApi).toContain("if (!canonicalEntitlementId)");
     expect(commerceWebhook).toContain("p_source_type: canonicalEntitlementId ? canonicalEntitlementType : 'commerce_order'");
     expect(commerceWebhook).toContain("if (canonicalEntitlementId) return;");
-    expect(checkinApi).toContain("registration?.source_id === access.id ? registration.id : null");
+    expect(checkinApi).toContain("committedRegistration?.id || null");
+    expect(checkinApi).toContain("entitlement_types: ['partner_access']");
+  });
+});
+
+describe("Bruce production program operations", () => {
+  it("inherits configured trigger/no-show terms and keeps Bruce out of resolver code", () => {
+    expect(bruceOperationsMigration).toContain("ADD COLUMN IF NOT EXISTS consumption_trigger");
+    expect(bruceOperationsMigration).toContain("p_consumption_trigger => v_program.consumption_trigger");
+    expect(bruceOperationsMigration).toContain("p_no_show_policy => v_program.no_show_policy");
+    expect(bruceOperationsMigration).toContain("partner_session_not_eligible");
+    expect(bruceOperationsMigration).toContain("program.status = 'active'");
+    expect(bruceOperationsMigration.toLowerCase()).not.toMatch(/is_bruce|where[^;]+bruce|program_key\s*=\s*'bruce'/);
+    expect(bruceOperationsMigration).not.toContain("INSERT INTO public.partner_programs");
+  });
+
+  it("uses canonical assignment, check-in, reconciliation and receivable paths", () => {
+    expect(entitlementApi).toContain("path === 'partner-entitlement'");
+    expect(entitlementApi).toContain("path === 'revoke-partner-entitlement'");
+    expect(entitlementApi).toContain("path === 'reconcile-attendance'");
+    expect(entitlementApi).toContain("admin.rpc('consume_access_entitlement'");
+    expect(bruceOperationsMigration).toContain("manual_reconciliation_actor_and_reason_required");
+    expect(checkinApi).toContain("check_in_with_entitlement");
+    expect(constitutionMigration).toContain("record_partner_receivable_from_consumption");
+  });
+
+  it("keeps the public and Desk projections deliberately narrow", () => {
+    expect(entitlementApi).toContain(".map((program: any) => ({ label: program.activity_label }))");
+    expect(checkinApi).toContain(".select('id, venue_id, customer_id, user_id, player_name, entry_type, checked_in_at, entitlement_id')");
+    expect(checkinApi).toContain("access_reason: right.access_reason");
+    expect(checkinApi).toContain("activity_name:");
+    expect(deskToday).toContain("accessReason");
+    expect(deskToday).toContain("<AxChip tone=\"electric\">{accessReason}</AxChip>");
+  });
+
+  it("places the minimum operator flow in the existing access admin surface", () => {
+    expect(partnerAdmin).toContain("Programvillkor");
+    expect(partnerAdmin).toContain("Tilldela Bruce-access");
+    expect(partnerAdmin).toContain("Registrera missad närvaro");
+    expect(partnerAdmin).toContain("api-entitlements\", \"operations");
+    expect(partnerAdmin).not.toContain("stored_value");
+    expect(partnerAdmin).not.toContain("is_bruce");
   });
 });
 

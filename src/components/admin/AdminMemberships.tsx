@@ -4,6 +4,7 @@ import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { Loader2, Plus, Crown, Trash2, ChevronUp, Tag, Save } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
+import AdminPartnerPrograms from "@/components/admin/AdminPartnerPrograms";
 
 interface MembershipTier {
   id: string;
@@ -941,6 +942,8 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
           Tilldela
         </button>
       </div>
+
+      <AdminPartnerPrograms venueId={venueId} />
     </div>
   );
 };

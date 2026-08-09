@@ -987,6 +987,7 @@ function ActivityParticipantRow({
   const checkedIn = participant.checked_in || participant.consumed || participant.status === "checked_in";
   const playingHost = isPlayingHostParticipant(participant);
   const paymentStatus = String(participant.payment_status || "").toLowerCase();
+  const accessReason = String(participant.access_reason || participant.metadata?.access_reason || "").trim();
   const paymentLabel = playingHost ? "0 kr · playing_host" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "confirmed" ? "Betald" : "Okänd";
   const receiptRef = participant.receipt_number || participant.receipt?.receipt_number || null;
   const hasCustomer = Boolean(participant.customer_id || participant.user_id);
@@ -1012,6 +1013,7 @@ function ActivityParticipantRow({
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <AxChip tone={paymentStatus === "paid" || paymentStatus === "free" || paymentStatus === "confirmed" ? "lime" : "sun"}>{paymentLabel}</AxChip>
+            {accessReason && <AxChip tone="electric">{accessReason}</AxChip>}
             {playingHost && <AxChip tone="electric">Playing host</AxChip>}
             <AxChip tone={checkedIn ? "lime" : "sun"}>
               {checkedIn ? `Incheckad${participant.checked_in_at ? ` ${timeLabel(participant.checked_in_at)}` : ""}` : "Ej incheckad"}

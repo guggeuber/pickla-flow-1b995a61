@@ -38,6 +38,8 @@ interface TodayCheckin {
   entry_type: string;
   checked_in_at: string;
   entitlement_id: string | null;
+  access_reason?: string | null;
+  activity_name?: string | null;
 }
 
 const statusConfig: Record<CourtStatus, { class: string; label: string; dot: string }> = {
@@ -467,7 +469,7 @@ const TodayScreen = () => {
         {recentCheckins.length > 0 ? (
           <div className="space-y-1.5">
             {recentCheckins.map((checkin) => {
-              const label = checkinLabels[checkin.entry_type] || checkin.entry_type;
+              const label = checkin.access_reason || checkinLabels[checkin.entry_type] || checkin.entry_type;
               const name = checkin.player_name || (checkin.entry_type === "booking_code" ? "Bokningskod" : "Gäst");
               const isNewArrival = newArrivalIds.has(checkin.id);
               const checkedInAt = DateTime.fromISO(checkin.checked_in_at, { zone: "utc" })
@@ -490,7 +492,7 @@ const TodayScreen = () => {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold truncate">{name}</p>
-                    <p className="text-[10px] text-muted-foreground">{label} · {checkedInAt}</p>
+                    <p className="text-[10px] text-muted-foreground">{label}{checkin.activity_name ? ` · ${checkin.activity_name}` : ""} · {checkedInAt}</p>
                   </div>
                   <span className="status-chip bg-court-free/15 text-court-free text-[9px] font-bold">
                     {isNewArrival ? "Ny" : "Inne"}
