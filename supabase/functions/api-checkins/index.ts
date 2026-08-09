@@ -7,6 +7,13 @@ import { activitySessionOccurrenceInterval } from '../_shared/activity_session_t
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const STOCKHOLM_ZONE = 'Europe/Stockholm';
+type CommittedRegistration = {
+  id: string;
+  activity_session_id: string;
+  session_date: string;
+  source_type: string | null;
+  source_id: string | null;
+};
 
 const entitlementPriority: Record<string, number> = {
   booking: 1,
@@ -218,7 +225,7 @@ async function resolveUserAccess(serviceClient: any, venueId: string, targetUser
     if (validUntil && nowMs > validUntil) continue;
     if (access.valid_date && access.valid_date !== today) continue;
 
-    const committedRegistration = (registrations || []).find((row: any) => (
+    const committedRegistration = (registrations || []).find((row: CommittedRegistration) => (
       ['punch_card', 'partner_access'].includes(String(row.source_type || ''))
       && String(row.source_id || '') === String(access.id)
     ));
@@ -1274,8 +1281,8 @@ Deno.serve(async (req) => {
 
       if (qErr) return errorResponse(qErr.message);
       const partnerEntitlementIds = (data || [])
-        .filter((row: any) => row.entry_type === 'partner_access' && row.entitlement_id)
-        .map((row: any) => row.entitlement_id);
+        .filter((row) => row.entry_type === 'partner_access' && row.entitlement_id)
+        .map((row) => row.entitlement_id);
       const { data: partnerRights, error: partnerRightsError } = partnerEntitlementIds.length
         ? await serviceClient.from('access_entitlements')
           .select('id, access_reason, activity_session_id, partner_program_id')
@@ -1284,8 +1291,8 @@ Deno.serve(async (req) => {
           .in('id', partnerEntitlementIds)
         : { data: [], error: null };
       if (partnerRightsError) return errorResponse(partnerRightsError.message);
-      const sessionIds = [...new Set((partnerRights || []).map((right: any) => right.activity_session_id).filter(Boolean))];
-      const programIds = [...new Set((partnerRights || []).map((right: any) => right.partner_program_id).filter(Boolean))];
+      const sessionIds = [...new Set((partnerRights || []).map((right) => right.activity_session_id).filter(Boolean))];
+      const programIds = [...new Set((partnerRights || []).map((right) => right.partner_program_id).filter(Boolean))];
       const [{ data: sessions, error: sessionsError }, { data: programs, error: programsError }] = await Promise.all([
         sessionIds.length
           ? serviceClient.from('activity_sessions').select('id, name').eq('venue_id', venueId).in('id', sessionIds)
@@ -1295,10 +1302,10 @@ Deno.serve(async (req) => {
           : Promise.resolve({ data: [], error: null }),
       ]);
       if (sessionsError || programsError) return errorResponse(sessionsError?.message || programsError?.message || 'Desk projection unavailable');
-      const rightById = new Map((partnerRights || []).map((right: any) => [right.id, right]));
-      const sessionById = new Map((sessions || []).map((session: any) => [session.id, session]));
-      const programById = new Map((programs || []).map((program: any) => [program.id, program]));
-      return jsonResponse((data || []).map((row: any) => {
+      const rightById = new Map((partnerRights || []).map((right) => [right.id, right]));
+      const sessionById = new Map((sessions || []).map((session) => [session.id, session]));
+      const programById = new Map((programs || []).map((program) => [program.id, program]));
+      return jsonResponse((data || []).map((row) => {
         const right = rightById.get(row.entitlement_id);
         if (!right) return row;
         const deskLabel = programById.get(right.partner_program_id)?.desk_label;

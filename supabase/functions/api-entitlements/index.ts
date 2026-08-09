@@ -3,6 +3,14 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 
 type ServiceClient = ReturnType<typeof getServiceClient>;
+type OperationalConsumption = {
+  id: string;
+  entitlement_id: string;
+  event_type: string;
+  reverses_consumption_id: string | null;
+  reason: string | null;
+  occurred_at: string;
+};
 
 const PROGRAM_STATUSES = new Set(['active', 'inactive', 'archived']);
 const CONSUMPTION_TRIGGERS = new Set(['on_checkin', 'on_commitment', 'on_session_end']);
@@ -192,18 +200,18 @@ Deno.serve(async (req) => {
       ]);
       if (rightsError || receivableError) throw new Error(rightsError?.message || receivableError?.message);
 
-      const entitlementIds = (rights || []).map((right: any) => right.id).filter(Boolean);
+      const entitlementIds = (rights || []).map((right) => right.id).filter(Boolean);
       const customerIds = [...new Set([
-        ...(rights || []).map((right: any) => right.customer_id),
-        ...(receivables || []).map((event: any) => event.customer_id),
+        ...(rights || []).map((right) => right.customer_id),
+        ...(receivables || []).map((event) => event.customer_id),
       ].filter(Boolean))];
       const sessionIds = [...new Set([
-        ...(rights || []).map((right: any) => right.activity_session_id),
-        ...(receivables || []).map((event: any) => event.activity_session_id),
+        ...(rights || []).map((right) => right.activity_session_id),
+        ...(receivables || []).map((event) => event.activity_session_id),
       ].filter(Boolean))];
       const programIds = [...new Set([
-        ...(rights || []).map((right: any) => right.partner_program_id),
-        ...(receivables || []).map((event: any) => event.partner_program_id),
+        ...(rights || []).map((right) => right.partner_program_id),
+        ...(receivables || []).map((event) => event.partner_program_id),
       ].filter(Boolean))];
 
       const [consumptionResult, registrationResult, customerResult, sessionResult, programResult] = await Promise.all([
@@ -233,24 +241,24 @@ Deno.serve(async (req) => {
       const readError = consumptionResult.error || registrationResult.error || customerResult.error || sessionResult.error || programResult.error;
       if (readError) throw new Error(readError.message);
 
-      const customerById = new Map((customerResult.data || []).map((customer: any) => [customer.id, customer]));
-      const sessionById = new Map((sessionResult.data || []).map((session: any) => [session.id, session]));
-      const programById = new Map((programResult.data || []).map((program: any) => [program.id, program]));
-      const registrationByEntitlement = new Map((registrationResult.data || []).map((registration: any) => [registration.source_id, registration]));
-      const consumptionsByEntitlement = new Map<string, any[]>();
+      const customerById = new Map((customerResult.data || []).map((customer) => [customer.id, customer]));
+      const sessionById = new Map((sessionResult.data || []).map((session) => [session.id, session]));
+      const programById = new Map((programResult.data || []).map((program) => [program.id, program]));
+      const registrationByEntitlement = new Map((registrationResult.data || []).map((registration) => [registration.source_id, registration]));
+      const consumptionsByEntitlement = new Map<string, OperationalConsumption[]>();
       for (const consumption of consumptionResult.data || []) {
         const current = consumptionsByEntitlement.get(consumption.entitlement_id) || [];
         current.push(consumption);
         consumptionsByEntitlement.set(consumption.entitlement_id, current);
       }
-      const customerName = (customer: any) => [customer?.first_name, customer?.last_name]
+      const customerName = (customer: { first_name?: string | null; last_name?: string | null; display_name?: string | null } | undefined) => [customer?.first_name, customer?.last_name]
         .map((part) => String(part || '').trim()).filter(Boolean).join(' ') || customer?.display_name || 'Kund';
 
       return jsonResponse({
-        assignments: (rights || []).map((right: any) => {
+        assignments: (rights || []).map((right) => {
           const events = consumptionsByEntitlement.get(right.id) || [];
-          const use = events.find((event: any) => event.event_type === 'use');
-          const reversed = use && events.some((event: any) => event.event_type === 'reversal' && event.reverses_consumption_id === use.id);
+          const use = events.find((event) => event.event_type === 'use');
+          const reversed = use && events.some((event) => event.event_type === 'reversal' && event.reverses_consumption_id === use.id);
           const program = programById.get(right.partner_program_id);
           const registration = registrationByEntitlement.get(right.id);
           return {
@@ -265,7 +273,7 @@ Deno.serve(async (req) => {
             attendance: use && !reversed ? { consumption_id: use.id, occurred_at: use.occurred_at, reconciled: Boolean(use.reason) } : null,
           };
         }),
-        receivables: (receivables || []).map((event: any) => ({
+        receivables: (receivables || []).map((event) => ({
           id: event.id,
           event_type: event.event_type,
           amount_minor: event.amount_minor,
