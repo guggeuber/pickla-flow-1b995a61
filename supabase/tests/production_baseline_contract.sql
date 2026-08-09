@@ -118,10 +118,22 @@ BEGIN
     RAISE EXCEPTION 'an absent legacy capability was silently added to the baseline';
   END IF;
 
+  IF NOT EXISTS (
+    SELECT 1
+    FROM storage.buckets
+    WHERE id = 'event-logos' AND public AND file_size_limit = 5242880
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM storage.buckets
+    WHERE id = 'event-offers' AND NOT public AND file_size_limit = 10485760
+  ) THEN
+    RAISE EXCEPTION 'approved event Storage capabilities are missing from the canonical baseline';
+  END IF;
+
   IF EXISTS (
     SELECT 1
     FROM storage.buckets
-    WHERE id IN ('community-stories', 'event-logos', 'forum-images', 'event-offers')
+    WHERE id IN ('community-stories', 'forum-images')
   ) THEN
     RAISE EXCEPTION 'an absent legacy Storage bucket was silently added to the baseline';
   END IF;
