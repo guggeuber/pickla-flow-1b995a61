@@ -12,6 +12,7 @@ import { activityRegistrationCheckinEligibility, addManualBookingParticipant, bo
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import type { DeskFulfillmentItem, DeskFulfillmentResponse } from "@/lib/commerce";
+import DeskBrucePanel from "@/components/desk/shell/DeskBrucePanel";
 
 interface Props {
   venueId: string | undefined;
@@ -408,6 +409,17 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
           ) : null}
         </div>
       </div>
+
+      {venueId ? (
+        <DeskBrucePanel
+          venueId={venueId}
+          serviceDate={selectedDate}
+          onParticipantAdded={() => {
+            qc.invalidateQueries({ queryKey: ["today-bookings", venueId, selectedDate] });
+            qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
+          }}
+        />
+      ) : null}
 
       {isToday ? (
         <section className="space-y-2">

@@ -6,6 +6,7 @@ const consumptionMigration = readFileSync("supabase/migrations/20260806130000_en
 const programMigration = readFileSync("supabase/migrations/20260806140000_partner_and_punch_card_readiness.sql", "utf8");
 const constitutionMigration = readFileSync("supabase/migrations/20260808120000_entitlement_constitution_v11.sql", "utf8");
 const bruceOperationsMigration = readFileSync("supabase/migrations/20260809120000_bruce_partner_program_operations.sql", "utf8");
+const bruceV1OperationsMigration = readFileSync("supabase/migrations/20260810120000_bruce_v1_manual_operations.sql", "utf8");
 const entitlementFields = readFileSync("supabase/functions/_shared/entitlements.ts", "utf8");
 const constitution = readFileSync("docs/entitlement-constitution.md", "utf8");
 const entitlementApi = readFileSync("supabase/functions/api-entitlements/index.ts", "utf8");
@@ -20,6 +21,7 @@ const scanner = readFileSync("src/components/desk/QrScanner.tsx", "utf8");
 const arrivals = readFileSync("src/components/desk/shell/DeskArrivals.tsx", "utf8");
 const deskToday = readFileSync("src/components/desk/shell/DeskToday.tsx", "utf8");
 const partnerAdmin = readFileSync("src/components/admin/AdminPartnerPrograms.tsx", "utf8");
+const deskBrucePanel = readFileSync("src/components/desk/shell/DeskBrucePanel.tsx", "utf8");
 
 describe("canonical entitlement foundation", () => {
   it("expresses scope, meter, validity, funding and customer ownership independently", () => {
@@ -84,6 +86,7 @@ describe("Bruce production program operations", () => {
 
   it("uses canonical assignment, check-in, reconciliation and receivable paths", () => {
     expect(entitlementApi).toContain("path === 'partner-entitlement'");
+    expect(entitlementApi).toContain("path === 'partner-visit'");
     expect(entitlementApi).toContain("path === 'revoke-partner-entitlement'");
     expect(entitlementApi).toContain("path === 'reconcile-attendance'");
     expect(entitlementApi).toContain("admin.rpc('consume_access_entitlement'");
@@ -103,11 +106,27 @@ describe("Bruce production program operations", () => {
 
   it("places the minimum operator flow in the existing access admin surface", () => {
     expect(partnerAdmin).toContain("Programvillkor");
-    expect(partnerAdmin).toContain("Tilldela Bruce-access");
+    expect(deskBrucePanel).toContain("Lägg till Bruce-deltagare");
+    expect(deskBrucePanel).toContain("Verifierad i Bruce Studio");
+    expect(deskBrucePanel).toContain('"partner-visit"');
     expect(partnerAdmin).toContain("Registrera missad närvaro");
     expect(partnerAdmin).toContain("api-entitlements\", \"operations");
     expect(partnerAdmin).not.toContain("stored_value");
     expect(partnerAdmin).not.toContain("is_bruce");
+  });
+
+  it("adds only the manual Bruce V1 operating controls", () => {
+    expect(bruceV1OperationsMigration).toContain("allocated_capacity");
+    for (const state of ["needs_publication", "published", "changed", "removed", "error"]) {
+      expect(bruceV1OperationsMigration).toContain(`'${state}'`);
+    }
+    expect(bruceV1OperationsMigration).toContain("register_partner_visit");
+    expect(bruceV1OperationsMigration).toContain("commit_activity_registration_capacity");
+    expect(bruceV1OperationsMigration).toContain("partner_receivable_settlement_events");
+    expect(bruceV1OperationsMigration).toContain("partner_receivable_settlement_events_are_append_only");
+    expect(bruceV1OperationsMigration).not.toContain("http");
+    expect(bruceV1OperationsMigration).not.toContain("webhook_events");
+    expect(bruceV1OperationsMigration).not.toContain("cron.schedule");
   });
 });
 
@@ -195,7 +214,8 @@ describe("partner and punch-card readiness", () => {
     expect(entitlementApi).toContain("`Klippkort · ${remainingUses(row)} gånger kvar`");
     expect(programPage).toContain('data-testid="partner-session-labels"');
     expect(myPage).toContain("Dina pass");
-    expect(adminSchedule).toContain("Rättigheter");
+    expect(adminSchedule).toContain("Manuell drift");
+    expect(adminSchedule).toContain("Bruce-kapacitet");
     expect(scanner).toContain('case "punch_card"');
     expect(scanner).toContain('case "partner_access"');
     expect(arrivals).toContain('punch_card: "Klippkort"');

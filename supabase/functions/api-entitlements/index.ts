@@ -1,6 +1,6 @@
 import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
-import { resolveCustomerIdForUser } from '../_shared/customers.ts';
+import { linkCustomerToVenue, resolveCustomerIdForUser } from '../_shared/customers.ts';
 
 type ServiceClient = ReturnType<typeof getServiceClient>;
 type OperationalConsumption = {
@@ -15,6 +15,7 @@ type OperationalConsumption = {
 const PROGRAM_STATUSES = new Set(['active', 'inactive', 'archived']);
 const CONSUMPTION_TRIGGERS = new Set(['on_checkin', 'on_commitment', 'on_session_end']);
 const NO_SHOW_POLICIES = new Set(['do_not_consume', 'consume', 'manual_review']);
+const PUBLICATION_STATUSES = new Set(['needs_publication', 'published', 'changed', 'removed', 'error']);
 const PUNCH_SCOPES = new Set(['open_play', 'session_type', 'product_key', 'venue', 'selected_venues', 'allowlist']);
 const FUNDERS = new Set(['self_prepaid', 'subscription', 'house_comped', 'partner', 'employer', 'sponsor']);
 
@@ -69,6 +70,20 @@ function publicProgramActive(program: any, now: number) {
 function remainingUses(row: any) {
   if (row.meter_type !== 'occurrences' && row.meter_type !== 'exact_session') return null;
   return Math.max(0, Number(row.uses_limit || 0) - Number(row.uses_count || 0));
+}
+
+function normalizeCustomerPhone(value: unknown) {
+  return String(value || '').replace(/[^0-9+]/g, '').trim() || null;
+}
+
+function normalizeCustomerEmail(value: unknown) {
+  return String(value || '').trim().toLowerCase() || null;
+}
+
+function sessionOccursOnDate(session: any, serviceDate: string) {
+  if (session.session_date) return session.session_date === serviceDate;
+  const weekday = new Date(`${serviceDate}T12:00:00.000Z`).getUTCDay();
+  return Array.isArray(session.recurrence_days) && session.recurrence_days.includes(weekday);
 }
 
 Deno.serve(async (req) => {
@@ -169,7 +184,7 @@ Deno.serve(async (req) => {
           .neq('status', 'archived')
           .order('name'),
         admin.from('partner_program_sessions')
-          .select('id, partner_program_id, activity_session_id, status, reimbursement_amount_minor')
+          .select('id, partner_program_id, activity_session_id, status, reimbursement_amount_minor, allocated_capacity, publication_status, publication_reference, publication_error, published_at, publication_updated_at')
           .eq('venue_id', venueId),
       ]);
       if (programError || eligibilityError) throw new Error(programError?.message || eligibilityError?.message);
@@ -193,7 +208,7 @@ Deno.serve(async (req) => {
           .order('service_date', { ascending: false })
           .limit(250),
         admin.from('partner_receivable_events')
-          .select('id, partner_program_id, entitlement_consumption_id, customer_id, activity_session_id, event_type, amount_minor, currency, occurred_at, settlement_state')
+          .select('id, partner_program_id, entitlement_consumption_id, customer_id, activity_session_id, event_type, reverses_event_id, amount_minor, currency, occurred_at, settlement_state')
           .eq('venue_id', venueId)
           .order('occurred_at', { ascending: false })
           .limit(250),
@@ -213,8 +228,12 @@ Deno.serve(async (req) => {
         ...(rights || []).map((right) => right.partner_program_id),
         ...(receivables || []).map((event) => event.partner_program_id),
       ].filter(Boolean))];
+      const accruedReceivableIds = (receivables || []).filter((event) => event.event_type === 'accrued').map((event) => event.id);
+      const reversedReceivableIds = new Set((receivables || [])
+        .filter((event) => event.event_type === 'reversal' && event.reverses_event_id)
+        .map((event) => event.reverses_event_id));
 
-      const [consumptionResult, registrationResult, customerResult, sessionResult, programResult] = await Promise.all([
+      const [consumptionResult, registrationResult, customerResult, sessionResult, programResult, settlementResult] = await Promise.all([
         entitlementIds.length
           ? admin.from('entitlement_consumptions')
             .select('id, entitlement_id, event_type, reverses_consumption_id, reason, occurred_at')
@@ -237,14 +256,26 @@ Deno.serve(async (req) => {
         programIds.length
           ? admin.from('partner_programs').select('id, name, desk_label').eq('organization_id', organizationId).in('id', programIds)
           : Promise.resolve({ data: [], error: null }),
+        accruedReceivableIds.length
+          ? admin.from('partner_receivable_settlement_events')
+            .select('id, partner_receivable_event_id, event_type, settlement_reference, occurred_at')
+            .in('partner_receivable_event_id', accruedReceivableIds)
+            .order('occurred_at', { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
       ]);
-      const readError = consumptionResult.error || registrationResult.error || customerResult.error || sessionResult.error || programResult.error;
+      const readError = consumptionResult.error || registrationResult.error || customerResult.error || sessionResult.error || programResult.error || settlementResult.error;
       if (readError) throw new Error(readError.message);
 
       const customerById = new Map((customerResult.data || []).map((customer) => [customer.id, customer]));
       const sessionById = new Map((sessionResult.data || []).map((session) => [session.id, session]));
       const programById = new Map((programResult.data || []).map((program) => [program.id, program]));
       const registrationByEntitlement = new Map((registrationResult.data || []).map((registration) => [registration.source_id, registration]));
+      const latestSettlementByReceivable = new Map<string, any>();
+      for (const event of settlementResult.data || []) {
+        if (!latestSettlementByReceivable.has(event.partner_receivable_event_id)) {
+          latestSettlementByReceivable.set(event.partner_receivable_event_id, event);
+        }
+      }
       const consumptionsByEntitlement = new Map<string, OperationalConsumption[]>();
       for (const consumption of consumptionResult.data || []) {
         const current = consumptionsByEntitlement.get(consumption.entitlement_id) || [];
@@ -273,17 +304,84 @@ Deno.serve(async (req) => {
             attendance: use && !reversed ? { consumption_id: use.id, occurred_at: use.occurred_at, reconciled: Boolean(use.reason) } : null,
           };
         }),
-        receivables: (receivables || []).map((event) => ({
-          id: event.id,
-          event_type: event.event_type,
-          amount_minor: event.amount_minor,
-          currency: event.currency,
-          occurred_at: event.occurred_at,
-          settlement_state: event.settlement_state,
-          customer_name: customerName(customerById.get(event.customer_id)),
-          activity_name: sessionById.get(event.activity_session_id)?.name || 'Aktivitet',
-          program_name: programById.get(event.partner_program_id)?.name || 'Partner',
-        })),
+        receivables: (receivables || []).map((event) => {
+          const settlement = latestSettlementByReceivable.get(event.id);
+          return {
+            id: event.id,
+            event_type: event.event_type,
+            amount_minor: event.amount_minor,
+            currency: event.currency,
+            occurred_at: event.occurred_at,
+            settlement_state: event.event_type === 'reversal' || reversedReceivableIds.has(event.id)
+              ? 'reversed'
+              : settlement?.event_type === 'settled' ? 'settled' : 'pending',
+            settlement_reference: settlement?.event_type === 'settled' ? settlement.settlement_reference : null,
+            customer_name: customerName(customerById.get(event.customer_id)),
+            activity_name: sessionById.get(event.activity_session_id)?.name || 'Aktivitet',
+            program_name: programById.get(event.partner_program_id)?.name || 'Partner',
+          };
+        }),
+      });
+    }
+
+    if (req.method === 'GET' && path === 'desk-sessions') {
+      const venueId = url.searchParams.get('venueId');
+      const serviceDate = url.searchParams.get('date');
+      if (!venueId || !/^\d{4}-\d{2}-\d{2}$/.test(serviceDate || '')) return errorResponse('Missing venueId or date');
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+
+      const { data: eligibility, error: eligibilityError } = await admin.from('partner_program_sessions')
+        .select('partner_program_id, activity_session_id, allocated_capacity, publication_status')
+        .eq('venue_id', venueId)
+        .eq('status', 'eligible');
+      if (eligibilityError) throw new Error(eligibilityError.message);
+      const programIds = [...new Set((eligibility || []).map((row) => row.partner_program_id))];
+      const sessionIds = [...new Set((eligibility || []).map((row) => row.activity_session_id))];
+      if (!programIds.length || !sessionIds.length) return jsonResponse({ sessions: [] });
+
+      const [{ data: programs, error: programError }, { data: sessions, error: sessionError }, { data: registrations, error: registrationError }] = await Promise.all([
+        admin.from('partner_programs')
+          .select('id, name, desk_label, status, valid_from, valid_until')
+          .in('id', programIds),
+        admin.from('activity_sessions')
+          .select('id, name, session_date, recurrence_days, start_time, end_time, capacity, is_active, publish_status')
+          .eq('venue_id', venueId)
+          .in('id', sessionIds),
+        admin.from('session_registrations')
+          .select('id, activity_session_id, source_type, status')
+          .eq('venue_id', venueId)
+          .eq('session_date', serviceDate!)
+          .eq('source_type', 'partner_access')
+          .in('status', ['confirmed', 'checked_in', 'no_show']),
+      ]);
+      if (programError || sessionError || registrationError) throw new Error(programError?.message || sessionError?.message || registrationError?.message);
+      const serviceMoment = Date.parse(`${serviceDate}T12:00:00.000Z`);
+      const programById = new Map((programs || []).filter((program) => publicProgramActive(program, serviceMoment)).map((program) => [program.id, program]));
+      const sessionById = new Map((sessions || []).filter((session) => session.is_active && sessionOccursOnDate(session, serviceDate!)).map((session) => [session.id, session]));
+      const countBySession = new Map<string, number>();
+      for (const registration of registrations || []) {
+        countBySession.set(registration.activity_session_id, (countBySession.get(registration.activity_session_id) || 0) + 1);
+      }
+
+      return jsonResponse({
+        sessions: (eligibility || []).flatMap((row) => {
+          const program = programById.get(row.partner_program_id);
+          const session = sessionById.get(row.activity_session_id);
+          if (!program || !session) return [];
+          return [{
+            program_id: program.id,
+            program_name: program.name,
+            desk_label: program.desk_label,
+            activity_session_id: session.id,
+            activity_name: session.name,
+            start_time: session.start_time,
+            end_time: session.end_time,
+            total_capacity: session.capacity,
+            allocated_capacity: row.allocated_capacity,
+            registered_count: countBySession.get(session.id) || 0,
+            publication_status: row.publication_status,
+          }];
+        }),
       });
     }
 
@@ -401,25 +499,54 @@ Deno.serve(async (req) => {
       if (!venueId || !sessionId || !programId) return errorResponse('Missing eligibility fields');
       if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
       const organizationId = await venueOrganization(admin, venueId);
-      const [{ data: session }, { data: program }] = await Promise.all([
-        admin.from('activity_sessions').select('venue_id').eq('id', sessionId).maybeSingle(),
+      const [{ data: session }, { data: program }, { data: existing }] = await Promise.all([
+        admin.from('activity_sessions').select('venue_id, capacity').eq('id', sessionId).maybeSingle(),
         admin.from('partner_programs').select('organization_id').eq('id', programId).maybeSingle(),
+        admin.from('partner_program_sessions')
+          .select('status, reimbursement_amount_minor, allocated_capacity, publication_status, publication_reference, publication_error, published_at')
+          .eq('partner_program_id', programId)
+          .eq('activity_session_id', sessionId)
+          .maybeSingle(),
       ]);
       if (!session || session.venue_id !== venueId || !program || program.organization_id !== organizationId) {
         return errorResponse('Program or session outside venue scope', 403);
       }
       const override = body.reimbursementAmountMinor == null ? null : Number(body.reimbursementAmountMinor);
       if (override != null && (!Number.isInteger(override) || override < 0)) return errorResponse('Invalid reimbursement amount');
+      const allocatedCapacity = Object.prototype.hasOwnProperty.call(body, 'allocatedCapacity')
+        ? Number(body.allocatedCapacity)
+        : Number(existing?.allocated_capacity || 0);
+      if (!Number.isInteger(allocatedCapacity) || allocatedCapacity < 0) return errorResponse('Invalid Bruce capacity');
+      if (session.capacity != null && allocatedCapacity > Number(session.capacity)) return errorResponse('Bruce capacity exceeds total capacity');
+      const publicationStatus = Object.prototype.hasOwnProperty.call(body, 'publicationStatus')
+        ? String(body.publicationStatus)
+        : existing?.publication_status || 'needs_publication';
+      if (!PUBLICATION_STATUSES.has(publicationStatus)) return errorResponse('Invalid publication status');
+      const publicationError = publicationStatus === 'error' ? String(body.publicationError || existing?.publication_error || '').trim() : null;
+      if (publicationStatus === 'error' && !publicationError) return errorResponse('Publication error requires a note');
+      const eligible = Object.prototype.hasOwnProperty.call(body, 'eligible')
+        ? body.eligible !== false
+        : existing?.status !== 'ineligible';
       const { data, error } = await admin.from('partner_program_sessions').upsert({
         partner_program_id: programId,
         organization_id: organizationId,
         venue_id: venueId,
         activity_session_id: sessionId,
-        status: body.eligible === false ? 'ineligible' : 'eligible',
-        reimbursement_amount_minor: override,
+        status: eligible ? 'eligible' : 'ineligible',
+        reimbursement_amount_minor: Object.prototype.hasOwnProperty.call(body, 'reimbursementAmountMinor')
+          ? override
+          : existing?.reimbursement_amount_minor ?? null,
+        allocated_capacity: allocatedCapacity,
+        publication_status: publicationStatus,
+        publication_reference: Object.prototype.hasOwnProperty.call(body, 'publicationReference')
+          ? String(body.publicationReference || '').trim() || null
+          : existing?.publication_reference || null,
+        publication_error: publicationError,
+        published_at: publicationStatus === 'published' ? existing?.published_at || new Date().toISOString() : existing?.published_at || null,
+        publication_updated_by: userId,
         created_by: userId,
       }, { onConflict: 'partner_program_id,activity_session_id' })
-        .select('id, partner_program_id, activity_session_id, status, reimbursement_amount_minor').single();
+        .select('id, partner_program_id, activity_session_id, status, reimbursement_amount_minor, allocated_capacity, publication_status, publication_reference, publication_error, published_at, publication_updated_at').single();
       if (error) throw new Error(error.message);
       return jsonResponse(data);
     }
@@ -446,6 +573,108 @@ Deno.serve(async (req) => {
       });
       if (error) throw new Error(error.message);
       return jsonResponse({ id: data?.id, status: data?.status, reason: data?.access_reason }, 201);
+    }
+
+    if (req.method === 'POST' && path === 'partner-visit') {
+      const body = await req.json();
+      const venueId = String(body.venueId || '');
+      const programId = String(body.programId || '');
+      const sessionId = String(body.sessionId || '');
+      const serviceDate = String(body.serviceDate || '');
+      if (!venueId || !programId || !sessionId || !/^\d{4}-\d{2}-\d{2}$/.test(serviceDate)) {
+        return errorResponse('Missing partner visit fields');
+      }
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const target = await resolveTargetCustomer(admin, venueId, body.customerId, body.targetUserId);
+      const { data, error } = await admin.rpc('register_partner_visit', {
+        p_partner_program_id: programId,
+        p_customer_id: target.customerId,
+        p_venue_id: venueId,
+        p_activity_session_id: sessionId,
+        p_service_date: serviceDate,
+        p_external_reference: String(body.externalReference || '').trim() || null,
+        p_user_id: target.userId,
+        p_operator_note: String(body.operatorNote || '').trim() || null,
+        p_created_by: userId,
+      });
+      if (error) throw new Error(error.message);
+      return jsonResponse(data, 201);
+    }
+
+    if (req.method === 'POST' && path === 'partner-customer') {
+      const body = await req.json();
+      const venueId = String(body.venueId || '');
+      const firstName = String(body.firstName || '').trim();
+      const lastName = String(body.lastName || '').trim();
+      const phone = normalizeCustomerPhone(body.phone);
+      const email = normalizeCustomerEmail(body.email);
+      if (!venueId || !firstName || !lastName || !phone) return errorResponse('First name, last name and phone are required');
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const organizationId = await venueOrganization(admin, venueId);
+      if (!organizationId) return errorResponse('Venue not found', 404);
+
+      const checks = [
+        admin.from('customers').select('id').eq('organization_id', organizationId).eq('phone_e164', phone).is('merged_into_id', null).eq('status', 'active').maybeSingle(),
+        email
+          ? admin.from('customers').select('id').eq('organization_id', organizationId).eq('email_normalized', email).is('merged_into_id', null).eq('status', 'active').maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+      ];
+      const [phoneMatch, emailMatch] = await Promise.all(checks);
+      if (phoneMatch.error || emailMatch.error) throw new Error(phoneMatch.error?.message || emailMatch.error?.message);
+      if (phoneMatch.data?.id || emailMatch.data?.id) {
+        return errorResponse('Customer already exists; select the existing customer', 409);
+      }
+
+      const { data: customer, error } = await admin.from('customers').insert({
+        organization_id: organizationId,
+        auth_user_id: null,
+        display_name: `${firstName} ${lastName}`,
+        first_name: firstName,
+        last_name: lastName,
+        primary_phone: String(body.phone).trim(),
+        phone_e164: phone,
+        primary_email: email,
+        email_normalized: email,
+        metadata: { source: 'desk_bruce_manual' },
+      }).select('id, display_name, first_name, last_name, primary_phone, primary_email').single();
+      if (error) throw new Error(error.message);
+      await linkCustomerToVenue(admin, customer.id, venueId, 'desk_bruce_manual');
+      return jsonResponse({
+        customer_id: customer.id,
+        display_name: customer.display_name,
+        first_name: customer.first_name,
+        last_name: customer.last_name,
+        phone: customer.primary_phone,
+        email: customer.primary_email,
+      }, 201);
+    }
+
+    if (req.method === 'POST' && path === 'settle-receivable') {
+      const body = await req.json();
+      const venueId = String(body.venueId || '');
+      const receivableId = String(body.receivableId || '');
+      const settlementReference = String(body.settlementReference || '').trim();
+      const note = String(body.note || '').trim();
+      if (!venueId || !receivableId || !settlementReference) return errorResponse('Missing settlement fields');
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const { data: receivable, error: receivableError } = await admin.from('partner_receivable_events')
+        .select('id, venue_id, event_type')
+        .eq('id', receivableId)
+        .maybeSingle();
+      if (receivableError) throw new Error(receivableError.message);
+      if (!receivable || receivable.venue_id !== venueId || receivable.event_type !== 'accrued') {
+        return errorResponse('Partner receivable outside venue scope', 403);
+      }
+      const { data, error } = await admin.rpc('record_partner_receivable_settlement', {
+        p_partner_receivable_event_id: receivableId,
+        p_event_type: 'settled',
+        p_settlement_reference: settlementReference,
+        p_note: note || null,
+        p_idempotency_key: `settle:${receivableId}:${settlementReference}`,
+        p_created_by: userId,
+      });
+      if (error) throw new Error(error.message);
+      return jsonResponse({ id: data?.id, settlement_state: 'settled', settlement_reference: data?.settlement_reference });
     }
 
     if (req.method === 'POST' && path === 'revoke-partner-entitlement') {

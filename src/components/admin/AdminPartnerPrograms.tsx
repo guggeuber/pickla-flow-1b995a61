@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { Check, Loader2, Search, ShieldCheck, UserRoundPlus } from "lucide-react";
+import { Check, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 
@@ -35,34 +35,6 @@ type ProgramResponse = {
   session_eligibility: SessionEligibility[];
 };
 
-type ActivitySession = {
-  id: string;
-  name: string;
-  session_date?: string | null;
-  start_time?: string | null;
-  recurrence_days?: number[] | null;
-};
-
-type CustomerOption = {
-  id?: string;
-  customer_id?: string | null;
-  display_name?: string | null;
-  full_name?: string | null;
-  first_name?: string | null;
-  last_name?: string | null;
-  email?: string | null;
-  phone?: string | null;
-};
-
-type CustomerRight = {
-  id: string;
-  type: string;
-  status: string;
-  reason: string;
-  service_date: string | null;
-  activity_session_id: string | null;
-};
-
 type OperationsResponse = {
   assignments: Array<{
     id: string;
@@ -82,6 +54,7 @@ type OperationsResponse = {
     currency: string;
     occurred_at: string;
     settlement_state: string;
+    settlement_reference?: string | null;
     customer_name: string;
     activity_name: string;
     program_name: string;
@@ -90,18 +63,6 @@ type OperationsResponse = {
 
 const inputClass = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:border-primary";
 const today = () => DateTime.now().setZone("Europe/Stockholm").toISODate() || "";
-
-function customerId(customer: CustomerOption | null) {
-  return customer?.customer_id || customer?.id || "";
-}
-
-function customerName(customer: CustomerOption) {
-  return customer.full_name
-    || [customer.first_name, customer.last_name].filter(Boolean).join(" ")
-    || customer.display_name
-    || customer.email
-    || "Kund";
-}
 
 function krToMinor(value: string) {
   const normalized = value.replace(",", ".").trim();
@@ -134,23 +95,11 @@ export default function AdminPartnerPrograms({ venueId }: { venueId: string }) {
   const qc = useQueryClient();
   const [programId, setProgramId] = useState("");
   const [programDraft, setProgramDraft] = useState(defaultProgramDraft);
-  const [customerSearch, setCustomerSearch] = useState("");
-  const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
-  const [assignProgramId, setAssignProgramId] = useState("");
-  const [sessionId, setSessionId] = useState("");
-  const [serviceDate, setServiceDate] = useState(today);
-  const [externalReference, setExternalReference] = useState("");
-  const [operatorNote, setOperatorNote] = useState("");
 
   const { data: configuration, isLoading: programsLoading } = useQuery<ProgramResponse>({
     queryKey: ["admin-partner-access-programs", venueId],
     enabled: Boolean(venueId),
     queryFn: () => apiGet("api-entitlements", "programs", { venueId }),
-  });
-  const { data: sessions = [] } = useQuery<ActivitySession[]>({
-    queryKey: ["admin-activity-sessions", venueId],
-    enabled: Boolean(venueId),
-    queryFn: () => apiGet("api-admin", "activity-sessions", { venueId }),
   });
   const { data: operations } = useQuery<OperationsResponse>({
     queryKey: ["admin-partner-operations", venueId],
@@ -158,36 +107,11 @@ export default function AdminPartnerPrograms({ venueId }: { venueId: string }) {
     queryFn: () => apiGet("api-entitlements", "operations", { venueId }),
   });
 
-  const normalizedSearch = customerSearch.trim();
-  const { data: customerOptions = [], isFetching: customerSearchLoading } = useQuery<CustomerOption[]>({
-    queryKey: ["admin-partner-customer-search", venueId, normalizedSearch],
-    enabled: Boolean(venueId) && !selectedCustomer && normalizedSearch.length >= 2,
-    queryFn: () => apiGet("api-customers", "list", { venueId, search: normalizedSearch, limit: "8" }),
-  });
-  const selectedCustomerId = customerId(selectedCustomer);
-  const { data: selectedCustomerRights } = useQuery<{ rights: CustomerRight[] }>({
-    queryKey: ["admin-partner-customer-rights", venueId, selectedCustomerId],
-    enabled: Boolean(venueId && selectedCustomerId),
-    queryFn: () => apiGet("api-entitlements", "customer", { venueId, customerId: selectedCustomerId }),
-  });
-
   const programs = configuration?.programs || [];
-  const activePrograms = programs.filter((program) => program.status === "active");
-  const eligibleSessionIds = useMemo(() => new Set((configuration?.session_eligibility || [])
-    .filter((row) => row.partner_program_id === assignProgramId && row.status === "eligible")
-    .map((row) => row.activity_session_id)), [assignProgramId, configuration?.session_eligibility]);
-  const eligibleSessions = sessions.filter((session) => eligibleSessionIds.has(session.id));
-  const activeSelectedRights = (selectedCustomerRights?.rights || [])
-    .filter((right) => right.type === "partner_access" && right.status === "active");
-
-  useEffect(() => {
-    if (!assignProgramId && activePrograms[0]) setAssignProgramId(activePrograms[0].id);
-  }, [activePrograms, assignProgramId]);
 
   const invalidateAll = () => {
     qc.invalidateQueries({ queryKey: ["admin-partner-access-programs", venueId] });
     qc.invalidateQueries({ queryKey: ["admin-partner-operations", venueId] });
-    if (selectedCustomerId) qc.invalidateQueries({ queryKey: ["admin-partner-customer-rights", venueId, selectedCustomerId] });
   };
 
   const saveProgram = useMutation({
@@ -226,30 +150,6 @@ export default function AdminPartnerPrograms({ venueId }: { venueId: string }) {
     onError: (error: Error) => toast.error(error.message),
   });
 
-  const assignAccess = useMutation({
-    mutationFn: () => {
-      if (!selectedCustomerId || !assignProgramId || !sessionId || !serviceDate || !externalReference.trim()) {
-        throw new Error("Välj kund, program, pass och datum samt ange Bruce-referens");
-      }
-      return apiPost("api-entitlements", "partner-entitlement", {
-        venueId,
-        customerId: selectedCustomerId,
-        programId: assignProgramId,
-        sessionId,
-        serviceDate,
-        externalReference: externalReference.trim(),
-        operatorNote: operatorNote.trim() || null,
-      });
-    },
-    onSuccess: () => {
-      invalidateAll();
-      setExternalReference("");
-      setOperatorNote("");
-      toast.success("Bruce-access tilldelad");
-    },
-    onError: (error: Error) => toast.error(error.message),
-  });
-
   const revokeAccess = useMutation({
     mutationFn: ({ entitlementId, reason }: { entitlementId: string; reason: string }) => apiPost(
       "api-entitlements",
@@ -281,6 +181,23 @@ export default function AdminPartnerPrograms({ venueId }: { venueId: string }) {
     },
     onError: (error: Error) => toast.error(error.message),
   });
+
+  const settleReceivable = useMutation({
+    mutationFn: ({ receivableId, settlementReference }: { receivableId: string; settlementReference: string }) => apiPost(
+      "api-entitlements",
+      "settle-receivable",
+      { venueId, receivableId, settlementReference },
+    ),
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Partnerfordran markerad som reglerad");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const visits = (operations?.assignments || []).filter((assignment) => Boolean(assignment.attendance));
+  const pendingReceivables = (operations?.receivables || []).filter((event) => event.event_type === "accrued" && event.settlement_state === "pending");
+  const settledReceivables = (operations?.receivables || []).filter((event) => event.event_type === "accrued" && event.settlement_state === "settled");
 
   const selectProgram = (selectedId: string) => {
     setProgramId(selectedId);
@@ -368,57 +285,13 @@ export default function AdminPartnerPrograms({ venueId }: { venueId: string }) {
 
       <div className="glass-card space-y-3 rounded-2xl p-4">
         <div>
-          <p className="text-sm font-semibold">Tilldela Bruce-access</p>
-          <p className="text-[11px] text-muted-foreground">Endast pass som har aktiverats under Schema går att välja.</p>
-        </div>
-        {selectedCustomer ? (
-          <button type="button" onClick={() => { setSelectedCustomer(null); setCustomerSearch(""); }} className="flex w-full items-center justify-between rounded-xl bg-muted/50 px-3 py-2 text-left text-sm">
-            <span>{customerName(selectedCustomer)}</span><span className="text-xs text-muted-foreground">Byt kund</span>
-          </button>
-        ) : (
-          <div className="relative">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Sök befintlig kund" className={`${inputClass} pl-9`} />
-            {normalizedSearch.length >= 2 ? (
-              <div className="mt-2 space-y-1">
-                {customerSearchLoading ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : customerOptions.map((customer) => (
-                  <button key={customerId(customer)} type="button" onClick={() => setSelectedCustomer(customer)} className="flex w-full justify-between rounded-xl bg-muted/40 px-3 py-2 text-left text-xs">
-                    <span className="font-semibold">{customerName(customer)}</span><span className="text-muted-foreground">{customer.email || customer.phone || "Kund"}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        )}
-        {selectedCustomer && activeSelectedRights.length > 0 ? (
-          <div className="rounded-xl bg-muted/40 p-3 text-xs">
-            <p className="font-semibold">Aktiv partneraccess</p>
-            {activeSelectedRights.map((right) => <p key={right.id} className="mt-1 text-muted-foreground">{right.reason} · {right.service_date || "giltig period"}</p>)}
-          </div>
-        ) : null}
-        <div className="grid gap-2 sm:grid-cols-2">
-          <select value={assignProgramId} onChange={(event) => { setAssignProgramId(event.target.value); setSessionId(""); }} className={inputClass}>
-            <option value="">Välj program</option>
-            {activePrograms.map((program) => <option key={program.id} value={program.id}>{program.name}</option>)}
-          </select>
-          <select value={sessionId} onChange={(event) => setSessionId(event.target.value)} className={inputClass}>
-            <option value="">Välj aktiverat pass</option>
-            {eligibleSessions.map((session) => <option key={session.id} value={session.id}>{session.name}{session.start_time ? ` · ${session.start_time.slice(0, 5)}` : ""}</option>)}
-          </select>
-          <input type="date" value={serviceDate} onChange={(event) => setServiceDate(event.target.value)} className={inputClass} aria-label="Passdatum" />
-          <input value={externalReference} onChange={(event) => setExternalReference(event.target.value)} placeholder="Bruce-referens" className={inputClass} />
-          <input value={operatorNote} onChange={(event) => setOperatorNote(event.target.value)} placeholder="Intern anteckning (valfritt)" className={`${inputClass} sm:col-span-2`} />
-        </div>
-        <button type="button" onClick={() => assignAccess.mutate()} disabled={assignAccess.isPending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">
-          {assignAccess.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserRoundPlus className="h-4 w-4" />}
-          Tilldela för valt pass
-        </button>
-      </div>
-
-      <div className="glass-card space-y-3 rounded-2xl p-4">
-        <div>
           <p className="text-sm font-semibold">Bruce-drift</p>
-          <p className="text-[11px] text-muted-foreground">Access och faktisk närvaro. Finansiella avtalsfält visas inte här.</p>
+          <p className="text-[11px] text-muted-foreground">Besök och manuellt reglerade partnerfordringar. Ingen automatisk avstämning.</p>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-xl bg-muted/40 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Bruce-besök</p><p className="mt-1 text-xl font-bold">{visits.length}</p></div>
+          <div className="rounded-xl bg-muted/40 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Väntande</p><p className="mt-1 text-xl font-bold">{pendingReceivables.length}</p></div>
+          <div className="rounded-xl bg-muted/40 p-3"><p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Reglerade</p><p className="mt-1 text-xl font-bold">{settledReceivables.length}</p></div>
         </div>
         <div className="space-y-2">
           {(operations?.assignments || []).map((assignment) => (
@@ -446,14 +319,30 @@ export default function AdminPartnerPrograms({ venueId }: { venueId: string }) {
           ))}
           {(operations?.assignments || []).length === 0 ? <p className="py-3 text-center text-xs text-muted-foreground">Inga Bruce-tilldelningar ännu</p> : null}
         </div>
-        {(operations?.receivables || []).length > 0 ? (
+        {pendingReceivables.length > 0 ? (
           <div className="border-t border-border pt-3">
-            <p className="mb-2 text-xs font-semibold">Väntande partnerunderlag</p>
+            <p className="mb-2 text-xs font-semibold">Väntande fordringar</p>
             <div className="space-y-1.5">
-              {operations!.receivables.map((event) => (
+              {pendingReceivables.map((event) => (
+                <div key={event.id} className="flex items-center justify-between gap-3 rounded-xl bg-muted/30 px-3 py-2 text-xs">
+                  <span><span className="block font-semibold">{event.customer_name} · {event.activity_name}</span><span className="text-muted-foreground">{event.program_name}</span></span>
+                  <span className="flex items-center gap-3"><span className="font-semibold">{formatSek(event.amount_minor)}</span><button type="button" disabled={settleReceivable.isPending} onClick={() => {
+                    const reference = window.prompt("Ange riktig regleringsreferens från Bruce-underlaget")?.trim();
+                    if (reference) settleReceivable.mutate({ receivableId: event.id, settlementReference: reference });
+                  }} className="font-semibold text-primary underline disabled:opacity-50">Markera reglerad</button></span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {settledReceivables.length > 0 ? (
+          <div className="border-t border-border pt-3">
+            <p className="mb-2 text-xs font-semibold">Reglerade fordringar</p>
+            <div className="space-y-1.5">
+              {settledReceivables.map((event) => (
                 <div key={event.id} className="flex items-center justify-between gap-3 text-xs">
-                  <span>{event.customer_name} · {event.activity_name}</span>
-                  <span className="font-semibold">{event.event_type === "reversal" ? "−" : ""}{formatSek(event.amount_minor)}</span>
+                  <span>{event.customer_name} · {event.activity_name}<span className="ml-2 text-muted-foreground">{event.settlement_reference}</span></span>
+                  <span className="font-semibold">{formatSek(event.amount_minor)}</span>
                 </div>
               ))}
             </div>

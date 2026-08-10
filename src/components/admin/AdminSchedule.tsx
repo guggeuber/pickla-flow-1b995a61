@@ -90,7 +90,23 @@ type PartnerSessionEligibility = {
   activity_session_id: string;
   status: "eligible" | "ineligible";
   reimbursement_amount_minor: number | null;
+  allocated_capacity: number;
+  publication_status: "needs_publication" | "published" | "changed" | "removed" | "error";
+  publication_reference: string | null;
+  publication_error: string | null;
 };
+
+const PUBLICATION_LABELS: Record<PartnerSessionEligibility["publication_status"], string> = {
+  needs_publication: "Behöver publiceras",
+  published: "Publicerad",
+  changed: "Ändrad",
+  removed: "Borttagen",
+  error: "Fel",
+};
+
+function BruceWordmark() {
+  return <span aria-label="Bruce" className="text-[10px] font-black tracking-[0.18em] text-foreground">BRUCE</span>;
+}
 
 function ScheduleAddonSelector({
   sourceProduct,
@@ -678,10 +694,17 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   });
 
   const updatePartnerSessionEligibility = useMutation({
-    mutationFn: ({ sessionId, programId, eligible }: { sessionId: string; programId: string; eligible: boolean }) => apiPost(
+    mutationFn: ({ sessionId, programId, ...updates }: {
+      sessionId: string;
+      programId: string;
+      eligible?: boolean;
+      allocatedCapacity?: number;
+      publicationStatus?: PartnerSessionEligibility["publication_status"];
+      publicationError?: string | null;
+    }) => apiPost(
       "api-entitlements",
       "session-eligibility",
-      { venueId, sessionId, programId, eligible },
+      { venueId, sessionId, programId, ...updates },
     ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin-partner-access-programs", venueId] });
@@ -1492,32 +1515,76 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                   {activePartnerPrograms.length > 0 ? (
                     <div className="rounded-xl bg-muted/40 p-3 space-y-2">
                       <div>
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Rättigheter</p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">Välj vilka partnerprogram som gäller för just detta pass.</p>
+                        <div className="flex items-center gap-2">
+                          <BruceWordmark />
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Manuell drift</p>
+                        </div>
+                        <p className="mt-1 text-[11px] text-muted-foreground">Aktivera per pass, ange Bruce-allokering och följ publiceringen i Bruce Studio.</p>
                       </div>
-                      <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="grid gap-2">
                         {activePartnerPrograms.map((program) => {
                           const eligibility = (partnerAccessConfig?.session_eligibility || []).find((row) => (
                             row.partner_program_id === program.id && row.activity_session_id === session.id
                           ));
                           const eligible = eligibility?.status === "eligible";
                           return (
-                            <label key={program.id} className="flex items-center justify-between gap-3 rounded-xl bg-background px-3 py-2 text-xs font-semibold">
-                              <span>
-                                <span className="block text-foreground">{program.name}</span>
-                                <span className="block text-[10px] font-normal text-muted-foreground">{program.activity_label}</span>
-                              </span>
-                              <input
-                                type="checkbox"
-                                checked={eligible}
-                                disabled={updatePartnerSessionEligibility.isPending}
-                                onChange={(event) => updatePartnerSessionEligibility.mutate({
-                                  sessionId: session.id,
-                                  programId: program.id,
-                                  eligible: event.target.checked,
-                                })}
-                              />
-                            </label>
+                            <div key={program.id} className="space-y-2 rounded-xl bg-background px-3 py-2.5 text-xs">
+                              <label className="flex items-center justify-between gap-3 font-semibold">
+                                <span>
+                                  <span className="flex items-center gap-2 text-foreground"><BruceWordmark /> {program.name}</span>
+                                  <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">{program.activity_label}</span>
+                                </span>
+                                <input
+                                  type="checkbox"
+                                  checked={eligible}
+                                  disabled={updatePartnerSessionEligibility.isPending}
+                                  onChange={(event) => updatePartnerSessionEligibility.mutate({
+                                    sessionId: session.id,
+                                    programId: program.id,
+                                    eligible: event.target.checked,
+                                  })}
+                                />
+                              </label>
+                              {eligible ? (
+                                <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-[1fr_1fr]">
+                                  <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                    Kapacitet · totalt {draft.capacity || session.capacity || "–"}
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={Number(draft.capacity || session.capacity || 0) || undefined}
+                                      defaultValue={eligibility?.allocated_capacity || 0}
+                                      aria-label="Bruce-kapacitet"
+                                      onBlur={(event) => {
+                                        const next = Math.max(0, Math.round(Number(event.currentTarget.value || 0)));
+                                        if (next !== (eligibility?.allocated_capacity || 0)) {
+                                          updatePartnerSessionEligibility.mutate({ sessionId: session.id, programId: program.id, allocatedCapacity: next });
+                                        }
+                                      }}
+                                      className="mt-1 w-full rounded-lg border border-border bg-muted/30 px-2.5 py-2 text-xs text-foreground outline-none"
+                                    />
+                                    <span className="block font-normal normal-case tracking-normal">Bruce-platser</span>
+                                  </label>
+                                  <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                    Publicering
+                                    <select
+                                      value={eligibility?.publication_status || "needs_publication"}
+                                      disabled={updatePartnerSessionEligibility.isPending}
+                                      onChange={(event) => {
+                                        const status = event.target.value as PartnerSessionEligibility["publication_status"];
+                                        const publicationError = status === "error" ? window.prompt("Beskriv publiceringsfelet")?.trim() || null : null;
+                                        if (status === "error" && !publicationError) return;
+                                        updatePartnerSessionEligibility.mutate({ sessionId: session.id, programId: program.id, publicationStatus: status, publicationError });
+                                      }}
+                                      className="mt-1 w-full rounded-lg border border-border bg-muted/30 px-2.5 py-2 text-xs normal-case tracking-normal text-foreground outline-none"
+                                    >
+                                      {Object.entries(PUBLICATION_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                                    </select>
+                                    {eligibility?.publication_error ? <span className="block font-normal normal-case tracking-normal text-destructive">{eligibility.publication_error}</span> : null}
+                                  </label>
+                                </div>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>

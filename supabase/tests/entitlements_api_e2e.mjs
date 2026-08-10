@@ -378,6 +378,9 @@ const operationalAssignment = operations.payload.assignments.find((assignment) =
 assert(operationalAssignment?.registration?.id === registration.id
   && operationalAssignment.attendance?.reconciled === true,
 "operator view did not connect assignment, registration and reconciled attendance");
+const reversedOperationalReceivable = operations.payload.receivables.find((event) => event.id === receivables[0].id);
+assert(reversedOperationalReceivable?.settlement_state === "reversed",
+  "operator view presented a reversed partner receivable as pending or settled");
 await fn(`operations?venueId=${ids.venue}`, { token: outsider.token, expected: 403 });
 pass("manual attendance reconciliation", "staff actor/reason audited through canonical consumption and scoped operations view");
 
