@@ -61,7 +61,9 @@ export function BookingParticipantSummary({
 }) {
   if (!summary) return null;
 
-  const participants = Array.isArray(summary.participants) ? summary.participants : [];
+  const participants = Array.isArray(summary.participants)
+    ? summary.participants.filter((participant) => participant.committed === true || ["paid", "free"].includes(String(participant.payment_status || "").toLowerCase()))
+    : [];
   const committedCount = Number(summary.committed_count || 0);
   const anonymousOthersCount = Number(summary.anonymous_others_count || 0);
   const capacity = Number(summary.capacity || 0);

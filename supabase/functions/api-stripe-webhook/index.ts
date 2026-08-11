@@ -629,6 +629,15 @@ async function handleCommerceOrder(
 }
 
 async function handleCommerceCheckoutExpired(session: any, serviceClient: any) {
+  const directHoldId = String(session?.metadata?.capacity_hold_id || '').trim();
+  if (directHoldId) {
+    const { error: directReleaseError } = await serviceClient.rpc('release_capacity_hold', {
+      p_hold_id: directHoldId,
+      p_reason: 'stripe_checkout_expired',
+    });
+    if (directReleaseError) throw new Error(directReleaseError.message);
+  }
+
   const orderId = String(session?.metadata?.commerce_order_id || '').trim();
   if (!orderId) return;
   const { data: order, error: orderError } = await serviceClient.from('commerce_orders')
@@ -1720,6 +1729,10 @@ async function handleCourtBooking(
       membership_usage_entitlement_type: includedHoursPerCourt > 0 ? 'court_hours_per_week' : null,
       membership_usage_period_start: includedHoursPerCourt > 0 ? meta.entitlement_period_start : null,
       membership_usage_period_end:   includedHoursPerCourt > 0 ? meta.entitlement_period_end : null,
+      participation_funding_mode: includedHoursPerCourt > 0 ? 'individual_participation' : 'resource_funded',
+      participation_funding_source_type: includedHoursPerCourt > 0 ? 'membership_entitlement' : 'stripe_payment',
+      participation_funding_source_id: includedHoursPerCourt > 0 ? (meta.membership_id || null) : session.id,
+      participation_funder: includedHoursPerCourt > 0 ? 'subscription' : 'self_prepaid',
     });
 
     if (error) throw new Error(`Failed to insert booking for court ${courtId}: ${error.message}`);

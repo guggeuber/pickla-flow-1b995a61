@@ -41,6 +41,7 @@ type InviteInfo = {
     reason?: string;
     membership_tier_names?: string[];
     requires_payment: boolean;
+    blocked?: boolean;
   } | null;
   identity_required?: boolean;
 };
@@ -128,11 +129,12 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
   const isOpenPrivateBooking = data?.booking?.source === "open_booking";
   const hasPlayPlus = (data?.pricing?.membership_tier_names || []).some((name) => /play\+/i.test(name));
   const requiresPayment = Boolean(data?.pricing?.requires_payment);
+  const pricingBlocked = Boolean(data?.pricing?.blocked);
   const sessionEmail = String(verifiedUser?.email || "").trim();
   const effectiveEmail = email.trim() || sessionEmail;
   const needsReceiptEmail = Boolean(verifiedUser && requiresPayment && !effectiveEmail);
   const authenticatedPricingResolving = Boolean(verifiedUser) && (!data?.pricing || isLoading);
-  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || needsReceiptEmail;
+  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || needsReceiptEmail || pricingBlocked;
   const claimDebugState = {
     authLoaded: !authLoading && sessionHydrated,
     inviteLoaded: Boolean(data),
@@ -146,7 +148,7 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
     submitting,
     pricingResolved: Boolean(data?.pricing),
     capacityState: data?.booking ? `${data.booking.claimed_count}/${data.booking.capacity}` : null,
-    holdState: "not_acquired_until_checkout",
+    holdState: "acquired_at_claim_when_payment_required",
     disabled: claimDisabled,
   };
 
@@ -271,8 +273,10 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
         product_type: "booking_participant",
         amount_sek: Number(claim.amount_sek || 0),
         venue_id: data.booking.venue_id,
+        idempotency_key: claim.capacity_hold_id || undefined,
         metadata: {
           booking_participant_id: claim.participant_id,
+          capacity_hold_id: claim.capacity_hold_id || "",
           customer_name: "",
           customer_email: effectiveEmail || currentSession.user.email || "",
           customer_phone: "",
@@ -350,6 +354,24 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
               label: "Hämtar pris...",
               disabled: true,
               icon: <Loader2 className="h-5 w-5 animate-spin" />,
+            }}
+          />
+        </>
+      ) : pricingBlocked ? (
+        <>
+          <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+            Kan inte boka platsen ännu
+          </p>
+          <p className="mt-2 text-[13px] font-semibold leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            Pickla behöver först verifiera hur grundbokningen är finansierad.
+          </p>
+          <SessionActions
+            className="mt-4"
+            primary={{
+              key: "blocked",
+              label: "Bokning tillfälligt pausad",
+              disabled: true,
+              icon: <Ticket className="h-5 w-5" />,
             }}
           />
         </>

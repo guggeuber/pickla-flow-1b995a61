@@ -8,7 +8,7 @@ import { apiGet, apiPatch } from "@/lib/api";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
-import { activityRegistrationCheckinEligibility, addManualBookingParticipant, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility, markBookingParticipantPaid } from "@/lib/deskOps";
+import { activityRegistrationCheckinEligibility, addManualBookingParticipant, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import type { DeskFulfillmentItem, DeskFulfillmentResponse } from "@/lib/commerce";
@@ -231,19 +231,11 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte checka in medspelare"),
   });
-  const participantPaidMutation = useMutation({
-    mutationFn: (participant: any) => markBookingParticipantPaid(participant),
-    onSuccess: () => {
-      toast.success("Medspelaren är markerad betald");
-      qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
-      qc.invalidateQueries({ queryKey: ["revenue-ledger"] });
-    },
-    onError: (error: any) => toast.error(error?.message || "Kunde inte markera betald"),
-  });
   const participantManualMutation = useMutation({
     mutationFn: ({ booking, input }: { booking: any; input: { displayName: string; email?: string; phone?: string } }) => addManualBookingParticipant(booking, input),
-    onSuccess: () => {
-      toast.success("Spelaren är tillagd");
+    onSuccess: (result: any) => {
+      const committed = ["paid", "free"].includes(String(result?.participant?.payment_status || "").toLowerCase());
+      toast.success(committed ? "Spelaren är tillagd" : "Betalningslänk skapad · ingen plats är bekräftad");
       qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
@@ -493,9 +485,6 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
                   onParticipantCheckIn={(participant) => participantCheckinMutation.mutate({ participant, booking })}
                   participantCheckingId={(participantCheckinMutation.variables as any)?.participant?.id || null}
                   participantChecking={participantCheckinMutation.isPending}
-                  onParticipantMarkPaid={(participant) => participantPaidMutation.mutate(participant)}
-                  participantPayingId={(participantPaidMutation.variables as any)?.id || null}
-                  participantPaying={participantPaidMutation.isPending}
                   onParticipantManualAdd={(input) => participantManualMutation.mutateAsync({ booking, input })}
                   participantManualAdding={participantManualMutation.isPending}
                 />
@@ -593,9 +582,6 @@ function BookingActionRow({
   onParticipantCheckIn,
   participantCheckingId,
   participantChecking,
-  onParticipantMarkPaid,
-  participantPayingId,
-  participantPaying,
   onParticipantManualAdd,
   participantManualAdding,
 }: {
@@ -607,9 +593,6 @@ function BookingActionRow({
   onParticipantCheckIn: (participant: any) => void;
   participantCheckingId: string | null;
   participantChecking: boolean;
-  onParticipantMarkPaid: (participant: any) => void;
-  participantPayingId: string | null;
-  participantPaying: boolean;
   onParticipantManualAdd: (input: { displayName: string; email?: string; phone?: string; customerId?: string | null }) => Promise<any>;
   participantManualAdding: boolean;
 }) {
@@ -838,12 +821,12 @@ function BookingActionRow({
                     <AxChip tone={claimed ? "lime" : "sun"}>{claimed ? "Claimad" : "Behöver identitet"}</AxChip>
                     <AxChip tone={checkedIn ? "lime" : "sun"}>{checkedIn ? "Incheckad" : "Ej inne"}</AxChip>
                     <AxChip tone={paid || free ? "lime" : "sun"}>
-                      {manualPlaceholder ? "Pris efter identitet" : paid ? "Betald" : free ? (accessReason ? `Ingår · ${accessReason}` : "Ingår") : `${amountSek.toLocaleString("sv-SE")} kr obetalt`}
+                      {manualPlaceholder ? "Ingen plats ännu · identitet krävs" : paid ? "Betald" : free ? (accessReason ? `Ingår · ${accessReason}` : "Ingår") : `Ingen plats ännu · betala ${amountSek.toLocaleString("sv-SE")} kr`}
                     </AxChip>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 md:justify-end">
-                  {!claimed && claimUrl ? (
+                  {(!claimed || (!paid && !free)) && claimUrl ? (
                     <button
                       type="button"
                       onClick={async () => {
@@ -858,21 +841,9 @@ function BookingActionRow({
                       style={{ background: ax("electric", 0.16), color: ax("electricSoft") }}
                     >
                       <Copy className="h-3.5 w-3.5" />
-                      Kopiera länk
+                      {claimed ? "Kopiera betalningslänk" : "Kopiera länk"}
                     </button>
                   ) : null}
-                  {claimed && !paid && !free && (
-                    <button
-                      type="button"
-                      onClick={() => onParticipantMarkPaid(participant)}
-                      disabled={participantPaying && participantPayingId === participant.id}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50"
-                      style={{ background: ax("sun", 0.18), color: ax("sun") }}
-                    >
-                      {participantPaying && participantPayingId === participant.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ReceiptText className="h-3.5 w-3.5" />}
-                      Betald på plats
-                    </button>
-                  )}
                   {checkedIn ? (
                     <span className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("lime", 0.16), color: ax("lime") }}>
                       Inne

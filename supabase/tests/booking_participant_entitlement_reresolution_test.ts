@@ -45,6 +45,10 @@ function fixtureBookings(founder = false) {
     end_time: '2026-08-11T16:00:00.000Z',
     included_court_hours: founder ? 1 : 0,
     membership_usage_entitlement_type: founder ? 'court_hours_per_week' : null,
+    participation_funding_mode: 'individual_participation',
+    participation_funding_source_type: founder ? 'membership_entitlement' : 'individual_participation',
+    participation_funding_source_id: null,
+    participation_funder: founder ? 'subscription' : 'self_prepaid',
   }];
 }
 
@@ -104,6 +108,38 @@ Deno.test('current canonical Day Pass coverage is property-driven', async () => 
     { bookingRows: fixtureBookings(false) },
   );
   assert(result.covered && result.entitlementType === 'day_access', 'Day Pass was not selected');
+});
+
+Deno.test('current canonical Partner/Bruce coverage is property-driven', async () => {
+  const result = await resolveCurrentBookingParticipantCoverage(
+    resolverClient({ canonical: {
+      status: 'covered', covered: true,
+      entitlement_id: '81000000-0000-4000-8000-000000000001',
+      entitlement_type: 'partner_access', access_reason: 'Ingår via Bruce',
+      funding_type: 'partner_funded', funder: 'partner',
+      consumption_required: true, consumption_trigger: 'on_checkin',
+    } }),
+    fixtureParticipant(),
+    { bookingRows: fixtureBookings(false) },
+  );
+  assert(result.covered && result.entitlementType === 'partner_access', 'Partner access was not selected');
+  assert(result.consumptionRequired && result.consumptionTrigger === 'on_checkin', 'Partner consumption policy was lost');
+});
+
+Deno.test('current canonical Punch Card coverage is property-driven', async () => {
+  const result = await resolveCurrentBookingParticipantCoverage(
+    resolverClient({ canonical: {
+      status: 'covered', covered: true,
+      entitlement_id: '82000000-0000-4000-8000-000000000001',
+      entitlement_type: 'punch_card', access_reason: 'Klippkort',
+      funding_type: 'deferred_revenue', funder: 'self_prepaid',
+      consumption_required: true, consumption_trigger: 'on_checkin',
+    } }),
+    fixtureParticipant(),
+    { bookingRows: fixtureBookings(false) },
+  );
+  assert(result.covered && result.entitlementType === 'punch_card', 'Punch Card was not selected');
+  assert(result.consumptionRequired && result.consumptionTrigger === 'on_checkin', 'Punch Card consumption policy was lost');
 });
 
 Deno.test('no matching entitlement leaves the unpaid amount collectible', async () => {

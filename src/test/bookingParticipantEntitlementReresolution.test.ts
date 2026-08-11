@@ -15,11 +15,11 @@ describe("unpaid booking-participant entitlement re-resolution", () => {
     expect(policy).toContain("Boolean(participant?.customer_id || participant?.user_id)");
   });
 
-  it("reuses one server-authoritative resolver at checkout, Desk payment and check-in", () => {
+  it("reuses one server-authoritative resolver at checkout, Desk projection and check-in", () => {
     expect(bookingsApi).toContain("channel: 'checkout'");
     expect(bookingsApi).toContain("channel: 'desk'");
     expect(checkinsApi).toContain("channel: 'checkin'");
-    expect(bookingsApi.match(/persistCurrentBookingParticipantCoverage/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(bookingsApi.match(/persistCurrentBookingParticipantCoverage/g)?.length).toBeGreaterThanOrEqual(1);
     expect(checkinsApi).toContain("persistCurrentBookingParticipantCoverage");
   });
 
@@ -61,6 +61,7 @@ describe("unpaid booking-participant entitlement re-resolution", () => {
   it("removes the stale Desk collection action when current coverage applies", () => {
     expect(desk).toContain("effective_access_reason");
     expect(desk).toContain("`Ingår · ${accessReason}`");
-    expect(desk).toContain("claimed && !paid && !free");
+    expect(desk).not.toContain("Betald på plats");
+    expect(desk).toContain("Ingen plats ännu · betala");
   });
 });

@@ -426,6 +426,10 @@ Deno.serve(async (req) => {
                 total_price: 0,
                 status: 'confirmed',
                 notes: `${account?.company_name || 'Företag'} | Serie`,
+                participation_funding_mode: 'resource_funded',
+                participation_funding_source_type: 'corporate_order',
+                participation_funding_source_id: order.id,
+                participation_funder: 'employer',
               }).select('id').single();
 
               if (booking) {

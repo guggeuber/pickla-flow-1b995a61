@@ -1,4 +1,5 @@
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
+import { bookingParticipationFunding } from './booking_participant_funding.ts';
 
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
 const OPEN_BOOKING_SOURCE = 'open_booking_slot';
@@ -6,12 +7,16 @@ const RESOLVABLE_ENTITLEMENT_TYPES = [
   'booking_access',
   'membership_access',
   'day_access',
+  'punch_card',
+  'partner_access',
 ];
 
 const ENTITLEMENT_PRIORITY: Record<string, number> = {
   booking_access: 10,
   membership_access: 20,
   day_access: 30,
+  punch_card: 40,
+  partner_access: 50,
 };
 
 export type BookingParticipantCoverage = {
@@ -34,6 +39,12 @@ export type BookingParticipantCoverage = {
 type ResolutionOptions = {
   bookingRows?: any[];
   channel?: 'checkout' | 'desk' | 'checkin' | 'ticket' | 'my_page';
+};
+
+type ParticipantIdentity = {
+  venueId: string;
+  customerId?: string | null;
+  userId?: string | null;
 };
 
 function metadataOf(row: any) {
@@ -140,7 +151,7 @@ async function loadBookingRows(admin: any, participant: any) {
 
   let query = admin
     .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_published_at, venue_courts(sport_type)')
+    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, corporate_package_id, membership_id, included_court_hours, membership_usage_entitlement_type, participation_funding_mode, participation_funding_source_type, participation_funding_source_id, participation_funder, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_published_at, venue_courts(sport_type)')
     .eq('venue_id', participant.venue_id)
     .neq('status', 'cancelled');
 
@@ -157,26 +168,45 @@ async function loadBookingRows(admin: any, participant: any) {
   return data?.length ? data : [booking];
 }
 
-export async function resolveCurrentBookingParticipantCoverage(
+export async function resolveBookingParticipantCoverageForIdentity(
   admin: any,
-  participant: any,
-  options: ResolutionOptions = {},
+  identity: ParticipantIdentity,
+  bookingRows: any[],
+  options: Omit<ResolutionOptions, 'bookingRows'> = {},
 ): Promise<BookingParticipantCoverage> {
-  if (!bookingParticipantCanReResolve(participant)) return noCoverage('not_unpaid');
-
-  const rows = options.bookingRows?.length ? options.bookingRows : await loadBookingRows(admin, participant);
-  const booking = representativeBooking(participant, rows);
-  if (!booking || booking.venue_id !== participant.venue_id) return noCoverage('booking_wrong_venue');
+  const rows = bookingRows || [];
+  const booking = rows[0];
+  if (!booking || booking.venue_id !== identity.venueId) return noCoverage('booking_wrong_venue');
   const serviceDate = bookingServiceDate(booking);
   if (!serviceDate) return noCoverage('booking_date_missing');
 
+  const baseFunding = bookingParticipationFunding(rows);
+  if (baseFunding.mode === 'resource_funded') {
+    return {
+      covered: true,
+      status: 'covered',
+      entitlementId: null,
+      entitlementType: 'booking_access',
+      accessReason: 'Ingår via banbokningen',
+      fundingType: 'base_booking_funded',
+      funder: baseFunding.funder,
+      sourceType: baseFunding.sourceType || 'booking',
+      sourceId: baseFunding.sourceId || booking.id || null,
+      membershipId: null,
+      consumptionRequired: false,
+      consumptionTrigger: null,
+      noShowPolicy: null,
+      resolutionPriority: 0,
+    };
+  }
+
   const candidates: BookingParticipantCoverage[] = [];
-  if (founderBooking(rows) && participant.user_id) {
+  if (founderBooking(rows) && identity.userId) {
     const { data: memberships, error: membershipError } = await admin
       .from('memberships')
       .select('id, starts_at, expires_at, membership_tiers(name)')
-      .eq('venue_id', participant.venue_id)
-      .eq('user_id', participant.user_id)
+      .eq('venue_id', identity.venueId)
+      .eq('user_id', identity.userId)
       .eq('status', 'active')
       .lte('starts_at', serviceDate)
       .or(`expires_at.is.null,expires_at.gte.${serviceDate}`)
@@ -196,8 +226,6 @@ export async function resolveCurrentBookingParticipantCoverage(
         entitlementId: null,
         entitlementType: 'membership_access',
         accessReason: 'Founder',
-        // The legacy membership row does not canonically state funding/funder.
-        // Never infer either value merely from the tier name.
         fundingType: null,
         funder: null,
         sourceType: 'membership',
@@ -211,11 +239,11 @@ export async function resolveCurrentBookingParticipantCoverage(
     }
   }
 
-  if (participant.customer_id || participant.user_id) {
+  if (identity.customerId || identity.userId) {
     const { data: canonical, error: canonicalError } = await admin.rpc('resolve_access_entitlement', {
-      p_venue_id: participant.venue_id,
-      p_customer_id: participant.customer_id || null,
-      p_user_id: participant.user_id || null,
+      p_venue_id: identity.venueId,
+      p_customer_id: identity.customerId || null,
+      p_user_id: identity.userId || null,
       p_activity_session_id: null,
       p_service_date: serviceDate,
       p_at: booking.start_time,
@@ -248,7 +276,25 @@ export async function resolveCurrentBookingParticipantCoverage(
   }
 
   candidates.sort((left, right) => left.resolutionPriority - right.resolutionPriority);
-  return candidates[0] || noCoverage('not_covered');
+  if (candidates[0]) return candidates[0];
+  return noCoverage(baseFunding.mode === 'unresolved' ? 'base_funding_unresolved' : 'not_covered');
+}
+
+export async function resolveCurrentBookingParticipantCoverage(
+  admin: any,
+  participant: any,
+  options: ResolutionOptions = {},
+): Promise<BookingParticipantCoverage> {
+  if (!bookingParticipantCanReResolve(participant)) return noCoverage('not_unpaid');
+
+  const rows = options.bookingRows?.length ? options.bookingRows : await loadBookingRows(admin, participant);
+  const booking = representativeBooking(participant, rows);
+  if (!booking || booking.venue_id !== participant.venue_id) return noCoverage('booking_wrong_venue');
+  return resolveBookingParticipantCoverageForIdentity(admin, {
+    venueId: participant.venue_id,
+    customerId: participant.customer_id || null,
+    userId: participant.user_id || null,
+  }, rows, { channel: options.channel });
 }
 
 export function projectBookingParticipantCoverage(participant: any, coverage: BookingParticipantCoverage) {

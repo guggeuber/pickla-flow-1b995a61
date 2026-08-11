@@ -294,8 +294,9 @@ export function OperationsBookingDrawer({
         customerId: selectedManualCustomer?.customer_id || null,
       });
     },
-    onSuccess: () => {
-      toast.success("Spelaren är tillagd");
+    onSuccess: (result: any) => {
+      const committed = ["paid", "free"].includes(String(result?.participant?.payment_status || "").toLowerCase());
+      toast.success(committed ? "Spelaren är tillagd" : "Betalningslänk skapad · ingen plats är bekräftad");
       setManualName("");
       setManualPhone("");
       setManualEmail("");
@@ -511,7 +512,7 @@ export function OperationsBookingDrawer({
                                 </p>
                               )}
                             </div>
-                            {!claimed && claimUrl ? (
+                            {(!claimed || (!paid && !free)) && claimUrl ? (
                               <button
                                 type="button"
                                 onClick={async () => {
@@ -525,7 +526,7 @@ export function OperationsBookingDrawer({
                                 className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-2.5 py-1.5 text-[11px] font-black text-white"
                               >
                                 <Copy className="h-3.5 w-3.5" />
-                                Kopiera länk
+                                {claimed ? "Kopiera betalningslänk" : "Kopiera länk"}
                               </button>
                             ) : null}
                           </div>
@@ -537,7 +538,7 @@ export function OperationsBookingDrawer({
                               {checkedIn ? "Incheckad" : "Ej inne"}
                             </span>
                             <span className={`rounded-full border px-2.5 py-1 ${paid || free ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
-                              {manualPlaceholder ? "Pris efter identitet" : paid ? "Betald" : free ? "Ingår" : "Obetald"}
+                              {manualPlaceholder ? "Ingen plats ännu · identitet krävs" : paid ? "Betald" : free ? "Ingår" : "Ingen plats ännu · betalning krävs"}
                             </span>
                           </div>
                         </div>

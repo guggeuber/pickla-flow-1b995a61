@@ -403,6 +403,38 @@ async function reResolveBookingParticipantForCheckin(
   return persisted;
 }
 
+function bookingParticipantConsumptionEntitlement(participant: any) {
+  const metadata = participant?.metadata && typeof participant.metadata === 'object'
+    ? participant.metadata
+    : {};
+  const entitlementId = String(metadata.entitlement_id || '').trim();
+  if (!metadata.consumption_required || !entitlementId) return null;
+  return {
+    type: metadata.entitlement_type || 'booking_participant',
+    id: participant.id,
+    canonical_entitlement_id: entitlementId,
+    source_type: metadata.source_type || null,
+    source_id: metadata.source_id || null,
+    registration_id: metadata.registration_id || null,
+    activity_session_id: metadata.activity_session_id || null,
+    metadata: {
+      ...metadata,
+      product_key: metadata.product_key || 'booking_participant_share',
+    },
+  };
+}
+
+async function markBookingParticipantCheckedIn(serviceClient: any, venueId: string, participantId: string | null) {
+  if (!participantId) return;
+  const { error } = await serviceClient
+    .from('booking_participants')
+    .update({ checked_in_at: new Date().toISOString() })
+    .eq('id', participantId)
+    .eq('venue_id', venueId)
+    .is('checked_in_at', null);
+  if (error) throw new Error(error.message);
+}
+
 async function resolveVenueForSelfCheckin(serviceClient: any, params: { venueId?: string | null; venueSlug?: string | null }) {
   if (params.venueId) {
     const { data } = await serviceClient
@@ -713,6 +745,8 @@ Deno.serve(async (req) => {
       });
       if (!venue?.id) return errorResponse('Venue not found', 404);
 
+      let bookingParticipantConsumption: any = null;
+
       if (requestedEntryType === 'booking_participant' && requestedEntitlementId) {
         const { data: participant, error: participantError } = await serviceClient
           .from('booking_participants')
@@ -736,6 +770,7 @@ Deno.serve(async (req) => {
         if (!['paid', 'free'].includes(String(effectiveParticipant.payment_status || '').toLowerCase())) {
           return errorResponse('Biljetten är inte betald', 409);
         }
+        bookingParticipantConsumption = bookingParticipantConsumptionEntitlement(effectiveParticipant);
       }
 
       const access = await resolveUserAccess(serviceClient, venue.id, userId);
@@ -772,7 +807,7 @@ Deno.serve(async (req) => {
           ent.type === requestedEntryType && String(ent.id || '') === requestedEntitlementId
         );
         if (!requested) return errorResponse('Ingen giltig access hittades för den här biljetten', 403);
-        best = requested;
+        best = bookingParticipantConsumption || requested;
       }
       if (!best) return errorResponse('Ingen giltig access hittades', 403);
       const playerName = profileName(profile);
@@ -796,6 +831,11 @@ Deno.serve(async (req) => {
             entryType: canonicalCheckin.entry_type,
             entitlementId: canonicalCheckin.entitlement_id,
           });
+          await markBookingParticipantCheckedIn(
+            serviceClient,
+            venue.id,
+            bookingParticipantConsumption ? requestedEntitlementId : null,
+          );
           return jsonResponse({
             checked_in: true,
             already_checked_in: Boolean(canonicalResult?.already_checked_in),
@@ -1150,6 +1190,8 @@ Deno.serve(async (req) => {
       const { today } = stockholmNow();
       let customerId = requestedCustomerId || (target_user_id ? await resolveCustomerIdForUser(serviceClient, target_user_id) : null);
       let canonicalEntitlement: any = null;
+      let bookingParticipantConsumption: any = null;
+      let bookingParticipantId: string | null = null;
 
       if (String(entry_type || '') === 'booking_participant' && entitlement_id) {
         const { data: participant, error: participantError } = await serviceClient
@@ -1160,6 +1202,7 @@ Deno.serve(async (req) => {
           .maybeSingle();
         if (participantError) return errorResponse(participantError.message, 500);
         if (!participant) return errorResponse('Biljetten saknas', 404);
+        bookingParticipantId = participant.id;
         if (target_user_id && participant.user_id && participant.user_id !== target_user_id) {
           return errorResponse('Biljetten tillhör en annan kund', 403);
         }
@@ -1169,7 +1212,8 @@ Deno.serve(async (req) => {
         target_user_id ||= participant.user_id || null;
         customerId ||= participant.customer_id || (target_user_id ? await resolveCustomerIdForUser(serviceClient, target_user_id) : null);
         try {
-          await reResolveBookingParticipantForCheckin(serviceClient, req, userId, participant);
+          const resolved = await reResolveBookingParticipantForCheckin(serviceClient, req, userId, participant);
+          bookingParticipantConsumption = bookingParticipantConsumptionEntitlement(resolved.participant);
         } catch (coverageError) {
           return errorResponse((coverageError as Error).message || 'Rättigheten kunde inte bekräftas', 409);
         }
@@ -1231,6 +1275,7 @@ Deno.serve(async (req) => {
         canonicalEntitlement = access.entitlements.find(
           (ent) => ent.type === entry_type && ent.id === entitlement_id && ent.canonical_entitlement_id,
         ) || null;
+        if (bookingParticipantConsumption) canonicalEntitlement = bookingParticipantConsumption;
       }
 
       if (String(entry_type || '') === 'booking_participant' && entitlement_id) {
@@ -1270,6 +1315,7 @@ Deno.serve(async (req) => {
             entryType: canonicalCheckin.entry_type,
             entitlementId: canonicalCheckin.entitlement_id,
           });
+          await markBookingParticipantCheckedIn(serviceClient, venue_id, bookingParticipantId);
           return jsonResponse({
             ...canonicalCheckin,
             already_checked_in: Boolean(canonicalResult?.already_checked_in),
