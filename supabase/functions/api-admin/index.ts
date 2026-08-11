@@ -15,7 +15,7 @@ import {
   type CapacityIntervalInput,
   type CapacityResource,
 } from '../_shared/capacity.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const ZETTLE_OAUTH_BASE_URL = 'https://oauth.zettle.com';
@@ -50,6 +50,7 @@ function adminEntityTableForPath(path: string) {
     'product-relationships': 'product_relationships',
     'activity-series': 'activity_series',
     'activity-sessions': 'activity_sessions',
+    'operations-staffing': 'operational_staff_assignments',
     links: 'venue_links',
     'event-categories': 'venue_event_categories',
     'zettle-connect': 'zettle_connections',
@@ -76,6 +77,7 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'product-relationships') return body.relationshipId || `${body.source_product_id || ''}:${body.target_product_id || ''}`;
   if (path === 'activity-series') return body.seriesId || url.searchParams.get('seriesId');
   if (path === 'activity-sessions') return body.sessionId || url.searchParams.get('sessionId');
+  if (path === 'operations-staffing') return body.assignmentId || body.source_id || url.searchParams.get('assignmentId');
   if (path === 'links') return body.linkId || url.searchParams.get('linkId');
   if (path === 'event-categories') return body.id || body.categoryKey || url.searchParams.get('id');
   if (path === 'zettle-import') return body.date || null;
@@ -303,7 +305,7 @@ async function validateActivitySessionCourtAvailability(
     return { ok: false as const, status: 400, message: 'En eller flera valda banor tillhör inte anläggningen.' };
   }
 
-  const courtById = new Map((courts || []).map((court: any) => [court.id, court]));
+  const courtById = new Map<string, any>((courts || []).map((court: any) => [court.id, court]));
   const window = conflictSearchWindow(session);
 
   let bookingsQuery = admin
@@ -2284,7 +2286,7 @@ async function runStripeInvoiceMaintenance(admin: any, venueId: string, mode: 'd
 
       for (const invoice of paidInvoices) {
         const assessment = await assessStripeSubscriptionInvoice(admin, venueId, scopedTarget, invoice);
-        let result = assessment;
+        let result: any = assessment;
         const blockedBySelection = mode === 'execute' && allowedInvoiceSet && !allowedInvoiceSet.has(invoice.id);
         if (blockedBySelection) {
           result = { status: 'skipped', invoice_id: invoice.id, reason: 'not_in_dry_run_selection' };
@@ -2616,8 +2618,8 @@ async function groupedCourtBookingItems(admin: any, venueId: string, startIso: s
   if (receiptsResult.error) throw new Error(receiptsResult.error.message);
   if (checkinsResult.error) throw new Error(checkinsResult.error.message);
 
-  const receiptByStripe = new Map((receiptsResult.data || []).map((receipt: any) => [receipt.stripe_session_id, receipt]));
-  const checkinByBookingId = new Map((checkinsResult.data || []).map((checkin: any) => [checkin.entitlement_id, checkin]));
+  const receiptByStripe = new Map<string, any>((receiptsResult.data || []).map((receipt: any) => [receipt.stripe_session_id, receipt]));
+  const checkinByBookingId = new Map<string, any>((checkinsResult.data || []).map((checkin: any) => [checkin.entitlement_id, checkin]));
   const groups = new Map<string, any[]>();
   for (const row of bookings) {
     const key = bookingGroupKey(row);
@@ -2710,7 +2712,7 @@ async function activeBookableCourtResources(admin: any, venueId: string) {
   });
 }
 
-async function resourceIdsForCourtIds(admin: any, venueId: string, courtIds: string[]) {
+async function resourceIdsForCourtIds(admin: any, venueId: string, courtIds: string[]): Promise<string[]> {
   if (courtIds.length === 0) return [];
 
   const { data: courts, error: courtsError } = await admin
@@ -2729,7 +2731,7 @@ async function resourceIdsForCourtIds(admin: any, venueId: string, courtIds: str
     .in('venue_court_id', courtIds);
   if (catalogError) throw new Error(catalogError.message);
 
-  const existingByCourt = new Map((existingCatalog || []).map((row: any) => [row.venue_court_id, row.id]));
+  const existingByCourt = new Map<string, string>((existingCatalog || []).map((row: any) => [String(row.venue_court_id), String(row.id)]));
   const missingCourts = (courts || []).filter((court: any) => !existingByCourt.has(court.id));
   if (missingCourts.length) {
     const { data: inserted, error: insertError } = await admin
@@ -2747,10 +2749,10 @@ async function resourceIdsForCourtIds(admin: any, venueId: string, courtIds: str
       })))
       .select('id, venue_court_id');
     if (insertError) throw new Error(insertError.message);
-    for (const row of inserted || []) existingByCourt.set(row.venue_court_id, row.id);
+    for (const row of inserted || []) existingByCourt.set(String(row.venue_court_id), String(row.id));
   }
 
-  return courtIds.map((courtId: string) => existingByCourt.get(courtId)).filter(Boolean);
+  return courtIds.map((courtId: string) => existingByCourt.get(courtId)).filter((id): id is string => Boolean(id));
 }
 
 const CAPACITY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -2776,12 +2778,493 @@ function capacityBlockCourtIds(block: any, courtIds: string[]) {
   return courtId && courtIds.includes(courtId) ? [courtId] : [];
 }
 
+function operationalSourceKey(sourceType: string, sourceId: string, occurrenceDate: string) {
+  return `${sourceType}:${sourceId}:${occurrenceDate}`;
+}
+
+function eventOccurrenceRange(event: Record<string, any>) {
+  const date = normalizeDateForResponse(event.start_date);
+  const startTime = cleanTime(event.start_time);
+  const endTime = cleanTime(event.end_time);
+  if (!date || !startTime || !endTime) return null;
+  const endDate = normalizeDateForResponse(event.end_date) || date;
+  const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' });
+  let end = DateTime.fromISO(`${endDate}T${endTime}:00`, { zone: 'Europe/Stockholm' });
+  if (!start.isValid || !end.isValid) return null;
+  if (end <= start) end = end.plus({ days: 1 });
+  return { date, starts_at: start.toUTC().toISO()!, ends_at: end.toUTC().toISO()! };
+}
+
+function operationalQueueDate(
+  preferredDate: unknown,
+  createdAt: unknown,
+  dates: string[],
+  today: string,
+) {
+  const preferred = normalizeDateForResponse(preferredDate);
+  if (preferred && dates.includes(preferred) && preferred >= today) return preferred;
+  if (dates.includes(today)) return today;
+  const created = normalizeDateForResponse(createdAt);
+  return created && dates.includes(created) ? created : null;
+}
+
+function normalizeOperationalStaffingRole(value: unknown) {
+  const role = String(value || '').trim();
+  if (!['host', 'instructor', 'service'].includes(role)) throw new Error('Invalid staffing role');
+  return role;
+}
+
+function normalizeOperationalSourceType(value: unknown) {
+  const sourceType = String(value || '').trim();
+  if (!['activity_session', 'booking', 'event', 'resource_block', 'operation_override'].includes(sourceType)) {
+    throw new Error('Invalid operational source type');
+  }
+  return sourceType;
+}
+
+async function validateOperationalStaffingSource(
+  admin: any,
+  venueId: string,
+  sourceType: string,
+  sourceId: string,
+  occurrenceDate: string,
+) {
+  if (sourceType === 'activity_session') {
+    const { data, error } = await admin.from('activity_sessions')
+      .select('id, venue_id, session_date, recurrence_days, start_time, end_time, is_active, publish_status')
+      .eq('id', sourceId).eq('venue_id', venueId).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data || !data.is_active || data.publish_status !== 'published' || !activitySessionOccursOnDate(data, occurrenceDate)) {
+      throw new Error('Activity occurrence not found');
+    }
+    return data;
+  }
+
+  if (sourceType === 'booking') {
+    const { data, error } = await admin.from('bookings')
+      .select('id, venue_id, start_time, end_time, status')
+      .eq('id', sourceId).eq('venue_id', venueId).neq('status', 'cancelled')
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const sourceDate = data ? DateTime.fromISO(data.start_time, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate() : null;
+    if (!data || sourceDate !== occurrenceDate) throw new Error('Booking occurrence not found');
+    return data;
+  }
+
+  if (sourceType === 'event') {
+    const { data, error } = await admin.from('events')
+      .select('id, venue_id, start_date, start_time, end_time, planning_status')
+      .eq('id', sourceId).eq('venue_id', venueId)
+      .in('planning_status', ['booked', 'ready', 'published', 'done']).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data || normalizeDateForResponse(data.start_date) !== occurrenceDate) throw new Error('Event occurrence not found');
+    return data;
+  }
+
+  const table = sourceType === 'resource_block' ? 'event_resource_blocks' : 'venue_operation_overrides';
+  const { data, error } = await admin.from(table)
+    .select('id, venue_id, starts_at, ends_at, status')
+    .eq('id', sourceId).eq('venue_id', venueId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const sourceDate = data ? DateTime.fromISO(data.starts_at, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate() : null;
+  if (!data || sourceDate !== occurrenceDate || ['cancelled', 'released'].includes(String(data.status))) throw new Error('Operational occurrence not found');
+  return data;
+}
+
+async function buildOperationsWeekProjection(
+  admin: any,
+  venueId: string,
+  dates: string[],
+  resources: CapacityResource[],
+  bookings: any[],
+  sessions: any[],
+  activityOverrides: any[],
+  blocks: any[],
+  operationOverrides: any[],
+  extras: any[],
+  capacityProjection: any,
+) {
+  const [eventsResult, assignmentsResult, staffResult, incidentsResult, attentionOrdersResult, pickupLinesResult] = extras;
+  const extraResults = [
+    ['events', eventsResult],
+    ['staff_assignments', assignmentsResult],
+    ['venue_staff', staffResult],
+    ['ops_incidents', incidentsResult],
+    ['commerce_attention', attentionOrdersResult],
+    ['commerce_pickup', pickupLinesResult],
+  ] as const;
+  for (const [source, result] of extraResults) {
+    if (result?.error) throw new Error(`Operations Week ${source}: ${result.error.message}`);
+  }
+
+  const staffRows = staffResult?.data || [];
+  const userIds = uniqueStrings(staffRows.map((row: any) => row.user_id));
+  const { data: profiles, error: profilesError } = userIds.length
+    ? await admin.from('player_profiles').select('auth_user_id, display_name').in('auth_user_id', userIds)
+    : { data: [], error: null };
+  if (profilesError) throw new Error(profilesError.message);
+  const profileByUserId = new Map<string, any>((profiles || []).map((profile: any) => [profile.auth_user_id, profile]));
+  const staffById = new Map<string, any>(staffRows.map((staff: any) => {
+    const profile = profileByUserId.get(staff.user_id);
+    return [staff.id, {
+      id: staff.id,
+      user_id: staff.user_id,
+      display_name: profile?.display_name || 'Personal',
+      venue_role: staff.role,
+      is_active: staff.is_active === true,
+    }];
+  }));
+
+  const sessionIds = uniqueStrings(sessions.map((session: any) => session.id));
+  const { data: registrations, error: registrationsError } = sessionIds.length
+    ? await admin.from('session_registrations')
+      .select('id, activity_session_id, session_date, status')
+      .eq('venue_id', venueId)
+      .in('activity_session_id', sessionIds)
+      .gte('session_date', dates[0])
+      .lte('session_date', dates[dates.length - 1])
+      .neq('status', 'cancelled')
+    : { data: [], error: null };
+  if (registrationsError) throw new Error(registrationsError.message);
+
+  const registrationIds = uniqueStrings((registrations || []).map((row: any) => row.id));
+  const bookingIds = uniqueStrings(bookings.map((row: any) => row.id));
+  const entitlementIds = uniqueStrings([...registrationIds, ...bookingIds]);
+  const { data: checkins, error: checkinsError } = entitlementIds.length
+    ? await admin.from('venue_checkins')
+      .select('id, entitlement_id, checked_in_at, checked_out_at')
+      .eq('venue_id', venueId)
+      .in('entitlement_id', entitlementIds)
+    : { data: [], error: null };
+  if (checkinsError) throw new Error(checkinsError.message);
+  const checkedEntitlementIds = new Set((checkins || []).map((row: any) => row.entitlement_id).filter(Boolean));
+
+  const registrationCounts = new Map<string, number>();
+  const checkedInCounts = new Map<string, number>();
+  for (const registration of registrations || []) {
+    const key = operationalSourceKey('activity_session', registration.activity_session_id, String(registration.session_date).slice(0, 10));
+    registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
+    if (registration.status === 'checked_in' || checkedEntitlementIds.has(registration.id)) {
+      checkedInCounts.set(key, (checkedInCounts.get(key) || 0) + 1);
+    }
+  }
+
+  const resourceById = new Map(resources.map((resource) => [resource.id, resource]));
+  const overrideByOccurrence = new Map((activityOverrides || []).map((row: any) => [
+    operationalSourceKey('activity_session', row.activity_session_id, String(row.session_date).slice(0, 10)),
+    row,
+  ]));
+  const assignmentsByOccurrence = new Map<string, any[]>();
+  for (const assignment of assignmentsResult?.data || []) {
+    const key = operationalSourceKey(assignment.source_type, assignment.source_id, String(assignment.occurrence_date).slice(0, 10));
+    const current = assignmentsByOccurrence.get(key) || [];
+    const staff = staffById.get(assignment.venue_staff_id);
+    current.push({
+      id: assignment.id,
+      venue_staff_id: assignment.venue_staff_id,
+      role: assignment.role,
+      display_name: staff?.display_name || 'Inaktiv personal',
+      valid: staff?.is_active === true,
+    });
+    assignmentsByOccurrence.set(key, current);
+  }
+
+  const occurrences: any[] = [];
+  const addOccurrence = (occurrence: Record<string, any>) => {
+    const key = operationalSourceKey(occurrence.source_type, occurrence.source_id, occurrence.occurrence_date);
+    const assignments = assignmentsByOccurrence.get(key) || [];
+    const validAssignments = assignments.filter((assignment: any) => assignment.valid);
+    const warnings = [...(occurrence.warnings || [])];
+    if (occurrence.requires_staffing && validAssignments.length === 0) {
+      warnings.push({ code: 'missing_staff', label: 'Saknar bemanning' });
+    }
+    if (assignments.some((assignment: any) => !assignment.valid)) {
+      warnings.push({ code: 'invalid_staff', label: 'Tilldelad personal är inaktiv' });
+    }
+    occurrences.push({
+      ...occurrence,
+      id: key,
+      assignments,
+      warnings,
+    });
+  };
+
+  for (const session of sessions) {
+    const courtIds = Array.isArray(session.court_ids) ? session.court_ids.map(String).filter((id: string) => resourceById.has(id)) : [];
+    for (const date of dates) {
+      if (!activitySessionOccursOnDate(session, date)) continue;
+      const range = activitySessionOccurrenceRangeUtc(session, date);
+      if (!range) continue;
+      const sourceKey = operationalSourceKey('activity_session', session.id, date);
+      const override = overrideByOccurrence.get(sourceKey);
+      if (override?.status === 'cancelled') continue;
+      addOccurrence({
+        source_type: 'activity_session',
+        source_id: session.id,
+        occurrence_date: date,
+        starts_at: range.startISO,
+        ends_at: range.endISO,
+        origin: session.series_id ? 'series' : 'activity',
+        classification: 'activity',
+        title: safeCapacityLabel(session.name, 'Aktivitet'),
+        resource_ids: courtIds,
+        resource_names: courtIds.map((id: string) => resourceById.get(id)?.name).filter(Boolean),
+        capacity: session.capacity == null ? null : Number(session.capacity),
+        booked_count: registrationCounts.get(sourceKey) || 0,
+        checked_in_count: checkedInCounts.get(sourceKey) || 0,
+        requires_staffing: session.requires_staffing === true,
+        detail_target: { kind: 'module', module_id: 'schedule', source_id: session.id, session_date: date },
+      });
+    }
+  }
+
+  const bookingGroups = new Map<string, any[]>();
+  for (const booking of bookings) {
+    const key = capacityBookingGroupKey(booking);
+    const current = bookingGroups.get(key) || [];
+    current.push(booking);
+    bookingGroups.set(key, current);
+  }
+  for (const group of bookingGroups.values()) {
+    group.sort((a: any, b: any) => String(a.venue_court_id).localeCompare(String(b.venue_court_id)) || String(a.id).localeCompare(String(b.id)));
+    const first = group[0];
+    const starts = DateTime.fromISO(first.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
+    const date = starts.isValid ? starts.toISODate()! : normalizeDateForResponse(first.start_time);
+    if (!date || !dates.includes(date)) continue;
+    const title = safeCapacityLabel(first.booked_by, 'Privat bokning');
+    const resourceIds = uniqueStrings(group.map((row: any) => row.venue_court_id)).filter((id) => resourceById.has(id));
+    const checkedCount = group.filter((row: any) => checkedEntitlementIds.has(row.id)).length;
+    addOccurrence({
+      source_type: 'booking',
+      source_id: first.id,
+      source_ids: group.map((row: any) => row.id),
+      occurrence_date: date,
+      starts_at: first.start_time,
+      ends_at: first.end_time,
+      origin: 'private_booking',
+      classification: 'booking',
+      title,
+      resource_ids: resourceIds,
+      resource_names: resourceIds.map((id) => resourceById.get(id)?.name).filter(Boolean),
+      capacity: null,
+      booked_count: group.length,
+      checked_in_count: checkedCount,
+      requires_staffing: false,
+      detail_target: {
+        kind: 'booking_drawer',
+        booking: {
+          id: `operations-booking-${first.id}`,
+          source_id: first.id,
+          source_ids: group.map((row: any) => row.id),
+          venue_id: venueId,
+          title: `${title} · ${resourceIds.map((id) => resourceById.get(id)?.name).filter(Boolean).join(', ')}`,
+          customer_name: title,
+          starts_at: first.start_time,
+          ends_at: first.end_time,
+          start_time: first.start_time,
+          end_time: first.end_time,
+          status: first.status,
+          access_code: first.access_code || null,
+          booking_refs: group.map((row: any) => row.booking_ref).filter(Boolean),
+          court_name: resourceIds.map((id) => resourceById.get(id)?.name).filter(Boolean).join(', '),
+          courts: resourceIds.map((id) => resourceById.get(id)).filter(Boolean),
+          checked_in: checkedCount > 0,
+          checked_in_count: checkedCount,
+        },
+      },
+    });
+  }
+
+  const eventBlocksByEventId = new Map<string, any[]>();
+  const operationBlocksByOverrideId = new Map<string, any[]>();
+  for (const block of blocks) {
+    if (block.event_id) {
+      const current = eventBlocksByEventId.get(block.event_id) || [];
+      current.push(block);
+      eventBlocksByEventId.set(block.event_id, current);
+    }
+    const operationOverrideId = String(cleanBlockMetadata(block.metadata).venue_operation_override_id || '');
+    if (operationOverrideId) {
+      const current = operationBlocksByOverrideId.get(operationOverrideId) || [];
+      current.push(block);
+      operationBlocksByOverrideId.set(operationOverrideId, current);
+    }
+  }
+
+  for (const event of eventsResult?.data || []) {
+    const range = eventOccurrenceRange(event);
+    if (!range || !dates.includes(range.date)) continue;
+    const eventBlocks = eventBlocksByEventId.get(event.id) || [];
+    const resourceIds = uniqueStrings(eventBlocks.flatMap((block: any) => capacityBlockCourtIds(block, resources.map((resource) => resource.id))));
+    const warnings: any[] = [];
+    if (!eventBlocks.length) warnings.push({ code: 'event_resource_missing', label: 'Bekräftad resurs saknas' });
+    const rangeDrift = eventBlocks.some((block: any) => {
+      const startDelta = Math.abs(DateTime.fromISO(block.starts_at).toMillis() - DateTime.fromISO(range.starts_at).toMillis());
+      const endDelta = Math.abs(DateTime.fromISO(block.ends_at).toMillis() - DateTime.fromISO(range.ends_at).toMillis());
+      return startDelta >= 60_000 || endDelta >= 60_000;
+    });
+    if (rangeDrift) warnings.push({ code: 'event_resource_drift', label: 'Eventtid och resursblock skiljer sig' });
+    addOccurrence({
+      source_type: 'event',
+      source_id: event.id,
+      occurrence_date: range.date,
+      starts_at: range.starts_at,
+      ends_at: range.ends_at,
+      origin: 'event',
+      classification: 'event',
+      title: safeCapacityLabel(eventDisplayTitle(event), 'Event'),
+      resource_ids: resourceIds,
+      resource_names: resourceIds.map((id) => resourceById.get(id)?.name).filter(Boolean),
+      capacity: event.expected_participants == null ? null : Number(event.expected_participants),
+      booked_count: event.expected_participants == null ? null : Number(event.expected_participants),
+      checked_in_count: null,
+      requires_staffing: true,
+      warnings,
+      detail_target: { kind: 'module', module_id: 'events', source_id: event.id },
+    });
+  }
+
+  for (const block of blocks) {
+    if (block.event_id || cleanBlockMetadata(block.metadata).venue_operation_override_id) continue;
+    const start = DateTime.fromISO(block.starts_at, { zone: 'utc' }).setZone('Europe/Stockholm');
+    const date = start.isValid ? start.toISODate() : null;
+    if (!date || !dates.includes(date)) continue;
+    const resourceIds = capacityBlockCourtIds(block, resources.map((resource) => resource.id));
+    addOccurrence({
+      source_type: 'resource_block',
+      source_id: block.id,
+      occurrence_date: date,
+      starts_at: block.starts_at,
+      ends_at: block.ends_at,
+      origin: block.reason === 'maintenance' ? 'maintenance' : 'operational_block',
+      classification: block.reason === 'maintenance' ? 'maintenance' : 'resource_block',
+      title: safeCapacityLabel(block.title, block.reason === 'maintenance' ? 'Underhåll' : 'Resursblockering'),
+      resource_ids: resourceIds,
+      resource_names: resourceIds.map((id) => resourceById.get(id)?.name).filter(Boolean),
+      capacity: null,
+      booked_count: null,
+      checked_in_count: null,
+      requires_staffing: false,
+      detail_target: { kind: 'module', module_id: 'resourceBlocks', source_id: block.id },
+    });
+  }
+
+  for (const override of operationOverrides) {
+    const start = DateTime.fromISO(override.starts_at, { zone: 'utc' }).setZone('Europe/Stockholm');
+    const date = start.isValid ? start.toISODate() : null;
+    if (!date || !dates.includes(date)) continue;
+    const linkedBlocks = operationBlocksByOverrideId.get(String(override.id)) || [];
+    const resourceIds = uniqueStrings(linkedBlocks.flatMap((block: any) => capacityBlockCourtIds(block, resources.map((resource) => resource.id))));
+    addOccurrence({
+      source_type: 'operation_override',
+      source_id: override.id,
+      occurrence_date: date,
+      starts_at: override.starts_at,
+      ends_at: override.ends_at,
+      origin: override.override_type === 'maintenance' ? 'maintenance' : 'operational_block',
+      classification: override.override_type === 'maintenance' ? 'maintenance' : 'closure',
+      title: safeCapacityLabel(override.title, override.override_type === 'maintenance' ? 'Underhåll' : 'Driftstopp'),
+      resource_ids: override.affects_entire_venue ? resources.map((resource) => resource.id) : resourceIds,
+      resource_names: override.affects_entire_venue ? ['Hela anläggningen'] : resourceIds.map((id) => resourceById.get(id)?.name).filter(Boolean),
+      capacity: null,
+      booked_count: null,
+      checked_in_count: null,
+      requires_staffing: false,
+      detail_target: { kind: 'module', module_id: 'operations', source_id: override.id },
+    });
+  }
+
+  const occurrencesByStaffId = new Map<string, any[]>();
+  const staffNameById = new Map<string, string>();
+  for (const occurrence of occurrences) {
+    for (const assignment of occurrence.assignments.filter((row: any) => row.valid)) {
+      staffNameById.set(assignment.venue_staff_id, assignment.display_name);
+      const staffedOccurrences = occurrencesByStaffId.get(assignment.venue_staff_id) || [];
+      if (!staffedOccurrences.some((row) => row.id === occurrence.id)) staffedOccurrences.push(occurrence);
+      occurrencesByStaffId.set(assignment.venue_staff_id, staffedOccurrences);
+    }
+  }
+  for (const [staffId, staffedOccurrences] of occurrencesByStaffId.entries()) {
+    staffedOccurrences.sort((left, right) => DateTime.fromISO(left.starts_at).toMillis() - DateTime.fromISO(right.starts_at).toMillis());
+    for (let leftIndex = 0; leftIndex < staffedOccurrences.length; leftIndex += 1) {
+      const left = staffedOccurrences[leftIndex];
+      const leftStart = DateTime.fromISO(left.starts_at).toMillis();
+      const leftEnd = DateTime.fromISO(left.ends_at).toMillis();
+      for (let rightIndex = leftIndex + 1; rightIndex < staffedOccurrences.length; rightIndex += 1) {
+        const right = staffedOccurrences[rightIndex];
+        const rightStart = DateTime.fromISO(right.starts_at).toMillis();
+        if (rightStart >= leftEnd) break;
+        const rightEnd = DateTime.fromISO(right.ends_at).toMillis();
+        if (leftStart >= rightEnd) continue;
+        const label = `${staffNameById.get(staffId) || 'Personal'} är dubbelbokad`;
+        left.warnings.push({ code: 'staff_overlap', label, venue_staff_id: staffId });
+        right.warnings.push({ code: 'staff_overlap', label, venue_staff_id: staffId });
+      }
+    }
+  }
+
+  occurrences.sort((a, b) => a.occurrence_date.localeCompare(b.occurrence_date) || a.starts_at.localeCompare(b.starts_at) || a.title.localeCompare(b.title));
+
+  const today = stockholmToday();
+  const queueByDate = new Map(dates.map((date) => [date, { incident_ids: new Set<string>(), attention_order_ids: new Set<string>(), pickup_line_ids: new Set<string>() }]));
+  for (const incident of incidentsResult?.data || []) {
+    const date = operationalQueueDate(incident.metadata?.session_date, incident.created_at, dates, today);
+    if (date) queueByDate.get(date)?.incident_ids.add(incident.id);
+  }
+  for (const order of attentionOrdersResult?.data || []) {
+    const date = operationalQueueDate(order.metadata?.session_date, order.paid_at || order.created_at, dates, today);
+    if (date) queueByDate.get(date)?.attention_order_ids.add(order.id);
+  }
+  for (const line of pickupLinesResult?.data || []) {
+    const linkedOrder = Array.isArray(line.commerce_orders) ? line.commerce_orders[0] : line.commerce_orders;
+    const date = operationalQueueDate(line.session_date, linkedOrder?.paid_at || linkedOrder?.created_at, dates, today);
+    if (date) queueByDate.get(date)?.pickup_line_ids.add(line.id);
+  }
+
+  const freeMinutesByDate = new Map<string, number>();
+  for (const interval of capacityProjection.intervals || []) {
+    if (interval.classification !== 'free') continue;
+    const minutes = Math.max(0, Math.round((DateTime.fromISO(interval.ends_at).toMillis() - DateTime.fromISO(interval.starts_at).toMillis()) / 60_000));
+    freeMinutesByDate.set(interval.venue_date, (freeMinutesByDate.get(interval.venue_date) || 0) + minutes);
+  }
+
+  const daily = dates.map((date) => {
+    const dayOccurrences = occurrences.filter((occurrence) => occurrence.occurrence_date === date);
+    const queue = queueByDate.get(date)!;
+    return {
+      date,
+      occurrence_count: dayOccurrences.length,
+      missing_staff_count: dayOccurrences.filter((occurrence) => occurrence.warnings.some((warning: any) => warning.code === 'missing_staff')).length,
+      queue_count: queue.incident_ids.size + queue.attention_order_ids.size + queue.pickup_line_ids.size,
+      queue: {
+        incidents: queue.incident_ids.size,
+        attention_orders: queue.attention_order_ids.size,
+        uncollected_products: queue.pickup_line_ids.size,
+      },
+      free_resource_minutes: freeMinutesByDate.get(date) || 0,
+    };
+  });
+
+  return {
+    occurrences,
+    staff_options: Array.from(staffById.values()).filter((staff: any) => staff.is_active),
+    daily,
+    query_strategy: {
+      bounded: true,
+      maximum_queries: 17,
+      n_plus_one: false,
+    },
+  };
+}
+
 async function capacityResponse(
   admin: any,
   venueId: string,
   fromDate: string,
   toDate: string,
   filters: { resourceId?: string | null; group?: string | null } = {},
+  includeOperations = false,
 ) {
   const dates = capacityDates(fromDate, toDate);
   const range = capacityRangeUtc(dates);
@@ -2790,7 +3273,48 @@ async function capacityResponse(
     return { error: 'Date range is outside the Capacity operational window.', status: 400 } as const;
   }
 
-  const [venueResult, courtsResult, hoursResult, bookingsResult, sessionsResult, activityOverridesResult, blocksResult, operationOverridesResult] = await Promise.all([
+  const operationsExtrasPromise = includeOperations
+    ? Promise.all([
+      admin.from('events')
+        .select('id, name, display_name, start_date, end_date, start_time, end_time, planning_status, expected_participants, resources')
+        .eq('venue_id', venueId)
+        .in('planning_status', ['booked', 'ready', 'published', 'done'])
+        .gte('start_date', range.start)
+        .lt('start_date', range.end)
+        .order('start_date', { ascending: true })
+        .order('start_time', { ascending: true })
+        .limit(500),
+      admin.from('operational_staff_assignments')
+        .select('id, venue_id, source_type, source_id, occurrence_date, venue_staff_id, role, status, created_at, updated_at')
+        .eq('venue_id', venueId)
+        .eq('status', 'active')
+        .gte('occurrence_date', dates[0])
+        .lte('occurrence_date', dates[dates.length - 1])
+        .limit(2000),
+      admin.from('venue_staff')
+        .select('id, user_id, role, is_active')
+        .eq('venue_id', venueId)
+        .limit(500),
+      admin.from('ops_incidents')
+        .select('id, status, severity, created_at, metadata')
+        .eq('venue_id', venueId)
+        .neq('status', 'resolved')
+        .limit(500),
+      admin.from('commerce_orders')
+        .select('id, status, created_at, paid_at, metadata')
+        .eq('venue_id', venueId)
+        .eq('status', 'attention')
+        .limit(500),
+      admin.from('commerce_order_lines')
+        .select('id, session_date, fulfillment_status, commerce_order_id, commerce_orders!inner(venue_id, status, created_at, paid_at)')
+        .eq('commerce_orders.venue_id', venueId)
+        .in('commerce_orders.status', ['paid', 'attention'])
+        .in('fulfillment_status', ['pending_pickup', 'attention'])
+        .limit(2000),
+    ])
+    : Promise.resolve(null);
+
+  const [venueResult, courtsResult, hoursResult, bookingsResult, sessionsResult, activityOverridesResult, blocksResult, operationOverridesResult, operationsExtras] = await Promise.all([
     admin.from('venues').select('id').eq('id', venueId).maybeSingle(),
     admin.from('venue_courts')
       .select('id, name, court_number, sport_type, is_available')
@@ -2803,7 +3327,7 @@ async function capacityResponse(
       .eq('venue_id', venueId)
       .order('day_of_week', { ascending: true }),
     admin.from('bookings')
-      .select('id, stripe_session_id, access_code, venue_id, venue_court_id, booked_by, start_time, end_time, status', { count: 'exact' })
+      .select('id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, booked_by, start_time, end_time, status', { count: 'exact' })
       .eq('venue_id', venueId)
       .neq('status', 'cancelled')
       .lt('start_time', range.end)
@@ -2811,7 +3335,7 @@ async function capacityResponse(
       .order('start_time', { ascending: true })
       .limit(5000),
     admin.from('activity_sessions')
-      .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status', { count: 'exact' })
+      .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, capacity, series_id, requires_staffing, is_active, publish_status', { count: 'exact' })
       .eq('venue_id', venueId)
       .eq('is_active', true)
       .eq('publish_status', 'published')
@@ -2840,6 +3364,7 @@ async function capacityResponse(
       .gt('ends_at', range.start)
       .order('starts_at', { ascending: true })
       .limit(1000),
+    operationsExtrasPromise,
   ]);
 
   if (venueResult.error || !venueResult.data) {
@@ -3017,6 +3542,21 @@ async function capacityResponse(
 
   const openingIntervals = buildOpeningIntervals(resources, dates, hoursResult.data || []);
   const projection = buildCapacityProjection(resources, dates, openingIntervals, inputs, venueId);
+  const operations = includeOperations && operationsExtras
+    ? await buildOperationsWeekProjection(
+      admin,
+      venueId,
+      dates,
+      resources,
+      bookingsResult.data || [],
+      sessionsResult.data || [],
+      activityOverridesResult.data || [],
+      blocksResult.data || [],
+      operationOverridesResult.data || [],
+      operationsExtras,
+      projection,
+    )
+    : null;
   const partial = Object.values(sourceStatus).some((source) => source.status === 'error');
   return {
     data: {
@@ -3031,6 +3571,7 @@ async function capacityResponse(
       summary: projection.summary,
       source_status: sourceStatus,
       partial,
+      ...(operations ? { operations } : {}),
     },
     status: partial ? 206 : 200,
   } as const;
@@ -4039,6 +4580,99 @@ Deno.serve(async (req) => {
       return jsonResponse(result.data, result.status);
     }
 
+    // ── OPERATIONS WEEK (READ PROJECTION) ──
+    if (req.method === 'GET' && path === 'operations-week') {
+      const scopedVenueId = venueId!;
+      const fromDate = String(url.searchParams.get('from') || '').slice(0, 10);
+      const toDate = String(url.searchParams.get('to') || '').slice(0, 10);
+      const requestedTimezone = url.searchParams.get('timezone');
+      if (!CAPACITY_UUID.test(scopedVenueId)) return errorResponse('Invalid venueId', 400);
+      if (requestedTimezone && requestedTimezone !== 'Europe/Stockholm') return errorResponse('Unsupported timezone', 400);
+      const dates = capacityDates(fromDate, toDate);
+      if (dates.length !== 7) return errorResponse('Operations Week requires Monday through Sunday', 400);
+      const monday = DateTime.fromISO(dates[0], { zone: 'Europe/Stockholm' });
+      if (!monday.isValid || monday.weekday !== 1) return errorResponse('Operations Week must start on Monday', 400);
+      try {
+        await requireVenueRole(admin, userId, scopedVenueId, ['venue_admin']);
+      } catch (_) {
+        return errorResponse('Forbidden: venue role required', 403);
+      }
+      const result = await capacityResponse(admin, scopedVenueId, fromDate, toDate, {}, true);
+      if ('error' in result) return errorResponse(result.error || 'Operations Week unavailable', result.status);
+      return jsonResponse(result.data, result.status, 5);
+    }
+
+    // ── OPERATIONS STAFFING (RELATION TO CANONICAL OCCURRENCE) ──
+    if (req.method === 'POST' && path === 'operations-staffing') {
+      const body = await req.json();
+      const scopedVenueId = String(body.venueId || body.venue_id || venueId || '').trim();
+      const sourceType = normalizeOperationalSourceType(body.source_type);
+      const sourceId = String(body.source_id || '').trim();
+      const occurrenceDate = String(body.occurrence_date || '').slice(0, 10);
+      const venueStaffId = String(body.venue_staff_id || '').trim();
+      const role = normalizeOperationalStaffingRole(body.role);
+      if (!CAPACITY_UUID.test(scopedVenueId) || !CAPACITY_UUID.test(sourceId) || !CAPACITY_UUID.test(venueStaffId)) {
+        return errorResponse('Invalid staffing identity', 400);
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(occurrenceDate)) return errorResponse('Invalid occurrence date', 400);
+      await validateOperationalStaffingSource(admin, scopedVenueId, sourceType, sourceId, occurrenceDate);
+
+      const { data: staff, error: staffError } = await admin.from('venue_staff')
+        .select('id, venue_id, is_active')
+        .eq('id', venueStaffId)
+        .eq('venue_id', scopedVenueId)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (staffError) return errorResponse(staffError.message, 500);
+      if (!staff) return errorResponse('Active venue staff not found', 404);
+
+      const { data: existing, error: existingError } = await admin.from('operational_staff_assignments')
+        .select('*')
+        .eq('venue_id', scopedVenueId)
+        .eq('source_type', sourceType)
+        .eq('source_id', sourceId)
+        .eq('occurrence_date', occurrenceDate)
+        .eq('venue_staff_id', venueStaffId)
+        .eq('role', role)
+        .eq('status', 'active')
+        .maybeSingle();
+      if (existingError) return errorResponse(existingError.message, 500);
+      if (existing) return jsonResponse(existing, 200, 0);
+
+      const { data, error: insertError } = await admin.from('operational_staff_assignments').insert({
+        venue_id: scopedVenueId,
+        source_type: sourceType,
+        source_id: sourceId,
+        occurrence_date: occurrenceDate,
+        venue_staff_id: venueStaffId,
+        role,
+        status: 'active',
+        created_by: userId,
+      }).select().single();
+      if (insertError) return errorResponse(insertError.message, 400);
+      return jsonResponse(data, 201, 0);
+    }
+
+    if (req.method === 'DELETE' && path === 'operations-staffing') {
+      const assignmentId = String(url.searchParams.get('assignmentId') || '').trim();
+      if (!CAPACITY_UUID.test(assignmentId)) return errorResponse('Invalid assignmentId', 400);
+      const { data: assignment, error: assignmentError } = await admin.from('operational_staff_assignments')
+        .select('*')
+        .eq('id', assignmentId)
+        .eq('venue_id', venueId)
+        .eq('status', 'active')
+        .maybeSingle();
+      if (assignmentError) return errorResponse(assignmentError.message, 500);
+      if (!assignment) return errorResponse('Staff assignment not found', 404);
+      const { data, error: updateError } = await admin.from('operational_staff_assignments')
+        .update({ status: 'cancelled' })
+        .eq('id', assignmentId)
+        .eq('venue_id', venueId)
+        .select().single();
+      if (updateError) return errorResponse(updateError.message, 400);
+      return jsonResponse(data, 200, 0);
+    }
+
     // ── ADMIN OS CALENDAR ──
     if (req.method === 'GET' && path === 'calendar') {
       const scopedVenueId = venueId!;
@@ -4743,8 +5377,8 @@ Deno.serve(async (req) => {
       const requestedVenueId = url.searchParams.get('venueId') || body.venueId || adminVenueId;
       if (!requestedVenueId) return errorResponse('No venue found', 400);
       const affectsEntireVenue = body.affects_entire_venue !== false;
-      const courtIds = Array.isArray(body.venue_court_ids)
-        ? Array.from(new Set(body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)))
+      const courtIds: string[] = Array.isArray(body.venue_court_ids)
+        ? Array.from(new Set<string>(body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)))
         : [];
       if (!affectsEntireVenue && courtIds.length === 0) return errorResponse('Select at least one court or affect the entire venue', 400);
 
@@ -4775,8 +5409,8 @@ Deno.serve(async (req) => {
       const title = String(body.title || '').trim().slice(0, 180);
       const reason = String(body.reason || '').trim().slice(0, 1000);
       const affectsEntireVenue = body.affects_entire_venue !== false;
-      const courtIds = Array.isArray(body.venue_court_ids)
-        ? Array.from(new Set(body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)))
+      const courtIds: string[] = Array.isArray(body.venue_court_ids)
+        ? Array.from(new Set<string>(body.venue_court_ids.map((id: unknown) => String(id)).filter(Boolean)))
         : [];
       const metadata = cleanBlockMetadata(body.metadata);
       if (!title) return errorResponse('Missing title', 400);
@@ -5599,6 +6233,7 @@ Deno.serve(async (req) => {
         early_bird_price_minor: normalized.early_bird_price_minor ?? null,
         early_bird_slots: normalized.early_bird_slots ?? null,
         scarcity_mode: normalized.scarcity_mode || 'none',
+        requires_staffing: normalized.requires_staffing === true,
       }).select().single();
       if (e) return errorResponse(e.message);
       try {
@@ -5619,7 +6254,7 @@ Deno.serve(async (req) => {
       if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
       const { data: existingSession, error: existingError } = await admin
         .from('activity_sessions')
-        .select('id, venue_id, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+        .select('id, venue_id, session_date, recurrence_days, start_time, end_time, court_ids, requires_staffing, is_active, publish_status')
         .eq('id', sessionId)
         .eq('venue_id', venueId)
         .maybeSingle();
