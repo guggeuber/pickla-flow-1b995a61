@@ -1,4 +1,4 @@
-import { ArrowRight, BarChart3, Calendar, LogIn, Menu, Plus, ShoppingBag, X } from "lucide-react";
+import { ArrowRight, Calendar, LogIn, Menu, Plus, ShoppingBag, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -36,7 +36,10 @@ export function PicklaTopBar({
   const [open, setOpen] = useState(false);
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
   const { data: bookingRows = [] } = useMyBookings();
-  const visibleBookings = useMemo(() => buildBookingHistory(bookingRows), [bookingRows]);
+  const upcomingBookings = useMemo(
+    () => buildBookingHistory(bookingRows).filter((booking) => booking.history_status === "upcoming"),
+    [bookingRows],
+  );
   const { venue, status } = useVenueStatusBySlug(slug);
   const shopCart = useGlobalShopCartIndicator(venue?.id);
   const resolvedVenueName = venueName
@@ -190,28 +193,11 @@ export function PicklaTopBar({
 
               {user && (
                 <section className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={() => go(`/stats?v=${slug}`)}
-                    className="flex w-full items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-left text-neutral-950"
-                    style={{ fontFamily: FONT_HEADING }}
-                  >
-                    <span className="flex items-center gap-3">
-                      <BarChart3 className="h-5 w-5 text-neutral-500" />
-                      Min statistik
-                    </span>
-                    <ArrowRight className="h-4 w-4 text-neutral-400" />
-                  </button>
-                </section>
-              )}
-
-              {user && (
-                <section className="space-y-2">
                   <p className="px-1 text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
                     mina bokningar
                   </p>
-                  {visibleBookings.length > 0 ? (
-                    visibleBookings.map((booking) => {
+                  {upcomingBookings.length > 0 ? (
+                    upcomingBookings.map((booking) => {
                       const ref = String(booking.primary_booking_ref || booking.booking_ref || booking.id || getBookingChatResourceId(booking));
                       return (
                         <button
@@ -238,7 +224,7 @@ export function PicklaTopBar({
                     })
                   ) : (
                     <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-[13px] text-neutral-500">
-                      Inga bokningar ännu
+                      Inga kommande bokningar
                     </div>
                   )}
                 </section>
