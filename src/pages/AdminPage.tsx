@@ -352,7 +352,7 @@ const AdminPage = () => {
               <AdminToday venueId={venueId} venueName={currentVenue?.name} onOpenSettings={openSettingsModule} />
             )}
             {active === "calendar" && (
-              <AdminCalendar venueId={venueId} onOpenModule={openSettingsModule} />
+              <AdminCalendar venueId={venueId} venueName={currentVenue?.name} onOpenModule={openSettingsModule} />
             )}
             {active === "pipeline" && (
               <AdminSoon

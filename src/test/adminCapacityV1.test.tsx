@@ -220,7 +220,7 @@ describe("Capacity V1 endpoint contract", () => {
   it("is a GET-only endpoint with explicit venue-role authorization", () => {
     const pathIndex = apiAdmin.indexOf("path === 'capacity'");
     const routeStart = apiAdmin.lastIndexOf("if (req.method", pathIndex);
-    const routeEnd = apiAdmin.indexOf("ADMIN OS CALENDAR", routeStart);
+    const routeEnd = apiAdmin.indexOf("OPERATIONS WEEK", routeStart);
     const route = apiAdmin.slice(routeStart, routeEnd);
     expect(route).toContain("req.method === 'GET'");
     expect(route).toContain("requireVenueRole(admin, userId, scopedVenueId");
@@ -245,12 +245,14 @@ describe("Capacity V1 endpoint contract", () => {
     expect(aggregator).not.toContain("customer_email");
     expect(aggregator).not.toContain("customer_phone");
     expect(aggregator).not.toContain("customer_id");
-    expect(aggregator).not.toContain("user_id");
-    expect(aggregator).not.toContain("total_price");
+    expect(aggregator).toContain(".select('id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, booked_by, start_time, end_time, status'");
+    expect(aggregator).not.toContain("customer_email");
+    expect(aggregator).not.toContain("customer_phone");
     expect(aggregator).toContain("capacityDatesWithinOperationalWindow");
     expect(aggregator).toContain("capacity source row limit exceeded");
     expect(aggregator).toContain("if (override?.status === 'cancelled') continue");
-    expect(aggregator).not.toContain("admin.from('events')");
+    expect(aggregator).toContain("includeOperations");
+    expect(aggregator).toContain("admin.from('events')");
     expect(aggregator).toContain("linkedOperationOverrideIds.has(String(override.id))");
   });
 

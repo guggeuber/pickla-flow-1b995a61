@@ -110,7 +110,7 @@ function positionPercent(value: number, bounds: { start: number; end: number }) 
   return Math.max(0, Math.min(100, ((value - bounds.start) / (bounds.end - bounds.start)) * 100));
 }
 
-function TimelineDay({
+export function TimelineDay({
   date,
   resources,
   openings,
@@ -146,6 +146,7 @@ function TimelineDay({
           {resources.map((resource) => {
             const opening = dayOpenings.find((row) => row.resource_id === resource.id);
             const occupied = intervals.filter((row) => row.resource_id === resource.id && row.venue_date === date && row.classification !== "free");
+            const free = intervals.filter((row) => row.resource_id === resource.id && row.venue_date === date && row.classification === "free");
             const lanes = assignLanes(occupied);
             const laneCount = Math.max(1, lanes.reduce((max, row) => Math.max(max, row.lane + 1), 1));
             const rowHeight = Math.max(48, laneCount * 26 + 12);
@@ -165,6 +166,21 @@ function TimelineDay({
                       <div className="absolute inset-y-0 left-1/4 w-px" style={{ background: ax("borderSoft") }} />
                       <div className="absolute inset-y-0 left-1/2 w-px" style={{ background: ax("borderSoft") }} />
                       <div className="absolute inset-y-0 left-3/4 w-px" style={{ background: ax("borderSoft") }} />
+                      {free.map((interval) => {
+                        const times = intervalMillis(interval);
+                        const left = positionPercent(Math.max(times.start, intervalMillis(opening).start), bounds);
+                        const right = positionPercent(Math.min(times.end, intervalMillis(opening).end), bounds);
+                        if (right <= left) return null;
+                        return (
+                          <span
+                            key={interval.id}
+                            aria-label={`Ledigt ${formatTime(interval.starts_at)}–${formatTime(interval.ends_at)}`}
+                            className="absolute inset-y-1 rounded-md"
+                            style={{ left: `${left}%`, width: `${right - left}%`, background: ax("lime", 0.08), border: `1px solid ${ax("lime", 0.16)}` }}
+                            title={`Ledigt ${formatTime(interval.starts_at)}–${formatTime(interval.ends_at)}`}
+                          />
+                        );
+                      })}
                       {lanes.map(({ interval, lane }) => {
                         const times = intervalMillis(interval);
                         const start = Math.max(times.start, intervalMillis(opening).start);

@@ -486,6 +486,115 @@ export function useAdminCapacity(
   });
 }
 
+export type AdminOperationsStaffRole = "host" | "instructor" | "service";
+
+export type AdminOperationsStaffAssignment = {
+  id: string;
+  venue_staff_id: string;
+  role: AdminOperationsStaffRole;
+  display_name: string;
+  valid: boolean;
+};
+
+export type AdminOperationsWarning = {
+  code: "missing_staff" | "invalid_staff" | "staff_overlap" | "event_resource_missing" | "event_resource_drift" | string;
+  label: string;
+  venue_staff_id?: string;
+};
+
+export type AdminOperationsOccurrence = {
+  id: string;
+  source_type: "activity_session" | "booking" | "event" | "resource_block" | "operation_override";
+  source_id: string;
+  source_ids?: string[];
+  occurrence_date: string;
+  starts_at: string;
+  ends_at: string;
+  origin: "activity" | "series" | "private_booking" | "contract" | "event" | "maintenance" | "operational_block" | string;
+  classification: "activity" | "booking" | "event" | "maintenance" | "resource_block" | "closure" | string;
+  title: string;
+  resource_ids: string[];
+  resource_names: string[];
+  capacity: number | null;
+  booked_count: number | null;
+  checked_in_count: number | null;
+  requires_staffing: boolean;
+  assignments: AdminOperationsStaffAssignment[];
+  warnings: AdminOperationsWarning[];
+  detail_target?: AdminCapacityInterval["detail_target"];
+};
+
+export type AdminOperationsDailySummary = {
+  date: string;
+  occurrence_count: number;
+  missing_staff_count: number;
+  queue_count: number;
+  queue: {
+    incidents: number;
+    attention_orders: number;
+    uncollected_products: number;
+  };
+  free_resource_minutes: number;
+};
+
+export type AdminOperationsWeekResponse = AdminCapacityResponse & {
+  operations: {
+    occurrences: AdminOperationsOccurrence[];
+    staff_options: Array<{
+      id: string;
+      user_id: string;
+      display_name: string;
+      venue_role: string;
+      is_active: boolean;
+    }>;
+    daily: AdminOperationsDailySummary[];
+    query_strategy: {
+      bounded: boolean;
+      maximum_queries: number;
+      n_plus_one: boolean;
+    };
+  };
+};
+
+export function useAdminOperationsWeek(
+  venueId: string | undefined,
+  from: string | undefined,
+  to: string | undefined,
+) {
+  return useQuery({
+    queryKey: ["admin-operations-week", venueId, from, to],
+    enabled: !!venueId && !!from && !!to,
+    queryFn: () => apiGet<AdminOperationsWeekResponse>("api-admin", "operations-week", {
+      venueId: venueId!,
+      from: from!,
+      to: to!,
+      timezone: "Europe/Stockholm",
+    }),
+    refetchInterval: 60_000,
+    retry: 1,
+  });
+}
+
+export function useAdminOperationsStaffing(venueId: string | undefined) {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["admin-operations-week", venueId] });
+  const assign = useMutation({
+    mutationFn: (body: {
+      source_type: AdminOperationsOccurrence["source_type"];
+      source_id: string;
+      occurrence_date: string;
+      venue_staff_id: string;
+      role: AdminOperationsStaffRole;
+    }) => apiPost("api-admin", "operations-staffing", { ...body, venueId }),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({
+    mutationFn: (assignmentId: string) => apiDelete("api-admin", "operations-staffing", { venueId: venueId!, assignmentId }),
+    onSuccess: invalidate,
+  });
+  return { assign, remove };
+}
+
 export type AdminAttentionItem = {
   id: string;
   kind: "lead" | "drift" | "event" | "block";

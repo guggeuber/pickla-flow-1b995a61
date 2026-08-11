@@ -25,9 +25,11 @@ import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/compone
 import { ax, AX_GRID_BG } from "./axTheme";
 import { AX_TYPE, AxCard, AxChip, AxSectionLabel } from "./axPrimitives";
 import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
+import AdminOperationsWeek from "./AdminOperationsWeek";
 
 interface Props {
   venueId: string | undefined;
+  venueName?: string;
   onOpenModule: (id: string) => void;
 }
 
@@ -405,7 +407,39 @@ function Sheet({
 
 /* ───────── Main ───────── */
 
-export default function AdminCalendar({ venueId, onOpenModule }: Props) {
+export default function AdminCalendar(props: Props) {
+  const [view, setView] = useState<"day" | "week">("day");
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <div className="flex rounded-xl p-1" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+          {(["day", "week"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setView(option)}
+              className="min-h-9 rounded-lg px-4 text-xs font-black"
+              style={{ background: view === option ? ax("electric") : "transparent", color: view === option ? ax("ink") : "white" }}
+            >
+              {option === "day" ? "Dag" : "Vecka"}
+            </button>
+          ))}
+        </div>
+      </div>
+      {view === "day" ? (
+        <AdminCalendarDay venueId={props.venueId} onOpenModule={props.onOpenModule} />
+      ) : props.venueId ? (
+        <div className="relative left-1/2 w-[calc(100vw-2rem)] max-w-[1440px] -translate-x-1/2">
+          <AdminOperationsWeek venueId={props.venueId} venueName={props.venueName} onOpenModule={props.onOpenModule} />
+        </div>
+      ) : (
+        <p className="py-8 text-center text-sm" style={{ color: ax("muted") }}>Välj venue först.</p>
+      )}
+    </div>
+  );
+}
+
+function AdminCalendarDay({ venueId, onOpenModule }: Props) {
   const qc = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(todayStockholm());
   const [openItem, setOpenItem] = useState<AdminCalendarItem | null>(null);

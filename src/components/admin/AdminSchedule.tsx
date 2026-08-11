@@ -556,6 +556,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [earlyBirdSlots, setEarlyBirdSlots] = useState("");
   const [capacity, setCapacity] = useState("");
   const [sessionCourtIds, setSessionCourtIds] = useState<string[]>([]);
+  const [requiresStaffing, setRequiresStaffing] = useState(false);
 
   const [editingSeriesId, setEditingSeriesId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -828,6 +829,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       scarcity_mode: scarcityMode,
       early_bird_price_minor: scarcityMode === "early_bird" ? priceSekToMinor(earlyBirdPrice) : null,
       early_bird_slots: scarcityMode === "early_bird" ? positiveSlots(earlyBirdSlots) : null,
+      requires_staffing: requiresStaffing,
       is_active: true,
     }, {
       onSuccess: () => {
@@ -835,6 +837,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         setScarcityMode("none");
         setEarlyBirdPrice("");
         setEarlyBirdSlots("");
+        setRequiresStaffing(false);
       },
     });
   };
@@ -907,6 +910,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         court_ids: session.court_ids || [],
         is_active: Boolean(session.is_active),
         publish_status: session.publish_status || "published",
+        requires_staffing: Boolean(session.requires_staffing),
         hosts: session.hosts || [],
         host_customer_ids: session.host_customer_ids || (session.hosts || []).map((host: any) => host.customer_id).filter(Boolean),
       },
@@ -967,6 +971,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       scarcity_mode: draft.scarcity_mode || "none",
       early_bird_price_minor: draft.scarcity_mode === "early_bird" ? priceSekToMinor(draft.early_bird_price_sek) : null,
       early_bird_slots: draft.scarcity_mode === "early_bird" ? positiveSlots(draft.early_bird_slots) : null,
+      requires_staffing: Boolean(draft.requires_staffing),
       host_customer_ids: Array.isArray(draft.host_customer_ids) ? draft.host_customer_ids : [],
     }, {
       onSuccess: () => setEditingSessionId(null),
@@ -1290,6 +1295,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           )}
           <p className="text-[11px] text-muted-foreground">Valda banor blockeras för privatbokning under passets tid.</p>
         </div>
+        <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-3 text-xs font-semibold text-muted-foreground">
+          <span>
+            Kräver operativ bemanning
+            <span className="mt-0.5 block text-[10px] font-normal">Veckan varnar tills minst en aktiv personal är tilldelad.</span>
+          </span>
+          <input type="checkbox" checked={requiresStaffing} onChange={(event) => setRequiresStaffing(event.target.checked)} />
+        </label>
         <button onClick={handleCreateSession} disabled={createSession.isPending} className="w-full rounded-xl bg-court-free py-2.5 text-sm font-bold text-white disabled:opacity-50 flex items-center justify-center gap-2">
           {createSession.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           Lägg i schema
@@ -1695,6 +1707,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                     )}
                     <p className="text-[11px] text-muted-foreground">Valda banor blockeras för privatbokning under passets tid.</p>
                   </div>
+                  <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-3 text-xs font-semibold text-muted-foreground">
+                    <span>
+                      Kräver operativ bemanning
+                      <span className="mt-0.5 block text-[10px] font-normal">Styrs explicit; aktivitetstypen gissar aldrig.</span>
+                    </span>
+                    <input type="checkbox" checked={Boolean(draft.requires_staffing)} onChange={(event) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, requires_staffing: event.target.checked } }))} />
+                  </label>
                   <div className="grid grid-cols-2 gap-2">
                     <select value={draft.is_active ? "true" : "false"} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, is_active: e.target.value === "true" } }))} className={baseInputClass} style={inputStyle}>
                       <option value="true">Aktiv</option>
