@@ -821,6 +821,7 @@ function BookingActionRow({
             const checkedIn = Boolean(participant.checked_in || participant.checked_in_at);
             const claimed = Boolean(participant.customer_id || participant.user_id);
             const metadata = participant.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
+            const accessReason = String(participant.access_reason || metadata.access_reason || metadata.effective_access_reason || "").trim();
             const manualPlaceholder = !claimed && metadata.source === "manual_placeholder";
             const claimUrl = participant.invite_token ? canonicalAppUrl(`/booking/invite/${encodeURIComponent(participant.invite_token)}`) : "";
             const amountSek = Number(participant.amount_sek || 0);
@@ -837,7 +838,7 @@ function BookingActionRow({
                     <AxChip tone={claimed ? "lime" : "sun"}>{claimed ? "Claimad" : "Behöver identitet"}</AxChip>
                     <AxChip tone={checkedIn ? "lime" : "sun"}>{checkedIn ? "Incheckad" : "Ej inne"}</AxChip>
                     <AxChip tone={paid || free ? "lime" : "sun"}>
-                      {manualPlaceholder ? "Pris efter identitet" : paid ? "Betald" : free ? "Ingår" : `${amountSek.toLocaleString("sv-SE")} kr obetalt`}
+                      {manualPlaceholder ? "Pris efter identitet" : paid ? "Betald" : free ? (accessReason ? `Ingår · ${accessReason}` : "Ingår") : `${amountSek.toLocaleString("sv-SE")} kr obetalt`}
                     </AxChip>
                   </div>
                 </div>

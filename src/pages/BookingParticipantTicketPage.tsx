@@ -33,6 +33,8 @@ type ParticipantTicketResponse = {
     price_minor: number;
     payment_status: string;
     checked_in_at: string | null;
+    access_reason?: string | null;
+    entitlement_type?: string | null;
   };
 };
 
@@ -199,7 +201,11 @@ export default function BookingParticipantTicketPage() {
                   {data.participant.display_name || "Din biljett"}
                 </p>
                 <p className="text-sm text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                  {data.participant.payment_status === "free" ? "Ingår" : data.participant.payment_status === "paid" ? `Betald · ${moneyFromMinor(data.participant.price_minor)}` : "Väntar på betalning"}
+                  {data.participant.payment_status === "free"
+                    ? (data.participant.access_reason ? `Ingår · ${data.participant.access_reason}` : "Ingår")
+                    : data.participant.payment_status === "paid"
+                      ? `Betald · ${moneyFromMinor(data.participant.price_minor)}`
+                      : "Väntar på betalning"}
                 </p>
               </div>
             </div>

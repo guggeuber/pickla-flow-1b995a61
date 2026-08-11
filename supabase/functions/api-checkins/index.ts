@@ -4,6 +4,11 @@ import { findAuthUserByEmail } from '../_shared/bookings.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { projectPublicVenueDisplayQueue } from '../_shared/security_projections.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import { auditMutation } from '../_shared/authorization.ts';
+import {
+  persistCurrentBookingParticipantCoverage,
+  resolveCurrentBookingParticipantCoverage,
+} from '../_shared/booking_participant_entitlement.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const STOCKHOLM_ZONE = 'Europe/Stockholm';
@@ -366,6 +371,38 @@ async function checkInCanonicalEntitlement(serviceClient: any, params: {
   return data as { checkin: any; consumption?: any; already_checked_in: boolean };
 }
 
+async function reResolveBookingParticipantForCheckin(
+  serviceClient: any,
+  req: Request,
+  actorUserId: string,
+  participant: any,
+) {
+  const coverage = await resolveCurrentBookingParticipantCoverage(serviceClient, participant, { channel: 'checkin' });
+  if (!coverage.covered) return { participant, coverage, reresolved: false };
+
+  const persisted = await persistCurrentBookingParticipantCoverage(serviceClient, participant, coverage, {
+    channel: 'checkin',
+  });
+  if (persisted.reresolved) {
+    await auditMutation(serviceClient, {
+      req,
+      userId: actorUserId,
+      action: 'booking_participant.entitlement_reresolved',
+      entityTable: 'booking_participants',
+      entityId: participant.id,
+      venueId: participant.venue_id,
+      before: { payment_status: participant.payment_status, price_minor: participant.price_minor },
+      after: { payment_status: 'free', price_minor: 0, access_reason: coverage.accessReason },
+      metadata: {
+        channel: 'checkin',
+        entitlement_id: coverage.entitlementId,
+        entitlement_type: coverage.entitlementType,
+      },
+    });
+  }
+  return persisted;
+}
+
 async function resolveVenueForSelfCheckin(serviceClient: any, params: { venueId?: string | null; venueSlug?: string | null }) {
   if (params.venueId) {
     const { data } = await serviceClient
@@ -675,6 +712,31 @@ Deno.serve(async (req) => {
         venueSlug: body.venue_slug || body.venueSlug || null,
       });
       if (!venue?.id) return errorResponse('Venue not found', 404);
+
+      if (requestedEntryType === 'booking_participant' && requestedEntitlementId) {
+        const { data: participant, error: participantError } = await serviceClient
+          .from('booking_participants')
+          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, metadata, bookings(id, booking_ref, venue_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_published_at)')
+          .eq('id', requestedEntitlementId)
+          .eq('venue_id', venue.id)
+          .maybeSingle();
+        if (participantError) return errorResponse(participantError.message, 500);
+        if (!participant || participant.user_id !== userId) return errorResponse('Biljetten tillhör inte den inloggade kunden', 403);
+        let effectiveParticipant = participant;
+        try {
+          effectiveParticipant = (await reResolveBookingParticipantForCheckin(
+            serviceClient,
+            req,
+            userId,
+            participant,
+          )).participant;
+        } catch (coverageError) {
+          return errorResponse((coverageError as Error).message || 'Rättigheten kunde inte bekräftas', 409);
+        }
+        if (!['paid', 'free'].includes(String(effectiveParticipant.payment_status || '').toLowerCase())) {
+          return errorResponse('Biljetten är inte betald', 409);
+        }
+      }
 
       const access = await resolveUserAccess(serviceClient, venue.id, userId);
       const profile = access.profile;
@@ -1077,7 +1139,8 @@ Deno.serve(async (req) => {
       if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
       const body = await req.json();
-      const { venue_id, target_user_id, player_name, player_phone } = body;
+      const { venue_id, player_name, player_phone } = body;
+      let target_user_id = body.target_user_id ? String(body.target_user_id) : null;
       const requestedCustomerId = body.customer_id ? String(body.customer_id) : null;
       let { entry_type, entitlement_id } = body;
       if (!venue_id || !entry_type) return errorResponse('Missing required fields');
@@ -1085,8 +1148,32 @@ Deno.serve(async (req) => {
       const serviceClient = getServiceClient();
       if (!await canStaffOperateVenue(serviceClient, userId, venue_id)) return errorResponse('Forbidden', 403);
       const { today } = stockholmNow();
-      const customerId = requestedCustomerId || (target_user_id ? await resolveCustomerIdForUser(serviceClient, target_user_id) : null);
+      let customerId = requestedCustomerId || (target_user_id ? await resolveCustomerIdForUser(serviceClient, target_user_id) : null);
       let canonicalEntitlement: any = null;
+
+      if (String(entry_type || '') === 'booking_participant' && entitlement_id) {
+        const { data: participant, error: participantError } = await serviceClient
+          .from('booking_participants')
+          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, metadata, bookings(id, booking_ref, venue_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_published_at)')
+          .eq('id', entitlement_id)
+          .eq('venue_id', venue_id)
+          .maybeSingle();
+        if (participantError) return errorResponse(participantError.message, 500);
+        if (!participant) return errorResponse('Biljetten saknas', 404);
+        if (target_user_id && participant.user_id && participant.user_id !== target_user_id) {
+          return errorResponse('Biljetten tillhör en annan kund', 403);
+        }
+        if (requestedCustomerId && participant.customer_id && participant.customer_id !== requestedCustomerId) {
+          return errorResponse('Biljetten tillhör en annan kund', 403);
+        }
+        target_user_id ||= participant.user_id || null;
+        customerId ||= participant.customer_id || (target_user_id ? await resolveCustomerIdForUser(serviceClient, target_user_id) : null);
+        try {
+          await reResolveBookingParticipantForCheckin(serviceClient, req, userId, participant);
+        } catch (coverageError) {
+          return errorResponse((coverageError as Error).message || 'Rättigheten kunde inte bekräftas', 409);
+        }
+      }
 
       if (target_user_id) {
         const access = await resolveUserAccess(serviceClient, venue_id, target_user_id);

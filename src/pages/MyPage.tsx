@@ -1122,7 +1122,9 @@ function BookingDetailsSheet({
               </p>
               <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
                 {participant.payment_status === "free"
-                  ? "Ingår"
+                  ? (participant.access_reason || participant.metadata?.effective_access_reason || participant.metadata?.access_reason
+                    ? `Ingår · ${participant.access_reason || participant.metadata?.effective_access_reason || participant.metadata?.access_reason}`
+                    : "Ingår")
                   : participant.payment_status === "paid"
                   ? "Betald"
                   : "Väntar på betalning"}
