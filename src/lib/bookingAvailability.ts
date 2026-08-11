@@ -1,8 +1,21 @@
+import { DateTime } from "luxon";
+
 export interface CourtAvailabilityBlock {
   court_id: string;
   start: string;
   end: string;
 }
+
+export interface BookingAvailabilityResource {
+  id: string;
+  sport_type?: string | null;
+}
+
+export type FirstAvailableBookingOption = {
+  startTime: string;
+  endTime: string;
+  resourceId: string;
+};
 
 export function timeToMinutes(time: string): number {
   const [hours, minutes] = time.slice(0, 5).split(":").map(Number);
@@ -58,4 +71,50 @@ export function courtIsAvailableForInterval(
     new Date(block.start).getTime() < endMs &&
     new Date(block.end).getTime() > startMs
   );
+}
+
+export function findFirstAvailableBookingOption({
+  date,
+  resourceType,
+  durationMinutes,
+  timeSlots,
+  resources,
+  blocks,
+  openTime,
+  closeTime,
+  zone = "Europe/Stockholm",
+}: {
+  date: string;
+  resourceType: "pickleball" | "dart";
+  durationMinutes: number;
+  timeSlots: string[];
+  resources: BookingAvailabilityResource[];
+  blocks: CourtAvailabilityBlock[];
+  openTime?: string | null;
+  closeTime?: string | null;
+  zone?: string;
+}): FirstAvailableBookingOption | null {
+  const matchingResources = resources.filter(
+    (resource) => (resource.sport_type || "pickleball") === resourceType,
+  );
+
+  for (const startTime of timeSlots) {
+    if (!bookingDurationFits(startTime, durationMinutes, openTime, closeTime)) continue;
+
+    const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone });
+    if (!start.isValid) continue;
+    const end = start.plus({ minutes: durationMinutes });
+    const resource = matchingResources.find((candidate) =>
+      courtIsAvailableForInterval(candidate.id, blocks, start.toMillis(), end.toMillis()),
+    );
+    if (resource) {
+      return {
+        startTime,
+        endTime: addMinutesToTime(startTime, durationMinutes),
+        resourceId: resource.id,
+      };
+    }
+  }
+
+  return null;
 }

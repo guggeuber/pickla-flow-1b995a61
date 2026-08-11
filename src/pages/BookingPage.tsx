@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useLocation, useSearchParams, useNavigate } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, CheckCircle2, Building2, Check, CircleDot, Target } from "lucide-react";
 import { toast } from "sonner";
@@ -12,13 +12,12 @@ import { apiGet, apiPost } from "@/lib/api";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
-import { SessionScheduleRow } from "@/components/session";
-import { openBookingToPresentation } from "@/lib/sessionPresentation";
 import { groupTimesByDaypart, reconcileCourtSelection } from "@/lib/bookingSelection";
 import {
   addMinutesToTime,
   bookingDurationFits,
   courtIsAvailableForInterval,
+  findFirstAvailableBookingOption,
   generateBookingTimeSlots,
 } from "@/lib/bookingAvailability";
 import weekendVibes from "@/assets/pickla-weekend-vibes.jpg";
@@ -86,25 +85,6 @@ const EMPTY_EXISTING_BOOKINGS: ExistingBooking[] = [];
 function sameStringArray(a: string[], b: string[]) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
-
-type OpenBookingItem = {
-  id: string;
-  title: string;
-  start_time: string;
-  end_time: string;
-  open_spots: number;
-  total_players: number;
-  public_capacity?: number;
-  opened_places?: number;
-  committed_at_publication?: number;
-  pace_label: string;
-  note?: string | null;
-  booker_first_name: string;
-  anonymous_others_count?: number;
-  committed_count?: number;
-  claim_url: string;
-  courts?: Array<{ name?: string | null; court_number?: number | null }>;
-};
 
 interface DayAvailability {
   openingHours: {
@@ -183,7 +163,6 @@ export default function BookingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const navigate = useNavigate();
-  const location = useLocation();
   const { user } = useAuth();
   const requestedSport: SportFilter = searchParams.get("sport") === "dart" ? "dart" : "pickleball";
 
@@ -260,9 +239,10 @@ export default function BookingPage() {
 
   useEffect(() => {
     setSportFilter(requestedSport);
+    setSelectedTime(null);
     setSelectedCourts([]);
     setShowCourtList(false);
-  }, [requestedSport]);
+  }, [requestedSport, slug]);
 
   const dates = useMemo(() => generateDates(availabilityStartDate, 7), [availabilityStartDate]);
 
@@ -297,16 +277,6 @@ export default function BookingPage() {
       return res.json();
     },
   });
-  const { data: openBookingsData } = useQuery<{ items: OpenBookingItem[] }>({
-    queryKey: ["public-open-bookings", slug, availabilityStartStr],
-    staleTime: 60000,
-    queryFn: () => apiGet("api-bookings", "public-open-bookings", {
-      slug,
-      date: availabilityStartStr,
-      days: "7",
-    }),
-  });
-
   const courts = useMemo<CourtData[]>(() => data?.courts || [], [data?.courts]);
   const dayAvailability = (data?.availabilityByDate?.[dateStr] || {
     openingHours: data?.openingHours || null,
@@ -317,11 +287,6 @@ export default function BookingPage() {
     () => dayAvailability.bookings || [],
     [dayAvailability.bookings]
   );
-  const openBookingsForDate = useMemo(() => (
-    (openBookingsData?.items || []).filter((item) =>
-      DateTime.fromISO(item.start_time, { zone: "utc" }).setZone("Europe/Stockholm").toISODate() === dateStr
-    ).sort((a, b) => a.start_time.localeCompare(b.start_time))
-  ), [dateStr, openBookingsData?.items]);
   const venueName = data?.venue?.name || "";
   const pricingRules = useMemo<PricingRule[]>(() => data?.pricingRules || [], [data?.pricingRules]);
 
@@ -460,8 +425,17 @@ export default function BookingPage() {
       : [];
 
     if (!nextTime || availableCourts.length === 0) {
-      nextTime = filteredTimeSlots.find((slot) => getAvailableCourtsForSlot(slot).length > 0)
-        || filteredTimeSlots[0];
+      const firstAvailable = findFirstAvailableBookingOption({
+        date: dateStr,
+        resourceType: sportFilter,
+        durationMinutes: selectedDuration,
+        timeSlots: filteredTimeSlots,
+        resources: courts,
+        blocks: existingBookings,
+        openTime: openingHours?.open_time,
+        closeTime: openingHours?.close_time,
+      });
+      nextTime = firstAvailable?.startTime || filteredTimeSlots[0];
       availableCourts = getAvailableCourtsForSlot(nextTime);
     }
 
@@ -489,7 +463,7 @@ export default function BookingPage() {
         toast.info(`${unavailableNames} är inte ledig ${timeRange}. Ingen annan ${sportCourtLabel} är ledig.`);
       }
     }
-  }, [dateStr, selectedDuration, sportFilter, filteredTimeSlots, existingBookings, sportCourts, selectedTime, selectedCourts]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slug, dateStr, selectedDuration, sportFilter, filteredTimeSlots, existingBookings, sportCourts, selectedTime, selectedCourts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedCourtObjects = useMemo(
     () => selectedCourts.map((id) => courts.find((court) => court.id === id)).filter(Boolean) as CourtData[],
@@ -519,6 +493,7 @@ export default function BookingPage() {
   const switchSport = (sport: SportFilter) => {
     if (sport === sportFilter) return;
     setSportFilter(sport);
+    setSelectedTime(null);
     setSelectedCourts([]);
     setShowCourtList(false);
 
@@ -896,6 +871,7 @@ export default function BookingPage() {
                     type="button"
                     onClick={() => {
                       setSelectedDate(date);
+                      setSelectedTime(null);
                       setSelectedCourts([]);
                     }}
                     className="min-w-[92px] rounded-2xl border px-3 py-3 text-left transition-transform active:scale-[0.98]"
@@ -948,57 +924,6 @@ export default function BookingPage() {
                 </div>
               </div>
 
-              {openBookingsForDate.length > 0 && (
-                <div className="mt-10">
-                  <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
-                    Schema
-                  </p>
-                  <div className="space-y-2">
-                    {openBookingsForDate.map((item) => {
-                      const start = DateTime.fromISO(item.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
-                      const end = DateTime.fromISO(item.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
-                      const courtLabel = (item.courts || [])
-                        .map((court) => court.name || (court.court_number ? `Bana ${court.court_number}` : null))
-                        .filter(Boolean)
-                        .join(", ");
-                      const capacity = Number(item.public_capacity || item.total_players || 0);
-                      const presentation = openBookingToPresentation({
-                        id: item.id,
-                        bookerFirstName: item.booker_first_name,
-                        startsAt: start.toISO()!,
-                        endsAt: end.toISO()!,
-                        resourceNames: courtLabel ? [courtLabel] : [],
-                        people: [],
-                        committedCount: Number(item.committed_count || 0),
-                        capacity,
-                        placesLeft: item.open_spots,
-                        pace: item.pace_label,
-                        description: item.note,
-                        pricing: { kind: "status", label: "Din del av banan" },
-                        primaryAction: { key: "join", label: "Häng på" },
-                        route: item.claim_url,
-                      });
-                      const openClaim = () => {
-                        try {
-                          const url = new URL(item.claim_url);
-                          navigate(`${url.pathname}${url.search}`, { state: { backgroundLocation: location } });
-                        } catch {
-                          window.location.href = item.claim_url;
-                        }
-                      };
-                      return (
-                        <SessionScheduleRow
-                          key={item.id}
-                          presentation={presentation}
-                          onClick={openClaim}
-                          className="rounded-2xl border-neutral-100 bg-neutral-50"
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {isClosed && (
                 <p className="mt-8 text-[13px] text-neutral-400" style={{ fontFamily: FONT_MONO }}>
                   stängt denna dag
@@ -1014,6 +939,8 @@ export default function BookingPage() {
                         type="button"
                         onClick={() => {
                           setSelectedDuration(duration);
+                          setSelectedTime(null);
+                          setSelectedCourts([]);
                           setShowCourtList(false);
                         }}
                         className={`rounded-2xl px-5 py-3 text-[11px] transition-all active:scale-[0.98] ${
