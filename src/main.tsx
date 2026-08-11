@@ -1,7 +1,12 @@
 import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
+import App from "./App.tsx";
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { renderBootstrapRecovery } from "@/lib/appRecovery";
+import {
+  installClientObservability,
+  reportBootstrapFailure,
+} from "@/lib/clientObservability";
 import "./index.css";
 
 const MAINTENANCE_MODE = import.meta.env.VITE_MAINTENANCE_MODE === "true";
@@ -20,9 +25,6 @@ if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
 
   updateServiceWorker = registerSW({
     immediate: true,
-    onRegisteredSW(_swUrl, registration) {
-      registration?.update();
-    },
     onNeedRefresh() {
       updateServiceWorker?.(true);
     },
@@ -33,11 +35,9 @@ async function bootstrap() {
   const rootElement = document.getElementById("root");
   if (!rootElement) throw new Error("Application root is missing");
   const root = createRoot(rootElement);
-  let observability: typeof import("./lib/clientObservability.ts") | undefined;
 
   try {
-    observability = await import("./lib/clientObservability.ts");
-    observability.installClientObservability();
+    installClientObservability();
 
     if (MAINTENANCE_MODE) {
       const { default: MaintenancePage } = await import("./pages/MaintenancePage");
@@ -49,14 +49,13 @@ async function bootstrap() {
       return;
     }
 
-    const { default: App } = await import("./App.tsx");
     root.render(
       <AppErrorBoundary>
         <App />
       </AppErrorBoundary>,
     );
   } catch (error) {
-    void observability?.reportBootstrapFailure(error);
+    void reportBootstrapFailure(error);
     root.unmount();
     renderBootstrapRecovery(rootElement, error);
   }
