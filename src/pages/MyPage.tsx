@@ -35,6 +35,7 @@ import {
   fetchCommerceRegistrationManagement,
   type CommerceRegistrationManagementState,
 } from "@/lib/commerce";
+import { fetchMyCourses } from "@/lib/courses";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -2458,6 +2459,11 @@ const MyPage = () => {
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
   const { data: sessionRegistrations } = useMySessionRegistrations();
+  const { data: myCourses } = useQuery({
+    queryKey: ["my-courses", user?.id],
+    queryFn: fetchMyCourses,
+    enabled: Boolean(user),
+  });
   const { data: eventRegistrations } = useMyEventRegistrations();
   const { data: activeMembership } = useActiveMembership();
   const { data: membershipBenefits } = useMyPasses();
@@ -2541,11 +2547,12 @@ const MyPage = () => {
   const bookingHistory = buildBookingHistory(bookings || [], now);
   const activeBookings = bookingHistory.filter((booking) => booking.history_status === "upcoming");
   const pastBookings = bookingHistory.filter((booking) => booking.history_status !== "upcoming");
-  const activeSessionRegistrations = (sessionRegistrations || []).filter((registration) => {
+  const nonCourseSessionRegistrations = (sessionRegistrations || []).filter((registration) => registration.activity_sessions?.session_type !== "course");
+  const activeSessionRegistrations = nonCourseSessionRegistrations.filter((registration) => {
     const sessionEnd = getSessionRegistrationDateTime(registration, true);
     return sessionEnd ? sessionEnd.getTime() >= now : true;
   });
-  const pastSessionRegistrations = (sessionRegistrations || []).filter((registration) => {
+  const pastSessionRegistrations = nonCourseSessionRegistrations.filter((registration) => {
     const sessionEnd = getSessionRegistrationDateTime(registration, true);
     return sessionEnd ? sessionEnd.getTime() < now : false;
   });
@@ -2674,6 +2681,35 @@ const MyPage = () => {
               )}
             </>
           )}
+
+          {(myCourses?.items || []).length > 0 ? (
+            <motion.div variants={item} id="courses">
+              <div className="mb-2 flex items-center gap-2">
+                <Calendar className="h-4 w-4" style={{ color: BLUE }} />
+                <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mina kurser</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {(myCourses?.items || []).map((course) => {
+                  const next = course.next_session;
+                  const nextDate = next
+                    ? DateTime.fromISO(next.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("ccc d MMM")
+                    : null;
+                  return (
+                    <Link key={course.commitment.id} to={`/course/${course.series.id}?v=${encodeURIComponent(venueSlug)}`} className="rounded-xl p-4 text-left active:scale-[0.98] transition-transform" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{course.series.name}</p>
+                          {course.participant.kind === "dependent" ? <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>Deltagare: {course.participant.first_name}</p> : null}
+                          <p className="mt-2 text-xs" style={{ color: TEXT_MUTED }}>{next ? `Nästa: ${nextDate} ${String(next.start_time).slice(0, 5)}` : "Kursen är avslutad"}</p>
+                        </div>
+                        <span className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>Tillfälle {Math.min(course.completed_sessions + 1, course.total_sessions)} av {course.total_sessions}</span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </motion.div>
+          ) : null}
 
           {/* Active bookings */}
           <motion.div variants={item}>

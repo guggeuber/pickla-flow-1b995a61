@@ -398,6 +398,54 @@ async function handleCommerceOrder(
     const purchaseKind = String(participation.resolver_snapshot?.purchase_kind || (
       participation.product_key === 'day_access' ? 'day_pass' : 'activity_ticket'
     ));
+    if (purchaseKind === 'course') {
+      const participantCustomerId = participation.beneficiary_customer_id || null;
+      const dependentParticipantId = participation.dependent_participant_id || null;
+      const { data: committed, error: commitmentError } = await serviceClient.rpc('commit_series_participant_capacity', {
+        p_venue_id: order.venue_id,
+        p_activity_series_id: participation.activity_series_id,
+        p_participant_customer_id: participantCustomerId,
+        p_dependent_participant_id: dependentParticipantId,
+        p_payer_customer_id: customerId,
+        p_commerce_order_id: orderId,
+        p_commerce_order_line_id: participation.id,
+        p_hold_id: participation.capacity_hold_id || null,
+        p_metadata: {
+          stripe_session_id: session.id,
+          payment_intent_id: stripeId(session.payment_intent),
+          purchase_kind: 'course',
+        },
+      }).maybeSingle();
+      if (commitmentError || !committed?.ok || !committed?.commitment_id) {
+        await serviceClient.from('commerce_orders').update({ status: 'attention' }).eq('id', orderId);
+        await serviceClient.from('commerce_order_lines').update({ fulfillment_status: 'attention' }).eq('id', participation.id);
+        await recordPaidCapacityConflict(serviceClient, {
+          venueId: order.venue_id,
+          scopeType: 'activity_series',
+          scopeId: participation.activity_series_id,
+          sessionDate: String(participation.resolver_snapshot?.series_start_date || participation.product_snapshot?.series_start_date || new Date().toISOString().slice(0, 10)),
+          stripeSessionId: session.id,
+          paymentIntentId: stripeId(session.payment_intent),
+          receiptId: financial.receipt_id,
+          ledgerSourceType: 'commerce_order',
+          ledgerSourceId: orderId,
+          customerId,
+          userId: order.user_id || null,
+          title: `Betald kursorder kunde inte leverera ${participation.product_name}`,
+          metadata: {
+            commerce_order_id: orderId,
+            commerce_order_line_id: participation.id,
+            failure_category: commitmentError ? 'rpc_error' : String(committed?.reason || 'series_capacity_full'),
+          },
+        });
+        throw new Error(commitmentError?.message || committed?.reason || 'Course commitment could not be delivered');
+      }
+      const { error: linkError } = await serviceClient.from('commerce_order_lines').update({
+        series_commitment_id: committed.commitment_id,
+        fulfillment_status: 'not_required',
+      }).eq('id', participation.id);
+      if (linkError) throw new Error(linkError.message);
+    } else {
     const canonicalEntitlementType = ['punch_card', 'partner_access'].includes(String(participation.resolver_snapshot?.entitlement_type || ''))
       ? String(participation.resolver_snapshot.entitlement_type)
       : null;
@@ -594,6 +642,7 @@ async function handleCommerceOrder(
         console.error('Commerce paid fulfillment failure handling failed:', error);
       },
     });
+    }
   }
 
   if (!order.user_id) {
@@ -707,7 +756,7 @@ async function handleCommerceRefund(object: StripeRefundObject, eventType: strin
   }
 
   const { data: participation, error: lineError } = await serviceClient.from('commerce_order_lines')
-    .select('session_registration_id, product_key, resolver_snapshot')
+    .select('session_registration_id, series_commitment_id, activity_series_id, product_key, resolver_snapshot')
     .eq('commerce_order_id', order.id)
     .eq('commerce_kind', 'participation')
     .maybeSingle();
@@ -735,6 +784,24 @@ async function handleCommerceRefund(object: StripeRefundObject, eventType: strin
         .neq('status', 'cancelled');
       if (passError) throw new Error(passError.message);
     }
+  }
+  if (participation?.series_commitment_id) {
+    const { error: commitmentError } = await serviceClient.from('series_commitments').update({
+      status: 'cancelled',
+      cancelled_at: new Date().toISOString(),
+      metadata: { cancellation_source: 'commerce_refund', commerce_order_id: order.id },
+    }).eq('id', participation.series_commitment_id).eq('status', 'active');
+    if (commitmentError) throw new Error(commitmentError.message);
+    const { error: entitlementError } = await serviceClient.from('access_entitlements')
+      .update({ status: 'revoked' })
+      .eq('source_type', 'series_commitment')
+      .eq('source_id', participation.series_commitment_id)
+      .neq('status', 'revoked');
+    if (entitlementError) throw new Error(entitlementError.message);
+    const { error: reconcileError } = await serviceClient.rpc('reconcile_course_series_participation', {
+      p_series_id: participation.activity_series_id,
+    });
+    if (reconcileError) throw new Error(reconcileError.message);
   }
   const { error: pickupError } = await serviceClient.from('commerce_order_lines')
     .update({ fulfillment_status: 'not_collected' })

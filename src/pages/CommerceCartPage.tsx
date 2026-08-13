@@ -128,6 +128,7 @@ export default function CommerceCartPage() {
   ), 0), [lines]);
   const hasParticipation = lines.some((line) => line.commerce_kind === "participation");
   const activity = orderQuery.data?.activity_access;
+  const course = orderQuery.data?.course_access;
   const activityDate = activity
     ? DateTime.fromISO(activity.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("cccc d MMMM")
     : "";
@@ -247,7 +248,7 @@ export default function CommerceCartPage() {
     },
   });
 
-  const resolvedVenueSlug = activity?.venue_slug || venueSlug;
+  const resolvedVenueSlug = activity?.venue_slug || course?.venue_slug || venueSlug;
   if (orderQuery.isLoading || authLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center pt-20"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
   if (authenticatedDraftReference && !user) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center"><div><p className="mb-4 font-bold">Logga in för att fortsätta ditt köp.</p><button type="button" onClick={() => { preserveIntendedRoute(`/cart?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`); navigate("/auth"); }} className="h-12 rounded-2xl bg-slate-950 px-6 font-black text-white">Logga in</button></div></div></div>;
   if (!token || orderQuery.error || !orderQuery.data) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center"><p>{orderQuery.error instanceof PurchaseSessionError ? PURCHASE_SESSION_ERROR_MESSAGE : "Varukorgen kunde inte öppnas."}</p></div></div>;
@@ -276,12 +277,22 @@ export default function CommerceCartPage() {
             {activity.venue_name ? <p className="mt-1 text-sm text-slate-500">{activity.venue_name}</p> : null}
           </section>
         ) : null}
-        <section className={activity ? "border-t border-black/10" : ""}>
+        {course ? (
+          <section className="pb-6">
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Kurs</p>
+            <h2 className="mt-1 text-lg font-black">{course.name}</h2>
+            <p className="mt-2 text-sm font-semibold text-slate-600">{course.total_sessions} tillfällen · start {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")}</p>
+            {course.participant_name ? <p className="mt-1 text-sm text-slate-500">Deltagare: {course.participant_name}</p> : null}
+            {course.venue_name ? <p className="mt-1 text-sm text-slate-500">{course.venue_name}</p> : null}
+          </section>
+        ) : null}
+        <section className={activity || course ? "border-t border-black/10" : ""}>
           {visibleLines.map((line) => {
             const isRacketLine = commerceRacketPickupQuantity([line]) > 0;
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
+            const isCourseLine = Boolean(course) && line.resolver_snapshot?.purchase_kind === "course";
             const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
-            const lineName = isDayPassLine ? line.product_name : isActivityParticipationLine ? "Personlig plats" : line.product_name;
+            const lineName = isCourseLine ? "Kursplats" : isDayPassLine ? line.product_name : isActivityParticipationLine ? "Personlig plats" : line.product_name;
             const LineIcon = line.commerce_kind === "participation" ? Ticket : ShoppingBag;
             const lineMetadata = isRacketLine && racketInstruction
               ? `Antal ${line.quantity} · ${racketInstruction}`
@@ -289,6 +300,8 @@ export default function CommerceCartPage() {
                 ? `Antal ${line.quantity} · ${COMMERCE_PICKUP_COPY}`
                 : isDayPassLine
                   ? "Alla Open Play-pass idag."
+                  : isCourseLine
+                    ? "En plats för hela kursserien."
                   : isActivityParticipationLine
                     ? null
                   : "Personlig plats";

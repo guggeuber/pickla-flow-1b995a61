@@ -2977,7 +2977,10 @@ async function buildOperationsWeekProjection(
     const validAssignments = assignments.filter((assignment: any) => assignment.valid);
     const warnings = [...(occurrence.warnings || [])];
     if (occurrence.requires_staffing && validAssignments.length === 0) {
-      warnings.push({ code: 'missing_staff', label: 'Saknar bemanning' });
+      warnings.push({
+        code: 'missing_staff',
+        label: occurrence.session_type === 'course' ? 'Saknar instruktör' : 'Saknar bemanning',
+      });
     }
     if (assignments.some((assignment: any) => !assignment.valid)) {
       warnings.push({ code: 'invalid_staff', label: 'Tilldelad personal är inaktiv' });
@@ -3007,6 +3010,7 @@ async function buildOperationsWeekProjection(
         ends_at: range.endISO,
         origin: session.series_id ? 'series' : 'activity',
         classification: 'activity',
+        session_type: session.session_type,
         title: safeCapacityLabel(session.name, 'Aktivitet'),
         resource_ids: courtIds,
         resource_names: courtIds.map((id: string) => resourceById.get(id)?.name).filter(Boolean),

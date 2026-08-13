@@ -475,13 +475,13 @@ async function buildActivityPreview(client: any, {
 
   const sessionStartedAt = performance.now();
   const sessionQuery = client.from('activity_sessions')
-    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, is_active, publish_status, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, is_active, publish_status, closed_to_public, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
     .eq('id', resolvedSessionId)
     .maybeSingle();
   const { data: session, error: sessionErr } = await sessionQuery;
   if (timings) timings.sessionLookupMs = Math.round(performance.now() - sessionStartedAt);
   if (sessionErr || !session) throw new Error('Activity session not found');
-  if (session.is_active !== true || session.publish_status !== 'published') throw new Error('Activity session is not public');
+  if (session.is_active !== true || session.publish_status !== 'published' || session.closed_to_public === true) throw new Error('Activity session is not public');
   if (session.venues?.is_public !== true) throw new Error('Venue not public');
   if (venueSlug && session.venues?.slug !== venueSlug) throw new Error('Venue mismatch');
 
@@ -668,6 +668,7 @@ async function activitySocialProof(client: any, {
     .eq('venue_id', venue.id)
     .eq('is_active', true)
     .eq('publish_status', 'published')
+    .eq('closed_to_public', false)
     .in('id', cleanSessionIds);
   if (sessionsErr) throw sessionsErr;
 

@@ -74,6 +74,7 @@ export function checkInActivityRegistration(registration: any) {
     venue_id: registration.venue_id,
     customer_id: registration.customer_id || null,
     target_user_id: registration.user_id || null,
+    dependent_participant_id: registration.dependent_participant_id || null,
     entry_type: "session_ticket",
     entitlement_id: registrationId,
     player_name: registration.customer_name || registration.player_name || registration.booked_by || null,

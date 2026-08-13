@@ -36,6 +36,9 @@ verify_jwt = false
 [functions.api-corporate]
 verify_jwt = false
 
+[functions.api-courses]
+verify_jwt = false
+
 [functions.api-link-preview]
 verify_jwt = false
 

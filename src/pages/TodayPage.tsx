@@ -23,6 +23,7 @@ import { activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
 import { getFirstName } from "@/lib/displayName";
 import { activitySessionToPresentation, openBookingToPresentation } from "@/lib/sessionPresentation";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
+import { fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
 
 
 const PAGE_BG = "#fffaf7";
@@ -746,6 +747,11 @@ export default function TodayPage() {
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
 
   const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
+  const { data: courseHome } = useQuery({
+    queryKey: ["course-home", slug, user?.id || "guest"],
+    queryFn: () => fetchCourseHome(slug),
+    staleTime: 30000,
+  });
   const { data: currentIdentity } = useCurrentIdentity(user?.id);
   const now = useActivityNow();
   const userName = getFirstName({
@@ -867,6 +873,27 @@ export default function TodayPage() {
             null
           ) : (
             <div className="space-y-8">
+              {courseHome?.mode === "registration" && courseHome.item ? (() => {
+                const course = courseHome.item as CourseDetail;
+                return (
+                  <button type="button" onClick={() => navigate(`/course/${course.id}?v=${encodeURIComponent(slug)}`)} className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }}>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Anmälan öppen</p>
+                    <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{course.name}</h2>
+                    <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>Startar {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")} · {course.capacity.available_count} platser kvar</p>
+                    <span className="mt-4 inline-flex items-center gap-2 text-sm font-black">Boka kurs <ArrowRight className="h-4 w-4" /></span>
+                  </button>
+                );
+              })() : null}
+              {courseHome?.mode === "next" && courseHome.item ? (() => {
+                const item = courseHome.item as MyCourseItem;
+                return (
+                  <button type="button" onClick={() => navigate(`/course/${item.series.id}?v=${encodeURIComponent(slug)}`)} className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }}>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Nästa</p>
+                    <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{item.series.name}</h2>
+                    <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>Tillfälle {Math.min(item.completed_sessions + 1, item.total_sessions)} av {item.total_sessions}{item.next_session ? ` · ${DateTime.fromISO(item.next_session.session_date).setLocale("sv").toFormat("cccc HH:mm").replace("00:00", String(item.next_session.start_time).slice(0, 5))}` : ""}</p>
+                  </button>
+                );
+              })() : null}
               {todayListItems.length > 0 && (
                 <section>
                   <h2 className="mb-4 text-[28px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING }}>

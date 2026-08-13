@@ -565,7 +565,7 @@ async function markSessionRegistrationCheckedIn(serviceClient: any, params: {
     .neq('status', 'cancelled');
 }
 
-Deno.serve(async (req) => {
+const checkinsHandler = async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -1192,6 +1192,25 @@ Deno.serve(async (req) => {
       let canonicalEntitlement: any = null;
       let bookingParticipantConsumption: any = null;
       let bookingParticipantId: string | null = null;
+      let dependentParticipantId: string | null = null;
+
+      if (String(entry_type || '') === 'session_ticket' && entitlement_id) {
+        const { data: registration, error: registrationError } = await serviceClient
+          .from('session_registrations')
+          .select('id, venue_id, session_date, customer_id, user_id, dependent_participant_id, status')
+          .eq('id', entitlement_id)
+          .eq('venue_id', venue_id)
+          .eq('session_date', today)
+          .in('status', ['confirmed', 'checked_in'])
+          .maybeSingle();
+        if (registrationError) return errorResponse(registrationError.message, 500);
+        if (!registration) return errorResponse('Biljetten saknas eller gäller inte idag', 404);
+        if (target_user_id && registration.user_id && registration.user_id !== target_user_id) return errorResponse('Biljetten tillhör en annan kund', 403);
+        if (requestedCustomerId && registration.customer_id && registration.customer_id !== requestedCustomerId) return errorResponse('Biljetten tillhör en annan kund', 403);
+        target_user_id ||= registration.user_id || null;
+        customerId ||= registration.customer_id || null;
+        dependentParticipantId = registration.dependent_participant_id || null;
+      }
 
       if (String(entry_type || '') === 'booking_participant' && entitlement_id) {
         const { data: participant, error: participantError } = await serviceClient
@@ -1352,6 +1371,7 @@ Deno.serve(async (req) => {
           venue_id,
           customer_id: customerId,
           user_id: target_user_id || null,
+          dependent_participant_id: dependentParticipantId,
           player_name: player_name || null,
           player_phone: player_phone || null,
           entry_type,
@@ -1554,4 +1574,8 @@ Deno.serve(async (req) => {
   } catch (e) {
     return errorResponse((e as Error).message, 500);
   }
-});
+};
+
+const localFunctionPort = Number(Deno.env.get('FUNCTION_PORT') || 0);
+if (localFunctionPort > 0) Deno.serve({ port: localFunctionPort }, checkinsHandler);
+else Deno.serve(checkinsHandler);

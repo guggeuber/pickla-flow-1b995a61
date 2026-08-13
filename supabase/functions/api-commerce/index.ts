@@ -364,8 +364,11 @@ function projectOrderLine(line: DbRecord) {
     fulfillment_type: line.fulfillment_type,
     fulfillment_status: line.fulfillment_status,
     activity_session_id: line.activity_session_id,
+    activity_series_id: line.activity_series_id,
     session_date: line.session_date,
     session_registration_id: line.session_registration_id,
+    series_commitment_id: line.series_commitment_id,
+    dependent_participant_id: line.dependent_participant_id,
     parent_line_id: line.parent_line_id,
     product_snapshot: {
       base_price_sek: Number(productSnapshot.base_price_sek || 0),
@@ -459,6 +462,33 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
       registration_status: registration?.status || null,
     } : null;
   }
+  let courseAccess = null;
+  if (participation?.activity_series_id) {
+    const [{ data: series }, { data: venue }, { data: dependent }] = await Promise.all([
+      admin.from('activity_series')
+        .select('id, name, start_date, end_date, start_time, end_time, total_sessions, status')
+        .eq('id', participation.activity_series_id)
+        .eq('venue_id', order.venue_id)
+        .maybeSingle(),
+      admin.from('venues').select('name, slug').eq('id', order.venue_id).maybeSingle(),
+      participation.dependent_participant_id
+        ? admin.from('dependent_participants').select('id, first_name, birth_year').eq('id', participation.dependent_participant_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+    courseAccess = series ? {
+      activity_series_id: series.id,
+      name: series.name,
+      start_date: series.start_date,
+      end_date: series.end_date,
+      start_time: series.start_time,
+      end_time: series.end_time,
+      total_sessions: series.total_sessions,
+      venue_name: venue?.name || null,
+      venue_slug: venue?.slug || null,
+      participant_name: dependent?.first_name || null,
+      commitment_id: participation.series_commitment_id || null,
+    } : null;
+  }
   return {
     order: {
       id: order.id,
@@ -489,6 +519,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
     receipt,
     receipt_lines: receiptLines.map(projectReceiptLine),
     activity_access: activityAccess,
+    course_access: courseAccess,
     ...(token ? { cart_token: token } : {}),
   };
 }
@@ -502,6 +533,177 @@ async function venueContext(admin: AdminClient, venueId: string) {
   if (error) throw new Error(error.message);
   if (!data?.organization_id) throw new Error('Venue not found');
   return data;
+}
+
+function validEmail(value: unknown) {
+  const email = String(value || '').trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+}
+
+async function createCourseCart(
+  admin: AdminClient,
+  body: Record<string, unknown>,
+  userId: string | null,
+) {
+  const seriesId = String(body.series_id || '').trim();
+  if (!UUID_PATTERN.test(seriesId)) throw new Error('Course not found');
+  const { data: series, error: seriesError } = await admin.from('activity_series')
+    .select('id, venue_id, access_product_id, name, series_type, status, start_date, end_date, registration_opens_at, registration_closes_at, capacity')
+    .eq('id', seriesId)
+    .eq('series_type', 'course')
+    .maybeSingle();
+  if (seriesError || !series) throw new Error(seriesError?.message || 'Course not found');
+  const venue = await venueContext(admin, series.venue_id);
+  const now = DateTime.now().toUTC();
+  const opens = series.registration_opens_at ? DateTime.fromISO(series.registration_opens_at, { zone: 'utc' }) : null;
+  const closes = series.registration_closes_at ? DateTime.fromISO(series.registration_closes_at, { zone: 'utc' }) : null;
+  if (series.status !== 'active' || (opens?.isValid && now < opens) || (closes?.isValid && now >= closes)) {
+    throw new Error('Kursanmälan är stängd.');
+  }
+  const { data: product, error: productError } = await admin.from('access_products')
+    .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, base_price_sek, vat_rate, resolver_rules, status, is_active, commerce_enabled')
+    .eq('id', series.access_product_id)
+    .eq('venue_id', series.venue_id)
+    .eq('product_kind', 'series_access')
+    .maybeSingle();
+  if (productError || !product?.is_active || product.status !== 'active' || product.commerce_enabled !== true || Number(product.base_price_sek || 0) <= 0) {
+    throw new Error(productError?.message || 'Kursprodukten är inte tillgänglig.');
+  }
+
+  const payerEmail = validEmail(body.guest_email);
+  const payerName = String(body.guest_name || '').trim().slice(0, 120);
+  let payerCustomerId: string | null = userId
+    ? await resolveOrCreateCustomerIdForUser(admin, userId, series.venue_id, 'course_cart')
+    : null;
+  if (!payerCustomerId) {
+    if (!payerEmail || !payerName) throw new Error('Namn och e-post krävs för kursköpet.');
+    payerCustomerId = await resolveOrCreateGuestCustomerByEmail(admin, {
+      venueId: series.venue_id,
+      email: payerEmail,
+      displayName: payerName,
+      source: 'course_cart_payer',
+    });
+  }
+
+  const participantType = String(body.participant_type || 'self');
+  let participantCustomerId: string | null = null;
+  let dependentParticipantId: string | null = null;
+  if (participantType === 'self') {
+    participantCustomerId = payerCustomerId;
+  } else if (participantType === 'adult') {
+    const participantEmail = validEmail(body.participant_email);
+    const participantName = String(body.participant_name || '').trim().slice(0, 120);
+    if (!participantEmail || !participantName) throw new Error('Deltagarens namn och e-post krävs.');
+    participantCustomerId = await resolveOrCreateGuestCustomerByEmail(admin, {
+      venueId: series.venue_id,
+      email: participantEmail,
+      displayName: participantName,
+      source: 'course_cart_participant',
+    });
+  } else if (participantType === 'dependent') {
+    if (!userId) throw new Error('Logga in för att anmäla ett barn.');
+    const dependentId = String(body.dependent_participant_id || '').trim();
+    if (dependentId) {
+      const { data: dependent, error } = await admin.from('dependent_participants')
+        .select('id')
+        .eq('id', dependentId)
+        .eq('guardian_customer_id', payerCustomerId)
+        .eq('organization_id', venue.organization_id)
+        .eq('status', 'active')
+        .maybeSingle();
+      if (error || !dependent) throw new Error(error?.message || 'Deltagaren kunde inte hittas.');
+      dependentParticipantId = dependent.id;
+    } else {
+      const firstName = String(body.dependent_first_name || '').trim().slice(0, 80);
+      const birthYear = Math.floor(Number(body.dependent_birth_year || 0));
+      if (!firstName || birthYear < new Date().getUTCFullYear() - 18 || birthYear > new Date().getUTCFullYear()) {
+        throw new Error('Barnets förnamn och födelseår krävs.');
+      }
+      const { data: dependent, error } = await admin.from('dependent_participants').insert({
+        organization_id: venue.organization_id,
+        guardian_customer_id: payerCustomerId,
+        first_name: firstName,
+        birth_year: birthYear,
+      }).select('id').single();
+      if (error || !dependent) throw new Error(error?.message || 'Deltagaren kunde inte skapas.');
+      dependentParticipantId = dependent.id;
+    }
+  } else {
+    throw new Error('Ogiltig deltagartyp.');
+  }
+
+  let duplicateQuery = admin.from('series_commitments').select('id')
+    .eq('activity_series_id', series.id)
+    .eq('status', 'active');
+  duplicateQuery = participantCustomerId
+    ? duplicateQuery.eq('participant_customer_id', participantCustomerId)
+    : duplicateQuery.eq('dependent_participant_id', dependentParticipantId);
+  const { data: existing, error: existingError } = await duplicateQuery.maybeSingle();
+  if (existingError) throw new Error(existingError.message);
+  if (existing) throw new Error('Deltagaren har redan en plats på kursen.');
+
+  const { data: fill, error: capacityError } = await admin.rpc('capacity_fill', {
+    p_venue_id: series.venue_id,
+    p_scope_type: 'activity_series',
+    p_scope_id: series.id,
+    p_session_date: series.start_date,
+  });
+  if (capacityError) throw new Error(capacityError.message);
+  const capacity = Array.isArray(fill) ? fill[0] : fill;
+  if (Number(capacity?.available_count || 0) <= 0) throw new Error('Kursen är fullbokad.');
+
+  const token = newCartToken();
+  const { data: order, error: orderError } = await admin
+    .from('commerce_orders')
+    .insert({
+    organization_id: venue.organization_id,
+    venue_id: series.venue_id,
+    customer_id: payerCustomerId,
+    user_id: userId,
+    guest_token_hash: await sha256(token),
+    draft_scope: `course:${series.id}`,
+    guest_name: payerName || null,
+    guest_email: payerEmail || null,
+    metadata: { source: 'course_registration', participant_type: participantType },
+  }).select('*').single();
+  if (orderError || !order) throw new Error(orderError?.message || 'Kursköpet kunde inte skapas.');
+  const lineId = crypto.randomUUID();
+  const unitPriceMinor = Math.round(Number(product.base_price_sek) * 100);
+  const totalExVatMinor = Math.round(unitPriceMinor / (1 + Number(product.vat_rate || 0) / 100));
+  const { error: lineError } = await admin.from('commerce_order_lines').insert({
+    id: lineId,
+    commerce_order_id: order.id,
+    product_id: product.id,
+    product_key: product.product_key,
+    product_name: product.name,
+    commerce_kind: 'participation',
+    quantity: 1,
+    unit_price_minor: unitPriceMinor,
+    discount_minor: 0,
+    line_total_inc_vat_minor: unitPriceMinor,
+    line_total_ex_vat_minor: totalExVatMinor,
+    vat_rate: Number(product.vat_rate || 0),
+    vat_amount_minor: unitPriceMinor - totalExVatMinor,
+    source_type: 'activity_series',
+    source_id: series.id,
+    fulfillment_type: 'participation',
+    activity_series_id: series.id,
+    beneficiary_user_id: participantType === 'self' ? userId : null,
+    beneficiary_customer_id: participantCustomerId,
+    dependent_participant_id: dependentParticipantId,
+    product_snapshot: {
+      description: product.description || null,
+      base_price_sek: Number(product.base_price_sek),
+      vat_rate: Number(product.vat_rate || 0),
+      resolver_rules: product.resolver_rules || {},
+    },
+    metadata: { participant_type: participantType },
+  });
+  if (lineError) {
+    await admin.from('commerce_orders').delete().eq('id', order.id).eq('status', 'draft');
+    throw new Error(lineError.message);
+  }
+  return cartResponse(admin, order, userId ? order.id : token);
 }
 
 async function validateCartItems(
@@ -567,12 +769,12 @@ async function validateCartItems(
       if (!sessionId || !sessionDate) throw new Error('Participation requires session and date');
       const { data: session, error: sessionError } = await admin
         .from('activity_sessions')
-        .select('id, venue_id, product_key, session_type, access_policy, is_active, publish_status')
+        .select('id, venue_id, product_key, session_type, access_policy, is_active, publish_status, closed_to_public')
         .eq('id', sessionId)
         .eq('venue_id', venueId)
         .maybeSingle();
       if (sessionError) throw new Error(sessionError.message);
-      if (!session?.is_active || session.publish_status !== 'published') throw new Error('Activity session is not available');
+      if (!session?.is_active || session.publish_status !== 'published' || session.closed_to_public === true) throw new Error('Activity session is not available');
       const expectedKey = session.product_key && session.product_key !== 'day_access'
         ? session.product_key
         : session.session_type === 'open_play' ? 'open_play_slot' : 'session_ticket';
@@ -720,44 +922,74 @@ async function resolveLines(
     let unitPriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
     let resolverSnapshot: Record<string, unknown> = { pricing_source: 'product_base_price' };
     if (line.commerce_kind === 'participation') {
-      const purchaseKind = product.product_key === 'day_access' || product.product_kind === 'day_access'
+      let purchaseKind: 'activity_ticket' | 'day_pass' | 'course' = product.product_key === 'day_access' || product.product_kind === 'day_access'
         ? 'day_pass'
         : 'activity_ticket';
+      if (product.product_kind === 'series_access' && line.activity_series_id) purchaseKind = 'course';
       if (purchaseKind === 'day_pass' && Number(product.base_price_sek || 0) <= 0) {
         throw new Error('Heldagspass saknar pris i Admin.');
       }
-      const decision = await resolveActivityPricingDecision({
-        client: admin,
-        venueId: order.venue_id,
-        userId,
-        activitySessionId: line.activity_session_id,
-        sessionDate: line.session_date,
-        requestedProductKey: product.product_key,
-        requestedAmountSek: Number(product.base_price_sek || 0),
-        purchaseKind,
-        salesChannel: 'online',
-        applyEarlyBird: options.applyEarlyBird !== false,
-      });
-      unitPriceMinor = Math.round(Number(decision.finalAmountSek || 0) * 100);
-      resolverSnapshot = {
-        product_key: decision.productKey,
-        purchase_kind: purchaseKind,
-        pricing_reason: decision.pricingReason,
-        access_decision: decision.accessDecision,
-        entitlement_type: decision.entitlementType,
-        source_entitlement_id: decision.accessDecision === 'entitlement_included' ? decision.sourceId : null,
-        access_reason: decision.accessReason,
-        funding_type: decision.fundingType,
-        funder: decision.funder,
-        consumption_required: decision.consumptionRequired,
-        membership_id: decision.membershipId,
-        membership_tier_name: decision.membershipTierName,
-        applied_price_type: decision.pricingReason,
-        final_price_minor: unitPriceMinor,
-        early_bird_remaining: (decision.debug?.scarcity as any)?.early_bird?.remaining ?? null,
-        quote_changed: false,
-        debug: decision.debug,
-      };
+      if (purchaseKind === 'course') {
+        const { data: series, error: seriesError } = await admin.from('activity_series')
+          .select('id, venue_id, status, start_date, registration_opens_at, registration_closes_at, access_product_id')
+          .eq('id', line.activity_series_id)
+          .eq('venue_id', order.venue_id)
+          .eq('series_type', 'course')
+          .maybeSingle();
+        const now = DateTime.now().toUTC();
+        const opens = series?.registration_opens_at ? DateTime.fromISO(series.registration_opens_at, { zone: 'utc' }) : null;
+        const closes = series?.registration_closes_at ? DateTime.fromISO(series.registration_closes_at, { zone: 'utc' }) : null;
+        if (seriesError || !series || series.status !== 'active' || series.access_product_id !== product.id
+          || (opens?.isValid && now < opens) || (closes?.isValid && now >= closes)) {
+          throw new Error(seriesError?.message || 'Kursanmälan är stängd.');
+        }
+        if (Number(product.base_price_sek || 0) <= 0) throw new Error('Kursen saknar pris i Admin.');
+        resolverSnapshot = {
+          product_key: product.product_key,
+          purchase_kind: 'course',
+          pricing_reason: 'course_upfront_price',
+          applied_price_type: 'course_upfront_price',
+          final_price_minor: unitPriceMinor,
+          access_decision: 'purchase_required',
+          activity_series_id: line.activity_series_id,
+          series_start_date: series.start_date,
+          quote_changed: false,
+          debug: { base_amount_sek: Number(product.base_price_sek || 0), pricing_reason: 'course_upfront_price' },
+        };
+      } else {
+        const decision = await resolveActivityPricingDecision({
+          client: admin,
+          venueId: order.venue_id,
+          userId,
+          activitySessionId: line.activity_session_id,
+          sessionDate: line.session_date,
+          requestedProductKey: product.product_key,
+          requestedAmountSek: Number(product.base_price_sek || 0),
+          purchaseKind,
+          salesChannel: 'online',
+          applyEarlyBird: options.applyEarlyBird !== false,
+        });
+        unitPriceMinor = Math.round(Number(decision.finalAmountSek || 0) * 100);
+        resolverSnapshot = {
+          product_key: decision.productKey,
+          purchase_kind: purchaseKind,
+          pricing_reason: decision.pricingReason,
+          access_decision: decision.accessDecision,
+          entitlement_type: decision.entitlementType,
+          source_entitlement_id: decision.accessDecision === 'entitlement_included' ? decision.sourceId : null,
+          access_reason: decision.accessReason,
+          funding_type: decision.fundingType,
+          funder: decision.funder,
+          consumption_required: decision.consumptionRequired,
+          membership_id: decision.membershipId,
+          membership_tier_name: decision.membershipTierName,
+          applied_price_type: decision.pricingReason,
+          final_price_minor: unitPriceMinor,
+          early_bird_remaining: (decision.debug?.scarcity as { early_bird?: { remaining?: number | null } } | undefined)?.early_bird?.remaining ?? null,
+          quote_changed: false,
+          debug: decision.debug,
+        };
+      }
     }
     resolved.push({
       id: line.id,
@@ -768,14 +1000,21 @@ async function resolveLines(
       fulfillment_type: product.fulfillment_type,
       quantity: line.quantity,
       activity_session_id: line.activity_session_id,
+      activity_series_id: line.activity_series_id,
       session_date: line.session_date,
       session_registration_id: line.session_registration_id,
+      series_commitment_id: line.series_commitment_id,
+      dependent_participant_id: line.dependent_participant_id,
       parent_line_id: line.parent_line_id,
       unit_price_minor: unitPriceMinor,
       discount_minor: 0,
       vat_rate: Number(product.vat_rate || 0),
-      beneficiary_user_id: line.commerce_kind === 'participation' ? userId || null : null,
-      beneficiary_customer_id: line.commerce_kind === 'participation' ? customerId : null,
+      beneficiary_user_id: line.commerce_kind === 'participation'
+        ? line.activity_series_id ? line.beneficiary_user_id || null : userId || null
+        : null,
+      beneficiary_customer_id: line.commerce_kind === 'participation'
+        ? line.activity_series_id ? line.beneficiary_customer_id || null : customerId
+        : null,
       resolver_snapshot: resolverSnapshot,
       product_snapshot: {
         ...(line.product_snapshot || {}),
@@ -794,6 +1033,25 @@ async function resolveLines(
 
 async function assertParticipationCapacityAvailable(admin: AdminClient, order: any, lines: any[]) {
   const participation = lines.find((line) => line.commerce_kind === 'participation');
+  if (participation?.activity_series_id) {
+    const { data: series, error: seriesError } = await admin.from('activity_series')
+      .select('id, start_date')
+      .eq('id', participation.activity_series_id)
+      .eq('venue_id', order.venue_id)
+      .eq('series_type', 'course')
+      .maybeSingle();
+    if (seriesError || !series) throw new Error(seriesError?.message || 'Course not found');
+    const { data, error } = await admin.rpc('capacity_fill', {
+      p_venue_id: order.venue_id,
+      p_scope_type: 'activity_series',
+      p_scope_id: participation.activity_series_id,
+      p_session_date: series.start_date,
+    });
+    if (error) throw new Error(error.message);
+    const fill = Array.isArray(data) ? data[0] : data;
+    if (Number(fill?.available_count ?? 0) <= 0) throw new Error('Kursen är fullbokad.');
+    return;
+  }
   if (!participation?.activity_session_id || !participation?.session_date) return;
   const { data, error } = await admin.rpc('capacity_fill', {
     p_venue_id: order.venue_id,
@@ -817,6 +1075,42 @@ async function acquireParticipationHold(
   userId: string | null,
   customerId: string | null,
 ) {
+  if (line.activity_series_id) {
+    const { data: series, error: seriesError } = await admin.from('activity_series')
+      .select('id, start_date')
+      .eq('id', line.activity_series_id)
+      .eq('venue_id', order.venue_id)
+      .eq('series_type', 'course')
+      .maybeSingle();
+    if (seriesError || !series) throw new Error(seriesError?.message || 'Course not found');
+    const { data, error } = await admin.rpc('acquire_capacity_hold', {
+      p_venue_id: order.venue_id,
+      p_scope_type: 'activity_series',
+      p_scope_id: line.activity_series_id,
+      p_session_date: series.start_date,
+      p_user_id: userId,
+      p_customer_id: customerId,
+      p_source_type: 'commerce_order',
+      p_source_id: line.id,
+      p_idempotency_key: `commerce:${order.id}:${line.id}:v${order.version}`,
+      p_ttl_seconds: 1800,
+      p_metadata: {
+        commerce_order_id: order.id,
+        commerce_order_line_id: line.id,
+        purchase_kind: 'course',
+      },
+    }).maybeSingle();
+    if (error) throw new Error(error.message);
+    const hold = (data || {}) as { ok?: boolean; hold_id?: string };
+    if (!hold.ok || !hold.hold_id) throw new Error('Kursen är fullbokad.');
+    return {
+      ...hold,
+      final_price_minor: Number(regularResolvedLine?.unit_price_minor || 0),
+      applied_price_type: 'course_upfront_price',
+      early_bird_remaining: null,
+      quote_changed: false,
+    };
+  }
   const regularPriceType = String(regularResolvedLine?.resolver_snapshot?.pricing_reason || 'regular_price');
   const { data, error } = await admin.rpc('acquire_activity_pricing_hold', {
     p_venue_id: order.venue_id,
@@ -1149,6 +1443,11 @@ const commerceHandler = async (req: Request) => {
       return jsonResponse(await cartResponse(admin, order, order.id), 200, 0);
     }
 
+    if (req.method === 'POST' && path === 'course-cart') {
+      const body = await req.json();
+      return jsonResponse(await createCourseCart(admin, body, userId || null), 201, 0);
+    }
+
     if (req.method === 'POST' && path === 'cart') {
       const body = await req.json();
       const venueId = String(body.venue_id || '').trim();
@@ -1425,6 +1724,20 @@ const commerceHandler = async (req: Request) => {
         .eq('source_type', 'commerce_order')
         .eq('source_id', order.id);
       if (accessClaimError) throw new Error(accessClaimError.message);
+      const { data: courseLines, error: courseLineError } = await admin.from('commerce_order_lines')
+        .select('series_commitment_id, beneficiary_customer_id')
+        .eq('commerce_order_id', order.id)
+        .not('series_commitment_id', 'is', null);
+      if (courseLineError) throw new Error(courseLineError.message);
+      for (const line of courseLines || []) {
+        if (line.beneficiary_customer_id !== order.customer_id) continue;
+        const { error: courseEntitlementClaimError } = await admin.from('access_entitlements')
+          .update({ user_id: userId })
+          .eq('source_type', 'series_commitment')
+          .eq('source_id', line.series_commitment_id)
+          .eq('customer_id', order.customer_id);
+        if (courseEntitlementClaimError) throw new Error(courseEntitlementClaimError.message);
+      }
       if (!alreadyClaimed) {
         await recordCommerceEvent(admin, {
           eventName: 'account_activated',
@@ -1522,6 +1835,33 @@ const commerceHandler = async (req: Request) => {
       if (order.status === 'attention') return errorResponse('Köpet behöver hanteras av Pickla innan det kan avbokas.', 409);
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.find((line) => line.commerce_kind === 'participation');
+      if (participation?.activity_series_id) {
+        const { data: series, error: seriesError } = await admin.from('activity_series')
+          .select('id, start_date, start_time')
+          .eq('id', participation.activity_series_id)
+          .eq('venue_id', order.venue_id)
+          .eq('series_type', 'course')
+          .maybeSingle();
+        if (seriesError || !series) return errorResponse('Kursen saknas', 404);
+        const starts = DateTime.fromISO(`${series.start_date}T${String(series.start_time || '00:00').slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+        if (!starts.isValid || DateTime.now().setZone('Europe/Stockholm') >= starts) {
+          return errorResponse('Kursen har redan startat och behöver hanteras manuellt.', 409);
+        }
+        if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
+        const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+        if (!stripeKey) throw new Error('Stripe not configured');
+        const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
+        const { data: pending, error: pendingError } = await admin.from('commerce_orders').update({
+          metadata: {
+            ...(order.metadata || {}),
+            cancellation_requested_at: order.metadata?.cancellation_requested_at || new Date().toISOString(),
+            cancellation_source: 'customer',
+            stripe_refund_id: refund.id,
+          },
+        }).eq('id', order.id).in('status', ['paid', 'attention']).select('*').maybeSingle();
+        if (pendingError) throw new Error(pendingError.message);
+        return jsonResponse({ ...(await cartResponse(admin, pending || order)), cancellation_pending: true }, 202, 0);
+      }
       if (!participation?.activity_session_id || !participation.session_date) {
         return errorResponse('Endast aktivitetsköp kan avbokas här', 409);
       }
@@ -1648,16 +1988,28 @@ const commerceHandler = async (req: Request) => {
           displayName: checkoutGuestName,
           source: 'commerce_activity_checkout',
         });
-        const { data: existingRegistration, error: existingRegistrationError } = await admin
-          .from('session_registrations')
-          .select('id')
-          .eq('activity_session_id', participation[0].activity_session_id)
-          .eq('session_date', participation[0].session_date)
-          .eq('customer_id', customerId)
-          .in('status', ['confirmed', 'checked_in', 'no_show'])
-          .maybeSingle();
-        if (existingRegistrationError) throw new Error(existingRegistrationError.message);
-        if (existingRegistration) return errorResponse('Du har redan en plats till den här aktiviteten.', 409);
+        if (participation[0].activity_series_id) {
+          let existingCommitmentQuery = admin.from('series_commitments').select('id')
+            .eq('activity_series_id', participation[0].activity_series_id)
+            .eq('status', 'active');
+          existingCommitmentQuery = participation[0].dependent_participant_id
+            ? existingCommitmentQuery.eq('dependent_participant_id', participation[0].dependent_participant_id)
+            : existingCommitmentQuery.eq('participant_customer_id', participation[0].beneficiary_customer_id || customerId);
+          const { data: existingCommitment, error: existingCommitmentError } = await existingCommitmentQuery.maybeSingle();
+          if (existingCommitmentError) throw new Error(existingCommitmentError.message);
+          if (existingCommitment) return errorResponse('Deltagaren har redan en plats på kursen.', 409);
+        } else {
+          const { data: existingRegistration, error: existingRegistrationError } = await admin
+            .from('session_registrations')
+            .select('id')
+            .eq('activity_session_id', participation[0].activity_session_id)
+            .eq('session_date', participation[0].session_date)
+            .eq('customer_id', customerId)
+            .in('status', ['confirmed', 'checked_in', 'no_show'])
+            .maybeSingle();
+          if (existingRegistrationError) throw new Error(existingRegistrationError.message);
+          if (existingRegistration) return errorResponse('Du har redan en plats till den här aktiviteten.', 409);
+        }
         await admin.from('commerce_orders').update({ customer_id: customerId }).eq('id', order.id).eq('status', 'draft');
       }
       const quoted = await resolveLines(admin, order, lines, userId, customerId);
@@ -1954,6 +2306,7 @@ const commerceHandler = async (req: Request) => {
     if (message.includes('stale_cart_version')) return errorResponse('Cart changed — review it again.', 409);
     if (message.includes('not found') || message.includes('not_found')) return errorResponse(message, 404);
     if (message.includes('Platsen hann tas')) return errorResponse(message, 409);
+    if (message.includes('Kursen är fullbokad')) return errorResponse(message, 409);
     return errorResponse(message, 400);
   }
 };

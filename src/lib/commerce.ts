@@ -65,7 +65,10 @@ export interface CommerceOrderLine {
   session_registration_id?: string | null;
   parent_line_id?: string | null;
   activity_session_id?: string | null;
+  activity_series_id?: string | null;
   session_date?: string | null;
+  series_commitment_id?: string | null;
+  dependent_participant_id?: string | null;
   product_snapshot?: Record<string, unknown> | null;
   resolver_snapshot?: Record<string, unknown> | null;
 }
@@ -106,6 +109,19 @@ export interface CommerceOrderResponse {
     venue_slug?: string | null;
     registration_id?: string | null;
     registration_status?: string | null;
+  } | null;
+  course_access?: {
+    activity_series_id: string;
+    name: string;
+    start_date: string;
+    end_date: string;
+    start_time: string;
+    end_time: string;
+    total_sessions: number;
+    venue_name?: string | null;
+    venue_slug?: string | null;
+    participant_name?: string | null;
+    commitment_id?: string | null;
   } | null;
 }
 

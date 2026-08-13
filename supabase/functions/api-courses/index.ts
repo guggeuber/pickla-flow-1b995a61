@@ -1,0 +1,421 @@
+import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
+import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
+import { requireVenueRole } from '../_shared/authorization.ts';
+import { resolveCustomerIdForUser } from '../_shared/customers.ts';
+import { DateTime } from 'https://esm.sh/luxon@3.5.0';
+
+type ServiceClient = ReturnType<typeof getServiceClient>;
+type CourseSeriesRow = {
+  id: string;
+  venue_id: string;
+  format_id?: string | null;
+  access_product_id?: string | null;
+  sport_type?: string | null;
+  status: string;
+  start_date: string;
+  registration_opens_at?: string | null;
+  registration_closes_at?: string | null;
+  capacity?: number | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  court_ids?: string[] | null;
+  [key: string]: unknown;
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const AGE_GROUPS = new Set(['adult', 'youth', 'all_ages']);
+const LEVELS = new Set(['intro', 'beginner', 'intermediate', 'advanced']);
+
+async function optionalUserId(req: Request) {
+  if (!req.headers.get('Authorization')) return null;
+  const result = await getAuthenticatedClient(req);
+  return result.error ? null : result.userId;
+}
+
+async function venue(admin: ServiceClient, input: { id?: string | null; slug?: string | null }) {
+  let query = admin.from('venues').select('id, organization_id, name, slug, commerce_enabled');
+  query = input.id ? query.eq('id', input.id) : query.eq('slug', input.slug || '');
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data?.organization_id) throw new Error('Venue not found');
+  return data;
+}
+
+async function courseSeries(admin: ServiceClient, seriesId: string) {
+  if (!UUID.test(seriesId)) throw new Error('Invalid Course Series');
+  const { data, error } = await admin.from('activity_series')
+    .select('id, venue_id, format_id, name, description, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
+    .eq('id', seriesId)
+    .eq('series_type', 'course')
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error('Course not found');
+  return data;
+}
+
+async function seriesCapacity(admin: ServiceClient, series: CourseSeriesRow) {
+  const { data, error } = await admin.rpc('capacity_fill', {
+    p_venue_id: series.venue_id,
+    p_scope_type: 'activity_series',
+    p_scope_id: series.id,
+    p_session_date: series.start_date,
+  });
+  if (error) throw new Error(error.message);
+  const fill = Array.isArray(data) ? data[0] : data;
+  return {
+    capacity: Number(fill?.capacity ?? series.capacity ?? 0),
+    committed_count: Number(fill?.committed_count || 0),
+    active_holds_count: Number(fill?.active_holds_count || 0),
+    available_count: Number(fill?.available_count || 0),
+  };
+}
+
+function registrationState(series: CourseSeriesRow, now = DateTime.now().toUTC()) {
+  const opens = series.registration_opens_at ? DateTime.fromISO(series.registration_opens_at, { zone: 'utc' }) : null;
+  const closes = series.registration_closes_at ? DateTime.fromISO(series.registration_closes_at, { zone: 'utc' }) : null;
+  if (series.status !== 'active') return 'closed';
+  if (opens?.isValid && now < opens) return 'upcoming';
+  if (closes?.isValid && now >= closes) return 'closed';
+  return 'open';
+}
+
+async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, userId?: string | null) {
+  const [formatResult, productResult, venueResult, sessionsResult, capacity] = await Promise.all([
+    series.format_id
+      ? admin.from('activity_formats').select('id, name, description, age_group, level, requires_instructor').eq('id', series.format_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    series.access_product_id
+      ? admin.from('access_products').select('id, product_key, name, description, base_price_sek, vat_rate, status, product_kind').eq('id', series.access_product_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    admin.from('venues').select('id, name, slug').eq('id', series.venue_id).maybeSingle(),
+    admin.from('activity_sessions')
+      .select('id, series_id, session_date, start_time, end_time, court_ids, capacity, requires_staffing, is_active, publish_status, series_occurrence_index')
+      .eq('series_id', series.id)
+      .order('series_occurrence_index'),
+    seriesCapacity(admin, series),
+  ]);
+  if (formatResult.error || productResult.error || venueResult.error || sessionsResult.error) {
+    throw new Error(formatResult.error?.message || productResult.error?.message || venueResult.error?.message || sessionsResult.error?.message || 'Course projection unavailable');
+  }
+  let commitment = null;
+  if (userId) {
+    const customerId = await resolveCustomerIdForUser(admin, userId);
+    if (customerId) {
+      const { data, error } = await admin.from('series_commitments')
+        .select('id, participant_customer_id, dependent_participant_id, payer_customer_id, status, activated_at')
+        .eq('activity_series_id', series.id)
+        .eq('status', 'active')
+        .or(`participant_customer_id.eq.${customerId},payer_customer_id.eq.${customerId}`)
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      commitment = data || null;
+    }
+  }
+  return {
+    ...series,
+    format: formatResult.data || null,
+    product: productResult.data || null,
+    venue: venueResult.data || null,
+    sessions: sessionsResult.data || [],
+    capacity,
+    registration_state: registrationState(series),
+    customer_has_commitment: Boolean(commitment),
+    commitment,
+  };
+}
+
+async function listMyCourses(admin: ServiceClient, userId: string) {
+  const customerId = await resolveCustomerIdForUser(admin, userId);
+  if (!customerId) return [];
+  const { data: dependentRows, error: dependentError } = await admin.from('dependent_participants')
+    .select('id, first_name, birth_year')
+    .eq('guardian_customer_id', customerId)
+    .eq('status', 'active');
+  if (dependentError) throw new Error(dependentError.message);
+  const dependentIds = (dependentRows || []).map((row) => row.id);
+  const filters = [`participant_customer_id.eq.${customerId}`, `payer_customer_id.eq.${customerId}`];
+  if (dependentIds.length) filters.push(`dependent_participant_id.in.(${dependentIds.join(',')})`);
+  const { data: commitments, error } = await admin.from('series_commitments')
+    .select('id, activity_series_id, participant_customer_id, dependent_participant_id, payer_customer_id, status, activated_at')
+    .eq('commitment_type', 'participant')
+    .in('status', ['active', 'completed'])
+    .or(filters.join(','))
+    .order('activated_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  if (!commitments?.length) return [];
+  const seriesIds = [...new Set(commitments.map((row) => row.activity_series_id))];
+  const [{ data: seriesRows, error: seriesError }, { data: sessionRows, error: sessionError }] = await Promise.all([
+    admin.from('activity_series').select('id, venue_id, format_id, name, start_date, end_date, total_sessions, status').in('id', seriesIds),
+    admin.from('activity_sessions')
+      .select('id, series_id, session_date, start_time, end_time, is_active, series_occurrence_index')
+      .in('series_id', seriesIds)
+      .eq('is_active', true)
+      .order('session_date'),
+  ]);
+  if (seriesError || sessionError) throw new Error(seriesError?.message || sessionError?.message || 'Course projection unavailable');
+  const dependentById = new Map((dependentRows || []).map((row) => [row.id, row]));
+  const now = DateTime.now().setZone('Europe/Stockholm');
+  return commitments.map((commitment) => {
+    const series = (seriesRows || []).find((row) => row.id === commitment.activity_series_id);
+    const sessions = (sessionRows || []).filter((row) => row.series_id === commitment.activity_series_id);
+    const next = sessions.find((session) => {
+      const ends = DateTime.fromISO(`${session.session_date}T${String(session.end_time).slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+      return ends.isValid && ends > now;
+    }) || null;
+    const completed = sessions.filter((session) => {
+      const ends = DateTime.fromISO(`${session.session_date}T${String(session.end_time).slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+      return ends.isValid && ends <= now;
+    }).length;
+    return {
+      commitment,
+      series,
+      participant: commitment.dependent_participant_id
+        ? { kind: 'dependent', ...(dependentById.get(commitment.dependent_participant_id) || {}) }
+        : { kind: 'customer' },
+      next_session: next,
+      completed_sessions: completed,
+      total_sessions: sessions.length,
+    };
+  });
+}
+
+function cleanText(value: unknown, max = 240) {
+  return String(value || '').trim().slice(0, max);
+}
+
+function courseProductKey() {
+  return `course_${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+const coursesHandler = async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
+  const url = new URL(req.url);
+  const path = url.pathname.split('/').pop() || '';
+  const admin = getServiceClient();
+  try {
+    if (req.method === 'GET' && path === 'detail') {
+      const userId = await optionalUserId(req);
+      const series = await courseSeries(admin, String(url.searchParams.get('seriesId') || ''));
+      const projected = await projectCourse(admin, series, userId);
+      if (projected.status !== 'active') return errorResponse('Course not found', 404);
+      return jsonResponse(projected, 200, 5);
+    }
+
+    if (req.method === 'GET' && path === 'home') {
+      const userId = await optionalUserId(req);
+      const venueRow = await venue(admin, {
+        id: url.searchParams.get('venueId'),
+        slug: url.searchParams.get('v') || url.searchParams.get('slug'),
+      });
+      if (userId) {
+        const mine = await listMyCourses(admin, userId);
+        const active = mine.find((item) => item.series?.venue_id === venueRow.id && item.commitment?.status === 'active' && item.next_session);
+        if (active) return jsonResponse({ mode: 'next', item: active }, 200, 0);
+      }
+      const now = DateTime.now().toUTC().toISO();
+      const { data, error } = await admin.from('activity_series')
+        .select('id, venue_id, format_id, name, description, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
+        .eq('venue_id', venueRow.id)
+        .eq('series_type', 'course')
+        .eq('status', 'active')
+        .lte('registration_opens_at', now)
+        .gt('registration_closes_at', now)
+        .order('registration_closes_at')
+        .limit(4);
+      if (error) throw new Error(error.message);
+      for (const series of data || []) {
+        const projected = await projectCourse(admin, series, userId);
+        if (projected.capacity.available_count > 0) return jsonResponse({ mode: 'registration', item: projected }, 200, 5);
+      }
+      return jsonResponse({ mode: 'none', item: null }, 200, 5);
+    }
+
+    const auth = await getAuthenticatedClient(req);
+    if (auth.error || !auth.userId) return errorResponse('Unauthorized', 401);
+
+    if (req.method === 'GET' && path === 'my') {
+      return jsonResponse({ items: await listMyCourses(admin, auth.userId) }, 200, 5);
+    }
+
+    if (req.method === 'GET' && path === 'admin') {
+      const venueId = String(url.searchParams.get('venueId') || '');
+      await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
+      const venueRow = await venue(admin, { id: venueId });
+      const [{ data: formats, error: formatError }, { data: seriesRows, error: seriesError }, { data: courts, error: courtsError }] = await Promise.all([
+        admin.from('activity_formats').select('*').eq('organization_id', venueRow.organization_id).eq('is_active', true).order('name'),
+        admin.from('activity_series')
+          .select('id, venue_id, format_id, name, description, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
+          .eq('venue_id', venueId).eq('series_type', 'course').order('start_date', { ascending: false }),
+        admin.from('venue_courts').select('id, name, court_number, sport_type').eq('venue_id', venueId).eq('is_available', true).order('court_number'),
+      ]);
+      if (formatError || seriesError || courtsError) throw new Error(formatError?.message || seriesError?.message || courtsError?.message || 'Course admin unavailable');
+      const projected = [];
+      for (const series of seriesRows || []) projected.push(await projectCourse(admin, series, null));
+      return jsonResponse({ formats: formats || [], series: projected, courts: courts || [] }, 200, 5);
+    }
+
+    if (req.method === 'POST' && path === 'format') {
+      const body = await req.json();
+      const venueId = String(body.venue_id || body.venueId || '');
+      await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
+      const venueRow = await venue(admin, { id: venueId });
+      const ageGroup = cleanText(body.age_group, 24);
+      const level = cleanText(body.level, 24);
+      if (!AGE_GROUPS.has(ageGroup) || !LEVELS.has(level)) return errorResponse('Invalid Course taxonomy', 400);
+      const { data, error } = await admin.from('activity_formats').insert({
+        organization_id: venueRow.organization_id,
+        name: cleanText(body.name, 120),
+        description: cleanText(body.description, 1000) || null,
+        age_group: ageGroup,
+        level,
+        requires_instructor: body.requires_instructor === true,
+      }).select('*').single();
+      if (error) throw new Error(error.message);
+      return jsonResponse(data, 201, 0);
+    }
+
+    if (req.method === 'POST' && path === 'series') {
+      const body = await req.json();
+      const venueId = String(body.venue_id || body.venueId || '');
+      await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
+      const venueRow = await venue(admin, { id: venueId });
+      const formatId = String(body.format_id || '');
+      const { data: format, error: formatError } = await admin.from('activity_formats')
+        .select('id, organization_id, name, description, requires_instructor')
+        .eq('id', formatId).eq('organization_id', venueRow.organization_id).eq('is_active', true).maybeSingle();
+      if (formatError || !format) return errorResponse('Course Format not found', 404);
+      const capacity = Math.floor(Number(body.capacity || 0));
+      const priceSek = Math.round(Number(body.price_sek || 0));
+      const totalSessions = Math.floor(Number(body.total_sessions || 0));
+      const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days.map(Number).filter((day: number) => Number.isInteger(day) && day >= 0 && day <= 6) : [];
+      const courtIds = Array.isArray(body.court_ids) ? [...new Set(body.court_ids.map(String).filter((id: string) => UUID.test(id)))] : [];
+      if (capacity <= 0 || priceSek <= 0 || totalSessions <= 0 || !recurrenceDays.length) return errorResponse('Course capacity, price and schedule are required', 400);
+      const productKey = courseProductKey();
+      const { data: product, error: productError } = await admin.from('access_products').insert({
+        venue_id: venueId,
+        product_key: productKey,
+        name: cleanText(body.name, 120) || format.name,
+        description: cleanText(body.description, 1000) || format.description || null,
+        product_kind: 'series_access',
+        base_price_sek: priceSek,
+        vat_rate: 6,
+        grants: { scope_type: 'activity_series', meter_type: 'unlimited' },
+        is_active: true,
+        commerce_kind: 'participation',
+        fulfillment_type: 'participation',
+        fulfillment_presentation: 'participation',
+        commerce_enabled: true,
+        status: 'active',
+        standalone_enabled: false,
+        activity_addon_enabled: false,
+        category: 'course',
+        sport: 'pickleball',
+        resolver_rules: { purchase_kind: 'course', max_quantity: 1 },
+      }).select('*').single();
+      if (productError || !product) throw new Error(productError?.message || 'Course product could not be created');
+      const { data: series, error: seriesError } = await admin.from('activity_series').insert({
+        venue_id: venueId,
+        format_id: format.id,
+        name: cleanText(body.name, 120) || format.name,
+        description: cleanText(body.description, 1000) || format.description || null,
+        series_type: 'course',
+        sport_type: 'pickleball',
+        status: 'draft',
+        product_key: productKey,
+        access_product_id: product.id,
+        start_date: body.start_date,
+        end_date: body.end_date,
+        total_sessions: totalSessions,
+        registration_opens_at: body.registration_opens_at,
+        registration_closes_at: body.registration_closes_at,
+        capacity,
+        recurrence_days: recurrenceDays,
+        start_time: body.start_time,
+        end_time: body.end_time,
+        court_ids: courtIds,
+        metadata: { created_by: auth.userId, doctrine: 'series_commitment' },
+      }).select('*').single();
+      if (seriesError || !series) {
+        await admin.from('access_products').delete().eq('id', product.id);
+        throw new Error(seriesError?.message || 'Course Series could not be created');
+      }
+      const { data: sessions, error: generationError } = await admin.rpc('generate_course_series_sessions', { p_series_id: series.id });
+      if (generationError) {
+        await admin.from('activity_series').delete().eq('id', series.id);
+        await admin.from('access_products').delete().eq('id', product.id);
+        throw new Error(generationError.message);
+      }
+      return jsonResponse({ series, product, sessions: sessions || [] }, 201, 0);
+    }
+
+    if (req.method === 'PATCH' && path === 'series') {
+      const body = await req.json();
+      const series = await courseSeries(admin, String(body.series_id || ''));
+      await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
+      const updates: Record<string, unknown> = {};
+      if (body.status !== undefined) {
+        if (!['draft', 'active', 'paused', 'completed', 'cancelled'].includes(String(body.status))) return errorResponse('Invalid Course status', 400);
+        updates.status = body.status;
+      }
+      if (body.registration_opens_at !== undefined) updates.registration_opens_at = body.registration_opens_at;
+      if (body.registration_closes_at !== undefined) updates.registration_closes_at = body.registration_closes_at;
+      if (body.capacity !== undefined) updates.capacity = Math.floor(Number(body.capacity));
+      const { data, error } = await admin.from('activity_series').update(updates).eq('id', series.id).select('*').single();
+      if (error) throw new Error(error.message);
+      if (body.price_sek !== undefined) {
+        const { error: productError } = await admin.from('access_products').update({ base_price_sek: Math.round(Number(body.price_sek)) }).eq('id', series.access_product_id);
+        if (productError) throw new Error(productError.message);
+      }
+      return jsonResponse(await projectCourse(admin, data, null), 200, 0);
+    }
+
+    if (req.method === 'PATCH' && path === 'session') {
+      const body = await req.json();
+      const sessionId = String(body.session_id || '');
+      const { data: session, error: sessionError } = await admin.from('activity_sessions')
+        .select('id, venue_id, series_id, activity_series!inner(series_type)')
+        .eq('id', sessionId).maybeSingle();
+      if (sessionError || !session || (session as { activity_series?: { series_type?: string } }).activity_series?.series_type !== 'course') return errorResponse('Course Session not found', 404);
+      await requireVenueRole(admin, auth.userId, session.venue_id, ['venue_admin']);
+      const updates: Record<string, unknown> = {};
+      for (const field of ['session_date', 'start_time', 'end_time', 'is_active']) if (body[field] !== undefined) updates[field] = body[field];
+      if (body.court_ids !== undefined) updates.court_ids = Array.isArray(body.court_ids) ? body.court_ids : [];
+      const { data, error } = await admin.from('activity_sessions').update(updates).eq('id', session.id).select('*').single();
+      if (error) throw new Error(error.message);
+      return jsonResponse(data, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'session') {
+      const body = await req.json();
+      const series = await courseSeries(admin, String(body.series_id || ''));
+      await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
+      const { data: last } = await admin.from('activity_sessions').select('series_occurrence_index').eq('series_id', series.id).order('series_occurrence_index', { ascending: false }).limit(1).maybeSingle();
+      const { data: format } = series.format_id
+        ? await admin.from('activity_formats').select('requires_instructor').eq('id', series.format_id).maybeSingle()
+        : { data: null };
+      const occurrenceIndex = Number(last?.series_occurrence_index || 0) + 1;
+      const { data, error } = await admin.from('activity_sessions').insert({
+        venue_id: series.venue_id, name: series.name, session_type: 'course', sport_type: series.sport_type,
+        recurrence_days: null, session_date: body.session_date, start_time: body.start_time || series.start_time,
+        end_time: body.end_time || series.end_time, price_sek: 0, capacity: series.capacity,
+        court_ids: body.court_ids || series.court_ids, access_policy: { series_commitment_required: true },
+        is_active: true, metadata: { generated_by: 'course_series', activity_series_id: series.id, added_manually: true },
+        series_id: series.id, product_key: null, publish_status: 'published', requires_staffing: format?.requires_instructor === true,
+        closed_to_public: true, series_occurrence_index: occurrenceIndex,
+      }).select('*').single();
+      if (error) throw new Error(error.message);
+      return jsonResponse(data, 201, 0);
+    }
+
+    return errorResponse('Not found', 404);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Course request failed';
+    const status = message.startsWith('Forbidden') ? 403 : /not found/i.test(message) ? 404 : 500;
+    return errorResponse(message, status);
+  }
+};
+
+const localFunctionPort = Number(Deno.env.get('FUNCTION_PORT') || 0);
+if (localFunctionPort > 0) Deno.serve({ port: localFunctionPort }, coursesHandler);
+else Deno.serve(coursesHandler);

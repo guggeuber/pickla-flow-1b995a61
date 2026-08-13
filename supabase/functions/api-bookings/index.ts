@@ -4605,7 +4605,7 @@ Deno.serve(async (req) => {
       if (date) {
         const { data: registrations, error: regErr } = await client
           .from('session_registrations')
-          .select('id, venue_id, activity_session_id, session_date, customer_id, user_id, status, price_paid_sek, source_type, source_id, metadata, stripe_session_id, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
+          .select('id, venue_id, activity_session_id, session_date, customer_id, user_id, dependent_participant_id, status, price_paid_sek, source_type, source_id, metadata, stripe_session_id, created_at, activity_sessions(id, name, session_type, start_time, end_time, capacity)')
           .eq('venue_id', venueId)
           .eq('session_date', date)
           .neq('status', 'cancelled');
@@ -4616,11 +4616,23 @@ Deno.serve(async (req) => {
         const registrationIds = Array.from(new Set((registrations || []).map((row: any) => row.id).filter(Boolean)));
         const stripeSessionIds = Array.from(new Set((registrations || []).map((row: any) => row.stripe_session_id).filter(Boolean)));
         const explicitCustomerIds = (registrations || []).map((row: any) => row.customer_id).filter(Boolean);
+        const dependentIds = Array.from(new Set((registrations || []).map((row) => row.dependent_participant_id).filter(Boolean)));
         const profilesByUserId = new Map<string, any>();
         const customersById = new Map<string, any>();
         const receiptByStripe = new Map<string, any>();
         const checkinByRegistrationId = new Map<string, any>();
         const commerceItemsByRegistrationId = new Map<string, any[]>();
+        const dependentsById = new Map<string, { id: string; first_name: string; birth_year: number; guardian_customer_id: string }>();
+
+        if (dependentIds.length > 0) {
+          const { data: dependents, error: dependentsError } = await lookupClient
+            .from('dependent_participants')
+            .select('id, guardian_customer_id, first_name, birth_year, operational_note')
+            .in('id', dependentIds)
+            .eq('status', 'active');
+          if (dependentsError) return errorResponse(dependentsError.message);
+          for (const dependent of dependents || []) dependentsById.set(dependent.id, dependent);
+        }
 
         if (userIds.length > 0) {
           const { data: profiles, error: profilesErr } = await client
@@ -4705,13 +4717,14 @@ Deno.serve(async (req) => {
           const startTime = occurrence?.startISO || null;
           const endTime = occurrence?.endISO || null;
           const profile = profilesByUserId.get(registration.user_id);
+          const dependent = registration.dependent_participant_id ? dependentsById.get(registration.dependent_participant_id) : null;
           const customerId = registration.customer_id || profile?.customer_id || null;
           const customer = customerId ? customersById.get(customerId) : null;
           const receipt = registration.stripe_session_id ? receiptByStripe.get(registration.stripe_session_id) || null : null;
           const customerFullName = [customer?.first_name, customer?.last_name].filter(Boolean).join(' ').trim();
-          const participantName = customerFullName || customer?.display_name || receipt?.customer_name || profileDisplayName(profile) || receipt?.customer_email || 'Deltagare';
-          const participantEmail = customer?.primary_email || receipt?.customer_email || null;
-          const participantPhone = customer?.primary_phone || receipt?.customer_phone || profile?.phone || null;
+          const participantName = dependent?.first_name || customerFullName || customer?.display_name || receipt?.customer_name || profileDisplayName(profile) || receipt?.customer_email || 'Deltagare';
+          const participantEmail = dependent ? null : customer?.primary_email || receipt?.customer_email || null;
+          const participantPhone = dependent ? null : customer?.primary_phone || receipt?.customer_phone || profile?.phone || null;
           const checkin = checkinByRegistrationId.get(registration.id);
           const registrationMetadata = registration.metadata && typeof registration.metadata === 'object' ? registration.metadata : {};
           const playingHost = isPlayingHostReason(registration.source_type) ||
@@ -4733,6 +4746,8 @@ Deno.serve(async (req) => {
             venue_id: registration.venue_id,
             customer_id: customerId,
             user_id: registration.user_id,
+            dependent_participant_id: registration.dependent_participant_id || null,
+            guardian_customer_id: dependent?.guardian_customer_id || null,
             venue_court_id: null,
             start_time: startTime,
             end_time: endTime,

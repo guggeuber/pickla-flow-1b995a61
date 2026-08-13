@@ -51,6 +51,7 @@ export default function CommerceOrderPage() {
     onError: (error: Error) => toast.error(error.message || "Kunde inte checka in"),
   });
   const activity = query.data?.activity_access;
+  const course = query.data?.course_access;
   const checkInAvailable = useMemo(() => activity ? activityCheckInAvailable({
     sessionDate: activity.session_date,
     startTime: activity.start_time,
@@ -69,7 +70,7 @@ export default function CommerceOrderPage() {
   const { order, lines, receipt } = query.data;
   const dayPassLine = lines.find((line) => line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass");
   const isDayPassPurchase = Boolean(dayPassLine);
-  const hasParticipation = Boolean(activity);
+  const hasParticipation = Boolean(activity || course);
   const isCancelled = order.status === "cancelled" || activity?.registration_status === "cancelled";
   const checkedIn = activity?.registration_status === "checked_in";
   const cancellationPending = Boolean(order.cancellation_pending);
@@ -81,7 +82,9 @@ export default function CommerceOrderPage() {
     ? `/my?registration=${encodeURIComponent(managementRegistrationId)}${activity?.venue_slug ? `&v=${encodeURIComponent(activity.venue_slug)}` : ""}`
     : null;
   const canManageBooking = Boolean(user && order.account_claimed && managementPath);
-  const participantConfirmed = !hasParticipation || ["confirmed", "checked_in", "no_show"].includes(String(activity?.registration_status || ""));
+  const participantConfirmed = course
+    ? Boolean(course.commitment_id)
+    : !hasParticipation || ["confirmed", "checked_in", "no_show"].includes(String(activity?.registration_status || ""));
   const purchaseConfirmed = order.status === "paid" && participantConfirmed;
   const waiting = order.status === "checkout_pending";
   const needsReview = order.status === "attention" || (order.status === "paid" && !participantConfirmed);
@@ -94,7 +97,7 @@ export default function CommerceOrderPage() {
   const activityPath = activity?.venue_slug
     ? `/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`
     : null;
-  const resolvedVenueSlug = activity?.venue_slug || venueSlug;
+  const resolvedVenueSlug = activity?.venue_slug || course?.venue_slug || venueSlug;
   const shareActivity = async () => {
     if (!activity || !activityPath) return;
     const shareUrl = `${window.location.origin}${activityPath.replace(/&ticket=1$/, "")}`;
@@ -125,7 +128,7 @@ export default function CommerceOrderPage() {
     : purchaseConfirmed && isDayPassPurchase
       ? `Du har heldagstillgång och en plats på ${activity?.name}.`
     : purchaseConfirmed && hasParticipation
-      ? `Du är anmäld till ${activity?.name}.`
+      ? course ? `Du har en plats på ${course.name}.` : `Du är anmäld till ${activity?.name}.`
       : purchaseConfirmed
         ? "Spara den här sidan för kvitto och orderinformation."
         : needsReview
@@ -153,6 +156,16 @@ export default function CommerceOrderPage() {
             </button>
           </div>
         ) : null}
+        {purchaseConfirmed && course ? (
+          <section className="mb-6 px-1">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din kurs</p>
+            <h2 className="mt-1 text-xl font-black">{course.name}</h2>
+            <p className="mt-3 text-sm font-semibold">{course.total_sessions} tillfällen · start {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")}</p>
+            {course.participant_name ? <p className="mt-1 text-sm text-slate-500">Deltagare: {course.participant_name}</p> : null}
+            {course.venue_name ? <p className="mt-1 text-sm text-slate-500">{course.venue_name}</p> : null}
+            <p className="mt-1 text-xs text-slate-500">Referens {purchaseReference}</p>
+          </section>
+        ) : null}
         <div className="mb-9 px-12 text-center">{waiting ? <Loader2 className="mx-auto h-7 w-7 animate-spin text-slate-600" /> : purchaseConfirmed ? <Check data-testid="commerce-success-check" className="mx-auto h-8 w-8 stroke-[1.75] text-slate-950" /> : <XCircle className="mx-auto h-7 w-7 text-slate-600" />}<h1 className="mt-5 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
         {purchaseConfirmed && activity ? (
           <section className="mb-6 px-1">
@@ -165,14 +178,14 @@ export default function CommerceOrderPage() {
           </section>
         ) : null}
         {racketInstruction ? <section className="mb-6 border-t border-black/10 px-1 pt-5"><h2 className="font-black">Hyrrack</h2><p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{racketInstruction.summary} {racketInstruction.pickup}</p></section> : null}
-        {purchaseConfirmed && hasParticipation && requiresGuestClaim && !isCancelled ? (
+        {purchaseConfirmed && activity && requiresGuestClaim && !isCancelled ? (
           <section className="mb-6 border-y border-black/10 py-5">
             <div><h2 className="font-black">Vem ska spela?</h2><p className="text-sm text-slate-500">Namnet visas på din biljett.</p></div>
             <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="För- och efternamn" className="mt-4 h-12 w-full rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" />
             <button type="button" onClick={() => confirmIdentity.mutate()} disabled={!displayName.trim() || confirmIdentity.isPending} className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{confirmIdentity.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Bekräfta namn och visa biljett</button>
           </section>
         ) : null}
-        {purchaseConfirmed && hasParticipation && !requiresGuestClaim ? (
+        {purchaseConfirmed && activity && !requiresGuestClaim ? (
           <section id="ticket" className="mb-6 border-y border-black/10 py-5 text-slate-950">
             <div className="flex items-start gap-3"><Ticket data-testid="commerce-ticket-icon" className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" /><div><p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{isDayPassPurchase ? "Ditt heldagspass" : "Din biljett"}</p><h2 className="mt-0.5 text-xl font-black">{activity?.name}</h2></div></div>
             <p className="mt-3 text-sm font-semibold">{activityDate} · {String(activity?.start_time || "").slice(0, 5)}–{String(activity?.end_time || "").slice(0, 5)}</p>
@@ -187,6 +200,12 @@ export default function CommerceOrderPage() {
                 <p className="mt-2 text-center text-xs leading-relaxed text-slate-500">Skapa konto och få biljett, kvitto och bokningshistorik på Min sida.</p>
               </div>
             ) : null}
+          </section>
+        ) : null}
+        {purchaseConfirmed && course ? (
+          <section className="mb-6 border-y border-black/10 py-5">
+            <p className="text-sm leading-relaxed text-slate-600">Din kursplats gäller hela serien. Kommande tillfälle och deltagaruppgifter finns på Min sida.</p>
+            {user && order.account_claimed ? <Link to={`/my?v=${encodeURIComponent(resolvedVenueSlug)}#courses`} className="mt-4 flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-black text-white">Visa min kurs</Link> : user ? <button type="button" onClick={() => claimAccount.mutate()} disabled={claimAccount.isPending} className="mt-4 h-12 w-full rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">Koppla kursköpet till mitt konto</button> : <button type="button" onClick={startAuth} className="mt-4 h-12 w-full rounded-2xl bg-slate-950 font-black text-white">Spara kursen</button>}
           </section>
         ) : null}
         {!(purchaseConfirmed && hasParticipation) ? <section className="divide-y divide-black/10 border-y border-black/10">

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { formatSek } from "@/lib/activityPricing";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
+import AdminCourses from "@/components/admin/AdminCourses";
 
 const DAYS = [
   { key: 1, label: "Mån" },
@@ -1019,6 +1020,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
 
   return (
     <div className="space-y-4">
+      <AdminCourses venueId={venueId} />
       <div className="glass-card rounded-2xl p-4 space-y-2">
         <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Schema bygger på två nivåer</p>
         <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
