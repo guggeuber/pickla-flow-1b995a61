@@ -110,7 +110,7 @@ function registrationState(series: CourseSeriesRow, now = DateTime.now().toUTC()
 async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, userId?: string | null) {
   const [formatResult, productResult, venueResult, sessionsResult, capacity] = await Promise.all([
     series.format_id
-      ? admin.from('activity_formats').select('id, name, description, age_group, level, requires_instructor').eq('id', series.format_id).maybeSingle()
+      ? admin.from('activity_formats').select('id, name, description, full_description, age_group, level, requires_instructor').eq('id', series.format_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     series.access_product_id
       ? admin.from('access_products').select('id, product_key, name, description, base_price_sek, vat_rate, status, product_kind').eq('id', series.access_product_id).maybeSingle()
@@ -357,6 +357,7 @@ const coursesHandler = async (req: Request) => {
         organization_id: venueRow.organization_id,
         name: cleanText(body.name, 120),
         description: cleanText(body.description, 1000) || null,
+        full_description: cleanText(body.full_description, 20000) || null,
         age_group: ageGroup,
         level,
         requires_instructor: body.requires_instructor === true,
@@ -365,13 +366,43 @@ const coursesHandler = async (req: Request) => {
       return jsonResponse(data, 201, 0);
     }
 
+    if (req.method === 'PATCH' && path === 'format') {
+      const body = await req.json();
+      const venueId = String(body.venue_id || body.venueId || '');
+      const formatId = String(body.format_id || '');
+      await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
+      const venueRow = await venue(admin, { id: venueId });
+      const ageGroup = cleanText(body.age_group, 24);
+      const level = cleanText(body.level, 24);
+      const name = cleanText(body.name, 120);
+      if (!UUID.test(formatId) || !name || !AGE_GROUPS.has(ageGroup) || !LEVELS.has(level)) {
+        return errorResponse('Invalid Course Format', 400);
+      }
+      const { data, error } = await admin.from('activity_formats').update({
+        name,
+        description: cleanText(body.description, 1000) || null,
+        full_description: cleanText(body.full_description, 20000) || null,
+        age_group: ageGroup,
+        level,
+        requires_instructor: body.requires_instructor === true,
+      }).eq('id', formatId).eq('organization_id', venueRow.organization_id).eq('is_active', true).select('*').maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!data) return errorResponse('Course Format not found', 404);
+      return jsonResponse(data, 200, 0);
+    }
+
     if (req.method === 'POST' && path === 'series-preview') {
       const body = await req.json();
       const schedule = courseScheduleInput(body);
       if (!schedule) return errorResponse('Course schedule and resources are required', 400);
       await requireVenueRole(admin, auth.userId, schedule.venueId, ['venue_admin']);
       await venue(admin, { id: schedule.venueId });
-      return jsonResponse(await previewCourseResourceSchedule(admin, schedule), 200, 0);
+      const excludeSeriesId = body.series_id ? String(body.series_id) : null;
+      if (excludeSeriesId) {
+        const existing = await courseSeries(admin, excludeSeriesId);
+        if (existing.venue_id !== schedule.venueId) return errorResponse('Course not found', 404);
+      }
+      return jsonResponse(await previewCourseResourceSchedule(admin, schedule, excludeSeriesId), 200, 0);
     }
 
     if (req.method === 'POST' && path === 'series') {
@@ -381,7 +412,7 @@ const coursesHandler = async (req: Request) => {
       const venueRow = await venue(admin, { id: venueId });
       const formatId = String(body.format_id || '');
       const { data: format, error: formatError } = await admin.from('activity_formats')
-        .select('id, organization_id, name, description, requires_instructor')
+        .select('id, organization_id, name, description, full_description, requires_instructor')
         .eq('id', formatId).eq('organization_id', venueRow.organization_id).eq('is_active', true).maybeSingle();
       if (formatError || !format) return errorResponse('Course Format not found', 404);
       const capacity = Math.floor(Number(body.capacity || 0));
@@ -459,20 +490,64 @@ const coursesHandler = async (req: Request) => {
       const body = await req.json();
       const series = await courseSeries(admin, String(body.series_id || ''));
       await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
-      const updates: Record<string, unknown> = {};
-      if (body.status !== undefined) {
-        if (!['draft', 'active', 'paused', 'completed', 'cancelled'].includes(String(body.status))) return errorResponse('Invalid Course status', 400);
-        updates.status = body.status;
+      const editableFields = [
+        'name', 'start_date', 'end_date', 'registration_opens_at', 'registration_closes_at',
+        'capacity', 'price_sek', 'recurrence_days', 'start_time', 'end_time',
+        'total_sessions', 'court_ids',
+      ];
+      const isDraftEdit = editableFields.some((field) => body[field] !== undefined);
+
+      if (isDraftEdit) {
+        if (body.status !== undefined) return errorResponse('Publish and edit are separate actions', 400);
+        if (series.status !== 'draft') return errorResponse('Published Course Series cannot be edited in V1', 409);
+        const schedule = courseScheduleInput({ ...body, venue_id: series.venue_id });
+        const capacity = Math.floor(Number(body.capacity || 0));
+        const priceSek = Math.round(Number(body.price_sek || 0));
+        const name = cleanText(body.name, 120);
+        if (!schedule || !name || capacity <= 0 || priceSek <= 0) {
+          return errorResponse('Course name, capacity, price, schedule and resources are required', 400);
+        }
+        const resourcePreview = await previewCourseResourceSchedule(admin, schedule, series.id);
+        if (resourcePreview.has_conflicts) return courseConflictResponse(resourcePreview);
+        const { error } = await admin.rpc('update_course_draft_series', {
+          p_series_id: series.id,
+          p_name: name,
+          p_start_date: schedule.startDate,
+          p_end_date: schedule.endDate,
+          p_registration_opens_at: body.registration_opens_at,
+          p_registration_closes_at: body.registration_closes_at,
+          p_capacity: capacity,
+          p_price_sek: priceSek,
+          p_recurrence_days: schedule.recurrenceDays,
+          p_start_time: schedule.startTime,
+          p_end_time: schedule.endTime,
+          p_total_sessions: schedule.totalSessions,
+          p_court_ids: schedule.courtIds,
+        });
+        if (error) {
+          if (error.message.includes('course_resource_conflict')) {
+            return courseConflictResponse(await previewCourseResourceSchedule(admin, schedule, series.id));
+          }
+          if (/course_series_not_draft|course_draft_has_/.test(error.message)) {
+            return errorResponse('Course draft can no longer be edited safely', 409);
+          }
+          throw new Error(error.message);
+        }
+        return jsonResponse(await projectCourse(admin, await courseSeries(admin, series.id), null), 200, 0);
       }
-      if (body.registration_opens_at !== undefined) updates.registration_opens_at = body.registration_opens_at;
-      if (body.registration_closes_at !== undefined) updates.registration_closes_at = body.registration_closes_at;
-      if (body.capacity !== undefined) updates.capacity = Math.floor(Number(body.capacity));
-      const { data, error } = await admin.from('activity_series').update(updates).eq('id', series.id).select('*').single();
+
+      if (body.status === undefined) return errorResponse('No Course update supplied', 400);
+      const nextStatus = String(body.status);
+      const transitions: Record<string, string[]> = {
+        draft: ['active', 'cancelled'],
+        active: ['paused', 'completed', 'cancelled'],
+        paused: ['active', 'completed', 'cancelled'],
+        completed: [],
+        cancelled: [],
+      };
+      if (!(transitions[series.status] || []).includes(nextStatus)) return errorResponse('Invalid Course status transition', 409);
+      const { data, error } = await admin.from('activity_series').update({ status: nextStatus }).eq('id', series.id).select('*').single();
       if (error) throw new Error(error.message);
-      if (body.price_sek !== undefined) {
-        const { error: productError } = await admin.from('access_products').update({ base_price_sek: Math.round(Number(body.price_sek)) }).eq('id', series.access_product_id);
-        if (productError) throw new Error(productError.message);
-      }
       return jsonResponse(await projectCourse(admin, data, null), 200, 0);
     }
 

@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   fetchCourseAdmin: vi.fn(),
   previewCourseSeries: vi.fn(),
   createCourseCart: vi.fn(),
+  createCourseFormat: vi.fn(),
+  updateCourseFormat: vi.fn(),
+  createCourseSeries: vi.fn(),
+  updateCourseSeries: vi.fn(),
 }));
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
@@ -20,9 +24,10 @@ vi.mock("@/lib/courses", () => ({
   fetchCourseAdmin: mocks.fetchCourseAdmin,
   previewCourseSeries: mocks.previewCourseSeries,
   createCourseCart: mocks.createCourseCart,
-  createCourseFormat: vi.fn(),
-  createCourseSeries: vi.fn(),
-  updateCourseSeries: vi.fn(),
+  createCourseFormat: mocks.createCourseFormat,
+  updateCourseFormat: mocks.updateCourseFormat,
+  createCourseSeries: mocks.createCourseSeries,
+  updateCourseSeries: mocks.updateCourseSeries,
 }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="topbar" /> }));
 vi.mock("@/lib/commerce", () => ({
@@ -36,7 +41,7 @@ const course = {
   total_sessions: 6, registration_opens_at: "2026-08-01T00:00:00Z", registration_closes_at: "2026-09-08T16:00:00Z",
   recurrence_days: [2], start_time: "18:00", end_time: "19:00", court_ids: [], registration_state: "open",
   customer_has_commitment: false,
-  format: { id: "format-1", name: "Pickla 101", description: "Nybörjarkurs", age_group: "adult", level: "beginner", requires_instructor: true },
+  format: { id: "format-1", name: "Pickla 101", description: "Dina första fyra veckor med pickleball.", full_description: "Introduktion\n\nTillfälle 1 · Grepp och grundslag.\nTillfälle 2 · Serve och retur.\n\nDetta ingår\nInstruktör och lånerack.", age_group: "adult", level: "beginner", requires_instructor: true },
   product: { id: "product-1", name: "Pickla 101", description: null, base_price_sek: 1495, vat_rate: 6 },
   venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
   capacity: { capacity: 12, committed_count: 7, active_holds_count: 0, available_count: 5 },
@@ -61,6 +66,9 @@ describe("Course V1 customer flow", () => {
     expect(await screen.findByRole("heading", { name: "Pickla 101 · Höst 2026" })).toBeInTheDocument();
     expect(screen.getByText("6 tillfällen · tisdagar 18:00–19:00")).toBeInTheDocument();
     expect(screen.getByText("5 platser kvar")).toBeInTheDocument();
+    expect(screen.getByText("Dina första fyra veckor med pickleball.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Om kursen" })).toBeInTheDocument();
+    expect(screen.getByText(/Tillfälle 1 · Grepp och grundslag/)).toBeInTheDocument();
     expect(screen.getByText(/Missade tillfällen återbetalas inte/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Boka kurs · ${formatCommerceMoney(149500)}` })).toBeDisabled();
   });
@@ -140,10 +148,59 @@ describe("Course V1 Admin", () => {
     fireEvent.click(screen.getByRole("button", { name: "Bana 3" }));
 
     expect(await screen.findByText("Privat bokning · 17:30–19:30")).toBeInTheDocument();
-    expect(screen.getByText("Ändra schema eller resurser innan kursen kan skapas.")).toBeInTheDocument();
+    expect(screen.getByText("Ändra schema eller resurser innan kursen kan sparas.")).toBeInTheDocument();
     expect(screen.getAllByText("Konflikt")).toHaveLength(1);
     expect(screen.getAllByText("Ledig")).toHaveLength(5);
     await waitFor(() => expect(screen.getByRole("button", { name: "Skapa kurs och tillfällen" })).toBeDisabled());
+  });
+
+  it("edits reusable Format content and reloads a draft Series into the canonical preview", async () => {
+    const courtId = "c0100000-0000-4000-8000-000000000003";
+    const draftCourse = { ...course, status: "draft", customer_has_commitment: false, court_ids: [courtId] };
+    mocks.previewCourseSeries.mockClear();
+    mocks.fetchCourseAdmin.mockResolvedValue({
+      formats: [course.format],
+      series: [draftCourse],
+      courts: [{ id: courtId, name: "Bana 3", sport_type: "pickleball" }],
+    });
+    mocks.updateCourseFormat.mockResolvedValue({ ...course.format, description: "Ny kort text", full_description: "Ny lång text" });
+    mocks.previewCourseSeries.mockResolvedValue({
+      occurrence_count: 6,
+      has_conflicts: false,
+      rows: course.sessions.map((session, index) => ({
+        occurrence_index: index + 1,
+        occurrence_date: session.session_date,
+        proposed_starts_at: `${session.session_date}T16:00:00Z`,
+        proposed_ends_at: `${session.session_date}T17:00:00Z`,
+        court_id: courtId,
+        court_name: "Bana 3",
+        is_available: true,
+        conflicts: [],
+      })),
+    });
+    mocks.updateCourseSeries.mockResolvedValue(draftCourse);
+
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Kurser/ }));
+    await screen.findByText("1. Kursformat");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Redigera" })[0]);
+    expect(screen.getByLabelText("Kort beskrivning")).toHaveValue("Dina första fyra veckor med pickleball.");
+    expect((screen.getByLabelText("Full beskrivning och kursinnehåll") as HTMLTextAreaElement).value).toContain("Tillfälle 1");
+    fireEvent.change(screen.getByLabelText("Kort beskrivning"), { target: { value: "Ny kort text" } });
+    fireEvent.change(screen.getByLabelText("Full beskrivning och kursinnehåll"), { target: { value: "Ny lång text" } });
+    fireEvent.click(screen.getByRole("button", { name: "Spara format" }));
+    await waitFor(() => expect(mocks.updateCourseFormat).toHaveBeenCalledWith(expect.objectContaining({
+      format_id: "format-1",
+      description: "Ny kort text",
+      full_description: "Ny lång text",
+    })));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Redigera" }).at(-1)!);
+    expect(screen.getByRole("heading", { name: "2. Redigera kursutkast" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Serienamn")).toHaveValue("Pickla 101 · Höst 2026");
+    await waitFor(() => expect(mocks.previewCourseSeries).toHaveBeenCalledWith(expect.objectContaining({ series_id: "series-1" })));
+    expect(await screen.findAllByText("Ledig")).toHaveLength(6);
   });
 });
 

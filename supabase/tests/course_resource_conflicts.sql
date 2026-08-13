@@ -155,4 +155,98 @@ BEGIN
 END;
 $$;
 
+UPDATE public.activity_formats
+SET description = 'Kort återanvändbar text',
+    full_description = E'Introduktion\n\nTillfälle 1 · Grunder\n\nDetta ingår\nInstruktör'
+WHERE id = 'c0130000-0000-4000-8000-000000000020';
+
+SELECT public.update_course_draft_series(
+  'c0130000-0000-4000-8000-000000000022',
+  'Course Resource Guard · Redigerad',
+  '2026-11-02', '2026-11-23',
+  '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+  10, 1595, ARRAY[1], '18:30', '19:30', 4,
+  ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+);
+
+DO $$
+DECLARE
+  v_ids UUID[];
+BEGIN
+  SELECT array_agg(id ORDER BY series_occurrence_index) INTO v_ids
+  FROM public.activity_sessions
+  WHERE series_id = 'c0130000-0000-4000-8000-000000000022';
+
+  IF cardinality(v_ids) <> 4 THEN RAISE EXCEPTION 'Draft edit did not reconcile occurrence count'; END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.activity_sessions
+    WHERE series_id = 'c0130000-0000-4000-8000-000000000022'
+      AND (start_time <> '18:30' OR end_time <> '19:30'
+        OR court_ids <> ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+        OR capacity <> 10 OR is_active = false)
+  ) THEN RAISE EXCEPTION 'Draft edit did not reconcile canonical Session fields'; END IF;
+  IF (SELECT base_price_sek FROM public.access_products WHERE id = 'c0130000-0000-4000-8000-000000000021') <> 1595 THEN
+    RAISE EXCEPTION 'Draft edit did not update product atomically';
+  END IF;
+  IF (SELECT full_description FROM public.activity_formats WHERE id = 'c0130000-0000-4000-8000-000000000020') NOT LIKE '%Tillfälle 1%' THEN
+    RAISE EXCEPTION 'Reusable Format full content was not stored';
+  END IF;
+END;
+$$;
+
+INSERT INTO public.bookings (
+  id, venue_id, venue_court_id, user_id, booked_by, start_time, end_time,
+  status, total_price, booking_ref
+) VALUES (
+  'c0130000-0000-4000-8000-000000000050',
+  'c0130000-0000-4000-8000-000000000002',
+  'c0130000-0000-4000-8000-000000000004',
+  'c0130000-0000-4000-8000-000000000010',
+  'c0130000-0000-4000-8000-000000000010',
+  '2026-11-16T17:30:00Z', '2026-11-16T18:30:00Z',
+  'confirmed', 350, 'COURSE-DRAFT-EDIT-CONFLICT'
+);
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM public.update_course_draft_series(
+      'c0130000-0000-4000-8000-000000000022',
+      'Partial mutation forbidden',
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      11, 1695, ARRAY[1], '18:30', '19:30', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Conflicting draft edit was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Conflicting draft edit was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%course_resource_conflict%' THEN RAISE; END IF;
+  END;
+
+  IF (SELECT name FROM public.activity_series WHERE id = 'c0130000-0000-4000-8000-000000000022') <> 'Course Resource Guard · Redigerad'
+     OR (SELECT capacity FROM public.activity_series WHERE id = 'c0130000-0000-4000-8000-000000000022') <> 10
+     OR (SELECT base_price_sek FROM public.access_products WHERE id = 'c0130000-0000-4000-8000-000000000021') <> 1595 THEN
+    RAISE EXCEPTION 'Blocked draft edit left partial commercial state';
+  END IF;
+
+  UPDATE public.activity_series SET status = 'active'
+  WHERE id = 'c0130000-0000-4000-8000-000000000022';
+  BEGIN
+    PERFORM public.update_course_draft_series(
+      'c0130000-0000-4000-8000-000000000022',
+      'Published mutation forbidden',
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      10, 1595, ARRAY[1], '18:30', '19:30', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Published Course edit was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Published Course edit was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%course_series_not_draft%' THEN RAISE; END IF;
+  END;
+END;
+$$;
+
 ROLLBACK;

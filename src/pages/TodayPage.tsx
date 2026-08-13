@@ -879,6 +879,7 @@ export default function TodayPage() {
                   <button type="button" onClick={() => navigate(`/course/${course.id}?v=${encodeURIComponent(slug)}`)} className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }}>
                     <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Anmälan öppen</p>
                     <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{course.name}</h2>
+                    {course.format?.description ? <p className="mt-2 text-sm leading-relaxed" style={{ color: MUTED }}>{course.format.description}</p> : null}
                     <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>Startar {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")} · {course.capacity.available_count} platser kvar</p>
                     <span className="mt-4 inline-flex items-center gap-2 text-sm font-black">Boka kurs <ArrowRight className="h-4 w-4" /></span>
                   </button>

@@ -87,13 +87,18 @@ export default function CourseSeriesPage() {
       <main className="mx-auto w-full max-w-xl px-5 pb-40 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
         <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Kurs</p>
         <h1 className="mt-2 text-3xl font-black leading-tight">{course.name}</h1>
-        <p className="mt-3 text-base leading-relaxed text-slate-600">{course.description || course.format?.description}</p>
+        <p className="mt-3 text-base leading-relaxed text-slate-600">{course.format?.description || course.description}</p>
 
         <section className="mt-8 grid gap-4 border-y border-black/10 py-6">
           <div className="flex gap-3"><CalendarDays className="mt-0.5 h-5 w-5" /><div><p className="font-bold">{sessions.length} tillfällen · {scheduleLabel}</p><p className="mt-1 text-sm text-slate-500">{swedishDate(course.start_date)}–{swedishDate(course.end_date)}</p></div></div>
           <div className="flex gap-3"><Users className="mt-0.5 h-5 w-5" /><div><p className="font-bold">{available} {available === 1 ? "plats" : "platser"} kvar</p><p className="mt-1 text-sm text-slate-500">{course.venue?.name}</p></div></div>
           {course.format?.requires_instructor ? <div className="flex gap-3"><Check className="mt-0.5 h-5 w-5" /><p className="font-bold">Instruktör vid varje tillfälle</p></div> : null}
         </section>
+
+        {course.format?.full_description ? <section className="mt-8">
+          <h2 className="text-lg font-black">Om kursen</h2>
+          <div className="mt-3 whitespace-pre-line text-sm leading-7 text-slate-600">{course.format.full_description}</div>
+        </section> : null}
 
         <section className="mt-8">
           <h2 className="text-lg font-black">Vem ska delta?</h2>

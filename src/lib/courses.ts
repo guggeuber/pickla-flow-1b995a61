@@ -4,6 +4,7 @@ export type CourseFormat = {
   id: string;
   name: string;
   description: string | null;
+  full_description: string | null;
   age_group: "adult" | "youth" | "all_ages";
   level: "intro" | "beginner" | "intermediate" | "advanced";
   requires_instructor: boolean;
@@ -133,6 +134,10 @@ export function fetchCourseAdmin(venueId: string) {
 
 export function createCourseFormat(input: Record<string, unknown>) {
   return apiPost<CourseFormat>("api-courses", "format", input);
+}
+
+export function updateCourseFormat(input: Record<string, unknown>) {
+  return apiPatch<CourseFormat>("api-courses", "format", input);
 }
 
 export function createCourseSeries(input: Record<string, unknown>) {

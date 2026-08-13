@@ -168,29 +168,45 @@ const format = (await course("format", {
   body: {
     venue_id: ids.venue,
     name: `Pickla 101 ${run}`,
-    description: "Vuxen nybörjarkurs",
+    description: "Dina första fyra veckor med pickleball.",
+    full_description: "Introduktion till Pickla 101.\n\nTillfälle 1 · Grepp och grundslag.\nTillfälle 2 · Serve och retur.\n\nDetta ingår\nInstruktör och lånerack.\n\nPraktisk information\nKom ombytt tio minuter före start.",
     age_group: "adult",
     level: "beginner",
     requires_instructor: true,
   },
 })).payload;
-assert(format.name === `Pickla 101 ${run}` && format.requires_instructor === true, "Format was not created canonically");
-pass("Format", "minimal reusable taxonomy and instructor requirement");
+assert(format.name === `Pickla 101 ${run}` && format.requires_instructor === true && format.full_description.includes("Tillfälle 1"), "Format was not created canonically");
+const editedFormat = (await course("format", {
+  method: "PATCH",
+  token: operator.token,
+  body: {
+    venue_id: ids.venue,
+    format_id: format.id,
+    name: `Pickla 101 ${run}`,
+    description: "Fyra trygga steg in i pickleball.",
+    full_description: `${format.full_description}\n\nTa med vattenflaska.`,
+    age_group: "adult",
+    level: "intro",
+    requires_instructor: true,
+  },
+})).payload;
+assert(editedFormat.description === "Fyra trygga steg in i pickleball." && editedFormat.full_description.endsWith("Ta med vattenflaska.") && editedFormat.level === "intro", "Format content was not editable");
+pass("Format", "short/full reusable content and constrained taxonomy are editable");
 
-function seriesBody({ capacity = 12, name = "Pickla 101 · Höst 2026", startTime = "18:00", endTime = "19:00", courtIds = [ids.court] } = {}) {
+function seriesBody({ capacity = 12, name = "Pickla 101 · Höst 2026", startTime = "18:00", endTime = "19:00", courtIds = [ids.court], startDate = "2026-09-08", endDate = "2026-10-13", totalSessions = 6, priceSek = 1495, recurrenceDays = [2], registrationOpensAt = "2026-08-01T00:00:00Z", registrationClosesAt = "2026-09-08T15:30:00Z" } = {}) {
   return {
     venue_id: ids.venue,
     format_id: format.id,
     name,
     description: "Sex tillfällen med en kursplats för hela serien.",
-    start_date: "2026-09-08",
-    end_date: "2026-10-13",
-    registration_opens_at: "2026-08-01T00:00:00Z",
-    registration_closes_at: "2026-09-08T15:30:00Z",
+    start_date: startDate,
+    end_date: endDate,
+    registration_opens_at: registrationOpensAt,
+    registration_closes_at: registrationClosesAt,
     capacity,
-    price_sek: 1495,
-    total_sessions: 6,
-    recurrence_days: [2],
+    price_sek: priceSek,
+    total_sessions: totalSessions,
+    recurrence_days: recurrenceDays,
     start_time: startTime,
     end_time: endTime,
     court_ids: courtIds,
@@ -220,6 +236,63 @@ async function createSeries(options = {}) {
 const freePreview = await previewSeries();
 assert(freePreview.occurrence_count === 6 && freePreview.rows.length === 6 && freePreview.rows.every((row) => row.is_available), "free Course preview was not fully available");
 pass("Course resource preview", "six free occurrences use canonical physical-resource truth");
+
+const draftInitialBody = seriesBody({
+  name: "Pickla 101 · Draft Edit",
+  startDate: "2027-05-03",
+  endDate: "2027-05-24",
+  totalSessions: 4,
+  recurrenceDays: [1],
+  startTime: "17:00",
+  endTime: "18:00",
+  courtIds: [ids.court2],
+  registrationOpensAt: "2027-01-01T00:00:00Z",
+  registrationClosesAt: "2027-05-02T21:59:00Z",
+});
+const draft = (await course("series", { method: "POST", token: operator.token, body: draftInitialBody })).payload;
+const originalDraftSessionIds = draft.sessions.map((session) => session.id);
+const draftEditBody = {
+  series_id: draft.series.id,
+  name: "Pickla 101 · Redigerat utkast",
+  start_date: "2027-05-04",
+  end_date: "2027-05-25",
+  registration_opens_at: "2027-01-15T00:00:00Z",
+  registration_closes_at: "2027-05-03T21:59:00Z",
+  capacity: 10,
+  price_sek: 1595,
+  total_sessions: 4,
+  recurrence_days: [2],
+  start_time: "18:30",
+  end_time: "19:30",
+  court_ids: [ids.court2],
+};
+const editPreview = (await course("series-preview", { method: "POST", token: operator.token, body: { ...draftEditBody, venue_id: ids.venue } })).payload;
+assert(editPreview.occurrence_count === 4 && editPreview.rows.every((row) => row.is_available), "draft edit preview did not exclude its own Sessions");
+const editedDraft = (await course("series", { method: "PATCH", token: operator.token, body: draftEditBody })).payload;
+assert(editedDraft.name === draftEditBody.name && editedDraft.capacity.capacity === 10 && editedDraft.product.base_price_sek === 1595, "draft commercial fields did not update together");
+assert(editedDraft.sessions.length === 4 && editedDraft.sessions.every((session) => session.start_time.startsWith("18:30") && session.court_ids[0] === ids.court2), "draft Sessions were not reconciled to the edited schedule");
+assert(editedDraft.sessions.every((session, index) => session.id === originalDraftSessionIds[index]), "draft reconciliation replaced stable occurrence identities unnecessarily");
+
+const draftConflictBooking = (await rest("bookings", "", { method: "POST", body: {
+  venue_id: ids.venue,
+  venue_court_id: ids.court2,
+  user_id: operator.id,
+  booked_by: operator.id,
+  start_time: "2027-05-18T16:30:00Z",
+  end_time: "2027-05-18T17:30:00Z",
+  status: "confirmed",
+  total_price: 350,
+  booking_ref: `COURSE-DRAFT-CONFLICT-${run}`,
+} })).payload[0];
+const blockedDraftEdit = await course("series", { method: "PATCH", token: operator.token, expected: 409, body: { ...draftEditBody, name: "Must roll back", price_sek: 1695 } });
+assert(blockedDraftEdit.payload.code === "course_resource_conflict", "draft edit conflict was not returned structurally");
+const draftAfterConflict = (await rest("activity_series", `id=eq.${draft.series.id}&select=name,capacity`)).payload[0];
+const productAfterConflict = (await rest("access_products", `id=eq.${draft.series.access_product_id}&select=base_price_sek`)).payload[0];
+assert(draftAfterConflict.name === draftEditBody.name && draftAfterConflict.capacity === 10 && productAfterConflict.base_price_sek === 1595, "blocked draft edit partially mutated Series/product truth");
+await rest("bookings", `id=eq.${draftConflictBooking.id}`, { method: "DELETE" });
+await course("series", { method: "PATCH", token: operator.token, body: { series_id: draft.series.id, status: "active" } });
+await course("series", { method: "PATCH", token: operator.token, expected: 409, body: { ...draftEditBody, name: "Published edit forbidden" } });
+pass("Draft Series editing", "preview and conflicts recompute; save is atomic; published-zero remains immutable");
 
 const created = await createSeries();
 const seriesId = created.series.id;
@@ -382,6 +455,7 @@ pass("Self check-in public closure", "public activity offered; Course and other 
 
 const detail = (await course(`detail?seriesId=${seriesId}`, { token: null })).payload;
 assert(detail.capacity.capacity === 12 && detail.capacity.available_count === 12, "public capacity projection incorrect");
+assert(detail.format.description === "Fyra trygga steg in i pickleball." && detail.format.full_description.includes("Ta med vattenflaska."), "public Course detail did not project canonical Format content");
 assert(!JSON.stringify(detail).includes("guardian_customer_id"), "public Course detail exposed guardian identity");
 const home = (await course(`home?v=${encodeURIComponent(`course-v1-${run}`)}`, { token: null })).payload;
 assert(home.mode === "registration" && home.item.id === seriesId, "Home did not project registration deadline truth");
