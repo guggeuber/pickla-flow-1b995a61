@@ -481,6 +481,7 @@ async function purchaseOptionsForVenue(serviceClient: any, venue: any) {
     .eq('venue_id', venue.id)
     .eq('is_active', true)
     .eq('publish_status', 'published')
+    .eq('closed_to_public', false)
     .order('start_time', { ascending: true })
     .limit(20);
 

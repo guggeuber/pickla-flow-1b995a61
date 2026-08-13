@@ -28,7 +28,10 @@ describe("Commerce Heldagspass purchase", () => {
   });
 
   it("freezes an accurate day-pass order line and keeps Early-Bird separate", () => {
-    expect(commerceApi).toContain("purchaseKind = product.product_key === 'day_access'");
+    expect(commerceApi).toMatch(
+      /product\.product_key === 'day_access'\s*\|\|\s*product\.product_kind === 'day_access'\s*\?\s*'day_pass'\s*:\s*'activity_ticket'/s,
+    );
+    expect(commerceApi).toContain("if (product.product_kind === 'series_access' && line.activity_series_id) purchaseKind = 'course'");
     expect(commerceApi).toContain("purchase_kind: purchaseKind");
     expect(commerceApi).toContain("purchase_kind: regularResolvedLine?.resolver_snapshot?.purchase_kind");
     expect(cartPage).toContain('line.resolver_snapshot?.purchase_kind === "day_pass"');

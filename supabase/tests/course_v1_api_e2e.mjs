@@ -213,6 +213,78 @@ const created = await createSeries();
 const seriesId = created.series.id;
 pass("Series generation", "one Series, six closed Sessions, existing staffing projection");
 
+const stockholmToday = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Europe/Stockholm",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+}).format(new Date());
+const visibilitySessionIds = {
+  public: crypto.randomUUID(),
+  course: crypto.randomUUID(),
+  otherClosed: crypto.randomUUID(),
+};
+await rest("activity_sessions", "", { method: "POST", body: [
+  {
+    id: visibilitySessionIds.public,
+    venue_id: ids.venue,
+    name: "Public self-check-in activity",
+    session_type: "open_play",
+    sport_type: "pickleball",
+    session_date: stockholmToday,
+    start_time: "00:01",
+    end_time: "23:59",
+    price_sek: 165,
+    capacity: 8,
+    publish_status: "published",
+    is_active: true,
+    closed_to_public: false,
+  },
+  {
+    id: visibilitySessionIds.course,
+    venue_id: ids.venue,
+    name: "Closed Course self-check-in activity",
+    session_type: "course",
+    sport_type: "pickleball",
+    session_date: stockholmToday,
+    start_time: "00:01",
+    end_time: "23:59",
+    price_sek: 1495,
+    capacity: 12,
+    publish_status: "published",
+    is_active: true,
+    closed_to_public: true,
+  },
+  {
+    id: visibilitySessionIds.otherClosed,
+    venue_id: ids.venue,
+    name: "Closed non-Course self-check-in activity",
+    session_type: "open_play",
+    sport_type: "pickleball",
+    session_date: stockholmToday,
+    start_time: "00:01",
+    end_time: "23:59",
+    price_sek: 165,
+    capacity: 8,
+    publish_status: "published",
+    is_active: true,
+    closed_to_public: true,
+  },
+] });
+const selfCheckin = (await request(`${checkinsUrl}/self`, {
+  method: "POST",
+  key: anonKey,
+  token: finalSeatA.token,
+  body: { venue_id: ids.venue },
+})).payload;
+const activityOptions = (selfCheckin.purchase_options || []).filter((option) => option.type === "activity_ticket");
+assert(selfCheckin.allowed === false, "self-check-in visibility fixture unexpectedly granted access");
+assert(activityOptions.length === 1, "self-check-in did not offer exactly the one public activity");
+assert(activityOptions[0].href.includes(visibilitySessionIds.public), "normal public activity was not offered");
+assert(!JSON.stringify(activityOptions).includes(visibilitySessionIds.course), "Course-specific purchase path leaked from self-check-in");
+assert(!JSON.stringify(activityOptions).includes(visibilitySessionIds.otherClosed), "other closed activity leaked from self-check-in");
+pass("Self check-in public closure", "public activity offered; Course and other closed sessions excluded by canonical visibility");
+
 const detail = (await course(`detail?seriesId=${seriesId}`, { token: null })).payload;
 assert(detail.capacity.capacity === 12 && detail.capacity.available_count === 12, "public capacity projection incorrect");
 assert(!JSON.stringify(detail).includes("guardian_customer_id"), "public Course detail exposed guardian identity");
@@ -284,12 +356,6 @@ assert(childCommitment?.status === "active" && childMy.items[0]?.participant?.fi
 assert(!JSON.stringify(publicAfterChild).includes("Elsa") && !JSON.stringify(publicAfterChild).includes(childCommitment.dependent_participant_id), "minor leaked to public Course projection");
 pass("Child privacy", "guardian/staff-operational identity exists; public projection contains no identity");
 
-const stockholmToday = new Intl.DateTimeFormat("sv-SE", {
-  timeZone: "Europe/Stockholm",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-}).format(new Date());
 await course("session", { method: "PATCH", token: operator.token, body: { session_id: originalSession.id, session_date: stockholmToday } });
 const childRegistration = (await rest("session_registrations", `series_commitment_id=eq.${childCommitment.id}&activity_session_id=eq.${originalSession.id}&select=id,status`)).payload[0];
 const childEntitlementBefore = (await rest("access_entitlements", `source_type=eq.series_commitment&source_id=eq.${childCommitment.id}&select=id,uses_count`)).payload[0];
