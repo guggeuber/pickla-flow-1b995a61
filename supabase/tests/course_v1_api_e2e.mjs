@@ -259,7 +259,11 @@ assert(commitmentAfterMove.id === commitment[0].id && commitmentAfterMove.status
 const added = (await course("session", { method: "POST", token: operator.token, body: { series_id: seriesId, session_date: "2026-10-20" } })).payload;
 const registrationsAfterAdd = (await rest("session_registrations", `series_commitment_id=eq.${commitment[0].id}&select=id`)).payload;
 assert(added.series_occurrence_index === 7 && registrationsAfterAdd.length === 7, "Session addition did not reconcile idempotently");
-pass("Session reconciliation", "move/add leaves commitment intact and updates expected participation");
+await course("session", { method: "PATCH", token: operator.token, body: { session_id: added.id, is_active: false } });
+const cancelledProjection = (await rest("session_registrations", `series_commitment_id=eq.${commitment[0].id}&activity_session_id=eq.${added.id}&select=id,status`)).payload[0];
+const commitmentAfterCancellation = (await rest("series_commitments", `id=eq.${commitment[0].id}&select=id,status`)).payload[0];
+assert(cancelledProjection?.status === "cancelled" && commitmentAfterCancellation?.status === "active", "Session cancellation changed the Series Commitment or left an active expectation");
+pass("Session reconciliation", "move/add/cancel leaves commitment intact and reconciles expected participation");
 
 const childPurchase = await checkoutCourse({
   seriesId,
