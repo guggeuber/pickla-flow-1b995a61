@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { CalendarDays, Check, ChevronDown, Loader2, Plus, Users } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, ChevronDown, Loader2, Plus, Users } from "lucide-react";
 import { toast } from "sonner";
 import {
   createCourseFormat,
   createCourseSeries,
   fetchCourseAdmin,
+  previewCourseSeries,
+  type CourseResourcePreviewRow,
   updateCourseSeries,
 } from "@/lib/courses";
 
@@ -60,6 +62,37 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
     }
     return result;
   }, [days, endDate, startDate, totalSessions]);
+  const previewInput = useMemo(() => ({
+    venue_id: venueId,
+    start_date: startDate,
+    end_date: endDate,
+    recurrence_days: days,
+    start_time: startTime,
+    end_time: endTime,
+    total_sessions: Number(totalSessions || 0),
+    court_ids: courtIds,
+  }), [courtIds, days, endDate, endTime, startDate, startTime, totalSessions, venueId]);
+  const previewEnabled = Boolean(
+    venueId && startDate && endDate && startTime && endTime && startTime !== endTime &&
+    days.length && courtIds.length && Number(totalSessions) > 0 && previewDates.length === Number(totalSessions),
+  );
+  const resourcePreview = useQuery({
+    queryKey: ["admin-course-resource-preview", previewInput],
+    queryFn: () => previewCourseSeries(previewInput),
+    enabled: previewEnabled,
+    retry: false,
+    staleTime: 0,
+  });
+  const resourcePreviewData = resourcePreview.data;
+  const previewOccurrences = useMemo(() => {
+    const groups = new Map<number, CourseResourcePreviewRow[]>();
+    for (const row of resourcePreviewData?.rows || []) {
+      const current = groups.get(row.occurrence_index) || [];
+      current.push(row);
+      groups.set(row.occurrence_index, current);
+    }
+    return [...groups.entries()].sort(([left], [right]) => left - right);
+  }, [resourcePreviewData]);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["admin-courses", venueId] });
   const createFormat = useMutation({
@@ -69,13 +102,15 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
   });
   const createSeries = useMutation({
     mutationFn: () => createCourseSeries({
-      venue_id: venueId, format_id: formatId, name, start_date: startDate, end_date: endDate,
+      ...previewInput, format_id: formatId, name,
       registration_opens_at: isoLocal(registrationOpen, "00:00"), registration_closes_at: isoLocal(registrationClose, "23:59"),
       capacity: Number(capacity), price_sek: Number(price), total_sessions: Number(totalSessions),
-      recurrence_days: days, start_time: startTime, end_time: endTime, court_ids: courtIds,
     }),
     onSuccess: async () => { await refresh(); setName(""); toast.success("Kurs skapad med konkreta tillfällen"); },
-    onError: (error: Error) => toast.error(error.message),
+    onError: async (error: Error) => {
+      await resourcePreview.refetch();
+      toast.error(error.message);
+    },
   });
   const publish = useMutation({
     mutationFn: (seriesId: string) => updateCourseSeries({ series_id: seriesId, status: "active" }),
@@ -119,8 +154,20 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
           </div>
           <div className="mt-3 flex flex-wrap gap-2">{DAYS.map((day) => <button key={day.value} type="button" onClick={() => setDays((current) => current.includes(day.value) ? current.filter((value) => value !== day.value) : [...current, day.value])} className={`rounded-full border px-3 py-1.5 text-xs font-bold ${days.includes(day.value) ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}>{day.label}</button>)}</div>
           <div className="mt-3 flex flex-wrap gap-2">{(data?.courts || []).filter((court) => court.sport_type === "pickleball").map((court) => <button key={court.id} type="button" onClick={() => setCourtIds((current) => current.includes(court.id) ? current.filter((id) => id !== court.id) : [...current, court.id])} className={`rounded-lg border px-3 py-2 text-xs font-bold ${courtIds.includes(court.id) ? "border-primary" : "border-border"}`}>{court.name}</button>)}</div>
-          {previewDates.length ? <div className="mt-4 rounded-xl bg-muted/50 p-3"><p className="text-xs font-bold">Förhandsvisning · {previewDates.length} tillfällen</p><p className="mt-1 text-xs text-muted-foreground">{previewDates.map((date) => DateTime.fromISO(date).setLocale("sv").toFormat("d MMM")).join(" · ")}</p></div> : null}
-          <button type="button" onClick={() => createSeries.mutate()} disabled={!formatId || !name || !startDate || !endDate || !registrationOpen || !registrationClose || previewDates.length !== Number(totalSessions) || createSeries.isPending} className="mt-3 inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-40">{createSeries.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}Skapa kurs och tillfällen</button>
+          {previewDates.length ? <div className="mt-4 rounded-xl border border-border p-3" data-testid="course-resource-preview"><div className="flex items-center justify-between gap-3"><p className="text-xs font-bold">Förhandsvisning · {previewDates.length} tillfällen</p>{resourcePreview.isFetching ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Kontrollerar resurser</span> : null}</div>
+            {!courtIds.length ? <p className="mt-2 text-xs text-destructive">Välj minst en bana för att kontrollera fysisk beläggning.</p> : null}
+            {resourcePreview.isError ? <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-destructive"><AlertTriangle className="h-3.5 w-3.5" />Resurskontrollen kunde inte genomföras. Kursen kan inte skapas.</p> : null}
+            {previewOccurrences.length ? <ol className="mt-3 grid gap-2">{previewOccurrences.map(([index, rows]) => {
+              const occurrenceHasConflict = rows.some((row) => !row.is_available);
+              const first = rows[0];
+              return <li key={index} className={`rounded-lg border p-3 ${occurrenceHasConflict ? "border-destructive/50 bg-destructive/5" : "border-border"}`}>
+                <div className="flex items-center justify-between gap-3"><p className="text-xs font-bold">{index}. {DateTime.fromISO(first.occurrence_date).setLocale("sv").toFormat("ccc d MMM")} · {startTime}–{endTime}</p><span className={`text-[11px] font-black uppercase tracking-wide ${occurrenceHasConflict ? "text-destructive" : "text-emerald-700"}`}>{occurrenceHasConflict ? "Konflikt" : "Ledig"}</span></div>
+                <div className="mt-2 grid gap-2">{rows.map((row) => <div key={row.court_id} className="text-xs"><p className="font-semibold">{row.court_name}</p>{row.conflicts.map((conflict) => <p key={`${conflict.source_type}:${conflict.source_id}`} className="mt-1 flex items-start gap-1 text-destructive"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /><span>{conflict.title} · {DateTime.fromISO(conflict.starts_at).setZone("Europe/Stockholm").toFormat("HH:mm")}–{DateTime.fromISO(conflict.ends_at).setZone("Europe/Stockholm").toFormat("HH:mm")}</span></p>)}</div>)}</div>
+              </li>;
+            })}</ol> : null}
+            {resourcePreview.data?.has_conflicts ? <p className="mt-3 text-xs font-semibold text-destructive">Ändra schema eller resurser innan kursen kan skapas.</p> : null}
+          </div> : null}
+          <button type="button" onClick={() => createSeries.mutate()} disabled={!formatId || !name || !startDate || !endDate || !registrationOpen || !registrationClose || !previewEnabled || resourcePreview.isFetching || !resourcePreview.data || resourcePreview.data.has_conflicts || createSeries.isPending} className="mt-3 inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-40">{createSeries.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}Skapa kurs och tillfällen</button>
         </div>
 
         <div className="border-t border-border pt-5">

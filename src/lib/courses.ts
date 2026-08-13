@@ -20,6 +20,31 @@ export type CourseSession = {
   series_occurrence_index: number;
 };
 
+export type CourseResourceConflict = {
+  source_type: "booking" | "activity_session" | "event_reservation" | "resource_block" | "venue_closure" | string;
+  source_id: string;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+};
+
+export type CourseResourcePreviewRow = {
+  occurrence_index: number;
+  occurrence_date: string;
+  proposed_starts_at: string;
+  proposed_ends_at: string;
+  court_id: string;
+  court_name: string;
+  is_available: boolean;
+  conflicts: CourseResourceConflict[];
+};
+
+export type CourseResourcePreview = {
+  rows: CourseResourcePreviewRow[];
+  has_conflicts: boolean;
+  occurrence_count: number;
+};
+
 export type CourseSeries = {
   id: string;
   venue_id: string;
@@ -112,6 +137,10 @@ export function createCourseFormat(input: Record<string, unknown>) {
 
 export function createCourseSeries(input: Record<string, unknown>) {
   return apiPost<{ series: { id: string }; sessions: CourseSession[] }>("api-courses", "series", input);
+}
+
+export function previewCourseSeries(input: Record<string, unknown>) {
+  return apiPost<CourseResourcePreview>("api-courses", "series-preview", input);
 }
 
 export function updateCourseSeries(input: Record<string, unknown>) {

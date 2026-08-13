@@ -14,7 +14,7 @@ if (!anonKey || !serviceKey || !apiUrl.startsWith("http://127.0.0.1")) {
 }
 
 const run = crypto.randomBytes(5).toString("hex");
-const ids = { venue: crypto.randomUUID(), court: crypto.randomUUID() };
+const ids = { venue: crypto.randomUUID(), court: crypto.randomUUID(), court2: crypto.randomUUID() };
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -144,14 +144,10 @@ await rest("venues", "", { method: "POST", body: {
   slug: `course-v1-${run}`,
   commerce_enabled: true,
 } });
-await rest("venue_courts", "", { method: "POST", body: {
-  id: ids.court,
-  venue_id: ids.venue,
-  name: "Bana 3",
-  court_number: 3,
-  sport_type: "pickleball",
-  is_available: true,
-} });
+await rest("venue_courts", "", { method: "POST", body: [
+  { id: ids.court, venue_id: ids.venue, name: "Bana 3", court_number: 3, sport_type: "pickleball", is_available: true },
+  { id: ids.court2, venue_id: ids.venue, name: "Bana 4", court_number: 4, sport_type: "pickleball", is_available: true },
+] });
 
 const operator = await createUser("operator");
 const payer = await createUser("payer");
@@ -181,27 +177,39 @@ const format = (await course("format", {
 assert(format.name === `Pickla 101 ${run}` && format.requires_instructor === true, "Format was not created canonically");
 pass("Format", "minimal reusable taxonomy and instructor requirement");
 
-async function createSeries({ capacity = 12, name = "Pickla 101 · Höst 2026" } = {}) {
+function seriesBody({ capacity = 12, name = "Pickla 101 · Höst 2026", startTime = "18:00", endTime = "19:00", courtIds = [ids.court] } = {}) {
+  return {
+    venue_id: ids.venue,
+    format_id: format.id,
+    name,
+    description: "Sex tillfällen med en kursplats för hela serien.",
+    start_date: "2026-09-08",
+    end_date: "2026-10-13",
+    registration_opens_at: "2026-08-01T00:00:00Z",
+    registration_closes_at: "2026-09-08T15:30:00Z",
+    capacity,
+    price_sek: 1495,
+    total_sessions: 6,
+    recurrence_days: [2],
+    start_time: startTime,
+    end_time: endTime,
+    court_ids: courtIds,
+  };
+}
+
+async function previewSeries(overrides = {}) {
+  return (await course("series-preview", {
+    method: "POST",
+    token: operator.token,
+    body: seriesBody(overrides),
+  })).payload;
+}
+
+async function createSeries(options = {}) {
   const created = (await course("series", {
     method: "POST",
     token: operator.token,
-    body: {
-      venue_id: ids.venue,
-      format_id: format.id,
-      name,
-      description: "Sex tillfällen med en kursplats för hela serien.",
-      start_date: "2026-09-08",
-      end_date: "2026-10-13",
-      registration_opens_at: "2026-08-01T00:00:00Z",
-      registration_closes_at: "2026-09-08T15:30:00Z",
-      capacity,
-      price_sek: 1495,
-      total_sessions: 6,
-      recurrence_days: [2],
-      start_time: "18:00",
-      end_time: "19:00",
-      court_ids: [ids.court],
-    },
+    body: seriesBody(options),
   })).payload;
   assert(created.sessions.length === 6, "Series did not generate six Sessions");
   assert(created.sessions.every((session) => session.closed_to_public === true && session.requires_staffing === true), "Course Sessions are not closed/staffed");
@@ -209,9 +217,96 @@ async function createSeries({ capacity = 12, name = "Pickla 101 · Höst 2026" }
   return created;
 }
 
+const freePreview = await previewSeries();
+assert(freePreview.occurrence_count === 6 && freePreview.rows.length === 6 && freePreview.rows.every((row) => row.is_available), "free Course preview was not fully available");
+pass("Course resource preview", "six free occurrences use canonical physical-resource truth");
+
 const created = await createSeries();
 const seriesId = created.series.id;
 pass("Series generation", "one Series, six closed Sessions, existing staffing projection");
+
+const activityConflict = await previewSeries();
+assert(activityConflict.has_conflicts && activityConflict.rows.every((row) => row.conflicts.some((conflict) => conflict.source_type === "activity_session" && conflict.source_id === created.sessions[row.occurrence_index - 1].id)), "existing Activity Session conflict was not projected");
+
+await rest("bookings", "", { method: "POST", body: {
+  venue_id: ids.venue,
+  venue_court_id: ids.court2,
+  user_id: operator.id,
+  booked_by: operator.id,
+  start_time: "2026-09-22T06:00:00Z",
+  end_time: "2026-09-22T07:00:00Z",
+  status: "confirmed",
+  total_price: 350,
+  booking_ref: `COURSE-CONFLICT-${run}`,
+} });
+const privateConflict = await previewSeries({ startTime: "08:00", endTime: "09:00", courtIds: [ids.court, ids.court2] });
+const privateConflictRows = privateConflict.rows.filter((row) => !row.is_available);
+assert(privateConflictRows.length === 1 && privateConflictRows[0].occurrence_index === 3 && privateConflictRows[0].court_id === ids.court2 && privateConflictRows[0].conflicts[0].source_type === "booking", "private booking conflict did not identify occurrence 3 and its court");
+
+const seriesBeforeBlockedCreate = (await rest("activity_series", `venue_id=eq.${ids.venue}&series_type=eq.course&select=id`)).payload.length;
+const sessionsBeforeBlockedCreate = (await rest("activity_sessions", `venue_id=eq.${ids.venue}&session_type=eq.course&select=id`)).payload.length;
+const blockedCreate = await course("series", {
+  method: "POST",
+  token: operator.token,
+  expected: 409,
+  body: seriesBody({ name: "Blocked private booking Course", startTime: "08:00", endTime: "09:00", courtIds: [ids.court, ids.court2] }),
+});
+assert(blockedCreate.payload.code === "course_resource_conflict" && blockedCreate.payload.preview.rows.some((row) => !row.is_available), "blocked Course creation did not return structured conflict data");
+assert((await rest("activity_series", `venue_id=eq.${ids.venue}&series_type=eq.course&select=id`)).payload.length === seriesBeforeBlockedCreate, "blocked Course creation left a Series");
+assert((await rest("activity_sessions", `venue_id=eq.${ids.venue}&session_type=eq.course&select=id`)).payload.length === sessionsBeforeBlockedCreate, "blocked Course creation partially generated Sessions");
+pass("Private booking guard", "occurrence 3/court identified; zero partial Course rows created");
+
+const adjacentPreview = await previewSeries({ startTime: "09:00", endTime: "10:00", courtIds: [ids.court2] });
+assert(adjacentPreview.rows.every((row) => row.is_available), "adjacent half-open interval was incorrectly treated as overlap");
+pass("Adjacent resource interval", "existing end at Course start remains available");
+
+const eventResource = (await rest("event_resource_catalog", "", { method: "POST", body: {
+  venue_id: ids.venue,
+  resource_type: "court",
+  name: "Bana 4 eventresurs",
+  venue_court_id: ids.court2,
+  is_active: true,
+} })).payload[0];
+await rest("event_resource_blocks", "", { method: "POST", body: [
+  {
+    venue_id: ids.venue, resource_catalog_id: eventResource.id, title: "Corporate Event", reason: "event", status: "confirmed",
+    starts_at: "2026-09-29T10:00:00Z", ends_at: "2026-09-29T11:00:00Z", blocks_public_booking: true,
+  },
+  {
+    venue_id: ids.venue, resource_catalog_id: eventResource.id, title: "Underhåll Bana 4", reason: "maintenance", status: "confirmed",
+    starts_at: "2026-10-06T12:00:00Z", ends_at: "2026-10-06T13:00:00Z", blocks_public_booking: true,
+  },
+] });
+const eventConflict = await previewSeries({ startTime: "12:00", endTime: "13:00", courtIds: [ids.court2] });
+assert(eventConflict.rows.find((row) => row.occurrence_index === 4)?.conflicts.some((conflict) => conflict.source_type === "event_reservation"), "event/resource block was not projected");
+const maintenanceConflict = await previewSeries({ startTime: "14:00", endTime: "15:00", courtIds: [ids.court2] });
+assert(maintenanceConflict.rows.find((row) => row.occurrence_index === 5)?.conflicts.some((conflict) => conflict.source_type === "resource_block"), "maintenance block was not projected");
+
+await rest("venue_operation_overrides", "", { method: "POST", body: {
+  venue_id: ids.venue,
+  title: "Driftstopp Bana 4",
+  reason: "Test",
+  override_type: "maintenance",
+  starts_at: "2026-10-13T14:00:00Z",
+  ends_at: "2026-10-13T15:00:00Z",
+  affects_entire_venue: false,
+  status: "active",
+  metadata: { venue_court_ids: [ids.court2] },
+} });
+const operationsConflict = await previewSeries({ startTime: "16:00", endTime: "17:00", courtIds: [ids.court2] });
+assert(operationsConflict.rows.find((row) => row.occurrence_index === 6)?.conflicts.some((conflict) => conflict.source_type === "venue_closure"), "operational/maintenance override was not projected");
+pass("Operations occupancy sources", "activity, event, resource and maintenance conflicts are canonical");
+
+const concurrentBodies = ["Concurrent Course A", "Concurrent Course B"].map((name) => seriesBody({ name, startTime: "06:00", endTime: "07:00", courtIds: [ids.court2] }));
+const concurrentCourseCreates = await Promise.all(concurrentBodies.map((body) => course("series", { method: "POST", token: operator.token, body, expected: [201, 409] })));
+assert(concurrentCourseCreates.filter((result) => result.response.status === 201).length === 1 && concurrentCourseCreates.filter((result) => result.response.status === 409).length === 1, "concurrent Course generation created overlapping physical occupancy");
+const concurrentWinner = concurrentCourseCreates.find((result) => result.response.status === 201).payload;
+assert(concurrentWinner.sessions.length === 6, "concurrent Course winner did not generate atomically");
+const concurrentSeriesRows = (await rest("activity_series", `venue_id=eq.${ids.venue}&name=in.(Concurrent%20Course%20A,Concurrent%20Course%20B)&select=id,access_product_id`)).payload;
+assert(concurrentSeriesRows.length === 1, "concurrent Course loser left a partial Series");
+const concurrentProducts = (await rest("access_products", `venue_id=eq.${ids.venue}&name=in.(Concurrent%20Course%20A,Concurrent%20Course%20B)&select=id`)).payload;
+assert(concurrentProducts.length === 1 && concurrentProducts[0].id === concurrentSeriesRows[0].access_product_id, "concurrent Course loser left an orphan product");
+pass("Course generation concurrency", "one request wins the resource lock; one receives 409");
 
 const stockholmToday = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Stockholm",
@@ -377,7 +472,7 @@ assert(childRegistrationAfter.status === "checked_in", "Course Session registrat
 assert(childEntitlementAfter.uses_count === childEntitlementBefore.uses_count, "Course check-in consumed the Series entitlement");
 pass("Course check-in", "existing check-in records Session attendance without consuming Series entitlement");
 
-const finalSeries = await createSeries({ capacity: 1, name: "Final Seat Course" });
+const finalSeries = await createSeries({ capacity: 1, name: "Final Seat Course", startTime: "19:00", endTime: "20:00" });
 const [cartA, cartB] = await Promise.all([
   commerce("course-cart", { method: "POST", token: finalSeatA.token, body: { series_id: finalSeries.series.id, participant_type: "self" } }),
   commerce("course-cart", { method: "POST", token: finalSeatB.token, body: { series_id: finalSeries.series.id, participant_type: "self" } }),
@@ -407,7 +502,7 @@ const activeHolds = (await rest("capacity_holds", `scope_type=eq.activity_series
 assert(activeHolds.length === 0, "abandoned Course checkout did not release capacity");
 pass("Final-seat concurrency", "one hold wins; checkout expiry releases the seat");
 
-const failedSeries = await createSeries({ capacity: 2, name: "Payment Failure Course" });
+const failedSeries = await createSeries({ capacity: 2, name: "Payment Failure Course", startTime: "20:00", endTime: "21:00" });
 const failedCart = (await commerce("course-cart", { method: "POST", token: failing.token, body: { series_id: failedSeries.series.id, participant_type: "self" } })).payload;
 const failedCheckout = await commerce("checkout", {
   method: "POST",

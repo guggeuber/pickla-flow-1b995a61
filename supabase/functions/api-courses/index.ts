@@ -22,6 +22,34 @@ type CourseSeriesRow = {
   [key: string]: unknown;
 };
 
+type CourseScheduleInput = {
+  venueId: string;
+  startDate: string;
+  endDate: string;
+  recurrenceDays: number[];
+  startTime: string;
+  endTime: string;
+  totalSessions: number;
+  courtIds: string[];
+};
+
+type CourseResourcePreviewRow = {
+  occurrence_index: number;
+  occurrence_date: string;
+  proposed_starts_at: string;
+  proposed_ends_at: string;
+  court_id: string;
+  court_name: string;
+  is_available: boolean;
+  conflicts: Array<{
+    source_type: string;
+    source_id: string;
+    title: string;
+    starts_at: string;
+    ends_at: string;
+  }>;
+};
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AGE_GROUPS = new Set(['adult', 'youth', 'all_ages']);
 const LEVELS = new Set(['intro', 'beginner', 'intermediate', 'advanced']);
@@ -188,6 +216,68 @@ function courseProductKey() {
   return `course_${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
+function courseScheduleInput(body: Record<string, unknown>): CourseScheduleInput | null {
+  const venueId = String(body.venue_id || body.venueId || '');
+  const startDate = String(body.start_date || '');
+  const endDate = String(body.end_date || '');
+  const startTime = String(body.start_time || '').slice(0, 8);
+  const endTime = String(body.end_time || '').slice(0, 8);
+  const totalSessions = Math.floor(Number(body.total_sessions || 0));
+  const recurrenceDays = Array.isArray(body.recurrence_days)
+    ? [...new Set(body.recurrence_days.map(Number).filter((day: number) => Number.isInteger(day) && day >= 0 && day <= 6))]
+    : [];
+  const courtIds = Array.isArray(body.court_ids)
+    ? [...new Set(body.court_ids.map(String).filter((id: string) => UUID.test(id)))]
+    : [];
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  const timePattern = /^\d{2}:\d{2}(?::\d{2})?$/;
+  if (
+    !UUID.test(venueId) || !datePattern.test(startDate) || !datePattern.test(endDate) || startDate > endDate ||
+    !timePattern.test(startTime) || !timePattern.test(endTime) || startTime === endTime ||
+    totalSessions <= 0 || !recurrenceDays.length || !courtIds.length
+  ) return null;
+  return { venueId, startDate, endDate, recurrenceDays, startTime, endTime, totalSessions, courtIds };
+}
+
+async function previewCourseResourceSchedule(
+  admin: ServiceClient,
+  schedule: CourseScheduleInput,
+  excludeSeriesId: string | null = null,
+  excludeSessionId: string | null = null,
+) {
+  const { data, error } = await admin.rpc('preview_course_resource_schedule', {
+    p_venue_id: schedule.venueId,
+    p_start_date: schedule.startDate,
+    p_end_date: schedule.endDate,
+    p_recurrence_days: schedule.recurrenceDays,
+    p_start_time: schedule.startTime,
+    p_end_time: schedule.endTime,
+    p_total_sessions: schedule.totalSessions,
+    p_court_ids: schedule.courtIds,
+    p_exclude_series_id: excludeSeriesId,
+    p_exclude_session_id: excludeSessionId,
+  });
+  if (error) throw new Error(error.message);
+  const rows = (data || []) as CourseResourcePreviewRow[];
+  const occurrenceCount = new Set(rows.map((row) => Number(row.occurrence_index))).size;
+  const selectedCourtCount = new Set(rows.map((row) => row.court_id)).size;
+  if (occurrenceCount !== schedule.totalSessions) throw new Error('Course schedule does not produce the requested occurrences');
+  if (selectedCourtCount !== schedule.courtIds.length) throw new Error('Course resources are unavailable');
+  return {
+    rows,
+    has_conflicts: rows.some((row) => !row.is_available),
+    occurrence_count: occurrenceCount,
+  };
+}
+
+function courseConflictResponse(preview: Awaited<ReturnType<typeof previewCourseResourceSchedule>>) {
+  return jsonResponse({
+    error: 'Course resource conflict',
+    code: 'course_resource_conflict',
+    preview,
+  }, 409, 0);
+}
+
 const coursesHandler = async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
   const url = new URL(req.url);
@@ -275,6 +365,15 @@ const coursesHandler = async (req: Request) => {
       return jsonResponse(data, 201, 0);
     }
 
+    if (req.method === 'POST' && path === 'series-preview') {
+      const body = await req.json();
+      const schedule = courseScheduleInput(body);
+      if (!schedule) return errorResponse('Course schedule and resources are required', 400);
+      await requireVenueRole(admin, auth.userId, schedule.venueId, ['venue_admin']);
+      await venue(admin, { id: schedule.venueId });
+      return jsonResponse(await previewCourseResourceSchedule(admin, schedule), 200, 0);
+    }
+
     if (req.method === 'POST' && path === 'series') {
       const body = await req.json();
       const venueId = String(body.venue_id || body.venueId || '');
@@ -287,10 +386,13 @@ const coursesHandler = async (req: Request) => {
       if (formatError || !format) return errorResponse('Course Format not found', 404);
       const capacity = Math.floor(Number(body.capacity || 0));
       const priceSek = Math.round(Number(body.price_sek || 0));
-      const totalSessions = Math.floor(Number(body.total_sessions || 0));
-      const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days.map(Number).filter((day: number) => Number.isInteger(day) && day >= 0 && day <= 6) : [];
-      const courtIds = Array.isArray(body.court_ids) ? [...new Set(body.court_ids.map(String).filter((id: string) => UUID.test(id)))] : [];
-      if (capacity <= 0 || priceSek <= 0 || totalSessions <= 0 || !recurrenceDays.length) return errorResponse('Course capacity, price and schedule are required', 400);
+      const schedule = courseScheduleInput(body);
+      if (!schedule || schedule.venueId !== venueId || capacity <= 0 || priceSek <= 0) return errorResponse('Course capacity, price, schedule and resources are required', 400);
+      const totalSessions = schedule.totalSessions;
+      const recurrenceDays = schedule.recurrenceDays;
+      const courtIds = schedule.courtIds;
+      const resourcePreview = await previewCourseResourceSchedule(admin, schedule);
+      if (resourcePreview.has_conflicts) return courseConflictResponse(resourcePreview);
       const productKey = courseProductKey();
       const { data: product, error: productError } = await admin.from('access_products').insert({
         venue_id: venueId,
@@ -344,6 +446,10 @@ const coursesHandler = async (req: Request) => {
       if (generationError) {
         await admin.from('activity_series').delete().eq('id', series.id);
         await admin.from('access_products').delete().eq('id', product.id);
+        if (generationError.message.includes('course_resource_conflict')) {
+          const concurrentPreview = await previewCourseResourceSchedule(admin, schedule);
+          return courseConflictResponse(concurrentPreview);
+        }
         throw new Error(generationError.message);
       }
       return jsonResponse({ series, product, sessions: sessions || [] }, 201, 0);
@@ -411,7 +517,11 @@ const coursesHandler = async (req: Request) => {
     return errorResponse('Not found', 404);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Course request failed';
-    const status = message.startsWith('Forbidden') ? 403 : /not found/i.test(message) ? 404 : 500;
+    const status = message.startsWith('Forbidden') ? 403
+      : /not found/i.test(message) ? 404
+      : message.includes('course_resource_conflict') ? 409
+      : /required|unavailable|does not produce/i.test(message) ? 400
+      : 500;
     return errorResponse(message, status);
   }
 };

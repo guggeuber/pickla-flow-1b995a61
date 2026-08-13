@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import AdminCourses from "@/components/admin/AdminCourses";
@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   user: null as null | { id: string },
   fetchCourseDetail: vi.fn(),
   fetchCourseAdmin: vi.fn(),
+  previewCourseSeries: vi.fn(),
   createCourseCart: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading:
 vi.mock("@/lib/courses", () => ({
   fetchCourseDetail: mocks.fetchCourseDetail,
   fetchCourseAdmin: mocks.fetchCourseAdmin,
+  previewCourseSeries: mocks.previewCourseSeries,
   createCourseCart: mocks.createCourseCart,
   createCourseFormat: vi.fn(),
   createCourseSeries: vi.fn(),
@@ -97,6 +99,51 @@ describe("Course V1 Admin", () => {
     expect(screen.getByText("Kommande tillfällen")).toBeInTheDocument();
     expect(screen.getByText(/^1\. tis 8 sep\.?$/)).toBeInTheDocument();
     expect(screen.getAllByText("18:00–19:00")).toHaveLength(6);
+  });
+
+  it("shows every conflicting occurrence and blocks Course creation", async () => {
+    mocks.fetchCourseAdmin.mockResolvedValue({
+      formats: [course.format],
+      series: [],
+      courts: [{ id: "c0100000-0000-4000-8000-000000000003", name: "Bana 3", sport_type: "pickleball" }],
+    });
+    mocks.previewCourseSeries.mockResolvedValue({
+      occurrence_count: 6,
+      has_conflicts: true,
+      rows: Array.from({ length: 6 }, (_, index) => ({
+        occurrence_index: index + 1,
+        occurrence_date: `2026-${index === 0 ? "09-08" : index === 1 ? "09-15" : index === 2 ? "09-22" : index === 3 ? "09-29" : index === 4 ? "10-06" : "10-13"}`,
+        proposed_starts_at: "2026-09-08T16:00:00Z",
+        proposed_ends_at: "2026-09-08T17:00:00Z",
+        court_id: "c0100000-0000-4000-8000-000000000003",
+        court_name: "Bana 3",
+        is_available: index !== 2,
+        conflicts: index === 2 ? [{
+          source_type: "booking",
+          source_id: "booking-1",
+          title: "Privat bokning",
+          starts_at: "2026-09-22T15:30:00Z",
+          ends_at: "2026-09-22T17:30:00Z",
+        }] : [],
+      })),
+    });
+
+    render(<AdminCourses venueId="c0100000-0000-4000-8000-000000000002" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Kurser/ }));
+    await screen.findByText("2. Konkret kursserie");
+    fireEvent.change(screen.getAllByRole("combobox")[2], { target: { value: "format-1" } });
+    fireEvent.change(screen.getByPlaceholderText("Pickla 101 · Höst 2026"), { target: { value: "Pickla 101 · Höst 2026" } });
+    fireEvent.change(screen.getByLabelText("Start"), { target: { value: "2026-09-08" } });
+    fireEvent.change(screen.getByLabelText("Slut"), { target: { value: "2026-10-13" } });
+    fireEvent.change(screen.getByLabelText("Anmälan öppnar"), { target: { value: "2026-08-20" } });
+    fireEvent.change(screen.getByLabelText("Anmälan stänger"), { target: { value: "2026-09-07" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bana 3" }));
+
+    expect(await screen.findByText("Privat bokning · 17:30–19:30")).toBeInTheDocument();
+    expect(screen.getByText("Ändra schema eller resurser innan kursen kan skapas.")).toBeInTheDocument();
+    expect(screen.getAllByText("Konflikt")).toHaveLength(1);
+    expect(screen.getAllByText("Ledig")).toHaveLength(5);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Skapa kurs och tillfällen" })).toBeDisabled());
   });
 });
 
