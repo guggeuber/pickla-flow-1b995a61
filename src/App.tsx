@@ -77,6 +77,8 @@ import CommerceCartPage from "./pages/CommerceCartPage";
 import CommerceOrderPage from "./pages/CommerceOrderPage";
 import CommerceShopPage from "./pages/CommerceShopPage";
 import CourseSeriesPage from "./pages/CourseSeriesPage";
+import CoursesPage from "./pages/CoursesPage";
+import PricesMembershipPage from "./pages/PricesMembershipPage";
 import { Loader2 } from "lucide-react";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { enforceCanonicalHost } from "@/lib/canonicalOrigin";
@@ -119,6 +121,8 @@ function AppRoutes() {
             <Route path="/pulse/:token" element={<PulsePage />} />
             <Route path="/shop" element={<CommerceShopPage />} />
             <Route path="/course/:seriesId" element={<CourseSeriesPage />} />
+            <Route path="/courses" element={<CoursesPage />} />
+            <Route path="/prices" element={<PricesMembershipPage />} />
             <Route path="/cart" element={<CommerceCartPage />} />
             <Route path="/commerce/confirmed" element={<CommerceOrderPage />} />
             <Route path="/order/:token" element={<CommerceOrderPage />} />

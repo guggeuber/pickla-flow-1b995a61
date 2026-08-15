@@ -67,6 +67,72 @@ function normalizeChannel(value: unknown) {
     : 'online';
 }
 
+export function firstVisitOfferDecision({
+  enabled,
+  priceMinor,
+  priorPaidParticipation,
+  currentAmountSek,
+}: {
+  enabled: boolean;
+  priceMinor: number | null;
+  priorPaidParticipation: boolean;
+  currentAmountSek: number;
+}) {
+  const priceSek = minorToSek(priceMinor);
+  const applies = enabled && priceSek != null && !priorPaidParticipation && currentAmountSek > priceSek;
+  return {
+    applies,
+    priceSek,
+    regularPriceSek: roundSek(currentAmountSek),
+    reason: !enabled
+      ? 'disabled'
+      : priceSek == null
+      ? 'invalid_price'
+      : priorPaidParticipation
+      ? 'prior_paid_participation'
+      : currentAmountSek <= priceSek
+      ? 'existing_price_not_higher'
+      : 'eligible',
+  };
+}
+
+export async function hasPriorPaidParticipation(client: any, customerId?: string | null, userId?: string | null) {
+  if (!customerId && !userId) return false;
+  const constrainIdentity = (query: any, customerColumn: string, userColumn: string) => customerId
+    ? query.eq(customerColumn, customerId)
+    : query.eq(userColumn, userId);
+  const [sessionResult, sharedCourtResult, commerceResult] = await Promise.all([
+    constrainIdentity(
+      client.from('session_registrations').select('id', { count: 'exact', head: true })
+        .gt('price_paid_sek', 0),
+      'customer_id',
+      'user_id',
+    ),
+    constrainIdentity(
+      client.from('booking_participants').select('id', { count: 'exact', head: true })
+        .eq('payment_status', 'paid')
+        .gt('price_minor', 0),
+      'customer_id',
+      'user_id',
+    ),
+    constrainIdentity(
+      client.from('commerce_order_lines')
+        .select('id, commerce_orders!inner(id)', { count: 'exact', head: true })
+        .eq('commerce_kind', 'participation')
+        .gt('line_total_inc_vat_minor', 0)
+        .eq('commerce_orders.status', 'paid'),
+      'beneficiary_customer_id',
+      'beneficiary_user_id',
+    ),
+  ]);
+  const failure = [sessionResult, sharedCourtResult, commerceResult].find((result) => result.error)?.error;
+  if (failure) {
+    console.error('first-visit history lookup failed', failure.message);
+    throw new Error('Could not verify first-visit eligibility');
+  }
+  return [sessionResult, sharedCourtResult, commerceResult].some((result) => Number(result.count || 0) > 0);
+}
+
 async function countActivityFill(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
   const { data: fillRows, error: fillError } = await client.rpc('capacity_fill', {
     p_venue_id: venueId,
@@ -154,6 +220,8 @@ export async function resolveActivityPricingDecision({
   session: providedSession,
   productCache,
   applyEarlyBird = true,
+  customerId,
+  priorPaidParticipation,
 }: {
   client: any;
   venueId: string;
@@ -167,12 +235,14 @@ export async function resolveActivityPricingDecision({
   session?: any | null;
   productCache?: Map<string, Promise<any>>;
   applyEarlyBird?: boolean;
+  customerId?: string | null;
+  priorPaidParticipation?: boolean;
 }): Promise<ActivityPricingDecision> {
   const session = providedSession?.id
     ? providedSession
     : (await client
       .from('activity_sessions')
-      .select('id, venue_id, name, session_type, session_date, start_time, end_time, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode')
+      .select('id, venue_id, name, session_type, session_date, start_time, end_time, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only')
       .eq('id', activitySessionId)
       .maybeSingle()).data;
 
@@ -206,6 +276,8 @@ export async function resolveActivityPricingDecision({
   const productBaseAmountSek = Number(product?.base_price_sek ?? 0);
   const fallbackBaseAmountSek = Number(requestedAmountSek || 0);
   const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
+  const firstVisitEnabled = purchaseKind === 'activity_ticket' && session.first_visit_offer_enabled === true;
+  const firstVisitPriceMinor = positiveInt(session.first_visit_price_minor);
   const earlyBirdPriceMinor = positiveInt(
     session.early_bird_price_minor ??
     sessionMetadata.early_bird_price_minor ??
@@ -311,6 +383,12 @@ export async function resolveActivityPricingDecision({
     member_discount_percent: memberDiscountPercent,
     day_pass_included: dayPassIncluded,
     membership_included: membershipIncluded,
+    first_visit_offer: {
+      enabled: firstVisitEnabled,
+      applied: false,
+      price_minor: firstVisitPriceMinor,
+      price_sek: minorToSek(firstVisitPriceMinor),
+    },
     scarcity: {
       mode: scarcityMode,
       registrations_count: registrationsCount,
@@ -531,8 +609,35 @@ export async function resolveActivityPricingDecision({
     }
   }
 
+  if (firstVisitEnabled && finalAmountSek > 0) {
+    entitlementCustomerId ||= customerId || (userId ? await resolveCustomerIdForUser(client, userId) : null);
+    const hasPaidBefore = priorPaidParticipation ?? await hasPriorPaidParticipation(client, entitlementCustomerId, userId);
+    const firstVisit = firstVisitOfferDecision({
+      enabled: true,
+      priceMinor: firstVisitPriceMinor,
+      priorPaidParticipation: hasPaidBefore,
+      currentAmountSek: finalAmountSek,
+    });
+    debug.first_visit_offer = {
+      enabled: true,
+      applied: firstVisit.applies,
+      price_minor: firstVisitPriceMinor,
+      price_sek: firstVisit.priceSek,
+      regular_price_sek: firstVisit.regularPriceSek,
+      eligibility_reason: firstVisit.reason,
+    };
+    if (firstVisit.applies && firstVisit.priceSek != null) {
+      finalAmountSek = firstVisit.priceSek;
+      pricingReason = 'first_visit_offer';
+      debug.pricing_source = 'first_visit_offer';
+    }
+  }
+
   if (earlyBirdActive && earlyBirdPriceSek != null && finalAmountSek > 0) {
     if (earlyBirdPriceSek < finalAmountSek) {
+      if ((debug.first_visit_offer as any)?.applied) {
+        debug.first_visit_offer = { ...(debug.first_visit_offer as Record<string, unknown>), applied: false, superseded_by: 'early_bird' };
+      }
       debug.before_early_bird_amount_sek = finalAmountSek;
       finalAmountSek = earlyBirdPriceSek;
       pricingReason = 'early_bird';

@@ -19,6 +19,7 @@ type CourseSeriesRow = {
   start_time?: string | null;
   end_time?: string | null;
   court_ids?: string[] | null;
+  image_urls?: string[] | null;
   [key: string]: unknown;
 };
 
@@ -72,7 +73,7 @@ async function venue(admin: ServiceClient, input: { id?: string | null; slug?: s
 async function courseSeries(admin: ServiceClient, seriesId: string) {
   if (!UUID.test(seriesId)) throw new Error('Invalid Course Series');
   const { data, error } = await admin.from('activity_series')
-    .select('id, venue_id, format_id, name, description, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
+    .select('id, venue_id, format_id, name, description, image_urls, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
     .eq('id', seriesId)
     .eq('series_type', 'course')
     .maybeSingle();
@@ -110,7 +111,7 @@ function registrationState(series: CourseSeriesRow, now = DateTime.now().toUTC()
 async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, userId?: string | null) {
   const [formatResult, productResult, venueResult, sessionsResult, capacity] = await Promise.all([
     series.format_id
-      ? admin.from('activity_formats').select('id, name, description, full_description, age_group, level, requires_instructor').eq('id', series.format_id).maybeSingle()
+      ? admin.from('activity_formats').select('id, name, description, full_description, image_urls, age_group, level, requires_instructor').eq('id', series.format_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     series.access_product_id
       ? admin.from('access_products').select('id, product_key, name, description, base_price_sek, vat_rate, status, product_kind').eq('id', series.access_product_id).maybeSingle()
@@ -143,6 +144,7 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
   return {
     ...series,
     format: formatResult.data || null,
+    image_urls: Array.isArray(series.image_urls) && series.image_urls.length ? series.image_urls.slice(0, 3) : (formatResult.data?.image_urls || []).slice(0, 3),
     product: productResult.data || null,
     venue: venueResult.data || null,
     sessions: sessionsResult.data || [],
@@ -210,6 +212,15 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
 
 function cleanText(value: unknown, max = 240) {
   return String(value || '').trim().slice(0, max);
+}
+
+function cleanImageUrls(value: unknown, ownerPath: string) {
+  if (!Array.isArray(value)) return [];
+  const marker = `/storage/v1/object/public/event-logos/${ownerPath}/`;
+  return [...new Set(value.map((url) => String(url || '').trim()).filter((url) => {
+    if (!url.startsWith('https://') || !url.includes(marker)) return false;
+    return /^[1-3]\.(png|jpe?g|webp)$/i.test(url.split(marker)[1]?.split('?')[0] || '');
+  }))].slice(0, 3);
 }
 
 function courseProductKey() {
@@ -305,7 +316,7 @@ const coursesHandler = async (req: Request) => {
       }
       const now = DateTime.now().toUTC().toISO();
       const { data, error } = await admin.from('activity_series')
-        .select('id, venue_id, format_id, name, description, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
+        .select('id, venue_id, format_id, name, description, image_urls, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
         .eq('venue_id', venueRow.id)
         .eq('series_type', 'course')
         .eq('status', 'active')
@@ -319,6 +330,19 @@ const coursesHandler = async (req: Request) => {
         if (projected.capacity.available_count > 0) return jsonResponse({ mode: 'registration', item: projected }, 200, 5);
       }
       return jsonResponse({ mode: 'none', item: null }, 200, 5);
+    }
+
+    if (req.method === 'GET' && path === 'catalog') {
+      const userId = await optionalUserId(req);
+      const venueRow = await venue(admin, { id: url.searchParams.get('venueId'), slug: url.searchParams.get('v') || url.searchParams.get('slug') });
+      const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
+      const { data, error } = await admin.from('activity_series')
+        .select('id, venue_id, format_id, name, description, image_urls, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
+        .eq('venue_id', venueRow.id).eq('series_type', 'course').eq('status', 'active').gte('end_date', today).order('start_date').limit(24);
+      if (error) throw new Error(error.message);
+      const items = [];
+      for (const series of data || []) items.push(await projectCourse(admin, series, userId));
+      return jsonResponse({ items }, 200, userId ? 0 : 5);
     }
 
     const auth = await getAuthenticatedClient(req);
@@ -335,7 +359,7 @@ const coursesHandler = async (req: Request) => {
       const [{ data: formats, error: formatError }, { data: seriesRows, error: seriesError }, { data: courts, error: courtsError }] = await Promise.all([
         admin.from('activity_formats').select('*').eq('organization_id', venueRow.organization_id).eq('is_active', true).order('name'),
         admin.from('activity_series')
-          .select('id, venue_id, format_id, name, description, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
+          .select('id, venue_id, format_id, name, description, image_urls, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
           .eq('venue_id', venueId).eq('series_type', 'course').order('start_date', { ascending: false }),
         admin.from('venue_courts').select('id, name, court_number, sport_type').eq('venue_id', venueId).eq('is_available', true).order('court_number'),
       ]);
@@ -358,6 +382,7 @@ const coursesHandler = async (req: Request) => {
         name: cleanText(body.name, 120),
         description: cleanText(body.description, 1000) || null,
         full_description: cleanText(body.full_description, 20000) || null,
+        image_urls: [],
         age_group: ageGroup,
         level,
         requires_instructor: body.requires_instructor === true,
@@ -382,6 +407,7 @@ const coursesHandler = async (req: Request) => {
         name,
         description: cleanText(body.description, 1000) || null,
         full_description: cleanText(body.full_description, 20000) || null,
+        ...(body.image_urls === undefined ? {} : { image_urls: cleanImageUrls(body.image_urls, `activity-formats/${formatId}`) }),
         age_group: ageGroup,
         level,
         requires_instructor: body.requires_instructor === true,

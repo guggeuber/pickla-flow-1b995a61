@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { AlertTriangle, CalendarDays, Check, ChevronDown, Loader2, Pencil, Plus, Users, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, ChevronDown, ImagePlus, Loader2, Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   createCourseFormat,
@@ -14,6 +14,7 @@ import {
   updateCourseFormat,
   updateCourseSeries,
 } from "@/lib/courses";
+import { namedEventImagePath, nextNamedEventImageSlot, removeNamedEventImage, uploadNamedEventImage } from "@/lib/eventMedia";
 
 const DAYS = [
   { value: 1, label: "Mån" }, { value: 2, label: "Tis" }, { value: 3, label: "Ons" },
@@ -38,6 +39,8 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
   const [formatName, setFormatName] = useState("");
   const [formatDescription, setFormatDescription] = useState("");
   const [formatFullDescription, setFormatFullDescription] = useState("");
+  const [formatImages, setFormatImages] = useState<string[]>([]);
+  const [formatImageBusy, setFormatImageBusy] = useState(false);
   const [ageGroup, setAgeGroup] = useState("adult");
   const [level, setLevel] = useState("beginner");
   const [requiresInstructor, setRequiresInstructor] = useState(true);
@@ -109,6 +112,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
     setFormatName("");
     setFormatDescription("");
     setFormatFullDescription("");
+    setFormatImages([]);
     setAgeGroup("adult");
     setLevel("beginner");
     setRequiresInstructor(true);
@@ -118,6 +122,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
     setFormatName(format.name);
     setFormatDescription(format.description || "");
     setFormatFullDescription(format.full_description || "");
+    setFormatImages(format.image_urls || []);
     setAgeGroup(format.age_group);
     setLevel(format.level);
     setRequiresInstructor(format.requires_instructor);
@@ -129,6 +134,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
         name: formatName,
         description: formatDescription,
         full_description: formatFullDescription,
+        image_urls: formatImages,
         age_group: ageGroup,
         level,
         requires_instructor: requiresInstructor,
@@ -138,14 +144,29 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
         : createCourseFormat(input);
     },
     onSuccess: async (format) => {
+      const savedPaths = new Set(formatImages.map(namedEventImagePath).filter(Boolean));
+      const removedImages = (data?.formats.find((item) => item.id === editingFormatId)?.image_urls || []).filter((url) => !savedPaths.has(namedEventImagePath(url)));
       if (!editingFormatId) setFormatId(format.id);
       const message = editingFormatId ? "Kursformat uppdaterat" : "Kursformat skapat";
       resetFormat();
       await refresh();
+      await Promise.allSettled(removedImages.map(removeNamedEventImage));
       toast.success(message);
     },
     onError: (error: Error) => toast.error(error.message),
   });
+  const addFormatImage = async (file?: File) => {
+    if (!file || !editingFormatId || formatImages.length >= 3) return;
+    const slot = nextNamedEventImageSlot(formatImages); if (!slot) return;
+    setFormatImageBusy(true);
+    try {
+      const url = await uploadNamedEventImage({ owner: "activity-formats", ownerId: editingFormatId, slot, file });
+      setFormatImages((current) => [...current, url].slice(0, 3));
+      toast.success("Bilden är uppladdad. Spara formatet för att publicera den.");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Bilden kunde inte laddas upp."); }
+    finally { setFormatImageBusy(false); }
+  };
+  const deleteFormatImage = (url: string) => setFormatImages((current) => current.filter((item) => item !== url));
 
   const resetSeries = () => {
     setEditingSeriesId(null);
@@ -230,6 +251,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
             <select aria-label="Nivå" className={inputClass} value={level} onChange={(event) => setLevel(event.target.value)}><option value="intro">Introduktion</option><option value="beginner">Nybörjare</option><option value="intermediate">Fortsättning</option><option value="advanced">Avancerad</option></select>
           </div>
           <label className="mt-3 flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={requiresInstructor} onChange={(event) => setRequiresInstructor(event.target.checked)} /> Kräver instruktör</label>
+          {editingFormatId ? <div className="mt-4"><p className="text-xs font-bold">Konceptbilder · 16:9 · max 3</p><div className="mt-2 flex flex-wrap gap-2">{formatImages.map((url) => <div key={url} className="relative overflow-hidden rounded-xl border border-border"><img src={url} alt="" className="aspect-video w-28 object-cover" /><button type="button" onClick={() => deleteFormatImage(url)} className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white" aria-label="Ta bort bild"><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>{formatImages.length < 3 ? <label className="mt-2 inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 text-xs font-bold"><ImagePlus className="h-4 w-4" />{formatImageBusy ? "Laddar..." : "Lägg till bild"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={formatImageBusy} onChange={(event) => void addFormatImage(event.target.files?.[0])} /></label> : null}</div> : <p className="mt-3 text-xs text-muted-foreground">Skapa formatet först för att lägga till återanvändbara bilder.</p>}
           <button type="button" onClick={() => saveFormat.mutate()} disabled={!formatName.trim() || saveFormat.isPending} className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-40">{saveFormat.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : editingFormatId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}{editingFormatId ? "Spara format" : "Skapa format"}</button>
           {(data?.formats || []).length ? <div className="mt-4 grid gap-2">{data!.formats.map((format) => <div key={format.id} className="flex items-start justify-between gap-3 rounded-xl border border-border p-3"><div><p className="text-sm font-bold">{format.name}</p><p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{format.description || "Ingen kort beskrivning"}</p></div><button type="button" onClick={() => editFormat(format)} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border border-border px-3 text-xs font-bold"><Pencil className="h-3.5 w-3.5" />Redigera</button></div>)}</div> : null}
         </div>

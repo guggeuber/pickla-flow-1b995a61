@@ -817,7 +817,7 @@ export default function BookingPage() {
           />
           <section>
             <h1 className="text-[40px] leading-none tracking-[-0.04em] text-neutral-950" style={{ fontFamily: FONT_MONO }}>
-              Boka aktivitet
+            Boka bana
             </h1>
             <div className="mt-7 grid grid-cols-3 gap-3">
               {([

@@ -5,6 +5,7 @@ export type CourseFormat = {
   name: string;
   description: string | null;
   full_description: string | null;
+  image_urls: string[];
   age_group: "adult" | "youth" | "all_ages";
   level: "intro" | "beginner" | "intermediate" | "advanced";
   requires_instructor: boolean;
@@ -52,6 +53,7 @@ export type CourseSeries = {
   format_id: string;
   name: string;
   description: string | null;
+  image_urls: string[];
   status: string;
   start_date: string;
   end_date: string;
@@ -113,6 +115,10 @@ export function fetchCourseHome(venueSlug: string) {
     "home",
     { v: venueSlug },
   );
+}
+
+export function fetchCourseCatalog(venueSlug: string) {
+  return apiGet<{ items: CourseDetail[] }>("api-courses", "catalog", { v: venueSlug });
 }
 
 export function createCourseCart(input: Record<string, unknown>, options?: ApiRequestOptions) {

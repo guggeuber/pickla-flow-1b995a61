@@ -70,6 +70,24 @@
       "headers": [
         { "key": "Content-Type", "value": "text/html; charset=utf-8" }
       ]
+    },
+    {
+      "source": "/e/:slug",
+      "headers": [
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/event/:eventId",
+      "headers": [
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/course/:seriesId",
+      "headers": [
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" }
+      ]
     }
   ],
   "redirects": [
@@ -97,6 +115,39 @@
         }
       ],
       "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/activity-og?sessionId=:sessionId"
+    },
+    {
+      "source": "/e/:slug",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(facebookexternalhit|Facebot|facebot|WhatsApp|whatsapp|Twitterbot|TwitterBot|Slackbot|Slackbot-LinkExpanding|Discordbot|LinkedInBot|TelegramBot|SkypeUriPreview|Applebot|bot|crawler|spider|preview).*"
+        }
+      ],
+      "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/event-og?slug=:slug"
+    },
+    {
+      "source": "/event/:eventId",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(facebookexternalhit|Facebot|facebot|WhatsApp|whatsapp|Twitterbot|TwitterBot|Slackbot|Slackbot-LinkExpanding|Discordbot|LinkedInBot|TelegramBot|SkypeUriPreview|Applebot|bot|crawler|spider|preview).*"
+        }
+      ],
+      "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/event-og?id=:eventId"
+    },
+    {
+      "source": "/course/:seriesId",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(facebookexternalhit|Facebot|facebot|WhatsApp|whatsapp|Twitterbot|TwitterBot|Slackbot|Slackbot-LinkExpanding|Discordbot|LinkedInBot|TelegramBot|SkypeUriPreview|Applebot|bot|crawler|spider|preview).*"
+        }
+      ],
+      "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/course-og?seriesId=:seriesId"
     },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

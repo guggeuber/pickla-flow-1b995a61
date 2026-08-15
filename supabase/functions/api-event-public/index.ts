@@ -1,7 +1,8 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
-import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
+import { hasPriorPaidParticipation, resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
+import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { projectPublicActivitySessionHosts } from '../_shared/public_activity_hosts.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
@@ -333,6 +334,32 @@ function programSessionPath(sessionId: string, sessionDate: string | null, venue
   return `/program/${encodeURIComponent(sessionId)}${params.toString() ? `?${params.toString()}` : ''}`;
 }
 
+function inheritedNamedEventImages(series: any) {
+  const seriesImages = Array.isArray(series?.image_urls) ? series.image_urls.filter(Boolean) : [];
+  if (seriesImages.length) return seriesImages.slice(0, 3);
+  return Array.isArray(series?.activity_formats?.image_urls)
+    ? series.activity_formats.image_urls.filter(Boolean).slice(0, 3)
+    : [];
+}
+
+function singleRelation(value: any) {
+  return Array.isArray(value) ? value[0] || null : value || null;
+}
+
+function activityOccurrenceDates(session: any, startDate: string, days = 7) {
+  const start = DateTime.fromISO(startDate, { zone: 'Europe/Stockholm' }).startOf('day');
+  const dates: string[] = [];
+  for (let offset = 0; offset < days; offset += 1) {
+    const date = start.plus({ days: offset });
+    const iso = date.toISODate();
+    if (!iso) continue;
+    if (session.session_date === iso || (!session.session_date && (session.recurrence_days || []).includes(date.weekday % 7))) {
+      dates.push(iso);
+    }
+  }
+  return dates;
+}
+
 function ogTitleForActivity(session: any, occurrenceDate: string) {
   const occurrence = DateTime.fromISO(occurrenceDate, { zone: 'Europe/Stockholm' });
   const startTime = session?.start_time ? String(session.start_time).slice(0, 5) : '';
@@ -475,7 +502,7 @@ async function buildActivityPreview(client: any, {
 
   const sessionStartedAt = performance.now();
   const sessionQuery = client.from('activity_sessions')
-    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, is_active, publish_status, closed_to_public, activity_series(id, name, series_type), venues(id, slug, name, is_public)')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, closed_to_public, activity_series(id, name, series_type, image_urls, activity_formats(image_urls)), venues(id, slug, name, is_public)')
     .eq('id', resolvedSessionId)
     .maybeSingle();
   const { data: session, error: sessionErr } = await sessionQuery;
@@ -542,6 +569,7 @@ async function buildActivityPreview(client: any, {
       scarcity_mode: session.scarcity_mode,
       occurrence_date: occurrenceDate,
       activity_series: session.activity_series,
+      image_urls: inheritedNamedEventImages(session.activity_series),
       venue_slug: session.venues?.slug || null,
       hosts: hostsBySessionId.get(session.id) || [],
     },
@@ -1212,7 +1240,7 @@ Deno.serve(async (req) => {
         const origin = publicSiteOrigin(req);
         const canonicalPath = publicPassPath(preview.activity_session.id, preview.activity_session.occurrence_date, preview.activity_session.venue_slug || venueSlug);
         const canonicalUrl = `${origin}${canonicalPath}`;
-        const imageUrl = `${origin}/og-pickla.jpg`;
+        const imageUrl = preview.activity_session.image_urls?.[0] || `${origin}/og-pickla.jpg`;
         const html = activityOgHtml({
           title: ogTitleForActivity(preview.activity_session, preview.activity_session.occurrence_date),
           description: ogDescriptionForActivity(registrationCount, preview.activity_session.hosts || [], scarcity),
@@ -1229,6 +1257,128 @@ Deno.serve(async (req) => {
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Activity OG preview not found', 404);
       }
+    }
+
+    if (req.method === 'GET' && path === 'event-og') {
+      const id = String(url.searchParams.get('id') || '').trim();
+      const slug = String(url.searchParams.get('slug') || '').trim();
+      if (!id && !slug) return errorResponse('Missing event identifier', 400);
+      const browserPath = slug ? `/e/${encodeURIComponent(slug)}` : `/event/${encodeURIComponent(id)}`;
+      if (!isLinkPreviewBot(req.headers.get('User-Agent'))) {
+        return new Response(null, { status: 302, headers: { Location: browserPath, 'Cache-Control': 'no-store' } });
+      }
+      let query = client.from('events')
+        .select('id, name, display_name, description, background_url, logo_url, is_public')
+        .eq('is_public', true);
+      query = slug ? query.eq('slug', slug) : query.eq('id', id);
+      const { data: event } = await query.maybeSingle();
+      if (!event?.id) return errorResponse('Event not found', 404);
+      const origin = publicSiteOrigin(req);
+      const canonicalUrl = `${origin}${browserPath}`;
+      return new Response(new Blob([activityOgHtml({
+        title: event.display_name || event.name || 'Pickla',
+        description: stripHtml(event.description) || 'Häng på hos Pickla.',
+        canonicalUrl,
+        imageUrl: event.background_url || event.logo_url || `${origin}/og-pickla.jpg`,
+      })], { type: 'text/html; charset=utf-8' }), {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300, s-maxage=300' },
+      });
+    }
+
+    if (req.method === 'GET' && path === 'course-og') {
+      const seriesId = String(url.searchParams.get('seriesId') || url.searchParams.get('id') || '').trim();
+      const venueSlug = String(url.searchParams.get('v') || '').trim();
+      if (!seriesId) return errorResponse('Missing seriesId', 400);
+      const browserPath = `/course/${encodeURIComponent(seriesId)}${venueSlug ? `?v=${encodeURIComponent(venueSlug)}` : ''}`;
+      if (!isLinkPreviewBot(req.headers.get('User-Agent'))) {
+        return new Response(null, { status: 302, headers: { Location: browserPath, 'Cache-Control': 'no-store' } });
+      }
+      const { data: series } = await client.from('activity_series')
+        .select('id, name, description, image_urls, series_type, status, venues(slug, is_public), activity_formats(description, image_urls)')
+        .eq('id', seriesId)
+        .eq('series_type', 'course')
+        .eq('status', 'active')
+        .maybeSingle();
+      const courseVenue = singleRelation(series?.venues);
+      const courseFormat = singleRelation(series?.activity_formats);
+      if (!series?.id || courseVenue?.is_public !== true || (venueSlug && courseVenue?.slug !== venueSlug)) {
+        return errorResponse('Course not found', 404);
+      }
+      const origin = publicSiteOrigin(req);
+      const canonicalUrl = `${origin}${browserPath}`;
+      return new Response(new Blob([activityOgHtml({
+        title: series.name || 'Kurs hos Pickla',
+        description: stripHtml(series.description || courseFormat?.description) || 'Boka kurs hos Pickla.',
+        canonicalUrl,
+        imageUrl: inheritedNamedEventImages({ image_urls: series.image_urls, activity_formats: courseFormat })[0] || `${origin}/og-pickla.jpg`,
+      })], { type: 'text/html; charset=utf-8' }), {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300, s-maxage=300' },
+      });
+    }
+
+    // Public discovery read model. Anonymous visitors are provisionally eligible;
+    // identified customers are checked against canonical paid participation history.
+    // Checkout runs the same resolver again before any price is committed.
+    if (req.method === 'GET' && path === 'first-visit-offers') {
+      const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
+      if (!venueSlug) return errorResponse('Missing venueSlug', 400);
+      const { data: venue, error: venueError } = await client.from('venues')
+        .select('id, slug, is_public')
+        .eq('slug', venueSlug)
+        .eq('is_public', true)
+        .maybeSingle();
+      if (venueError || !venue?.id) return errorResponse('Venue not found', 404);
+
+      const userId = await getOptionalUserId(req);
+      const customerId = userId ? await resolveCustomerIdForUser(client, userId) : null;
+      const priorPaidParticipation = await hasPriorPaidParticipation(client, customerId, userId);
+      const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+      const { data: sessions, error: sessionsError } = await client.from('activity_sessions')
+        .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only')
+        .eq('venue_id', venue.id)
+        .eq('is_active', true)
+        .eq('publish_status', 'published')
+        .eq('closed_to_public', false)
+        .eq('first_visit_offer_enabled', true);
+      if (sessionsError) return errorResponse(sessionsError.message, 500);
+
+      const productCache = new Map<string, Promise<any>>();
+      const occurrences = (await Promise.all((sessions || []).flatMap((session: any) =>
+        activityOccurrenceDates(session, today).map(async (sessionDate) => {
+          const decision = await resolveActivityPricingDecision({
+            client,
+            venueId: venue.id,
+            userId,
+            customerId,
+            priorPaidParticipation,
+            activitySessionId: session.id,
+            sessionDate,
+            requestedProductKey: session.product_key,
+            requestedAmountSek: session.price_sek,
+            purchaseKind: 'activity_ticket',
+            session,
+            productCache,
+          });
+          const offer = decision.debug?.first_visit_offer as any;
+          return offer?.applied ? {
+            activity_session_id: session.id,
+            session_date: sessionDate,
+            applied: true,
+            price_sek: Number(offer.price_sek || decision.finalAmountSek || 0),
+            regular_price_sek: Number(offer.regular_price_sek || decision.baseAmountSek || 0),
+          } : null;
+        })
+      ))).filter(Boolean);
+      return jsonResponse({
+        is_first_time: !priorPaidParticipation,
+        occurrences,
+        items: occurrences.map((offer: any) => ({
+          ...offer,
+          route: programSessionPath(offer.activity_session_id, offer.session_date, venueSlug),
+        })),
+      }, 200, userId ? 0 : 30);
     }
 
     // GET /api-event-public/activity-preview?id=X — public activity info
@@ -1536,7 +1686,7 @@ Deno.serve(async (req) => {
       const today = url.searchParams.get('today'); // pass 'true' to filter today's events
 
       let query = client.from('events')
-        .select('id, name, display_name, category, start_date, end_date, start_time, end_time, entry_fee, entry_fee_type, status, logo_url, primary_color, is_drop_in, format, venue_id, venues(id, name)')
+        .select('id, name, display_name, category, start_date, end_date, start_time, end_time, entry_fee, entry_fee_type, status, logo_url, background_url, primary_color, is_drop_in, format, venue_id, venues(id, name)')
         .eq('is_public', true)
         .in('status', ['active', 'upcoming', 'in_progress'])
         .order('start_date', { ascending: true })

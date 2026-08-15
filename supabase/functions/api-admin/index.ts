@@ -129,6 +129,13 @@ function productKeyForActivityTicket(sessionType: string) {
   return 'open_play_slot';
 }
 
+function cleanNamedEventImageUrls(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const urls = [...new Set(value.map((url) => String(url || '').trim()).filter((url) => /^https:\/\//.test(url)))];
+  if (urls.length > 3) throw new Error('Högst tre bilder kan användas');
+  return urls;
+}
+
 function normalizeActivitySessionPayload(body: Record<string, any>) {
   const next = { ...body };
   const soldAs = String(next.sold_as || next.access_policy?.sold_as || '') as SoldAs | '';
@@ -192,6 +199,19 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
       }
       next.early_bird_slots = earlyBirdSlots;
     }
+  }
+
+  const hasFirstVisitFields = Object.prototype.hasOwnProperty.call(next, 'first_visit_offer_enabled') ||
+    Object.prototype.hasOwnProperty.call(next, 'first_visit_price_minor') ||
+    Object.prototype.hasOwnProperty.call(next, 'first_visit_only');
+  if (hasFirstVisitFields) {
+    const enabled = next.first_visit_offer_enabled === true;
+    if (enabled && /fredagsklubben/i.test(String(next.name || ''))) {
+      throw new Error('Prova-på får inte aktiveras på Fredagsklubben');
+    }
+    next.first_visit_offer_enabled = enabled;
+    next.first_visit_price_minor = enabled ? 9900 : null;
+    next.first_visit_only = true;
   }
 
   if (productKey && !['open_play_slot', 'group_training', 'day_access', 'event_fee'].includes(String(productKey))) {
@@ -6128,6 +6148,7 @@ Deno.serve(async (req) => {
         is_active: body.is_active ?? true,
         sort_order: Number(body.sort_order || 0),
         metadata: body.metadata || {},
+        image_urls: [],
       }, { onConflict: 'venue_id,source_product_id,target_product_id,relationship_type' }).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data, 201);
@@ -6173,8 +6194,11 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'activity-series') {
       const { seriesId, ...updates } = await req.json();
       if (!seriesId) return errorResponse('Missing seriesId');
+      const allowed = ['name', 'description', 'series_type', 'sport_type', 'status', 'product_key', 'start_date', 'end_date', 'total_sessions', 'metadata'];
+      const safeUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => allowed.includes(key)));
+      if (Object.prototype.hasOwnProperty.call(updates, 'image_urls')) safeUpdates.image_urls = cleanNamedEventImageUrls(updates.image_urls);
       const { data, error: e } = await admin.from('activity_series')
-        .update(updates).eq('id', seriesId).eq('venue_id', venueId).select().single();
+        .update(safeUpdates).eq('id', seriesId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data);
     }
@@ -6189,7 +6213,7 @@ Deno.serve(async (req) => {
 
     if (req.method === 'GET' && path === 'activity-sessions') {
       const { data, error: e } = await admin.from('activity_sessions')
-        .select('*, activity_series(id, name, series_type)')
+        .select('*, activity_series(id, name, series_type, image_urls, activity_formats(image_urls))')
         .eq('venue_id', venueId)
         .order('start_time', { ascending: true });
       if (e) return errorResponse(e.message);
@@ -6237,6 +6261,9 @@ Deno.serve(async (req) => {
         early_bird_price_minor: normalized.early_bird_price_minor ?? null,
         early_bird_slots: normalized.early_bird_slots ?? null,
         scarcity_mode: normalized.scarcity_mode || 'none',
+        first_visit_offer_enabled: normalized.first_visit_offer_enabled === true,
+        first_visit_price_minor: normalized.first_visit_offer_enabled === true ? 9900 : null,
+        first_visit_only: true,
         requires_staffing: normalized.requires_staffing === true,
       }).select().single();
       if (e) return errorResponse(e.message);
@@ -6258,12 +6285,15 @@ Deno.serve(async (req) => {
       if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
       const { data: existingSession, error: existingError } = await admin
         .from('activity_sessions')
-        .select('id, venue_id, session_date, recurrence_days, start_time, end_time, court_ids, requires_staffing, is_active, publish_status')
+        .select('id, venue_id, name, session_date, recurrence_days, start_time, end_time, court_ids, requires_staffing, is_active, publish_status')
         .eq('id', sessionId)
         .eq('venue_id', venueId)
         .maybeSingle();
       if (existingError) return errorResponse(existingError.message);
       if (!existingSession?.id) return errorResponse('Activity session not found', 404);
+      if (normalized.first_visit_offer_enabled === true && /fredagsklubben/i.test(String(normalized.name || existingSession.name || ''))) {
+        return errorResponse('Prova-på får inte aktiveras på Fredagsklubben', 400);
+      }
       const draft = effectiveActivitySessionDraft(existingSession, normalized, venueId);
       if (!isValidActivitySessionTimeOrder(draft.start_time, draft.end_time)) {
         return errorResponse('Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.', 400);

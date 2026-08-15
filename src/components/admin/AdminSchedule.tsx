@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { AlertTriangle, CalendarDays, Edit3, Loader2, Plus, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Edit3, ImagePlus, Loader2, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatSek } from "@/lib/activityPricing";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
 import AdminCourses from "@/components/admin/AdminCourses";
+import { namedEventImagePath, nextNamedEventImageSlot, removeNamedEventImage, uploadNamedEventImage } from "@/lib/eventMedia";
 
 const DAYS = [
   { key: 1, label: "Mån" },
@@ -555,6 +556,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [scarcityMode, setScarcityMode] = useState("none");
   const [earlyBirdPrice, setEarlyBirdPrice] = useState("");
   const [earlyBirdSlots, setEarlyBirdSlots] = useState("");
+  const [firstVisitOfferEnabled, setFirstVisitOfferEnabled] = useState(false);
   const [capacity, setCapacity] = useState("");
   const [sessionCourtIds, setSessionCourtIds] = useState<string[]>([]);
   const [requiresStaffing, setRequiresStaffing] = useState(false);
@@ -564,6 +566,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [seriesDrafts, setSeriesDrafts] = useState<Record<string, any>>({});
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, any>>({});
   const [hostSearch, setHostSearch] = useState("");
+  const [seriesImageBusyId, setSeriesImageBusyId] = useState<string | null>(null);
 
   const { data: products = [] } = useQuery<ScheduleProductOption[]>({
     queryKey: ["admin-access-products", venueId],
@@ -830,6 +833,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       scarcity_mode: scarcityMode,
       early_bird_price_minor: scarcityMode === "early_bird" ? priceSekToMinor(earlyBirdPrice) : null,
       early_bird_slots: scarcityMode === "early_bird" ? positiveSlots(earlyBirdSlots) : null,
+      first_visit_offer_enabled: firstVisitOfferEnabled,
+      first_visit_price_minor: firstVisitOfferEnabled ? 9900 : null,
+      first_visit_only: true,
       requires_staffing: requiresStaffing,
       is_active: true,
     }, {
@@ -838,6 +844,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         setScarcityMode("none");
         setEarlyBirdPrice("");
         setEarlyBirdSlots("");
+        setFirstVisitOfferEnabled(false);
         setRequiresStaffing(false);
       },
     });
@@ -860,6 +867,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         series_type: item.series_type || "program",
         product_key: item.product_key || "",
         status: item.status || "active",
+        image_urls: Array.isArray(item.image_urls) ? item.image_urls : [],
       },
     }));
   };
@@ -876,9 +884,32 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       series_type: draft.series_type || "program",
       product_key: draft.product_key || null,
       status: draft.status || "active",
+      image_urls: draft.image_urls || [],
     }, {
-      onSuccess: () => setEditingSeriesId(null),
+      onSuccess: async () => {
+        const savedPaths = new Set((draft.image_urls || []).map(namedEventImagePath).filter(Boolean));
+        await Promise.allSettled((item.image_urls || []).filter((url: string) => !savedPaths.has(namedEventImagePath(url))).map(removeNamedEventImage));
+        setEditingSeriesId(null);
+      },
     });
+  };
+
+  const addSeriesImage = async (series: any, file?: File) => {
+    if (!file) return;
+    const draft = seriesDrafts[series.id] || {};
+    const urls = Array.isArray(draft.image_urls) ? draft.image_urls : [];
+    const slot = nextNamedEventImageSlot(urls);
+    if (!slot) return;
+    setSeriesImageBusyId(series.id);
+    try {
+      const url = await uploadNamedEventImage({ owner: "activity-series", ownerId: series.id, slot, file });
+      setSeriesDrafts((current) => ({ ...current, [series.id]: { ...current[series.id], image_urls: [...urls, url].slice(0, 3) } }));
+      toast.success("Bilden är uppladdad. Spara serien för att publicera den.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Bilden kunde inte laddas upp");
+    } finally {
+      setSeriesImageBusyId(null);
+    }
   };
 
   const startEditSession = (session: any) => {
@@ -907,6 +938,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         scarcity_mode: sessionScarcityMode(session),
         early_bird_price_sek: sessionEarlyBirdPriceSek(session),
         early_bird_slots: sessionEarlyBirdSlots(session),
+        first_visit_offer_enabled: Boolean(session.first_visit_offer_enabled),
         capacity: session.capacity ?? "",
         court_ids: session.court_ids || [],
         is_active: Boolean(session.is_active),
@@ -972,6 +1004,9 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       scarcity_mode: draft.scarcity_mode || "none",
       early_bird_price_minor: draft.scarcity_mode === "early_bird" ? priceSekToMinor(draft.early_bird_price_sek) : null,
       early_bird_slots: draft.scarcity_mode === "early_bird" ? positiveSlots(draft.early_bird_slots) : null,
+      first_visit_offer_enabled: Boolean(draft.first_visit_offer_enabled),
+      first_visit_price_minor: draft.first_visit_offer_enabled ? 9900 : null,
+      first_visit_only: true,
       requires_staffing: Boolean(draft.requires_staffing),
       host_customer_ids: Array.isArray(draft.host_customer_ids) ? draft.host_customer_ids : [],
     }, {
@@ -1081,6 +1116,30 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <option value="draft">Utkast</option>
                         <option value="archived">Arkiv</option>
                       </select>
+                    </div>
+                    <div className="rounded-xl bg-muted/40 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Eventbilder</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">16:9 · högst tre · ärvs av passen</p>
+                        </div>
+                        {(draft.image_urls || []).length < 3 ? (
+                          <label className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-background px-3 py-2 text-[10px] font-bold">
+                            {seriesImageBusyId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />} Lägg till
+                            <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={seriesImageBusyId === item.id} onChange={(event) => void addSeriesImage(item, event.target.files?.[0])} />
+                          </label>
+                        ) : null}
+                      </div>
+                      {(draft.image_urls || []).length ? (
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          {(draft.image_urls || []).map((url: string) => (
+                            <div key={url} className="relative overflow-hidden rounded-lg">
+                              <img src={url} alt="" className="aspect-video w-full object-cover" />
+                              <button type="button" aria-label="Ta bort eventbild" onClick={() => setSeriesDrafts((current) => ({ ...current, [item.id]: { ...draft, image_urls: (draft.image_urls || []).filter((candidate: string) => candidate !== url) } }))} className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-black/70 text-white"><X className="h-3 w-3" /></button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : <p className="mt-3 text-[11px] text-muted-foreground">Ingen bild ger ett lugnt textkort. Ingen platshållare skapas.</p>}
                     </div>
                     <ScheduleAddonSelector
                       sourceProduct={productMap[draft.product_key || item.product_key]}
@@ -1236,6 +1295,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
               <input type="number" placeholder="4" value={earlyBirdSlots} onChange={(e) => setEarlyBirdSlots(e.target.value)} disabled={scarcityMode !== "early_bird"} className={baseInputClass + " w-full disabled:opacity-50"} style={inputStyle} />
             </label>
           </div>
+          <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-3 text-xs font-semibold text-muted-foreground">
+            <span>
+              Prova-på · 99 kr
+              <span className="mt-0.5 block text-[10px] font-normal">Endast förstagångsköpare. Aktivt tills du stänger av det.</span>
+            </span>
+            <input type="checkbox" checked={firstVisitOfferEnabled} disabled={/fredagsklubben/i.test(sessionName)} onChange={(event) => setFirstVisitOfferEnabled(event.target.checked)} />
+          </label>
           <div className="grid grid-cols-2 gap-1.5 text-[11px]">
             {createPreview.map(([label, value]) => (
               <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
@@ -1648,6 +1714,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         <input type="number" placeholder="4" value={draft.early_bird_slots ?? ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, early_bird_slots: e.target.value } }))} disabled={(draft.scarcity_mode || "none") !== "early_bird"} className={baseInputClass + " w-full disabled:opacity-50"} style={inputStyle} />
                       </label>
                     </div>
+                    <label className="flex items-center justify-between gap-3 rounded-xl bg-background/60 px-3 py-3 text-xs font-semibold text-muted-foreground">
+                      <span>
+                        Prova-på · 99 kr
+                        <span className="mt-0.5 block text-[10px] font-normal">Endast förstagångsköpare. Ingen kampanjperiod.</span>
+                      </span>
+                      <input type="checkbox" checked={Boolean(draft.first_visit_offer_enabled)} disabled={/fredagsklubben/i.test(draft.name || session.name)} onChange={(event) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, first_visit_offer_enabled: event.target.checked } }))} />
+                    </label>
                     <div className="grid grid-cols-2 gap-1.5 text-[11px]">
                       {activePreview.map(([label, value]) => (
                         <div key={label} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5">
@@ -1809,6 +1882,12 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                             ? `Tidigt pris ${savedEarlyBirdPrice ? formatSek(Number(savedEarlyBirdPrice)) : ""} · ${savedEarlyBirdSlots || 0} platser`
                             : "Kapacitet visas när passet börjar fyllas"}
                         </span>
+                      </div>
+                    ) : null}
+                    {session.first_visit_offer_enabled ? (
+                      <div className="mt-2 rounded-xl bg-primary/10 px-3 py-2 text-[11px] text-primary">
+                        <span className="block text-[9px] font-bold uppercase tracking-widest">Prova-på</span>
+                        <span className="mt-1 block font-bold">99 kr · endast första betalda besöket</span>
                       </div>
                     ) : null}
                     {product && <p className="mt-2 text-[10px] text-muted-foreground">Produkt: {product.name}</p>}

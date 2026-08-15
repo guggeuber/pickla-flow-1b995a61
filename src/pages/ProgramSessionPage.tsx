@@ -428,11 +428,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const pricingDebug = backendPricing?.debug || {};
   const pricingScarcity = (pricingDebug.scarcity || data?.scarcity || {}) as any;
   const earlyBird = (pricingScarcity.early_bird || {}) as any;
+  const firstVisitOffer = (pricingDebug.first_visit_offer || {}) as any;
+  const firstVisitLine = commercePurchaseKind === "activity_ticket" && firstVisitOffer.applied
+    ? `Ditt första besök: ${formatSek(Number(firstVisitOffer.price_sek || 0))} istället för ${formatSek(Number(firstVisitOffer.regular_price_sek || backendPricing?.baseAmountSek || session?.price_sek || 0))}. Racket ingår.`
+    : null;
   const earlyBirdActive = Boolean(earlyBird.active) && Number(earlyBird.remaining || 0) > 0 && Number(earlyBird.price_sek || 0) > 0;
   const earlyBirdLine = commercePurchaseKind === "activity_ticket" && earlyBirdActive
     ? `Tidigt pris ${formatSek(Number(earlyBird.price_sek || 0))} — ${Number(earlyBird.remaining || 0)} kvar just nu`
     : null;
-  const capacityScarcityLine = !earlyBirdLine && pricingScarcity.mode === "capacity" && pricingScarcity.capacity_active
+  const capacityScarcityLine = !firstVisitLine && !earlyBirdLine && pricingScarcity.mode === "capacity" && pricingScarcity.capacity_active
     ? `${Number(pricingScarcity.registrations_count || registrationCount || 0)} anmälda · ${Number(pricingScarcity.capacity_remaining || spotsLeft || 0)} platser kvar`
     : null;
   const pricingMode = String(pricingDebug.pricing_mode || session?.metadata?.pricing_mode || "standard");
@@ -612,6 +616,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         startTime: String(session.start_time || "").slice(0, 5),
         endTime: String(session.end_time || "").slice(0, 5),
         resourceNames: reservedCourtLabel ? [reservedCourtLabel] : [],
+        imageUrls: Array.isArray(session.image_urls) ? session.image_urls : [],
         host: sessionHosts.length
           ? {
               firstName: hostFirstName(sessionHosts[0]),
@@ -1103,10 +1108,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </div>
           ) : null}
 
-          {!isRegistered && commerceStep === "product" && !pricingPending && (earlyBirdLine || capacityScarcityLine) ? (
+          {!isRegistered && commerceStep === "product" && !pricingPending && (firstVisitLine || earlyBirdLine || capacityScarcityLine) ? (
             <p className="px-2 py-1 text-center text-[13px] font-black text-slate-700" style={{ fontFamily: FONT_HEADING }}>
-              {earlyBirdLine || capacityScarcityLine}
+              {firstVisitLine || earlyBirdLine || capacityScarcityLine}
             </p>
+          ) : null}
+
+          {!isRegistered && commerceStep === "product" && !firstVisitLine ? (
+            <p className="px-2 text-center text-[12px] font-semibold text-slate-500">Racket finns att låna.</p>
           ) : null}
 
           {!isRegistered && commerceStep === "product" && commercePilotEnabled ? (

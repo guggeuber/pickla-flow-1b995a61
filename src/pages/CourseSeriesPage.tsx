@@ -85,6 +85,7 @@ export default function CourseSeriesPage() {
     <div className="min-h-[100dvh] bg-white text-slate-950">
       <PicklaTopBar slug={venueSlug} background="#fff" />
       <main className="mx-auto w-full max-w-xl px-5 pb-40 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
+        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt="" className="mb-6 aspect-video w-full rounded-[24px] object-cover" /> : null}
         <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Kurs</p>
         <h1 className="mt-2 text-3xl font-black leading-tight">{course.name}</h1>
         <p className="mt-3 text-base leading-relaxed text-slate-600">{course.format?.description || course.description}</p>

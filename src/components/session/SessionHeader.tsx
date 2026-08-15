@@ -20,6 +20,7 @@ export function SessionHeader({ presentation }: SessionHeaderProps) {
 
   return (
     <div className="space-y-3">
+      {presentation.imageUrls?.[0] ? <img src={presentation.imageUrls[0]} alt="" className="aspect-video w-full rounded-[20px] object-cover" data-testid="session-identity-image" /> : null}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="mb-1.5 text-[11px] font-black uppercase tracking-[0.28em] text-neutral-400">

@@ -45,6 +45,7 @@ export type SessionPresentation = {
   timingLabel: string;
   venueName?: string | null;
   resourceNames: string[];
+  imageUrls?: string[];
   host?: SessionHostPresentation | null;
   people: PeopleRowPerson[];
   committedCount?: number | null;
@@ -68,6 +69,7 @@ type ActivitySessionPresentationInput = {
   endTime: string;
   venueName?: string | null;
   resourceNames?: string[];
+  imageUrls?: string[];
   host?: SessionHostPresentation | null;
   people?: PeopleRowPerson[];
   committedCount?: number | null;
@@ -153,6 +155,7 @@ export function activitySessionToPresentation(input: ActivitySessionPresentation
     ...timing,
     venueName: input.venueName ?? null,
     resourceNames: input.resourceNames ?? [],
+    imageUrls: input.imageUrls ?? [],
     host: input.host ?? null,
     people: input.people ?? [],
     committedCount: input.committedCount ?? null,

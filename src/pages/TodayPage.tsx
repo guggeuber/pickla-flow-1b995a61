@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
@@ -24,6 +24,7 @@ import { getFirstName } from "@/lib/displayName";
 import { activitySessionToPresentation, openBookingToPresentation } from "@/lib/sessionPresentation";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 import { fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
+import { inheritedEventImages } from "@/lib/eventMedia";
 
 
 const PAGE_BG = "#fffaf7";
@@ -56,6 +57,8 @@ type FeedItem = {
   userRegistrationStatus?: string | null;
   priceSek?: number | null;
   isSpecialPass?: boolean;
+  firstVisitOffer?: { applied: boolean; priceSek: number; regularPriceSek: number } | null;
+  imageUrls?: string[];
   onlineCheaper?: boolean;
   participants?: PublicProfile[];
   resourceNames?: string[];
@@ -78,6 +81,10 @@ type FeedItem = {
     early_bird_price_minor?: number | null;
     early_bird_slots?: number | null;
     scarcity_mode?: string | null;
+    first_visit_offer_enabled?: boolean;
+    first_visit_price_minor?: number | null;
+    first_visit_only?: boolean;
+    image_urls?: string[];
   };
   capacity?: number | null;
   href: string;
@@ -107,6 +114,13 @@ type SessionRow = {
   early_bird_price_minor?: number | null;
   early_bird_slots?: number | null;
   scarcity_mode?: string | null;
+  first_visit_offer_enabled?: boolean;
+  first_visit_price_minor?: number | null;
+  first_visit_only?: boolean;
+  activity_series?: {
+    image_urls?: string[] | null;
+    activity_formats?: { image_urls?: string[] | null } | null;
+  } | null;
 };
 
 type SessionOccurrence = SessionRow & {
@@ -156,6 +170,21 @@ type EventRow = {
   start_date: string | null;
   start_time: string | null;
   end_time: string | null;
+  logo_url?: string | null;
+  background_url?: string | null;
+};
+
+type FirstVisitOfferResponse = {
+  is_first_time: boolean;
+  occurrences: Array<{
+    activity_session_id: string;
+    session_date: string;
+    applied: boolean;
+    price_sek: number;
+    regular_price_sek: number;
+    route?: string;
+  }>;
+  items: Array<{ route: string }>;
 };
 
 type BookingRow = {
@@ -202,14 +231,15 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
       const [sessionsRes, eventsRes, bookingsRes, openBookingsRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, activity_series(image_urls, activity_formats(image_urls))")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")
+          .eq("closed_to_public", false)
           .order("start_time", { ascending: true }),
         supabase
           .from("events")
-          .select("id, name, display_name, slug, category, status, start_date, start_time, end_time")
+          .select("id, name, display_name, slug, category, status, start_date, start_time, end_time, logo_url, background_url")
           .eq("venue_id", venueId!)
           .eq("is_public", true)
           .in("status", ["upcoming", "active", "live"])
@@ -347,6 +377,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           userRegistrationStatus,
           priceSek: earlyPrice ?? (onlinePrice || Number(session.price_sek || 0)),
           isSpecialPass,
+          imageUrls: inheritedEventImages(session.activity_series),
           onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
           participants: (participantUserIdsByKey.get(occurrenceKey) || [])
             .map((participantUserId) => publicProfilesByUserId.get(participantUserId))
@@ -379,6 +410,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           ? DateTime.fromISO(event.start_date).toFormat("d MMM", { locale: "sv" })
           : null,
         chatEmoji: "🏆",
+        imageUrls: [event.background_url || event.logo_url].filter(Boolean) as string[],
       }));
 
       const bookingItems: FeedItem[] = (groupBookingRows((bookingsRes.data || []) as BookingRow[]) as BookingGroup[]).map((booking) => {
@@ -443,6 +475,14 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
 
       return mergedItems;
     },
+  });
+}
+
+function useFirstVisitOffers(slug: string, userId: string | undefined) {
+  return useQuery({
+    queryKey: ["first-visit-offers", slug, userId || "guest"],
+    staleTime: userId ? 0 : 30_000,
+    queryFn: () => apiGet<FirstVisitOfferResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }),
   });
 }
 
@@ -569,12 +609,13 @@ function FeedRow({
         })
       : activitySessionToPresentation({
           id: item.id,
-          typeLabel: item.isSpecialPass ? "SPECIALPASS" : item.category,
+          typeLabel: item.firstVisitOffer?.applied ? `Prova-på · ${formatSek(item.firstVisitOffer.priceSek)}` : item.isSpecialPass ? "SPECIALPASS" : item.category,
           title: item.title,
           sessionDate: item.date,
           startTime: item.startTime,
           endTime: item.endTime || item.startTime,
           resourceNames: item.resourceNames,
+          imageUrls: item.imageUrls,
           people: item.participants,
           committedCount: item.registrationsCount,
           capacity: item.capacity,
@@ -685,8 +726,9 @@ function FeaturedTonightHero({
           boxShadow: "0 14px 36px rgba(17,17,17,0.06)",
         }}
       >
+        {item?.imageUrls?.[0] ? <img src={item.imageUrls[0]} alt="" className="-mx-5 -mt-5 mb-5 aspect-video w-[calc(100%+2.5rem)] object-cover" data-testid="featured-identity-image" /> : null}
         <p className="text-[11px] font-black uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: PINK }}>
-          {activityStatus?.stateLabel || timing.eyebrow}
+          {item?.firstVisitOffer?.applied ? `Prova-på · ${formatSek(item.firstVisitOffer.priceSek)}` : activityStatus?.stateLabel || timing.eyebrow}
         </p>
         <div className="mt-5">
           {welcomeLine ? (
@@ -746,7 +788,25 @@ export default function TodayPage() {
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
 
-  const { data: items = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
+  const { data: rawItems = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
+  const { data: firstVisitOffers } = useFirstVisitOffers(slug, user?.id);
+  const firstVisitByOccurrence = useMemo(() => new Map(
+    (firstVisitOffers?.occurrences || []).map((offer) => [`${offer.activity_session_id}:${offer.session_date}`, offer]),
+  ), [firstVisitOffers?.occurrences]);
+  const items = useMemo(() => rawItems.map((item) => {
+    if (item.kind !== "session" || !item.activitySession?.id) return item;
+    const offer = firstVisitByOccurrence.get(`${item.activitySession.id}:${item.date}`);
+    if (!offer?.applied) return item;
+    return {
+      ...item,
+      priceSek: offer.price_sek,
+      firstVisitOffer: {
+        applied: true,
+        priceSek: offer.price_sek,
+        regularPriceSek: offer.regular_price_sek,
+      },
+    };
+  }), [firstVisitByOccurrence, rawItems]);
   const { data: courseHome } = useQuery({
     queryKey: ["course-home", slug, user?.id || "guest"],
     queryFn: () => fetchCourseHome(slug),
@@ -873,16 +933,22 @@ export default function TodayPage() {
             null
           ) : (
             <div className="space-y-8">
+              {firstVisitOffers?.is_first_time ? (
+                <button type="button" onClick={() => navigate(firstVisitOffers.items?.[0]?.route || `/today?v=${encodeURIComponent(slug)}`)} className="flex w-full items-center justify-between gap-4 border-y border-black/10 py-4 text-left text-[14px] font-bold">
+                  <span>{firstVisitOffers.items?.length ? "Första gången? Prova för 99 kr — racket ingår." : "Första gången? 165 kr, racket ingår — kom på Open Play ikväll."}</span>
+                  <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
+                </button>
+              ) : null}
               {courseHome?.mode === "registration" && courseHome.item ? (() => {
                 const course = courseHome.item as CourseDetail;
                 return (
-                  <button type="button" onClick={() => navigate(`/course/${course.id}?v=${encodeURIComponent(slug)}`)} className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }}>
+                  <article className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="home-course-card">
                     <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Anmälan öppen</p>
                     <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{course.name}</h2>
                     {course.format?.description ? <p className="mt-2 text-sm leading-relaxed" style={{ color: MUTED }}>{course.format.description}</p> : null}
-                    <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>Startar {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")} · {course.capacity.available_count} platser kvar</p>
-                    <span className="mt-4 inline-flex items-center gap-2 text-sm font-black">Boka kurs <ArrowRight className="h-4 w-4" /></span>
-                  </button>
+                    <p className="mt-2 text-sm font-black" style={{ color: PINK }}>Startar {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")} · {course.capacity.available_count} platser kvar</p>
+                    <button type="button" onClick={() => navigate(`/course/${course.id}?v=${encodeURIComponent(slug)}`)} className="mt-4 inline-flex items-center gap-2 rounded-full bg-black px-5 py-3 text-sm font-black text-white">Boka kurs <ArrowRight className="h-4 w-4" /></button>
+                  </article>
                 );
               })() : null}
               {courseHome?.mode === "next" && courseHome.item ? (() => {

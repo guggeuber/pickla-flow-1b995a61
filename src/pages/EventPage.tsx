@@ -170,7 +170,8 @@ export default function EventPage() {
   const venue = event.venues;
   const fields: string[] = event.registration_fields || ["name", "phone"];
   const catConfig = event.category_config;
-  const eventLogo = event.logo_url || catConfig?.logo_url;
+  const eventLogo = event.logo_url;
+  const eventHero = event.background_url || eventLogo;
   const whatsapp = event.whatsapp_url || catConfig?.whatsapp_url || WHATSAPP_GROUPS[event.category]?.url;
   const whatsappLabel = event.display_name || event.name || catConfig?.display_name || WHATSAPP_GROUPS[event.category]?.label || "WhatsApp-grupp";
 
@@ -225,8 +226,8 @@ export default function EventPage() {
 
       {/* Event header */}
       <div className="px-5 pb-5">
-        {eventLogo && (
-          <img src={eventLogo} alt="" className="h-12 max-w-[160px] object-contain mb-5" />
+        {eventHero && (
+          <img src={eventHero} alt="" className="mb-5 aspect-video w-full rounded-2xl object-cover" />
         )}
 
         <h1 className="text-[28px] font-bold text-neutral-900 tracking-tight leading-tight" style={{ fontFamily: FONT_GROTESK }}>
@@ -517,18 +518,11 @@ export default function EventPage() {
                   }}
                   className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl bg-neutral-50 active:bg-neutral-100 transition-colors text-left"
                 >
-                  {evt.logo_url ? (
-                    <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center overflow-hidden">
-                      <img src={evt.logo_url} alt="" className="max-w-full max-h-full object-contain" />
+                  {(evt.background_url || evt.logo_url) ? (
+                    <div className="w-16 aspect-video rounded-xl flex-shrink-0 overflow-hidden">
+                      <img src={evt.background_url || evt.logo_url} alt="" className="h-full w-full object-cover" />
                     </div>
-                  ) : (
-                    <div
-                      className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center text-[12px] font-bold text-white"
-                      style={{ background: evt.primary_color || "#333", fontFamily: FONT_MONO }}
-                    >
-                      {(evt.display_name || evt.name || "?")[0].toUpperCase()}
-                    </div>
-                  )}
+                  ) : null}
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium text-neutral-900 truncate" style={{ fontFamily: FONT_GROTESK }}>
                       {(evt.display_name || evt.name).toLowerCase()}

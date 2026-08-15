@@ -35,6 +35,7 @@ export function SessionScheduleRow({
         className,
       )}
     >
+      {presentation.imageUrls?.[0] ? <img src={presentation.imageUrls[0]} alt="" className="mb-4 aspect-video w-full rounded-[16px] object-cover" data-testid="schedule-identity-image" /> : null}
       <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-3">
         <div className="pt-1 font-mono text-[18px] font-bold text-black/75">
           {start.toFormat("HH:mm")}

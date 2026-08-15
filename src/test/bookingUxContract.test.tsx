@@ -40,11 +40,11 @@ describe("final booking UX contract", () => {
     expect(myPageSource).toContain("visible={bookingHasConversation(b, conversationRooms)}");
   });
 
-  it("keeps hamburger and My Page on the same booking source and status derivation", () => {
-    for (const source of [myPageSource, topBarSource]) {
-      expect(source).toContain("useMyBookings()");
-      expect(source).toContain("buildBookingHistory(");
-      expect(source).toContain("BookingStatusChip");
-    }
+  it("keeps full booking ownership on My Page while the menu stays a navigation surface", () => {
+    expect(myPageSource).toContain("useMyBookings()");
+    expect(myPageSource).toContain("buildBookingHistory(");
+    expect(myPageSource).toContain("BookingStatusChip");
+    expect(topBarSource).not.toContain("useMyBookings()");
+    expect(topBarSource).toContain('["Min sida"');
   });
 });

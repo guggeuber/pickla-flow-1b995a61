@@ -961,6 +961,7 @@ async function resolveLines(
           client: admin,
           venueId: order.venue_id,
           userId,
+          customerId,
           activitySessionId: line.activity_session_id,
           sessionDate: line.session_date,
           requestedProductKey: product.product_key,
