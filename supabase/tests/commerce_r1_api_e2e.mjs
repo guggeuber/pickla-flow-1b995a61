@@ -235,6 +235,57 @@ async function seed() {
 await seed();
 pass("fixture", "local venue, activities and products seeded");
 
+// Prova-på is customer-wide, reserved once before Stripe, and consumed by the
+// committed activity registration rather than by payment history alone.
+await rest("activity_sessions", `id=in.(${ids.activity},${ids.futureActivity},${ids.capacityActivity})`, {
+  method: "PATCH",
+  body: { first_visit_offer_enabled: true, first_visit_price_minor: 9900, first_visit_only: true },
+});
+const firstVisitEmail = "first-visit-concurrency@commerce-r1.local";
+const firstVisitA = await createCart({ email: firstVisitEmail, name: "First Visit", activityId: ids.activity, date: today });
+const firstVisitB = await createCart({ venueId: ids.capacityVenue, productId: ids.capacityParticipation, activityId: ids.capacityActivity, date: today, racketId: ids.capacityRacket, email: firstVisitEmail, name: "First Visit" });
+const [firstQuoteA, firstQuoteB] = await Promise.all([
+  fn("resolve", { method: "POST", body: { token: firstVisitA.cart_token } }),
+  fn("resolve", { method: "POST", body: { token: firstVisitB.cart_token } }),
+]);
+assert(firstQuoteA.payload.lines[0].unit_price_minor === 9900 && firstQuoteB.payload.lines[0].unit_price_minor === 9900, "new customer did not receive provisional 99 kr quotes");
+const concurrentFirstVisit = await Promise.all([
+  fn("checkout", { method: "POST", expected: [200, 409], body: { token: firstVisitA.cart_token, expected_version: firstVisitA.order.version, guest_email: firstVisitEmail, guest_name: "First Visit", success_path: "/commerce/confirmed", cancel_path: "/today" } }),
+  fn("checkout", { method: "POST", expected: [200, 409], body: { token: firstVisitB.cart_token, expected_version: firstVisitB.order.version, guest_email: firstVisitEmail, guest_name: "First Visit", success_path: "/commerce/confirmed", cancel_path: "/today" } }),
+]);
+const firstVisitWinner = concurrentFirstVisit.find((item) => item.response.status === 200);
+const firstVisitLoser = concurrentFirstVisit.find((item) => item.response.status === 409);
+assert(firstVisitWinner?.payload?.url && firstVisitLoser?.payload?.quote_changed === true, "concurrent Prova-på did not produce one winner and one reprice");
+assert(Number(firstVisitLoser.payload.pricing.final_price_minor) === 16500, "losing Prova-på attempt did not return ordinary price");
+const winnerUrl = new URL(firstVisitWinner.payload.url);
+assert(Number(winnerUrl.searchParams.get("expires_at")) > Math.floor(Date.now() / 1000) + 1800, "Prova-på Stripe Session has no bounded expiry");
+const firstVisitSession = winnerUrl.searchParams.get("session");
+const firstVisitOrder = (await rest("commerce_orders", `id=eq.${firstVisitWinner.payload.order_id}&select=id,version,customer_id`)).payload[0];
+const firstVisitEvent = checkoutEvent({ eventId: "evt_first_visit_once", sessionId: firstVisitSession, orderId: firstVisitOrder.id, version: firstVisitWinner.payload.version, amount: 9900, email: firstVisitEmail, name: "First Visit", paymentIntent: "pi_first_visit_once" });
+await signedWebhook(firstVisitEvent);
+const duplicateFirstVisit = await signedWebhook(firstVisitEvent);
+assert(duplicateFirstVisit.duplicate === true, "duplicate Prova-på webhook was not idempotent");
+const redeemed = (await rest("session_registrations", `customer_id=eq.${firstVisitOrder.customer_id}&metadata->>pricing_reason=eq.first_visit_offer&select=id,status`)).payload;
+assert(redeemed.length === 1 && redeemed[0].status === "confirmed", "Prova-på redemption was not committed exactly once");
+const afterRedemption = await createCart({ email: firstVisitEmail, name: "First Visit", activityId: ids.activity, date: tomorrow });
+const afterRedemptionCheckout = await checkout(afterRedemption, { email: firstVisitEmail, name: "First Visit" });
+const afterRedemptionLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${afterRedemptionCheckout.order_id}&commerce_kind=eq.participation&select=unit_price_minor,resolver_snapshot`)).payload[0];
+assert(Number(afterRedemptionLine.unit_price_minor) === 16500, "completed Prova-på customer remained eligible at final pricing");
+
+const abandonEmail = "first-visit-abandon@commerce-r1.local";
+const firstVisitAbandonCart = await createCart({ email: abandonEmail, name: "Abandon", activityId: ids.activity, date: today });
+const firstVisitAbandonCheckout = await checkout(firstVisitAbandonCart, { email: abandonEmail, name: "Abandon" });
+const firstVisitAbandonSession = new URL(firstVisitAbandonCheckout.url).searchParams.get("session");
+await signedWebhook({ id: "evt_first_visit_expired", type: "checkout.session.expired", data: { object: { id: firstVisitAbandonSession, metadata: { commerce_order_id: firstVisitAbandonCheckout.order_id } } } });
+const afterAbandon = await createCart({ email: abandonEmail, name: "Abandon", activityId: ids.futureActivity, date: tomorrow });
+const afterAbandonQuote = (await fn("resolve", { method: "POST", body: { token: afterAbandon.cart_token } })).payload;
+assert(afterAbandonQuote.lines[0].unit_price_minor === 9900, "expired Prova-på reservation did not release");
+pass("Prova-på once", "committed participation, two-venue concurrency, bounded Stripe expiry, release and duplicate webhook");
+await rest("activity_sessions", `id=in.(${ids.activity},${ids.futureActivity},${ids.capacityActivity})`, {
+  method: "PATCH",
+  body: { first_visit_offer_enabled: false, first_visit_price_minor: null },
+});
+
 const member = await createUser("member@commerce-r1.local");
 const attacker = await createUser("attacker@commerce-r1.local");
 

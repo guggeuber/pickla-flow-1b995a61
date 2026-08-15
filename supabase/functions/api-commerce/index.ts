@@ -98,6 +98,8 @@ type DeskFulfillmentItem = {
 };
 
 const DESK_PICKUP_INSTRUCTION = 'Hämtas vid disken.';
+const FIRST_VISIT_STRIPE_EXPIRY_SECONDS = 31 * 60;
+const FIRST_VISIT_HOLD_TTL_SECONDS = 32 * 60;
 
 function appendStripeFormValue(body: URLSearchParams, key: string, value: unknown) {
   if (value === undefined || value === null) return;
@@ -128,6 +130,16 @@ async function createStripeCheckoutSession(stripeKey: string, data: Record<strin
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.error?.message || `Stripe API error ${response.status}`);
   return payload as StripeCheckoutSession;
+}
+
+async function expireStripeCheckoutSession(stripeKey: string, sessionId: string) {
+  const response = await fetch(`${STRIPE_API_BASE}/checkout/sessions/${encodeURIComponent(sessionId)}/expire`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${stripeKey}` },
+  });
+  if (response.ok) return;
+  const payload = await response.json().catch(() => ({}));
+  throw new Error(payload?.error?.message || `Stripe session expiry failed ${response.status}`);
 }
 
 async function createStripeRefund(stripeKey: string, paymentIntentId: string, orderId: string) {
@@ -865,7 +877,7 @@ async function resolveLines(
   lines: any[],
   userId?: string | null,
   resolvedCustomerId?: string | null,
-  options: { applyEarlyBird?: boolean } = {},
+  options: { applyEarlyBird?: boolean; applyFirstVisit?: boolean } = {},
 ) {
   const productIds = lines.map((line) => line.product_id).filter(Boolean);
   const { data: products, error } = await admin
@@ -969,6 +981,7 @@ async function resolveLines(
           purchaseKind,
           salesChannel: 'online',
           applyEarlyBird: options.applyEarlyBird !== false,
+          applyFirstVisit: options.applyFirstVisit !== false,
         });
         unitPriceMinor = Math.round(Number(decision.finalAmountSek || 0) * 100);
         resolverSnapshot = {
@@ -1113,7 +1126,8 @@ async function acquireParticipationHold(
     };
   }
   const regularPriceType = String(regularResolvedLine?.resolver_snapshot?.pricing_reason || 'regular_price');
-  const { data, error } = await admin.rpc('acquire_activity_pricing_hold', {
+  const quotedPriceType = String(quotedResolvedLine?.resolver_snapshot?.pricing_reason || regularPriceType);
+  const { data, error } = await admin.rpc('acquire_first_visit_activity_pricing_hold', {
     p_venue_id: order.venue_id,
     p_activity_session_id: line.activity_session_id,
     p_session_date: line.session_date,
@@ -1125,6 +1139,7 @@ async function acquireParticipationHold(
     p_regular_price_minor: Number(regularResolvedLine?.unit_price_minor || 0),
     p_regular_price_type: regularPriceType,
     p_quoted_price_minor: Number(quotedResolvedLine?.unit_price_minor || 0),
+    p_ttl_seconds: quotedPriceType === 'first_visit_offer' ? FIRST_VISIT_HOLD_TTL_SECONDS : 600,
     p_metadata: {
       commerce_order_id: order.id,
       commerce_order_line_id: line.id,
@@ -2015,9 +2030,30 @@ const commerceHandler = async (req: Request) => {
       }
       const quoted = await resolveLines(admin, order, lines, userId, customerId);
       const resolved = participation[0]
-        ? await resolveLines(admin, order, lines, userId, customerId, { applyEarlyBird: false })
+        ? await resolveLines(admin, order, lines, userId, customerId, { applyEarlyBird: false, applyFirstVisit: false })
         : quoted;
+      const quotedParticipationAtCheckout = participation[0]
+        ? quoted.find((line) => line.id === participation[0].id)
+        : null;
+      const canonicalParticipationAtCheckout = participation[0]
+        ? resolved.find((line) => line.id === participation[0].id)
+        : null;
+      if (
+        quotedParticipationAtCheckout?.resolver_snapshot?.debug?.first_visit_offer?.eligibility_reason
+          === 'active_first_visit_reservation'
+      ) {
+        return jsonResponse({
+          error: 'Prova-på-priset är redan reserverat i ett annat köp. Kontrollera den nya summan.',
+          quote_changed: true,
+          pricing: {
+            applied_price_type: canonicalParticipationAtCheckout?.resolver_snapshot?.pricing_reason || 'regular_price',
+            final_price_minor: Number(canonicalParticipationAtCheckout?.unit_price_minor || 0),
+            quote_changed: true,
+          },
+        }, 409, 0);
+      }
       let holdId: string | null = null;
+      let checkoutAppliedPriceType: string | null = null;
       if (participation[0]) {
         const resolvedParticipation = resolved.find((line) => line.id === participation[0].id);
         const quotedParticipation = quoted.find((line) => line.id === participation[0].id);
@@ -2031,6 +2067,7 @@ const commerceHandler = async (req: Request) => {
           customerId,
         );
         holdId = pricingHold.hold_id || null;
+        checkoutAppliedPriceType = String(pricingHold.applied_price_type || '') || null;
         if (pricingHold.quote_changed) {
           await releaseHold(admin, holdId, 'commerce_quote_changed');
           return jsonResponse({
@@ -2136,6 +2173,9 @@ const commerceHandler = async (req: Request) => {
             commerce_order_id: order.id,
             commerce_order_version: String(frozenOrder.version),
           },
+          ...(checkoutAppliedPriceType === 'first_visit_offer'
+            ? { expires_at: Math.floor(Date.now() / 1000) + FIRST_VISIT_STRIPE_EXPIRY_SECONDS }
+            : {}),
           success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${cancelPath}`,
         });
@@ -2145,18 +2185,30 @@ const commerceHandler = async (req: Request) => {
         throw error;
       }
 
-      const { data: attached, error: attachError } = await admin.rpc('attach_commerce_order_stripe_session', {
-        p_order_id: order.id,
-        p_version: frozenOrder.version,
-        p_stripe_session_id: stripeSession.id,
-      });
-      if (attachError || !attached) throw new Error(attachError?.message || 'Could not attach Stripe session');
-      if (holdId) {
-        const { error: holdAttachError } = await admin.rpc('attach_capacity_hold_stripe_session', {
-          p_hold_id: holdId,
+      try {
+        const { data: attached, error: attachError } = await admin.rpc('attach_commerce_order_stripe_session', {
+          p_order_id: order.id,
+          p_version: frozenOrder.version,
           p_stripe_session_id: stripeSession.id,
         });
-        if (holdAttachError) throw new Error(holdAttachError.message);
+        if (attachError || !attached) throw new Error(attachError?.message || 'Could not attach Stripe session');
+        if (holdId) {
+          const { data: holdAttached, error: holdAttachError } = await admin.rpc('attach_capacity_hold_stripe_session', {
+            p_hold_id: holdId,
+            p_stripe_session_id: stripeSession.id,
+          });
+          if (holdAttachError || !holdAttached) throw new Error(holdAttachError?.message || 'Could not attach Stripe session to hold');
+        }
+      } catch (error) {
+        await expireStripeCheckoutSession(stripeKey, stripeSession.id).catch((expiryError) => {
+          console.error('Could not expire unattached Stripe Checkout Session', expiryError);
+        });
+        await releaseHold(admin, holdId, 'commerce_stripe_attach_failed');
+        await admin.rpc('reopen_commerce_order_after_checkout_failure', {
+          p_order_id: order.id,
+          p_version: frozenOrder.version,
+        });
+        throw error;
       }
       await recordCommerceEvent(admin, {
         eventName: 'checkout_started',

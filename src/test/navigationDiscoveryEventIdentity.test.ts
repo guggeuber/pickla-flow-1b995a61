@@ -23,7 +23,8 @@ describe("Navigation, discovery and event identity contract", () => {
     const page = read("src/pages/PricesMembershipPage.tsx");
     expect(page).toContain("Priser & medlemskap");
     expect(page).toContain("/membership?v=");
-    expect(page).toContain("Första gången? Prova för 99 kr — racket ingår.");
+    expect(page).toContain("Första gången? Spela för 99 kr.");
+    expect(page).toContain("Racket finns att låna.");
     expect(page).not.toMatch(/<table|line-through|överstruk/i);
   });
 
@@ -52,8 +53,23 @@ describe("Navigation, discovery and event identity contract", () => {
     const admin = read("supabase/functions/api-admin/index.ts");
     expect(migration).toContain("first_visit_price_minor = 9900");
     expect(migration).not.toContain("campaign_starts_at");
-    expect(resolver).toContain("hasPriorPaidParticipation");
+    expect(resolver).toContain("firstVisitEligibilityForCustomer");
     expect(resolver).toContain("pricingReason = 'first_visit_offer'");
+    const onceMigration = read("supabase/migrations/20260816120000_first_visit_offer_once.sql");
+    expect(onceMigration).toContain("registration.status IN ('confirmed', 'checked_in', 'no_show', 'cancelled')");
+    expect(onceMigration).toContain("IN ('activity_ticket', 'day_pass')");
+    expect(onceMigration).toContain("acquire_first_visit_activity_pricing_hold");
+    expect(onceMigration).toContain("pg_advisory_xact_lock");
+    expect(onceMigration).toContain("idx_capacity_holds_one_active_first_visit_per_customer");
+    expect(onceMigration).toContain("hold.stripe_session_id IS NOT NULL");
+    expect(onceMigration).toContain("AND stripe_session_id IS NULL");
+    expect(onceMigration).not.toContain("booking_participants");
+    expect(onceMigration).not.toContain("commerce_order_lines");
+    const commerce = read("supabase/functions/api-commerce/index.ts");
+    expect(commerce).toContain("applyFirstVisit: false");
+    expect(commerce).toContain("FIRST_VISIT_STRIPE_EXPIRY_SECONDS");
+    expect(commerce).toContain("FIRST_VISIT_HOLD_TTL_SECONDS");
+    expect(commerce).toContain("expireStripeCheckoutSession");
     expect(publicApi).toContain("offer?.applied ?");
     expect(admin).toContain("Prova-på får inte aktiveras på Fredagsklubben");
     expect(read("src/pages/ProgramSessionPage.tsx")).toContain("Racket finns att låna.");

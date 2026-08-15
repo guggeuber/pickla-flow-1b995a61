@@ -17,7 +17,13 @@ const server = http.createServer(async (request, response) => {
     }
     sequence += 1;
     const id = `cs_test_commerce_r1_${sequence}`;
-    response.end(JSON.stringify({ id, url: `http://127.0.0.1:${port}/checkout?session=${id}` }));
+    const expiresAt = form.get("expires_at") || "";
+    response.end(JSON.stringify({ id, url: `http://127.0.0.1:${port}/checkout?session=${id}&expires_at=${expiresAt}` }));
+    return;
+  }
+
+  if (request.method === "POST" && /^\/v1\/checkout\/sessions\/[^/]+\/expire$/.test(request.url || "")) {
+    response.end(JSON.stringify({ id: request.url.split("/")[4], status: "expired" }));
     return;
   }
 

@@ -245,7 +245,23 @@ async function insertIdentityIfMissing(admin: any, row: Record<string, unknown>)
   if (existing?.id) return;
 
   const { error } = await admin.from('customer_identities').insert(row);
-  if (error) throw new Error(error.message);
+  if (!error) return;
+  if (error.code !== '23505') throw new Error(error.message);
+
+  // Concurrent guest checkouts can resolve the same canonical email between
+  // the read and insert above. Treat the unique-key winner as idempotent only
+  // when it attached the identity to this same canonical customer.
+  const { data: concurrent, error: concurrentError } = await admin
+    .from('customer_identities')
+    .select('customer_id')
+    .eq('organization_id', organizationId)
+    .eq('provider', provider)
+    .eq('provider_id', providerId)
+    .maybeSingle();
+  if (concurrentError) throw new Error(concurrentError.message);
+  if (concurrent?.customer_id !== row.customer_id) {
+    throw new Error('Customer identity is already linked to another customer');
+  }
 }
 
 export async function resolveOrCreateCustomerIdForUser(

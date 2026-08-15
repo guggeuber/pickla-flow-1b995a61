@@ -70,16 +70,20 @@ function normalizeChannel(value: unknown) {
 export function firstVisitOfferDecision({
   enabled,
   priceMinor,
-  priorPaidParticipation,
+  priorCommittedParticipation,
+  completedRedemption,
+  activeReservation,
   currentAmountSek,
 }: {
   enabled: boolean;
   priceMinor: number | null;
-  priorPaidParticipation: boolean;
+  priorCommittedParticipation: boolean;
+  completedRedemption: boolean;
+  activeReservation: boolean;
   currentAmountSek: number;
 }) {
   const priceSek = minorToSek(priceMinor);
-  const applies = enabled && priceSek != null && !priorPaidParticipation && currentAmountSek > priceSek;
+  const applies = enabled && priceSek != null && !priorCommittedParticipation && !completedRedemption && !activeReservation && currentAmountSek > priceSek;
   return {
     applies,
     priceSek,
@@ -88,49 +92,47 @@ export function firstVisitOfferDecision({
       ? 'disabled'
       : priceSek == null
       ? 'invalid_price'
-      : priorPaidParticipation
-      ? 'prior_paid_participation'
+      : priorCommittedParticipation
+      ? 'prior_committed_activity_participation'
+      : completedRedemption
+      ? 'completed_first_visit_redemption'
+      : activeReservation
+      ? 'active_first_visit_reservation'
       : currentAmountSek <= priceSek
       ? 'existing_price_not_higher'
       : 'eligible',
   };
 }
 
-export async function hasPriorPaidParticipation(client: any, customerId?: string | null, userId?: string | null) {
-  if (!customerId && !userId) return false;
-  const constrainIdentity = (query: any, customerColumn: string, userColumn: string) => customerId
-    ? query.eq(customerColumn, customerId)
-    : query.eq(userColumn, userId);
-  const [sessionResult, sharedCourtResult, commerceResult] = await Promise.all([
-    constrainIdentity(
-      client.from('session_registrations').select('id', { count: 'exact', head: true })
-        .gt('price_paid_sek', 0),
-      'customer_id',
-      'user_id',
-    ),
-    constrainIdentity(
-      client.from('booking_participants').select('id', { count: 'exact', head: true })
-        .eq('payment_status', 'paid')
-        .gt('price_minor', 0),
-      'customer_id',
-      'user_id',
-    ),
-    constrainIdentity(
-      client.from('commerce_order_lines')
-        .select('id, commerce_orders!inner(id)', { count: 'exact', head: true })
-        .eq('commerce_kind', 'participation')
-        .gt('line_total_inc_vat_minor', 0)
-        .eq('commerce_orders.status', 'paid'),
-      'beneficiary_customer_id',
-      'beneficiary_user_id',
-    ),
-  ]);
-  const failure = [sessionResult, sharedCourtResult, commerceResult].find((result) => result.error)?.error;
-  if (failure) {
-    console.error('first-visit history lookup failed', failure.message);
+export type FirstVisitEligibility = {
+  hasCommittedParticipation: boolean;
+  hasCompletedRedemption: boolean;
+  hasActiveReservation: boolean;
+  eligible: boolean;
+};
+
+export async function firstVisitEligibilityForCustomer(
+  client: any,
+  customerId?: string | null,
+  userId?: string | null,
+): Promise<FirstVisitEligibility> {
+  if (!customerId && !userId) {
+    return { hasCommittedParticipation: false, hasCompletedRedemption: false, hasActiveReservation: false, eligible: true };
+  }
+  const { data, error } = await client.rpc('first_visit_offer_eligibility', {
+    p_customer_id: customerId || null,
+    p_user_id: userId || null,
+  }).maybeSingle();
+  if (error) {
+    console.error('first-visit eligibility lookup failed', error.message);
     throw new Error('Could not verify first-visit eligibility');
   }
-  return [sessionResult, sharedCourtResult, commerceResult].some((result) => Number(result.count || 0) > 0);
+  return {
+    hasCommittedParticipation: data?.has_committed_participation === true,
+    hasCompletedRedemption: data?.has_completed_redemption === true,
+    hasActiveReservation: data?.has_active_reservation === true,
+    eligible: data?.eligible === true,
+  };
 }
 
 async function countActivityFill(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
@@ -220,8 +222,9 @@ export async function resolveActivityPricingDecision({
   session: providedSession,
   productCache,
   applyEarlyBird = true,
+  applyFirstVisit = true,
   customerId,
-  priorPaidParticipation,
+  firstVisitEligibility,
 }: {
   client: any;
   venueId: string;
@@ -235,8 +238,9 @@ export async function resolveActivityPricingDecision({
   session?: any | null;
   productCache?: Map<string, Promise<any>>;
   applyEarlyBird?: boolean;
+  applyFirstVisit?: boolean;
   customerId?: string | null;
-  priorPaidParticipation?: boolean;
+  firstVisitEligibility?: FirstVisitEligibility;
 }): Promise<ActivityPricingDecision> {
   const session = providedSession?.id
     ? providedSession
@@ -276,7 +280,7 @@ export async function resolveActivityPricingDecision({
   const productBaseAmountSek = Number(product?.base_price_sek ?? 0);
   const fallbackBaseAmountSek = Number(requestedAmountSek || 0);
   const sessionMetadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {};
-  const firstVisitEnabled = purchaseKind === 'activity_ticket' && session.first_visit_offer_enabled === true;
+  const firstVisitEnabled = applyFirstVisit && purchaseKind === 'activity_ticket' && session.first_visit_offer_enabled === true;
   const firstVisitPriceMinor = positiveInt(session.first_visit_price_minor);
   const earlyBirdPriceMinor = positiveInt(
     session.early_bird_price_minor ??
@@ -611,11 +615,13 @@ export async function resolveActivityPricingDecision({
 
   if (firstVisitEnabled && finalAmountSek > 0) {
     entitlementCustomerId ||= customerId || (userId ? await resolveCustomerIdForUser(client, userId) : null);
-    const hasPaidBefore = priorPaidParticipation ?? await hasPriorPaidParticipation(client, entitlementCustomerId, userId);
+    const eligibility = firstVisitEligibility ?? await firstVisitEligibilityForCustomer(client, entitlementCustomerId, userId);
     const firstVisit = firstVisitOfferDecision({
       enabled: true,
       priceMinor: firstVisitPriceMinor,
-      priorPaidParticipation: hasPaidBefore,
+      priorCommittedParticipation: eligibility.hasCommittedParticipation,
+      completedRedemption: eligibility.hasCompletedRedemption,
+      activeReservation: eligibility.hasActiveReservation,
       currentAmountSek: finalAmountSek,
     });
     debug.first_visit_offer = {

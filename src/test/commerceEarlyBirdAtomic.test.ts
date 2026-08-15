@@ -24,7 +24,7 @@ describe("Commerce Early-Bird atomic allocation contract", () => {
 
   it("resolves membership precedence before the atomic scarcity award", () => {
     expect(pricingResolver).toContain("applyEarlyBird = true");
-    expect(commerceApi).toContain("{ applyEarlyBird: false }");
+    expect(commerceApi).toContain("applyEarlyBird: false");
     expect(commerceApi).toContain("p_regular_price_minor");
     expect(commerceApi).toContain("p_regular_price_type");
   });

@@ -1,7 +1,7 @@
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
-import { hasPriorPaidParticipation, resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
+import { firstVisitEligibilityForCustomer, resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { projectPublicActivitySessionHosts } from '../_shared/public_activity_hosts.ts';
@@ -1319,7 +1319,7 @@ Deno.serve(async (req) => {
     }
 
     // Public discovery read model. Anonymous visitors are provisionally eligible;
-    // identified customers are checked against canonical paid participation history.
+    // identified customers are checked against committed relevant activity truth.
     // Checkout runs the same resolver again before any price is committed.
     if (req.method === 'GET' && path === 'first-visit-offers') {
       const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
@@ -1333,7 +1333,7 @@ Deno.serve(async (req) => {
 
       const userId = await getOptionalUserId(req);
       const customerId = userId ? await resolveCustomerIdForUser(client, userId) : null;
-      const priorPaidParticipation = await hasPriorPaidParticipation(client, customerId, userId);
+      const firstVisitEligibility = await firstVisitEligibilityForCustomer(client, customerId, userId);
       const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
       const { data: sessions, error: sessionsError } = await client.from('activity_sessions')
         .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only')
@@ -1352,7 +1352,7 @@ Deno.serve(async (req) => {
             venueId: venue.id,
             userId,
             customerId,
-            priorPaidParticipation,
+            firstVisitEligibility,
             activitySessionId: session.id,
             sessionDate,
             requestedProductKey: session.product_key,
@@ -1372,7 +1372,7 @@ Deno.serve(async (req) => {
         })
       ))).filter(Boolean);
       return jsonResponse({
-        is_first_time: !priorPaidParticipation,
+        is_first_time: firstVisitEligibility.eligible,
         occurrences,
         items: occurrences.map((offer: any) => ({
           ...offer,

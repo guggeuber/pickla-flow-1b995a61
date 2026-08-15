@@ -935,7 +935,7 @@ export default function TodayPage() {
             <div className="space-y-8">
               {firstVisitOffers?.is_first_time ? (
                 <button type="button" onClick={() => navigate(firstVisitOffers.items?.[0]?.route || `/today?v=${encodeURIComponent(slug)}`)} className="flex w-full items-center justify-between gap-4 border-y border-black/10 py-4 text-left text-[14px] font-bold">
-                  <span>{firstVisitOffers.items?.length ? "Första gången? Prova för 99 kr — racket ingår." : "Första gången? 165 kr, racket ingår — kom på Open Play ikväll."}</span>
+                  <span>{firstVisitOffers.items?.length ? <><span className="block">Första gången? Spela för 99 kr.</span><span className="mt-1 block text-[12px] font-semibold text-neutral-500">Racket finns att låna.</span></> : "Första gången? 165 kr, racket ingår — kom på Open Play ikväll."}</span>
                   <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
                 </button>
               ) : null}
