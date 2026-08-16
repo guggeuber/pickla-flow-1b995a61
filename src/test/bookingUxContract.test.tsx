@@ -40,11 +40,14 @@ describe("final booking UX contract", () => {
     expect(myPageSource).toContain("visible={bookingHasConversation(b, conversationRooms)}");
   });
 
-  it("keeps full booking ownership on My Page while the menu stays a navigation surface", () => {
+  it("keeps full ownership on My Page while the menu exposes only the upcoming quick preview", () => {
     expect(myPageSource).toContain("useMyBookings()");
     expect(myPageSource).toContain("buildBookingHistory(");
     expect(myPageSource).toContain("BookingStatusChip");
-    expect(topBarSource).not.toContain("useMyBookings()");
+    expect(topBarSource).toContain("useMyBookings()");
+    expect(topBarSource).toContain('booking.history_status === "upcoming"');
+    expect(topBarSource).not.toContain("pastBookings");
+    expect(topBarSource).not.toContain("showPast");
     expect(topBarSource).toContain('["Min sida"');
   });
 });

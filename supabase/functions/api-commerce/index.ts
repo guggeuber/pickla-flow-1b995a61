@@ -11,6 +11,7 @@ import {
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { evaluateCommerceAvailability, type CommerceProductLike } from '../_shared/commerce_availability.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
 import {
   canonicalEntitlementFields,
   type EntitlementFunder,
@@ -1661,7 +1662,15 @@ const commerceHandler = async (req: Request) => {
 
     if (req.method === 'GET' && path === 'order') {
       const token = url.searchParams.get('token') || '';
-      const order = await loadOrderByReference(admin, token, userId, true);
+      let order = await loadOrderByReference(admin, token, userId, true);
+      if (order.status === 'checkout_pending') {
+        const recovery = await reconcileExpiredFirstVisitCheckouts(admin, {
+          orderId: order.id,
+          stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+          stripeApiBase: STRIPE_API_BASE,
+        });
+        if (recovery.released > 0) order = await loadOrderByReference(admin, token, userId, true);
+      }
       return jsonResponse(await cartResponse(admin, order), 200, 0);
     }
 
@@ -2027,6 +2036,13 @@ const commerceHandler = async (req: Request) => {
           if (existingRegistration) return errorResponse('Du har redan en plats till den här aktiviteten.', 409);
         }
         await admin.from('commerce_orders').update({ customer_id: customerId }).eq('id', order.id).eq('status', 'draft');
+      }
+      if (customerId) {
+        await reconcileExpiredFirstVisitCheckouts(admin, {
+          customerId,
+          stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+          stripeApiBase: STRIPE_API_BASE,
+        });
       }
       const quoted = await resolveLines(admin, order, lines, userId, customerId);
       const resolved = participation[0]

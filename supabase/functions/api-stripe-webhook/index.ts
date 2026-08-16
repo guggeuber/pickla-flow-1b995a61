@@ -17,6 +17,7 @@ import {
 } from './commerce_participation.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
+import { finalizeExpiredCommerceCheckout } from '../_shared/commerce_checkout_expiry.ts';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
@@ -177,7 +178,7 @@ const stripeWebhookHandler = async (req: Request) => {
 
   if (event.type === 'checkout.session.expired') {
     try {
-      await handleCommerceCheckoutExpired(event.data.object, serviceClient);
+      await finalizeExpiredCommerceCheckout(event.data.object, serviceClient);
       await serviceClient.from('stripe_events')
         .update({ status: 'processed', processed_at: new Date().toISOString(), error: null })
         .eq('id', eventId);
@@ -675,57 +676,6 @@ async function handleCommerceOrder(
       pickupItems: lines.filter((line: any) => line.fulfillment_type === 'desk_pickup').map((line: any) => `${line.quantity > 1 ? `${line.quantity} × ` : ''}${line.product_name}`),
     });
   }
-}
-
-async function handleCommerceCheckoutExpired(session: any, serviceClient: any) {
-  const directHoldId = String(session?.metadata?.capacity_hold_id || '').trim();
-  if (directHoldId) {
-    const { error: directReleaseError } = await serviceClient.rpc('release_capacity_hold', {
-      p_hold_id: directHoldId,
-      p_reason: 'stripe_checkout_expired',
-    });
-    if (directReleaseError) throw new Error(directReleaseError.message);
-  }
-
-  const orderId = String(session?.metadata?.commerce_order_id || '').trim();
-  if (!orderId) return;
-  const { data: order, error: orderError } = await serviceClient.from('commerce_orders')
-    .select('id, venue_id, status, stripe_session_id, metadata')
-    .eq('id', orderId)
-    .maybeSingle();
-  if (orderError) throw new Error(orderError.message);
-  if (!order || order.stripe_session_id !== session.id || order.status !== 'checkout_pending') return;
-  const { data: lines, error: linesError } = await serviceClient.from('commerce_order_lines')
-    .select('capacity_hold_id')
-    .eq('commerce_order_id', order.id)
-    .not('capacity_hold_id', 'is', null);
-  if (linesError) throw new Error(linesError.message);
-  for (const line of lines || []) {
-    const { error: releaseError } = await serviceClient.rpc('release_capacity_hold', {
-      p_hold_id: line.capacity_hold_id,
-      p_reason: 'stripe_checkout_expired',
-    });
-    if (releaseError) throw new Error(releaseError.message);
-  }
-  const { error: expireError } = await serviceClient.from('commerce_orders')
-    .update({ status: 'expired', expires_at: new Date().toISOString() })
-    .eq('id', order.id)
-    .eq('status', 'checkout_pending');
-  if (expireError) throw new Error(expireError.message);
-  const { data: participation } = await serviceClient.from('commerce_order_lines')
-    .select('activity_session_id')
-    .eq('commerce_order_id', order.id)
-    .eq('commerce_kind', 'participation')
-    .maybeSingle();
-  const { error: eventError } = await serviceClient.from('commerce_events').upsert({
-    venue_id: order.venue_id,
-    commerce_order_id: order.id,
-    activity_session_id: participation?.activity_session_id || null,
-    event_name: 'checkout_abandoned',
-    journey_id_hash: order.metadata?.journey_id_hash || null,
-    metadata: { source: 'stripe_webhook' },
-  }, { onConflict: 'commerce_order_id,event_name' });
-  if (eventError) console.error('checkout abandoned event failed', eventError.message);
 }
 
 async function handleCommerceRefund(object: StripeRefundObject, eventType: string, serviceClient: ServiceClient) {

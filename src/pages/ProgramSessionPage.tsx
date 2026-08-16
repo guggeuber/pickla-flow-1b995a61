@@ -425,12 +425,13 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const backendPricing = data?.activityTicketPricing || data?.pricing || null;
   const dayPassPricing = data?.dayPassPricing || null;
   const selectedPricing = commercePurchaseKind === "day_pass" ? dayPassPricing : backendPricing;
+  const selectedCustomerPrice = selectedPricing?.customerPresentation || null;
   const pricingDebug = backendPricing?.debug || {};
   const pricingScarcity = (pricingDebug.scarcity || data?.scarcity || {}) as any;
   const earlyBird = (pricingScarcity.early_bird || {}) as any;
   const firstVisitOffer = (pricingDebug.first_visit_offer || {}) as any;
   const firstVisitLine = commercePurchaseKind === "activity_ticket" && firstVisitOffer.applied
-    ? "Första gången? Spela för 99 kr."
+    ? selectedCustomerPrice?.offerDetail || "Första gången? Spela för 99 kr."
     : null;
   const earlyBirdActive = Boolean(earlyBird.active) && Number(earlyBird.remaining || 0) > 0 && Number(earlyBird.price_sek || 0) > 0;
   const earlyBirdLine = commercePurchaseKind === "activity_ticket" && earlyBirdActive
@@ -456,10 +457,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     commercePurchaseKind === "day_pass" ? commerceDayPassProduct?.base_price_sek : session?.price_sek
   ) ?? 0);
   const effectivePrice = Number(selectedPricing?.effectivePriceSek ?? selectedPricing?.finalAmountSek ?? basePrice);
-  const displayedPrice = pricingPending ? "Hämtar pris..." : effectivePrice <= 0 ? 0 : effectivePrice;
+  const customerDisplayPrice = Number(selectedCustomerPrice?.displayPriceSek ?? effectivePrice);
+  const displayedPrice = pricingPending ? "Hämtar pris..." : customerDisplayPrice <= 0 ? 0 : customerDisplayPrice;
   const checkoutLabel = pricingPending
     ? "Hämtar ditt pris..."
-    : selectedPricing?.checkoutLabel || formatSek(effectivePrice);
+    : selectedCustomerPrice?.displayLabel || selectedPricing?.checkoutLabel || formatSek(customerDisplayPrice);
   const pricingIsIncluded = !pricingPending && selectedPricing?.requiresCheckout === false;
   const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
   const membershipName = String(
@@ -489,10 +491,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const commerceExtrasTotalMinor = commerceExtrasForPurchase.reduce((sum, product) => (
     sum + Number(commerceQuantities[product.id] || 0) * Math.round(Number(product.base_price_sek || 0) * 100)
   ), 0);
-  const commerceProductTotalMinor = Math.max(0, Math.round(effectivePrice * 100));
+  const commerceProductTotalMinor = Math.max(0, Math.round(customerDisplayPrice * 100));
   const commerceTotalMinor = commerceProductTotalMinor + commerceExtrasTotalMinor;
   const commerceItemCount = 1 + commerceExtrasQuantity;
-  const commerceSavingsMinor = Math.max(0, Math.round((basePrice - effectivePrice) * 100));
+  const commerceSavingsMinor = Math.max(0, Math.round((basePrice - customerDisplayPrice) * 100));
   const now = useActivityNow();
   const occurrenceInterval = occurrenceDate && session?.start_time && session?.end_time
     ? activitySessionOccurrenceInterval(occurrenceDate, session.start_time, session.end_time)
@@ -1133,7 +1135,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   <span className="mt-1 block text-[12px] font-semibold text-slate-500">Gäller detta pass.</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
-                  {backendPricing?.checkoutLabel || formatSek(Number(backendPricing?.finalAmountSek || 0))}
+                  {backendPricing?.customerPresentation?.displayLabel || backendPricing?.checkoutLabel || formatSek(Number(backendPricing?.finalAmountSek || 0))}
                   <span className={`grid h-5 w-5 place-items-center rounded-full border ${commercePurchaseKind === "activity_ticket" ? "border-slate-950 bg-slate-950 text-white" : "border-black/20 text-transparent"}`}><Check className="h-3 w-3" /></span>
                 </span>
               </button>
@@ -1150,7 +1152,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                     <span className="mt-1 block text-[12px] font-semibold text-slate-500">Alla Open Play-pass idag.</span>
                   </span>
                   <span className="flex shrink-0 items-center gap-2 text-[14px] font-black">
-                    {dayPassPricing.checkoutLabel || formatSek(Number(dayPassPricing.finalAmountSek || commerceDayPassProduct.base_price_sek || 0))}
+                    {dayPassPricing.customerPresentation?.displayLabel || dayPassPricing.checkoutLabel || formatSek(Number(dayPassPricing.finalAmountSek || commerceDayPassProduct.base_price_sek || 0))}
                     <span className={`grid h-5 w-5 place-items-center rounded-full border ${commercePurchaseKind === "day_pass" ? "border-slate-950 bg-slate-950 text-white" : "border-black/20 text-transparent"}`}><Check className="h-3 w-3" /></span>
                   </span>
                 </button>
@@ -1167,7 +1169,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               <p className="text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400">Ditt val</p>
               <div className="mt-2 flex items-center justify-between gap-4">
                 <p className="text-[15px] font-black text-slate-950">{commercePurchaseKind === "day_pass" ? "Spela hela dagen" : "Personlig plats"}</p>
-                <p className="shrink-0 text-[15px] font-black">{selectedPricing?.checkoutLabel || formatCommerceMoney(commerceProductTotalMinor)}</p>
+                <p className="shrink-0 text-[15px] font-black">{selectedPricing?.customerPresentation?.displayLabel || selectedPricing?.checkoutLabel || formatCommerceMoney(commerceProductTotalMinor)}</p>
               </div>
             </section>
           ) : null}

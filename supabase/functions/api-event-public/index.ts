@@ -7,6 +7,7 @@ import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { projectPublicActivitySessionHosts } from '../_shared/public_activity_hosts.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -1333,6 +1334,13 @@ Deno.serve(async (req) => {
 
       const userId = await getOptionalUserId(req);
       const customerId = userId ? await resolveCustomerIdForUser(client, userId) : null;
+      if (customerId) {
+        await reconcileExpiredFirstVisitCheckouts(client, {
+          customerId,
+          stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+          stripeApiBase: Deno.env.get('STRIPE_API_BASE'),
+        });
+      }
       const firstVisitEligibility = await firstVisitEligibilityForCustomer(client, customerId, userId);
       const today = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
       const { data: sessions, error: sessionsError } = await client.from('activity_sessions')
@@ -1340,12 +1348,11 @@ Deno.serve(async (req) => {
         .eq('venue_id', venue.id)
         .eq('is_active', true)
         .eq('publish_status', 'published')
-        .eq('closed_to_public', false)
-        .eq('first_visit_offer_enabled', true);
+        .eq('closed_to_public', false);
       if (sessionsError) return errorResponse(sessionsError.message, 500);
 
       const productCache = new Map<string, Promise<any>>();
-      const occurrences = (await Promise.all((sessions || []).flatMap((session: any) =>
+      const pricing = (await Promise.all((sessions || []).flatMap((session: any) =>
         activityOccurrenceDates(session, today).map(async (sessionDate) => {
           const decision = await resolveActivityPricingDecision({
             client,
@@ -1361,23 +1368,36 @@ Deno.serve(async (req) => {
             session,
             productCache,
           });
-          const offer = decision.debug?.first_visit_offer as any;
-          return offer?.applied ? {
+          return {
             activity_session_id: session.id,
             session_date: sessionDate,
-            applied: true,
-            price_sek: Number(offer.price_sek || decision.finalAmountSek || 0),
-            regular_price_sek: Number(offer.regular_price_sek || decision.baseAmountSek || 0),
-          } : null;
+            effective_price_sek: decision.effectivePriceSek,
+            requires_checkout: decision.requiresCheckout,
+            pricing_reason: decision.pricingReason,
+            customer_presentation: decision.customerPresentation,
+          };
         })
       ))).filter(Boolean);
+      const occurrences = pricing.flatMap((item: any) => {
+        if (item.customer_presentation?.offerState !== 'eligible') return [];
+        return [{
+          activity_session_id: item.activity_session_id,
+          session_date: item.session_date,
+          applied: true,
+          price_sek: Number(item.customer_presentation.displayPriceSek || 0),
+          regular_price_sek: Number(item.customer_presentation.listPriceSek || 0),
+        }];
+      });
+      const offerItems = pricing.filter((item: any) => Boolean(item.customer_presentation?.offerState)).map((offer: any) => ({
+        ...offer,
+        route: programSessionPath(offer.activity_session_id, offer.session_date, venueSlug),
+      }));
       return jsonResponse({
         is_first_time: firstVisitEligibility.eligible,
+        has_configured_offer: (sessions || []).some((session: any) => session.first_visit_offer_enabled === true),
+        pricing,
         occurrences,
-        items: occurrences.map((offer: any) => ({
-          ...offer,
-          route: programSessionPath(offer.activity_session_id, offer.session_date, venueSlug),
-        })),
+        items: offerItems,
       }, 200, userId ? 0 : 30);
     }
 
@@ -1389,6 +1409,14 @@ Deno.serve(async (req) => {
         const userStartedAt = performance.now();
         const userId = await getOptionalUserId(req);
         timings.authMs = Math.round(performance.now() - userStartedAt);
+        const customerId = userId ? await resolveCustomerIdForUser(client, userId) : null;
+        if (customerId) {
+          await reconcileExpiredFirstVisitCheckouts(client, {
+            customerId,
+            stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+            stripeApiBase: Deno.env.get('STRIPE_API_BASE'),
+          });
+        }
         const preview = await buildActivityPreview(client, {
           roomId: url.searchParams.get('roomId'),
           sessionId: url.searchParams.get('sessionId'),
@@ -1418,6 +1446,7 @@ Deno.serve(async (req) => {
               client,
               venueId: preview.activity_session.venue_id,
               userId,
+              customerId,
               activitySessionId: preview.activity_session.id,
               sessionDate: preview.activity_session.occurrence_date,
               requestedProductKey: preview.activity_session.product_key,
@@ -1430,6 +1459,7 @@ Deno.serve(async (req) => {
               client,
               venueId: preview.activity_session.venue_id,
               userId,
+              customerId,
               activitySessionId: preview.activity_session.id,
               sessionDate: preview.activity_session.occurrence_date,
               requestedProductKey: 'day_access',

@@ -12,6 +12,9 @@ import { activitySessionToPresentation, openBookingToPresentation, type SessionP
 import { supabase } from "@/integrations/supabase/client";
 import { useVenueWithHours } from "@/lib/venueStatus";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
+import { useAuth } from "@/hooks/useAuth";
+import { inheritedEventImages } from "@/lib/eventMedia";
+import type { ActivityDiscoveryPricingResponse } from "@/lib/activityPricing";
 
 const PAGE_BG = "#fffaf7";
 const TEXT = "#111111";
@@ -37,6 +40,11 @@ type ActivitySessionRow = {
   early_bird_price_minor?: number | null;
   early_bird_slots?: number | null;
   scarcity_mode?: string | null;
+  image_urls?: string[] | null;
+  activity_series?: {
+    image_urls?: string[] | null;
+    activity_formats?: { image_urls?: string[] | null } | null;
+  } | null;
 };
 
 type ActivitySessionOccurrence = ActivitySessionRow & {
@@ -107,9 +115,9 @@ function parseClaimHref(claimUrl: string) {
   }
 }
 
-function useWeeklySchedule(slug: string, venueId: string | undefined, venueName: string | undefined) {
+function useWeeklySchedule(slug: string, venueId: string | undefined, venueName: string | undefined, userId?: string) {
   return useQuery({
-    queryKey: ["weekly-session-schedule", slug, venueId],
+    queryKey: ["weekly-session-schedule", slug, venueId, userId || "guest"],
     enabled: !!venueId,
     staleTime: 30_000,
     queryFn: async () => {
@@ -117,19 +125,23 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
       const startDate = now.toISODate()!;
       const endDate = now.plus({ days: WEEK_DAYS - 1 }).toISODate()!;
 
-      const [sessionsRes, openBookingsRes] = await Promise.all([
+      const [sessionsRes, openBookingsRes, pricingRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, image_urls, activity_series(image_urls, activity_formats(image_urls))")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")
+          .eq("closed_to_public", false)
           .order("start_time", { ascending: true }),
         apiGet<{ items: OpenBookingItem[] }>("api-bookings", "public-open-bookings", {
           slug,
           date: startDate,
           days: String(WEEK_DAYS),
         }).catch(() => ({ items: [] })),
+        apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", {
+          venueSlug: slug,
+        }).catch(() => ({ is_first_time: false, has_configured_offer: false, pricing: [], occurrences: [], items: [] })),
       ]);
 
       if (sessionsRes.error) throw sessionsRes.error;
@@ -177,6 +189,10 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
       for (const row of socialProofRes.occurrences || []) {
         socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
       }
+      const pricingByKey = new Map((pricingRes.pricing || []).map((pricing) => [
+        `${pricing.activity_session_id}:${pricing.session_date}`,
+        pricing,
+      ]));
 
       const activityItems: WeeklyScheduleItem[] = sessionOccurrences
         .filter((session) => {
@@ -188,21 +204,24 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
           const registered = Number(socialProofByKey.get(occurrenceKey)?.registrations_count || 0);
           const capacity = Number(session.capacity || 0);
           const href = occurrenceHref(session, slug);
+          const resolvedPrice = pricingByKey.get(occurrenceKey)?.customer_presentation;
+          const displayPrice = Number(resolvedPrice?.displayPriceSek ?? session.price_sek ?? 0);
           const presentation = activitySessionToPresentation({
             id: session.id,
-            typeLabel: sessionTypeLabel(session.session_type),
+            typeLabel: resolvedPrice?.offerLabel || sessionTypeLabel(session.session_type),
             title: session.name,
             sessionDate: session.occurrence_date,
             startTime: String(session.start_time).slice(0, 5),
             endTime: String(session.end_time).slice(0, 5),
             venueName,
+            imageUrls: inheritedEventImages(session),
             people: [],
             committedCount: registered,
             capacity: capacity || null,
             placesLeft: capacity ? Math.max(0, capacity - registered) : null,
-            pricing: Number(session.price_sek || 0) > 0
-              ? { kind: "amount", amountSek: Number(session.price_sek || 0) }
-              : null,
+            pricing: displayPrice > 0
+              ? { kind: "amount", amountSek: displayPrice }
+              : { kind: "included", amountSek: 0, label: resolvedPrice?.displayLabel || "Ingår" },
             primaryAction: { key: "open", label: "Visa" },
             route: href,
             now,
@@ -262,9 +281,10 @@ export default function OpenPlayPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const { user } = useAuth();
   const slug = searchParams.get("v") || "pickla-arena-sthlm";
   const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
-  const { data: schedule = [], isLoading: scheduleLoading } = useWeeklySchedule(slug, venue?.id, venue?.name);
+  const { data: schedule = [], isLoading: scheduleLoading } = useWeeklySchedule(slug, venue?.id, venue?.name, user?.id);
   const now = DateTime.now().setZone("Europe/Stockholm");
 
   const groups = useMemo(() => {

@@ -15,8 +15,20 @@ export function nextNamedEventImageSlot(urls: string[]) {
   return [1, 2, 3].find((slot) => !occupied.has(slot)) || null;
 }
 
-export function inheritedEventImages(series?: { image_urls?: string[] | null; activity_formats?: { image_urls?: string[] | null } | null } | null) {
-  const seriesImages = Array.isArray(series?.image_urls) ? series!.image_urls!.filter(Boolean) : [];
+type EventImageSource = {
+  image_urls?: string[] | null;
+  activity_series?: {
+    image_urls?: string[] | null;
+    activity_formats?: { image_urls?: string[] | null } | null;
+  } | null;
+  activity_formats?: { image_urls?: string[] | null } | null;
+};
+
+export function inheritedEventImages(source?: EventImageSource | null) {
+  const directImages = Array.isArray(source?.image_urls) ? source.image_urls.filter(Boolean) : [];
+  if (directImages.length) return directImages.slice(0, MAX_NAMED_EVENT_IMAGES);
+  const series = source?.activity_series || source;
+  const seriesImages = Array.isArray(series?.image_urls) ? series.image_urls.filter(Boolean) : [];
   if (seriesImages.length) return seriesImages.slice(0, MAX_NAMED_EVENT_IMAGES);
   return Array.isArray(series?.activity_formats?.image_urls)
     ? series.activity_formats.image_urls.filter(Boolean).slice(0, MAX_NAMED_EVENT_IMAGES)

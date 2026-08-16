@@ -12,7 +12,7 @@ import {
   getBookingCourtLabel,
   groupBookingRows,
 } from "@/lib/bookingGroups";
-import { formatSek } from "@/lib/activityPricing";
+import { formatSek, type ActivityDiscoveryPricingResponse } from "@/lib/activityPricing";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
@@ -57,7 +57,12 @@ type FeedItem = {
   userRegistrationStatus?: string | null;
   priceSek?: number | null;
   isSpecialPass?: boolean;
-  firstVisitOffer?: { applied: boolean; priceSek: number; regularPriceSek: number } | null;
+  firstVisitOffer?: {
+    state: "conditional" | "eligible";
+    label: string;
+    priceSek: number;
+    regularPriceSek: number;
+  } | null;
   imageUrls?: string[];
   onlineCheaper?: boolean;
   participants?: PublicProfile[];
@@ -117,6 +122,7 @@ type SessionRow = {
   first_visit_offer_enabled?: boolean;
   first_visit_price_minor?: number | null;
   first_visit_only?: boolean;
+  image_urls?: string[] | null;
   activity_series?: {
     image_urls?: string[] | null;
     activity_formats?: { image_urls?: string[] | null } | null;
@@ -172,19 +178,6 @@ type EventRow = {
   end_time: string | null;
   logo_url?: string | null;
   background_url?: string | null;
-};
-
-type FirstVisitOfferResponse = {
-  is_first_time: boolean;
-  occurrences: Array<{
-    activity_session_id: string;
-    session_date: string;
-    applied: boolean;
-    price_sek: number;
-    regular_price_sek: number;
-    route?: string;
-  }>;
-  items: Array<{ route: string }>;
 };
 
 type BookingRow = {
@@ -377,7 +370,7 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
           userRegistrationStatus,
           priceSek: earlyPrice ?? (onlinePrice || Number(session.price_sek || 0)),
           isSpecialPass,
-          imageUrls: inheritedEventImages(session.activity_series),
+          imageUrls: inheritedEventImages(session),
           onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
           participants: (participantUserIdsByKey.get(occurrenceKey) || [])
             .map((participantUserId) => publicProfilesByUserId.get(participantUserId))
@@ -482,7 +475,7 @@ function useFirstVisitOffers(slug: string, userId: string | undefined) {
   return useQuery({
     queryKey: ["first-visit-offers", slug, userId || "guest"],
     staleTime: userId ? 0 : 30_000,
-    queryFn: () => apiGet<FirstVisitOfferResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }),
+    queryFn: () => apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }),
   });
 }
 
@@ -609,7 +602,7 @@ function FeedRow({
         })
       : activitySessionToPresentation({
           id: item.id,
-          typeLabel: item.firstVisitOffer?.applied ? `Prova-på · ${formatSek(item.firstVisitOffer.priceSek)}` : item.isSpecialPass ? "SPECIALPASS" : item.category,
+          typeLabel: item.firstVisitOffer?.label || (item.isSpecialPass ? "SPECIALPASS" : item.category),
           title: item.title,
           sessionDate: item.date,
           startTime: item.startTime,
@@ -728,7 +721,7 @@ function FeaturedTonightHero({
       >
         {item?.imageUrls?.[0] ? <img src={item.imageUrls[0]} alt="" className="-mx-5 -mt-5 mb-5 aspect-video w-[calc(100%+2.5rem)] object-cover" data-testid="featured-identity-image" /> : null}
         <p className="text-[11px] font-black uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: PINK }}>
-          {item?.firstVisitOffer?.applied ? `Prova-på · ${formatSek(item.firstVisitOffer.priceSek)}` : activityStatus?.stateLabel || timing.eyebrow}
+          {item?.firstVisitOffer?.label || activityStatus?.stateLabel || timing.eyebrow}
         </p>
         <div className="mt-5">
           {welcomeLine ? (
@@ -790,23 +783,25 @@ export default function TodayPage() {
 
   const { data: rawItems = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
   const { data: firstVisitOffers } = useFirstVisitOffers(slug, user?.id);
-  const firstVisitByOccurrence = useMemo(() => new Map(
-    (firstVisitOffers?.occurrences || []).map((offer) => [`${offer.activity_session_id}:${offer.session_date}`, offer]),
-  ), [firstVisitOffers?.occurrences]);
+  const pricingByOccurrence = useMemo(() => new Map(
+    (firstVisitOffers?.pricing || []).map((pricing) => [`${pricing.activity_session_id}:${pricing.session_date}`, pricing]),
+  ), [firstVisitOffers?.pricing]);
   const items = useMemo(() => rawItems.map((item) => {
     if (item.kind !== "session" || !item.activitySession?.id) return item;
-    const offer = firstVisitByOccurrence.get(`${item.activitySession.id}:${item.date}`);
-    if (!offer?.applied) return item;
+    const pricing = pricingByOccurrence.get(`${item.activitySession.id}:${item.date}`);
+    if (!pricing?.customer_presentation) return item;
+    const customerPrice = pricing.customer_presentation;
     return {
       ...item,
-      priceSek: offer.price_sek,
-      firstVisitOffer: {
-        applied: true,
-        priceSek: offer.price_sek,
-        regularPriceSek: offer.regular_price_sek,
-      },
+      priceSek: customerPrice.displayPriceSek,
+      firstVisitOffer: customerPrice.offerState && customerPrice.offerLabel ? {
+        state: customerPrice.offerState,
+        label: customerPrice.offerLabel,
+        priceSek: pricing.effective_price_sek,
+        regularPriceSek: customerPrice.listPriceSek,
+      } : null,
     };
-  }), [firstVisitByOccurrence, rawItems]);
+  }), [pricingByOccurrence, rawItems]);
   const { data: courseHome } = useQuery({
     queryKey: ["course-home", slug, user?.id || "guest"],
     queryFn: () => fetchCourseHome(slug),
@@ -889,7 +884,8 @@ export default function TodayPage() {
   );
   const featuredPriceLabel = featuredIncluded
     ? null
-    : featuredPricing?.checkoutLabel ||
+    : featuredPricing?.customerPresentation?.displayLabel ||
+      featuredPricing?.checkoutLabel ||
       (featuredFallbackPrice > 0 ? formatSek(featuredFallbackPrice) : null) ||
       null;
   const openFeatured = () => {
@@ -933,7 +929,7 @@ export default function TodayPage() {
             null
           ) : (
             <div className="space-y-8">
-              {firstVisitOffers?.is_first_time ? (
+              {firstVisitOffers?.is_first_time && (firstVisitOffers.items?.length > 0 || !firstVisitOffers.has_configured_offer) ? (
                 <button type="button" onClick={() => navigate(firstVisitOffers.items?.[0]?.route || `/today?v=${encodeURIComponent(slug)}`)} className="flex w-full items-center justify-between gap-4 border-y border-black/10 py-4 text-left text-[14px] font-bold">
                   <span>{firstVisitOffers.items?.length ? <><span className="block">Första gången? Spela för 99 kr.</span><span className="mt-1 block text-[12px] font-semibold text-neutral-500">Racket finns att låna.</span></> : "Första gången? 165 kr, racket ingår — kom på Open Play ikväll."}</span>
                   <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />

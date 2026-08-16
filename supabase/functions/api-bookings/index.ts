@@ -3769,6 +3769,29 @@ Deno.serve(async (req) => {
     return jsonResponse({ bookings, count: bookings.length, corporate: !!validCorporatePackageId }, 201);
   }
 
+  // Public customer price projection. Only active hourly rules for a public
+  // venue are exposed; operational booking/admin endpoints remain authenticated.
+  if (req.method === 'GET' && path === 'pricing') {
+    const venueId = url.searchParams.get('venueId');
+    if (!venueId) return errorResponse('Missing venueId');
+    const admin = getServiceClient();
+    const { data: venue, error: venueError } = await admin.from('venues')
+      .select('id')
+      .eq('id', venueId)
+      .eq('is_public', true)
+      .maybeSingle();
+    if (venueError) return errorResponse(venueError.message, 500);
+    if (!venue) return errorResponse('Venue not found', 404);
+    const { data, error: pricingError } = await admin.from('pricing_rules')
+      .select('id, name, type, price, days_of_week, time_from, time_to')
+      .eq('venue_id', venueId)
+      .eq('type', 'hourly')
+      .eq('is_active', true)
+      .order('time_from');
+    if (pricingError) return errorResponse(pricingError.message, 500);
+    return jsonResponse(data, 200, 30);
+  }
+
   try {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
@@ -4823,19 +4846,6 @@ Deno.serve(async (req) => {
         bookingCount: bookingsRes.data?.length || 0,
         passCount: passesRes.data?.length || 0,
       }, 200, 15);
-    }
-
-    // GET /api-bookings/pricing?venueId=X
-    if (req.method === 'GET' && path === 'pricing') {
-      const venueId = url.searchParams.get('venueId');
-      if (!venueId) return errorResponse('Missing venueId');
-
-      const { data, error: qErr } = await client.from('pricing_rules')
-        .select('id, name, type, price, days_of_week, time_from, time_to, is_active')
-        .eq('venue_id', venueId).eq('is_active', true).order('price');
-      if (qErr) return errorResponse(qErr.message);
-
-      return jsonResponse(data, 200, 30);
     }
 
     // GET /api-bookings/hours?venueId=X

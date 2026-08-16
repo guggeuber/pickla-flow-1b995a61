@@ -231,6 +231,7 @@ export type BackendActivityPricingDecision = {
   requiresCheckout?: boolean | null;
   accessDecision?: "paid" | "membership_included" | "day_access_included" | "free_day_pass" | string | null;
   productKey?: string | null;
+  customerPresentation?: CustomerActivityPricePresentation | null;
   debug?: {
     pricing_mode?: string | null;
     member_discount_percent?: number | null;
@@ -239,6 +240,40 @@ export type BackendActivityPricingDecision = {
     day_pass_included?: boolean | null;
     membership_included?: boolean | null;
   } | null;
+};
+
+export type CustomerActivityPricePresentation = {
+  identityState: "anonymous" | "identified";
+  displayPriceSek: number;
+  displayLabel: string;
+  listPriceSek: number;
+  offerState: "conditional" | "eligible" | null;
+  offerLabel: string | null;
+  offerDetail: string | null;
+};
+
+export type ActivityDiscoveryPrice = {
+  activity_session_id: string;
+  session_date: string;
+  effective_price_sek: number;
+  requires_checkout: boolean;
+  pricing_reason: string;
+  customer_presentation: CustomerActivityPricePresentation;
+};
+
+export type ActivityDiscoveryPricingResponse = {
+  is_first_time: boolean;
+  has_configured_offer: boolean;
+  pricing: ActivityDiscoveryPrice[];
+  occurrences: Array<{
+    activity_session_id: string;
+    session_date: string;
+    applied: boolean;
+    price_sek: number;
+    regular_price_sek: number;
+    route?: string;
+  }>;
+  items: Array<{ route: string }>;
 };
 
 export function mergeBackendActivityPricing(

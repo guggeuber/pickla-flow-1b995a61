@@ -55,6 +55,7 @@ describe("booking participation funding doctrine", () => {
 describe("pay first contracts", () => {
   const bookings = read("../../supabase/functions/api-bookings/index.ts");
   const webhook = read("../../supabase/functions/api-stripe-webhook/index.ts");
+  const checkoutExpiry = read("../../supabase/functions/_shared/commerce_checkout_expiry.ts");
   const corporate = read("../../supabase/functions/api-corporate/index.ts");
   const checkins = read("../../supabase/functions/api-checkins/index.ts");
   const entitlement = read("../../supabase/functions/_shared/booking_participant_entitlement.ts");
@@ -79,8 +80,9 @@ describe("pay first contracts", () => {
   });
 
   it("releases expired participant checkout holds", () => {
-    expect(webhook).toContain("const directHoldId = String(session?.metadata?.capacity_hold_id");
-    expect(webhook).toContain("p_reason: 'stripe_checkout_expired'");
+    expect(webhook).toContain("finalizeExpiredCommerceCheckout(event.data.object, serviceClient)");
+    expect(checkoutExpiry).toContain("const directHoldId = String(session?.metadata?.capacity_hold_id");
+    expect(checkoutExpiry).toContain("p_reason: 'stripe_checkout_expired'");
   });
 
   it("removes pay-at-desk producers and keeps only a stale-client rejection", () => {

@@ -104,6 +104,42 @@ export function firstVisitOfferDecision({
   };
 }
 
+export function activityCustomerPricePresentation({
+  identifiedCustomer,
+  finalAmountSek,
+  baseAmountSek,
+  checkoutLabel,
+  firstVisitApplied,
+  firstVisitPriceSek,
+  firstVisitRegularPriceSek,
+}: {
+  identifiedCustomer: boolean;
+  finalAmountSek: number;
+  baseAmountSek: number;
+  checkoutLabel: string;
+  firstVisitApplied: boolean;
+  firstVisitPriceSek: number;
+  firstVisitRegularPriceSek: number;
+}) {
+  const conditionalFirstVisit = !identifiedCustomer && firstVisitApplied && firstVisitPriceSek > 0;
+  const displayPriceSek = roundSek(conditionalFirstVisit ? firstVisitRegularPriceSek : finalAmountSek);
+  return {
+    identityState: identifiedCustomer ? 'identified' as const : 'anonymous' as const,
+    displayPriceSek,
+    displayLabel: displayPriceSek <= 0 ? checkoutLabel : formatSek(displayPriceSek),
+    listPriceSek: baseAmountSek,
+    offerState: firstVisitApplied ? (identifiedCustomer ? 'eligible' as const : 'conditional' as const) : null,
+    offerLabel: firstVisitApplied && firstVisitPriceSek > 0
+      ? identifiedCustomer
+        ? `Prova-på · ${formatSek(firstVisitPriceSek)}`
+        : `Första gången? ${formatSek(firstVisitPriceSek)}`
+      : null,
+    offerDetail: firstVisitApplied && firstVisitPriceSek > 0
+      ? `Första gången? Spela för ${formatSek(firstVisitPriceSek)}.`
+      : null,
+  };
+}
+
 export type FirstVisitEligibility = {
   hasCommittedParticipation: boolean;
   hasCompletedRedemption: boolean;
@@ -206,6 +242,15 @@ export type ActivityPricingDecision = {
   membershipId: string | null;
   membershipTierName: string | null;
   sourceId: string | null;
+  customerPresentation: {
+    identityState: 'anonymous' | 'identified';
+    displayPriceSek: number;
+    displayLabel: string;
+    listPriceSek: number;
+    offerState: 'conditional' | 'eligible' | null;
+    offerLabel: string | null;
+    offerDetail: string | null;
+  };
   debug: Record<string, unknown>;
 };
 
@@ -661,6 +706,20 @@ export async function resolveActivityPricingDecision({
       ? 'Ingår idag'
       : accessReason || 'Ingår'
     : formatSek(finalAmountSek);
+  const identifiedCustomer = Boolean(userId || customerId);
+  const firstVisitDebug = (debug.first_visit_offer || {}) as Record<string, unknown>;
+  const firstVisitApplied = firstVisitDebug.applied === true;
+  const firstVisitPriceSek = Number(firstVisitDebug.price_sek || 0);
+  const firstVisitRegularPriceSek = Number(firstVisitDebug.regular_price_sek || finalAmountSek);
+  const customerPresentation: ActivityPricingDecision['customerPresentation'] = activityCustomerPricePresentation({
+    identifiedCustomer,
+    finalAmountSek,
+    baseAmountSek,
+    checkoutLabel,
+    firstVisitApplied,
+    firstVisitPriceSek,
+    firstVisitRegularPriceSek,
+  });
 
   return {
     activitySessionId,
@@ -682,6 +741,7 @@ export async function resolveActivityPricingDecision({
     membershipId,
     membershipTierName,
     sourceId,
+    customerPresentation,
     debug: {
       ...debug,
       final_amount_sek: finalAmountSek,
