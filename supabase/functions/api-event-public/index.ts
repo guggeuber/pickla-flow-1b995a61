@@ -1310,18 +1310,9 @@ Deno.serve(async (req) => {
       }
       const origin = publicSiteOrigin(req);
       const canonicalUrl = `${origin}${browserPath}`;
-      const { data: firstSession } = await client.from('activity_sessions')
-        .select('image_urls')
-        .eq('series_id', series.id)
-        .eq('is_active', true)
-        .order('session_date')
-        .order('series_occurrence_index')
-        .limit(1)
-        .maybeSingle();
       const presentationType = String(courseFormat?.presentation_type || 'course');
       const bookingCopy = presentationType === 'course' ? 'Boka kurs hos Pickla.' : 'Boka plats hos Pickla.';
-      const imageUrl = (Array.isArray(firstSession?.image_urls) ? firstSession.image_urls.filter(Boolean)[0] : null)
-        || inheritedNamedEventImages({ image_urls: series.image_urls, activity_formats: courseFormat })[0]
+      const imageUrl = inheritedNamedEventImages({ image_urls: series.image_urls, activity_formats: courseFormat })[0]
         || null;
       return new Response(new Blob([activityOgHtml({
         title: series.name || 'Kurs hos Pickla',

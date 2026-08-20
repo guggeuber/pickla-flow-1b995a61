@@ -119,7 +119,7 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
       : Promise.resolve({ data: null, error: null }),
     admin.from('venues').select('id, name, slug').eq('id', series.venue_id).maybeSingle(),
     admin.from('activity_sessions')
-      .select('id, series_id, session_date, start_time, end_time, court_ids, capacity, requires_staffing, is_active, publish_status, series_occurrence_index, image_urls')
+      .select('id, series_id, session_date, start_time, end_time, court_ids, capacity, requires_staffing, is_active, publish_status, series_occurrence_index')
       .eq('series_id', series.id)
       .order('series_occurrence_index'),
     seriesCapacity(admin, series),
@@ -142,13 +142,12 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
       commitment = data || null;
     }
   }
-  const sessionImages = (sessionsResult.data || []).find((session) => Array.isArray(session.image_urls) && session.image_urls.length)?.image_urls || [];
   const seriesImages = Array.isArray(series.image_urls) ? series.image_urls.filter(Boolean) : [];
   const formatImages = Array.isArray(formatResult.data?.image_urls) ? formatResult.data.image_urls.filter(Boolean) : [];
   return {
     ...series,
     format: formatResult.data || null,
-    image_urls: (sessionImages.length ? sessionImages : seriesImages.length ? seriesImages : formatImages).slice(0, 3),
+    image_urls: (seriesImages.length ? seriesImages : formatImages).slice(0, 3),
     product: productResult.data || null,
     venue: venueResult.data || null,
     sessions: sessionsResult.data || [],

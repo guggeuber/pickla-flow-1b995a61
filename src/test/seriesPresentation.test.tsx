@@ -99,12 +99,14 @@ describe("Series presentation projection", () => {
     expect(commerce).not.toMatch(/presentation_type\s*===|presentation_type\s*!==/);
   });
 
-  it("preserves Session to Series to Format image inheritance without a placeholder", () => {
+  it("uses the canonical Series to Format image inheritance without a placeholder", () => {
     const courses = read("supabase/functions/api-courses/index.ts");
     const og = read("supabase/functions/api-event-public/index.ts");
     const courseOg = og.slice(og.indexOf("path === 'course-og'"), og.indexOf("path === 'first-visit-offers'"));
-    expect(courses).toContain("sessionImages.length ? sessionImages : seriesImages.length ? seriesImages : formatImages");
-    expect(courseOg).toContain("firstSession?.image_urls");
+    expect(courses).toContain("seriesImages.length ? seriesImages : formatImages");
+    expect(courses).not.toContain("sessionImages");
+    expect(courseOg).not.toContain("firstSession");
+    expect(courseOg).toContain("inheritedNamedEventImages({ image_urls: series.image_urls, activity_formats: courseFormat })");
     expect(courseOg).toContain("|| null");
     expect(courseOg).not.toContain("og-pickla.jpg");
   });

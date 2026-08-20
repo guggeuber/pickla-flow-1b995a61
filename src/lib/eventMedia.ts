@@ -25,8 +25,6 @@ type EventImageSource = {
 };
 
 export function inheritedEventImages(source?: EventImageSource | null) {
-  const directImages = Array.isArray(source?.image_urls) ? source.image_urls.filter(Boolean) : [];
-  if (directImages.length) return directImages.slice(0, MAX_NAMED_EVENT_IMAGES);
   const series = source?.activity_series || source;
   const seriesImages = Array.isArray(series?.image_urls) ? series.image_urls.filter(Boolean) : [];
   if (seriesImages.length) return seriesImages.slice(0, MAX_NAMED_EVENT_IMAGES);

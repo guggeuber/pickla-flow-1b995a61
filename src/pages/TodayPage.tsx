@@ -124,7 +124,6 @@ type SessionRow = {
   first_visit_offer_enabled?: boolean;
   first_visit_price_minor?: number | null;
   first_visit_only?: boolean;
-  image_urls?: string[] | null;
   activity_series?: {
     image_urls?: string[] | null;
     activity_formats?: { image_urls?: string[] | null } | null;

@@ -40,7 +40,6 @@ type ActivitySessionRow = {
   early_bird_price_minor?: number | null;
   early_bird_slots?: number | null;
   scarcity_mode?: string | null;
-  image_urls?: string[] | null;
   activity_series?: {
     image_urls?: string[] | null;
     activity_formats?: { image_urls?: string[] | null } | null;
@@ -128,7 +127,7 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
       const [sessionsRes, openBookingsRes, pricingRes] = await Promise.all([
         supabase
           .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, image_urls, activity_series(image_urls, activity_formats(image_urls))")
+          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, activity_series(image_urls, activity_formats(image_urls))")
           .eq("venue_id", venueId!)
           .eq("is_active", true)
           .eq("publish_status", "published")

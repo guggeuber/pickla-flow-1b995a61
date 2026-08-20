@@ -50,10 +50,9 @@ describe("Navigation, discovery and event identity contract", () => {
   });
 
   it("inherits Series images before Format images without placeholders", () => {
-    const sessionImage = "https://example.test/session.jpg";
     const formatImage = "https://example.test/format.jpg";
     const seriesImage = "https://example.test/series.jpg";
-    expect(inheritedEventImages({ image_urls: [sessionImage], activity_series: { image_urls: [seriesImage], activity_formats: { image_urls: [formatImage] } } })).toEqual([sessionImage]);
+    expect(inheritedEventImages({ activity_series: { image_urls: [seriesImage], activity_formats: { image_urls: [formatImage] } } })).toEqual([seriesImage]);
     expect(inheritedEventImages({ image_urls: [seriesImage], activity_formats: { image_urls: [formatImage] } })).toEqual([seriesImage]);
     expect(inheritedEventImages({ image_urls: [], activity_formats: { image_urls: [formatImage] } })).toEqual([formatImage]);
     expect(inheritedEventImages({ image_urls: [], activity_formats: { image_urls: [] } })).toEqual([]);
@@ -118,7 +117,7 @@ describe("Navigation, discovery and event identity contract", () => {
     const event = read("src/pages/EventPage.tsx");
     const og = read("supabase/functions/api-event-public/index.ts");
     expect(today).toContain("imageUrls: inheritedEventImages");
-    expect(openPlay).toContain("scarcity_mode, image_urls, activity_series(image_urls, activity_formats(image_urls))");
+    expect(openPlay).toContain("scarcity_mode, activity_series(image_urls, activity_formats(image_urls))");
     expect(openPlay).toContain("imageUrls: inheritedEventImages(session)");
     expect(event).toContain("eventHero = event.background_url || eventLogo");
     expect(og).toContain("preview.activity_session.image_urls?.[0]");

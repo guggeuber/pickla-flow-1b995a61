@@ -22,7 +22,6 @@ export type CourseSession = {
   requires_staffing: boolean;
   is_active: boolean;
   series_occurrence_index: number;
-  image_urls?: string[];
 };
 
 export type CourseResourceConflict = {
