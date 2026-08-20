@@ -403,12 +403,18 @@ function activityOgHtml({
   title: string;
   description: string;
   canonicalUrl: string;
-  imageUrl: string;
+  imageUrl?: string | null;
 }) {
   const safeTitle = escapeHtml(title);
   const safeDescription = escapeHtml(description);
   const safeUrl = escapeHtml(canonicalUrl);
-  const safeImage = escapeHtml(imageUrl);
+  const safeImage = imageUrl ? escapeHtml(imageUrl) : '';
+  const imageMeta = safeImage ? `
+    <meta property="og:image" content="${safeImage}" />
+    <meta property="og:image:width" content="1216" />
+    <meta property="og:image:height" content="640" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="${safeImage}" />` : '';
   return `<!doctype html>
 <html lang="sv">
   <head>
@@ -422,14 +428,10 @@ function activityOgHtml({
     <meta property="og:title" content="${safeTitle}" />
     <meta property="og:description" content="${safeDescription}" />
     <meta property="og:url" content="${safeUrl}" />
-    <meta property="og:image" content="${safeImage}" />
-    <meta property="og:image:width" content="1216" />
-    <meta property="og:image:height" content="640" />
+    ${imageMeta}
     <meta property="og:locale" content="sv_SE" />
-    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${safeTitle}" />
     <meta name="twitter:description" content="${safeDescription}" />
-    <meta name="twitter:image" content="${safeImage}" />
   </head>
   <body>
     <main>
@@ -1296,7 +1298,7 @@ Deno.serve(async (req) => {
         return new Response(null, { status: 302, headers: { Location: browserPath, 'Cache-Control': 'no-store' } });
       }
       const { data: series } = await client.from('activity_series')
-        .select('id, name, description, image_urls, series_type, status, venues(slug, is_public), activity_formats(description, image_urls)')
+        .select('id, name, description, image_urls, series_type, status, venues(slug, is_public), activity_formats(description, image_urls, presentation_type)')
         .eq('id', seriesId)
         .eq('series_type', 'course')
         .eq('status', 'active')
@@ -1308,11 +1310,24 @@ Deno.serve(async (req) => {
       }
       const origin = publicSiteOrigin(req);
       const canonicalUrl = `${origin}${browserPath}`;
+      const { data: firstSession } = await client.from('activity_sessions')
+        .select('image_urls')
+        .eq('series_id', series.id)
+        .eq('is_active', true)
+        .order('session_date')
+        .order('series_occurrence_index')
+        .limit(1)
+        .maybeSingle();
+      const presentationType = String(courseFormat?.presentation_type || 'course');
+      const bookingCopy = presentationType === 'course' ? 'Boka kurs hos Pickla.' : 'Boka plats hos Pickla.';
+      const imageUrl = (Array.isArray(firstSession?.image_urls) ? firstSession.image_urls.filter(Boolean)[0] : null)
+        || inheritedNamedEventImages({ image_urls: series.image_urls, activity_formats: courseFormat })[0]
+        || null;
       return new Response(new Blob([activityOgHtml({
         title: series.name || 'Kurs hos Pickla',
-        description: stripHtml(series.description || courseFormat?.description) || 'Boka kurs hos Pickla.',
+        description: stripHtml(series.description || courseFormat?.description) || bookingCopy,
         canonicalUrl,
-        imageUrl: inheritedNamedEventImages({ image_urls: series.image_urls, activity_formats: courseFormat })[0] || `${origin}/og-pickla.jpg`,
+        imageUrl,
       })], { type: 'text/html; charset=utf-8' }), {
         status: 200,
         headers: { 'content-type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300, s-maxage=300' },

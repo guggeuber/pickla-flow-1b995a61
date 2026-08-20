@@ -1,0 +1,111 @@
+import { readFileSync } from "node:fs";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { SeriesRegistrationCard } from "@/components/series/SeriesRegistrationCard";
+import type { CourseDetail } from "@/lib/courses";
+import {
+  occurrenceCountLabel,
+  seriesPresentation,
+} from "@/lib/seriesPresentation";
+
+const read = (path: string) => readFileSync(path, "utf8");
+
+function fixture(presentationType: "course" | "social_event" | "clinic" | "tournament"): CourseDetail {
+  return {
+    id: `series-${presentationType}`,
+    venue_id: "venue-1",
+    format_id: `format-${presentationType}`,
+    name: presentationType === "social_event" ? "Parker Brunch" : "Pickla 101 · Hösten 2026",
+    description: null,
+    image_urls: ["https://example.test/parker-brunch.webp"],
+    status: "active",
+    start_date: "2026-09-05",
+    end_date: "2026-09-05",
+    total_sessions: presentationType === "social_event" ? 1 : 4,
+    registration_opens_at: "2026-08-01T00:00:00Z",
+    registration_closes_at: "2026-09-01T00:00:00Z",
+    recurrence_days: [6],
+    start_time: "13:00",
+    end_time: "18:00",
+    court_ids: [],
+    registration_state: "open",
+    customer_has_commitment: false,
+    format: {
+      id: `format-${presentationType}`,
+      name: presentationType === "social_event" ? "Parker Brunch" : "Pickla 101",
+      description: presentationType === "social_event"
+        ? "Brunch, pickleball och människor i huset."
+        : "Fyra veckor. Åtta spelare, två banor, en coach.",
+      full_description: "Full beskrivning",
+      image_urls: ["https://example.test/parker-brunch.webp"],
+      presentation_type: presentationType,
+      age_group: "adult",
+      level: "beginner",
+      requires_instructor: true,
+    },
+    product: { id: "product-1", name: "Plats", description: null, base_price_sek: 199, vat_rate: 6 },
+    venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
+    sessions: [],
+    capacity: { capacity: 40, committed_count: 0, active_holds_count: 0, available_count: 40 },
+  };
+}
+
+describe("Series presentation projection", () => {
+  it("centralizes labels, CTA, discovery and presentation metadata", () => {
+    expect(seriesPresentation("course")).toMatchObject({ label: "KURS", bookingCta: "Boka kurs", listedInCourses: true });
+    expect(seriesPresentation("social_event")).toMatchObject({ label: "EVENT", bookingCta: "Boka plats", hideSingleOccurrenceCount: true, imageProminence: "prominent", listedInCourses: false });
+    expect(seriesPresentation("clinic")).toMatchObject({ label: "CLINIC", bookingCta: "Boka plats", showInstructor: true, listedInCourses: false });
+    expect(seriesPresentation("tournament")).toMatchObject({ label: "TURNERING", bookingCta: "Boka plats", listedInCourses: false });
+    expect(seriesPresentation("unknown").type).toBe("course");
+    expect(occurrenceCountLabel(1)).toBe("1 tillfälle");
+    expect(occurrenceCountLabel(2)).toBe("2 tillfällen");
+  });
+
+  it("gives Parker Brunch a prominent Home image and place CTA", () => {
+    const onOpen = vi.fn();
+    render(<SeriesRegistrationCard series={fixture("social_event")} onOpen={onOpen} />);
+    expect(screen.getByText("Event · anmälan öppen")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(screen.getByTestId("home-series-image")).toHaveAttribute("src", "https://example.test/parker-brunch.webp");
+    fireEvent.click(screen.getByRole("button", { name: /Boka plats/ }));
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the Course Home card compact and text-led", () => {
+    render(<SeriesRegistrationCard series={fixture("course")} onOpen={() => undefined} />);
+    expect(screen.getByText("Anmälan öppen")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Boka kurs/ })).toBeInTheDocument();
+    expect(screen.queryByTestId("home-series-image")).not.toBeInTheDocument();
+  });
+
+  it("filters /courses at both API and UI boundaries", () => {
+    const api = read("supabase/functions/api-courses/index.ts");
+    const page = read("src/pages/CoursesPage.tsx");
+    expect(api).toContain(".eq('activity_formats.presentation_type', 'course')");
+    expect(api).toContain("projected.format?.presentation_type === 'course'");
+    expect(page).toContain("listedInCourses");
+  });
+
+  it("keeps presentation type out of Series commercial and operational writes", () => {
+    const migration = read("supabase/migrations/20260820120000_series_presentation_types.sql");
+    const courses = read("supabase/functions/api-courses/index.ts");
+    const commerce = read("supabase/functions/api-commerce/index.ts");
+    const formatWrite = courses.slice(courses.indexOf("path === 'format'"), courses.indexOf("path === 'series-preview'"));
+    const seriesWrite = courses.slice(courses.indexOf("path === 'series-preview'"));
+    expect(migration).toContain("Customer presentation only");
+    expect(formatWrite).toContain("presentation_type");
+    expect(seriesWrite).not.toContain("presentation_type:");
+    expect(commerce.match(/presentation_type/g)).toHaveLength(3);
+    expect(commerce).not.toMatch(/presentation_type\s*===|presentation_type\s*!==/);
+  });
+
+  it("preserves Session to Series to Format image inheritance without a placeholder", () => {
+    const courses = read("supabase/functions/api-courses/index.ts");
+    const og = read("supabase/functions/api-event-public/index.ts");
+    const courseOg = og.slice(og.indexOf("path === 'course-og'"), og.indexOf("path === 'first-visit-offers'"));
+    expect(courses).toContain("sessionImages.length ? sessionImages : seriesImages.length ? seriesImages : formatImages");
+    expect(courseOg).toContain("firstSession?.image_urls");
+    expect(courseOg).toContain("|| null");
+    expect(courseOg).not.toContain("og-pickla.jpg");
+  });
+});

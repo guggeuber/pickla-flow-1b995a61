@@ -118,6 +118,7 @@ export interface CommerceOrderResponse {
     start_time: string;
     end_time: string;
     total_sessions: number;
+    presentation_type?: "course" | "social_event" | "clinic" | "tournament";
     venue_name?: string | null;
     venue_slug?: string | null;
     participant_name?: string | null;

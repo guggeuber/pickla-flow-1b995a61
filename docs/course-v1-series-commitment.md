@@ -45,6 +45,12 @@ Course V1 deliberately excludes instalments, Pay at Desk, invoice flow, proratin
 
 The schema leaves `commitment_type=resource` reserved for a future recurring resource Contract. Participant commitments are compatible with a future Team/Organization carrier, but Course V1 implements only Customer or subordinate participant carriers. League competition remains outside Series Commitment.
 
+## Series presentation precedent
+
+Series is a general engine. Customer language is projected from Format `presentation_type` and must never redefine commercial or operational truth. Presentation may control labels, CTA copy, occurrence metadata, image prominence and discovery filtering only; pricing, checkout, capacity, entitlement, commitment, attendance, resources, staffing and cancellation remain unchanged.
+
+An individual public place sold by Pickla belongs to Series. A single buyer commissioning or buying an entire event remains in Event CRM. Presentation type does not move data or behavior between those domains.
+
 ## Source-of-truth audit
 
 | Object | Responsibility | Course action |

@@ -18,6 +18,7 @@ import {
   fetchCommerceOrder,
   formatCommerceMoney,
 } from "@/lib/commerce";
+import { occurrenceCountLabel, seriesPresentation } from "@/lib/seriesPresentation";
 
 function fulfillmentLabel(status: string, cancelled: boolean) {
   if (cancelled || status === "not_collected") return "Ej längre tillgänglig för uthämtning";
@@ -52,6 +53,12 @@ export default function CommerceOrderPage() {
   });
   const activity = query.data?.activity_access;
   const course = query.data?.course_access;
+  const coursePresentation = seriesPresentation(course?.presentation_type);
+  const courseOccurrenceSummary = course
+    ? coursePresentation.hideSingleOccurrenceCount && Number(course.total_sessions) === 1
+      ? `${DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")} · ${String(course.start_time).slice(0, 5)}–${String(course.end_time).slice(0, 5)}`
+      : `${occurrenceCountLabel(Number(course.total_sessions))} · start ${DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")}`
+    : "";
   const checkInAvailable = useMemo(() => activity ? activityCheckInAvailable({
     sessionDate: activity.session_date,
     startTime: activity.start_time,
@@ -158,9 +165,9 @@ export default function CommerceOrderPage() {
         ) : null}
         {purchaseConfirmed && course ? (
           <section className="mb-6 px-1">
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din kurs</p>
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{coursePresentation.type === "course" ? "Din kurs" : coursePresentation.label}</p>
             <h2 className="mt-1 text-xl font-black">{course.name}</h2>
-            <p className="mt-3 text-sm font-semibold">{course.total_sessions} tillfällen · start {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")}</p>
+            <p className="mt-3 text-sm font-semibold">{courseOccurrenceSummary}</p>
             {course.participant_name ? <p className="mt-1 text-sm text-slate-500">Deltagare: {course.participant_name}</p> : null}
             {course.venue_name ? <p className="mt-1 text-sm text-slate-500">{course.venue_name}</p> : null}
             <p className="mt-1 text-xs text-slate-500">Referens {purchaseReference}</p>

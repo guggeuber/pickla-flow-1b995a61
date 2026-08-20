@@ -479,7 +479,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
   if (participation?.activity_series_id) {
     const [{ data: series }, { data: venue }, { data: dependent }] = await Promise.all([
       admin.from('activity_series')
-        .select('id, name, start_date, end_date, start_time, end_time, total_sessions, status')
+        .select('id, name, start_date, end_date, start_time, end_time, total_sessions, status, activity_formats(presentation_type)')
         .eq('id', participation.activity_series_id)
         .eq('venue_id', order.venue_id)
         .maybeSingle(),
@@ -488,6 +488,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
         ? admin.from('dependent_participants').select('id, first_name, birth_year').eq('id', participation.dependent_participant_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
+    const seriesFormat = Array.isArray(series?.activity_formats) ? series.activity_formats[0] : series?.activity_formats;
     courseAccess = series ? {
       activity_series_id: series.id,
       name: series.name,
@@ -496,6 +497,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
       start_time: series.start_time,
       end_time: series.end_time,
       total_sessions: series.total_sessions,
+      presentation_type: seriesFormat?.presentation_type || 'course',
       venue_name: venue?.name || null,
       venue_slug: venue?.slug || null,
       participant_name: dependent?.first_name || null,

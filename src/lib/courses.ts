@@ -1,4 +1,5 @@
 import { apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
+import type { SeriesPresentationType } from "@/lib/seriesPresentation";
 
 export type CourseFormat = {
   id: string;
@@ -6,6 +7,7 @@ export type CourseFormat = {
   description: string | null;
   full_description: string | null;
   image_urls: string[];
+  presentation_type: SeriesPresentationType;
   age_group: "adult" | "youth" | "all_ages";
   level: "intro" | "beginner" | "intermediate" | "advanced";
   requires_instructor: boolean;
@@ -20,6 +22,7 @@ export type CourseSession = {
   requires_staffing: boolean;
   is_active: boolean;
   series_occurrence_index: number;
+  image_urls?: string[];
 };
 
 export type CourseResourceConflict = {
@@ -94,7 +97,7 @@ export type CourseDetail = Omit<CourseSeries, "capacity"> & {
 
 export type MyCourseItem = {
   commitment: { id: string; status: string; dependent_participant_id?: string | null };
-  series: { id: string; venue_id: string; name: string; start_date: string; end_date: string; total_sessions: number };
+  series: { id: string; venue_id: string; name: string; start_date: string; end_date: string; total_sessions: number; presentation_type?: SeriesPresentationType };
   participant: { kind: "customer" | "dependent"; id?: string; first_name?: string; birth_year?: number };
   next_session: CourseSession | null;
   completed_sessions: number;

@@ -54,6 +54,7 @@ type CourseResourcePreviewRow = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AGE_GROUPS = new Set(['adult', 'youth', 'all_ages']);
 const LEVELS = new Set(['intro', 'beginner', 'intermediate', 'advanced']);
+const PRESENTATION_TYPES = new Set(['course', 'social_event', 'clinic', 'tournament']);
 
 async function optionalUserId(req: Request) {
   if (!req.headers.get('Authorization')) return null;
@@ -111,14 +112,14 @@ function registrationState(series: CourseSeriesRow, now = DateTime.now().toUTC()
 async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, userId?: string | null) {
   const [formatResult, productResult, venueResult, sessionsResult, capacity] = await Promise.all([
     series.format_id
-      ? admin.from('activity_formats').select('id, name, description, full_description, image_urls, age_group, level, requires_instructor').eq('id', series.format_id).maybeSingle()
+      ? admin.from('activity_formats').select('id, name, description, full_description, image_urls, age_group, level, requires_instructor, presentation_type').eq('id', series.format_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     series.access_product_id
       ? admin.from('access_products').select('id, product_key, name, description, base_price_sek, vat_rate, status, product_kind').eq('id', series.access_product_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     admin.from('venues').select('id, name, slug').eq('id', series.venue_id).maybeSingle(),
     admin.from('activity_sessions')
-      .select('id, series_id, session_date, start_time, end_time, court_ids, capacity, requires_staffing, is_active, publish_status, series_occurrence_index')
+      .select('id, series_id, session_date, start_time, end_time, court_ids, capacity, requires_staffing, is_active, publish_status, series_occurrence_index, image_urls')
       .eq('series_id', series.id)
       .order('series_occurrence_index'),
     seriesCapacity(admin, series),
@@ -141,10 +142,13 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
       commitment = data || null;
     }
   }
+  const sessionImages = (sessionsResult.data || []).find((session) => Array.isArray(session.image_urls) && session.image_urls.length)?.image_urls || [];
+  const seriesImages = Array.isArray(series.image_urls) ? series.image_urls.filter(Boolean) : [];
+  const formatImages = Array.isArray(formatResult.data?.image_urls) ? formatResult.data.image_urls.filter(Boolean) : [];
   return {
     ...series,
     format: formatResult.data || null,
-    image_urls: Array.isArray(series.image_urls) && series.image_urls.length ? series.image_urls.slice(0, 3) : (formatResult.data?.image_urls || []).slice(0, 3),
+    image_urls: (sessionImages.length ? sessionImages : seriesImages.length ? seriesImages : formatImages).slice(0, 3),
     product: productResult.data || null,
     venue: venueResult.data || null,
     sessions: sessionsResult.data || [],
@@ -184,6 +188,12 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
       .order('session_date'),
   ]);
   if (seriesError || sessionError) throw new Error(seriesError?.message || sessionError?.message || 'Course projection unavailable');
+  const formatIds = [...new Set((seriesRows || []).map((row) => row.format_id).filter(Boolean))];
+  const { data: formatRows, error: formatError } = formatIds.length
+    ? await admin.from('activity_formats').select('id, presentation_type').in('id', formatIds)
+    : { data: [], error: null };
+  if (formatError) throw new Error(formatError.message);
+  const presentationByFormat = new Map((formatRows || []).map((format) => [format.id, format.presentation_type || 'course']));
   const dependentById = new Map((dependentRows || []).map((row) => [row.id, row]));
   const now = DateTime.now().setZone('Europe/Stockholm');
   return commitments.map((commitment) => {
@@ -199,7 +209,7 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
     }).length;
     return {
       commitment,
-      series,
+      series: series ? { ...series, presentation_type: presentationByFormat.get(series.format_id) || 'course' } : series,
       participant: commitment.dependent_participant_id
         ? { kind: 'dependent', ...(dependentById.get(commitment.dependent_participant_id) || {}) }
         : { kind: 'customer' },
@@ -337,11 +347,14 @@ const coursesHandler = async (req: Request) => {
       const venueRow = await venue(admin, { id: url.searchParams.get('venueId'), slug: url.searchParams.get('v') || url.searchParams.get('slug') });
       const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
       const { data, error } = await admin.from('activity_series')
-        .select('id, venue_id, format_id, name, description, image_urls, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at')
-        .eq('venue_id', venueRow.id).eq('series_type', 'course').eq('status', 'active').gte('end_date', today).order('start_date').limit(24);
+        .select('id, venue_id, format_id, name, description, image_urls, series_type, sport_type, status, product_key, access_product_id, start_date, end_date, total_sessions, registration_opens_at, registration_closes_at, capacity, recurrence_days, start_time, end_time, court_ids, metadata, created_at, updated_at, activity_formats!inner(presentation_type)')
+        .eq('venue_id', venueRow.id).eq('series_type', 'course').eq('activity_formats.presentation_type', 'course').eq('status', 'active').gte('end_date', today).order('start_date').limit(24);
       if (error) throw new Error(error.message);
       const items = [];
-      for (const series of data || []) items.push(await projectCourse(admin, series, userId));
+      for (const series of data || []) {
+        const projected = await projectCourse(admin, series, userId);
+        if (projected.format?.presentation_type === 'course') items.push(projected);
+      }
       return jsonResponse({ items }, 200, userId ? 0 : 5);
     }
 
@@ -376,7 +389,8 @@ const coursesHandler = async (req: Request) => {
       const venueRow = await venue(admin, { id: venueId });
       const ageGroup = cleanText(body.age_group, 24);
       const level = cleanText(body.level, 24);
-      if (!AGE_GROUPS.has(ageGroup) || !LEVELS.has(level)) return errorResponse('Invalid Course taxonomy', 400);
+      const presentationType = cleanText(body.presentation_type || 'course', 32);
+      if (!AGE_GROUPS.has(ageGroup) || !LEVELS.has(level) || !PRESENTATION_TYPES.has(presentationType)) return errorResponse('Invalid Format taxonomy', 400);
       const { data, error } = await admin.from('activity_formats').insert({
         organization_id: venueRow.organization_id,
         name: cleanText(body.name, 120),
@@ -386,6 +400,7 @@ const coursesHandler = async (req: Request) => {
         age_group: ageGroup,
         level,
         requires_instructor: body.requires_instructor === true,
+        presentation_type: presentationType,
       }).select('*').single();
       if (error) throw new Error(error.message);
       return jsonResponse(data, 201, 0);
@@ -399,9 +414,10 @@ const coursesHandler = async (req: Request) => {
       const venueRow = await venue(admin, { id: venueId });
       const ageGroup = cleanText(body.age_group, 24);
       const level = cleanText(body.level, 24);
+      const presentationType = cleanText(body.presentation_type || 'course', 32);
       const name = cleanText(body.name, 120);
-      if (!UUID.test(formatId) || !name || !AGE_GROUPS.has(ageGroup) || !LEVELS.has(level)) {
-        return errorResponse('Invalid Course Format', 400);
+      if (!UUID.test(formatId) || !name || !AGE_GROUPS.has(ageGroup) || !LEVELS.has(level) || !PRESENTATION_TYPES.has(presentationType)) {
+        return errorResponse('Invalid Format', 400);
       }
       const { data, error } = await admin.from('activity_formats').update({
         name,
@@ -411,6 +427,7 @@ const coursesHandler = async (req: Request) => {
         age_group: ageGroup,
         level,
         requires_instructor: body.requires_instructor === true,
+        presentation_type: presentationType,
       }).eq('id', formatId).eq('organization_id', venueRow.organization_id).eq('is_active', true).select('*').maybeSingle();
       if (error) throw new Error(error.message);
       if (!data) return errorResponse('Course Format not found', 404);

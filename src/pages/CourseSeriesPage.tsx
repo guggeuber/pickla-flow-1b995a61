@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { createCourseCart, fetchCourseDetail } from "@/lib/courses";
 import { formatCommerceMoney } from "@/lib/commerce";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import { occurrenceCountLabel, seriesPresentation } from "@/lib/seriesPresentation";
 
 type ParticipantType = "self" | "adult" | "dependent";
 
@@ -35,6 +36,7 @@ export default function CourseSeriesPage() {
     enabled: Boolean(seriesId) && !authLoading,
   });
   const course = query.data;
+  const presentation = seriesPresentation(course?.format?.presentation_type);
   const venueSlug = course?.venue?.slug || params.get("v") || "pickla-arena-sthlm";
   const sessions = course?.sessions || [];
   const scheduleLabel = (() => {
@@ -46,7 +48,7 @@ export default function CourseSeriesPage() {
 
   const buy = useMutation({
     mutationFn: async () => {
-      if (!course) throw new Error("Kursen kunde inte öppnas.");
+      if (!course) throw new Error("Sidan kunde inte öppnas.");
       if (participantType === "dependent" && !user) {
         preserveIntendedRoute(`/course/${seriesId}?v=${encodeURIComponent(venueSlug)}`);
         navigate(`/auth?redirect=${encodeURIComponent(`/course/${seriesId}`)}&v=${encodeURIComponent(venueSlug)}`);
@@ -63,7 +65,7 @@ export default function CourseSeriesPage() {
         dependent_birth_year: childBirthYear || null,
       }, user ? undefined : { auth: "omit" });
       const reference = response.cart_token || response.order.id;
-      if (!reference) throw new Error("Kursköpet kunde inte skapas.");
+      if (!reference) throw new Error("Bokningen kunde inte skapas.");
       return reference;
     },
     onSuccess: (reference) => navigate(`/cart?token=${encodeURIComponent(reference)}&v=${encodeURIComponent(venueSlug)}`),
@@ -71,7 +73,7 @@ export default function CourseSeriesPage() {
   });
 
   if (query.isLoading || authLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><div className="grid min-h-[100dvh] place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
-  if (!course || query.isError) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><main className="mx-auto max-w-xl px-6 pt-32 text-center">Kursen kunde inte öppnas.</main></div>;
+  if (!course || query.isError) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><main className="mx-auto max-w-xl px-6 pt-32 text-center">Sidan kunde inte öppnas.</main></div>;
 
   const available = Number(course.capacity.available_count || 0);
   const open = course.registration_state === "open" && available > 0 && !course.customer_has_commitment;
@@ -85,19 +87,19 @@ export default function CourseSeriesPage() {
     <div className="min-h-[100dvh] bg-white text-slate-950">
       <PicklaTopBar slug={venueSlug} background="#fff" />
       <main className="mx-auto w-full max-w-xl px-5 pb-40 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
-        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt="" className="mb-6 aspect-video w-full rounded-[24px] object-cover" /> : null}
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Kurs</p>
+        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt={course.name} className={presentation.imageProminence === "prominent" ? "-mx-5 mb-7 aspect-[16/10] w-[calc(100%+2.5rem)] object-cover" : "mb-6 aspect-video w-full rounded-[24px] object-cover"} data-testid="series-detail-image" /> : null}
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{presentation.label}</p>
         <h1 className="mt-2 text-3xl font-black leading-tight">{course.name}</h1>
         <p className="mt-3 text-base leading-relaxed text-slate-600">{course.format?.description || course.description}</p>
 
         <section className="mt-8 grid gap-4 border-y border-black/10 py-6">
-          <div className="flex gap-3"><CalendarDays className="mt-0.5 h-5 w-5" /><div><p className="font-bold">{sessions.length} tillfällen · {scheduleLabel}</p><p className="mt-1 text-sm text-slate-500">{swedishDate(course.start_date)}–{swedishDate(course.end_date)}</p></div></div>
+          <div className="flex gap-3"><CalendarDays className="mt-0.5 h-5 w-5" /><div>{presentation.hideSingleOccurrenceCount && sessions.length === 1 ? <><p className="font-bold">{swedishDate(sessions[0].session_date)}</p><p className="mt-1 text-sm text-slate-500">{String(sessions[0].start_time).slice(0, 5)}–{String(sessions[0].end_time).slice(0, 5)}</p></> : <><p className="font-bold">{occurrenceCountLabel(sessions.length)} · {scheduleLabel}</p><p className="mt-1 text-sm text-slate-500">{swedishDate(course.start_date)}–{swedishDate(course.end_date)}</p></>}</div></div>
           <div className="flex gap-3"><Users className="mt-0.5 h-5 w-5" /><div><p className="font-bold">{available} {available === 1 ? "plats" : "platser"} kvar</p><p className="mt-1 text-sm text-slate-500">{course.venue?.name}</p></div></div>
-          {course.format?.requires_instructor ? <div className="flex gap-3"><Check className="mt-0.5 h-5 w-5" /><p className="font-bold">Instruktör vid varje tillfälle</p></div> : null}
+          {presentation.showInstructor && course.format?.requires_instructor && presentation.instructorLabel ? <div className="flex gap-3"><Check className="mt-0.5 h-5 w-5" /><p className="font-bold">{presentation.instructorLabel}</p></div> : null}
         </section>
 
         {course.format?.full_description ? <section className="mt-8">
-          <h2 className="text-lg font-black">Om kursen</h2>
+          <h2 className="text-lg font-black">{presentation.contentHeading}</h2>
           <div className="mt-3 whitespace-pre-line text-sm leading-7 text-slate-600">{course.format.full_description}</div>
         </section> : null}
 
@@ -119,17 +121,17 @@ export default function CourseSeriesPage() {
           {participantType === "dependent" ? user ? <div className="mt-4 grid gap-3"><input aria-label="Barnets förnamn" value={childName} onChange={(event) => setChildName(event.target.value)} placeholder="Barnets förnamn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Barnets födelseår" value={childBirthYear} onChange={(event) => setChildBirthYear(event.target.value)} placeholder="Födelseår" inputMode="numeric" className="h-12 rounded-xl border border-black/15 px-3" /><p className="text-xs leading-relaxed text-slate-500">Uppgifterna visas bara för dig och behörig personal.</p></div> : <button type="button" onClick={() => buy.mutate()} className="mt-4 flex items-center gap-2 text-sm font-bold underline underline-offset-4">Logga in för att anmäla barn <ChevronRight className="h-4 w-4" /></button> : null}
         </section>
 
-        <section className="mt-8 border-t border-black/10 pt-6">
+        {presentation.type === "course" ? <section className="mt-8 border-t border-black/10 pt-6">
           <h2 className="font-black">Kursplatsen gäller hela serien</h2>
           <p className="mt-2 text-sm leading-relaxed text-slate-600">Du köper en plats på kursen, inte separata besök. Missade tillfällen återbetalas inte och ger ingen ersättningsplats.</p>
-        </section>
+        </section> : null}
       </main>
       <footer className="fixed inset-x-0 bottom-0 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
         <div className="mx-auto max-w-xl">
-          {course.customer_has_commitment ? <p className="mb-3 text-center text-sm font-bold">Du har redan en plats på kursen.</p> : null}
+          {course.customer_has_commitment ? <p className="mb-3 text-center text-sm font-bold">Du har redan en plats.</p> : null}
           <button type="button" onClick={() => buy.mutate()} disabled={!ready || buy.isPending} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
             {buy.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-            {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : `Boka kurs · ${formatCommerceMoney(Number(course.product.base_price_sek) * 100)}`}
+            {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : `${presentation.bookingCta} · ${formatCommerceMoney(Number(course.product.base_price_sek) * 100)}`}
           </button>
         </div>
       </footer>

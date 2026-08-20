@@ -29,6 +29,7 @@ import {
   purchaseErrorMessage,
   withPurchaseSessionRecovery,
 } from "@/lib/purchaseSessionRecovery";
+import { occurrenceCountLabel, seriesPresentation } from "@/lib/seriesPresentation";
 
 type ResolvedLine = CommerceOrderLine & { unit_price_minor: number; product_name: string };
 
@@ -129,6 +130,12 @@ export default function CommerceCartPage() {
   const hasParticipation = lines.some((line) => line.commerce_kind === "participation");
   const activity = orderQuery.data?.activity_access;
   const course = orderQuery.data?.course_access;
+  const coursePresentation = seriesPresentation(course?.presentation_type);
+  const courseOccurrenceSummary = course
+    ? coursePresentation.hideSingleOccurrenceCount && Number(course.total_sessions) === 1
+      ? `${DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")} · ${String(course.start_time).slice(0, 5)}–${String(course.end_time).slice(0, 5)}`
+      : `${occurrenceCountLabel(Number(course.total_sessions))} · start ${DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")}`
+    : "";
   const activityDate = activity
     ? DateTime.fromISO(activity.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("cccc d MMMM")
     : "";
@@ -279,9 +286,9 @@ export default function CommerceCartPage() {
         ) : null}
         {course ? (
           <section className="pb-6">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Kurs</p>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">{coursePresentation.label}</p>
             <h2 className="mt-1 text-lg font-black">{course.name}</h2>
-            <p className="mt-2 text-sm font-semibold text-slate-600">{course.total_sessions} tillfällen · start {DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")}</p>
+            <p className="mt-2 text-sm font-semibold text-slate-600">{courseOccurrenceSummary}</p>
             {course.participant_name ? <p className="mt-1 text-sm text-slate-500">Deltagare: {course.participant_name}</p> : null}
             {course.venue_name ? <p className="mt-1 text-sm text-slate-500">{course.venue_name}</p> : null}
           </section>
@@ -292,7 +299,7 @@ export default function CommerceCartPage() {
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
             const isCourseLine = Boolean(course) && line.resolver_snapshot?.purchase_kind === "course";
             const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
-            const lineName = isCourseLine ? "Kursplats" : isDayPassLine ? line.product_name : isActivityParticipationLine ? "Personlig plats" : line.product_name;
+            const lineName = isCourseLine ? coursePresentation.type === "course" ? "Kursplats" : "Plats" : isDayPassLine ? line.product_name : isActivityParticipationLine ? "Personlig plats" : line.product_name;
             const LineIcon = line.commerce_kind === "participation" ? Ticket : ShoppingBag;
             const lineMetadata = isRacketLine && racketInstruction
               ? `Antal ${line.quantity} · ${racketInstruction}`
@@ -301,7 +308,7 @@ export default function CommerceCartPage() {
                 : isDayPassLine
                   ? "Alla Open Play-pass idag."
                   : isCourseLine
-                    ? "En plats för hela kursserien."
+                    ? coursePresentation.type === "course" ? "En plats för hela kursserien." : "En plats för hela serien."
                   : isActivityParticipationLine
                     ? null
                   : "Personlig plats";

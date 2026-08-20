@@ -41,7 +41,7 @@ const course = {
   total_sessions: 6, registration_opens_at: "2026-08-01T00:00:00Z", registration_closes_at: "2026-09-08T16:00:00Z",
   recurrence_days: [2], start_time: "18:00", end_time: "19:00", court_ids: [], registration_state: "open",
   customer_has_commitment: false,
-  format: { id: "format-1", name: "Pickla 101", description: "Dina första fyra veckor med pickleball.", full_description: "Introduktion\n\nTillfälle 1 · Grepp och grundslag.\nTillfälle 2 · Serve och retur.\n\nDetta ingår\nInstruktör och lånerack.", age_group: "adult", level: "beginner", requires_instructor: true },
+  format: { id: "format-1", name: "Pickla 101", description: "Dina första fyra veckor med pickleball.", full_description: "Introduktion\n\nTillfälle 1 · Grepp och grundslag.\nTillfälle 2 · Serve och retur.\n\nDetta ingår\nInstruktör och lånerack.", image_urls: [], age_group: "adult", level: "beginner", requires_instructor: true, presentation_type: "course" },
   product: { id: "product-1", name: "Pickla 101", description: null, base_price_sek: 1495, vat_rate: 6 },
   venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
   capacity: { capacity: 12, committed_count: 7, active_holds_count: 0, available_count: 5 },
@@ -93,15 +93,77 @@ describe("Course V1 customer flow", () => {
     expect(screen.queryByLabelText(/Barnets efternamn/i)).not.toBeInTheDocument();
     expect(screen.getByText("Uppgifterna visas bara för dig och behörig personal.")).toBeInTheDocument();
   });
+
+  it("projects Parker Brunch as a one-occurrence social event without Course language", async () => {
+    mocks.user = null;
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      id: "parker-brunch",
+      name: "Parker Brunch",
+      start_date: "2026-09-05",
+      end_date: "2026-09-05",
+      total_sessions: 1,
+      start_time: "13:00",
+      end_time: "18:00",
+      image_urls: ["https://example.test/parker-brunch.webp"],
+      format: {
+        ...course.format,
+        name: "Parker Brunch",
+        description: "Brunch, pickleball och människor i huset.",
+        full_description: "En eftermiddag med brunch och pickleball.",
+        presentation_type: "social_event",
+        requires_instructor: true,
+      },
+      product: { ...course.product, base_price_sek: 199 },
+      capacity: { capacity: 40, committed_count: 0, active_holds_count: 0, available_count: 40 },
+      sessions: [{ id: "parker-session", session_date: "2026-09-05", start_time: "13:00", end_time: "18:00", court_ids: [], requires_staffing: true, is_active: true, series_occurrence_index: 1 }],
+    });
+    renderCourse();
+
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(screen.getByText("EVENT")).toBeInTheDocument();
+    expect(screen.getByText("5 september")).toBeInTheDocument();
+    expect(screen.getByText("13:00–18:00")).toBeInTheDocument();
+    expect(screen.getByText("40 platser kvar")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Boka plats · 199 kr" })).toBeDisabled();
+    expect(screen.getByTestId("series-detail-image")).toHaveAttribute("src", "https://example.test/parker-brunch.webp");
+    expect(screen.queryByText(/1 tillfällen?/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Instruktör vid varje tillfälle/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Kursplatsen|plats på kursen/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["clinic", "CLINIC", "Om clinicen", "Coach vid varje tillfälle"],
+    ["tournament", "TURNERING", "Om turneringen", null],
+  ] as const)("projects %s language without changing the shared purchase surface", async (presentationType, label, heading, instructorCopy) => {
+    mocks.user = null;
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      name: presentationType === "clinic" ? "Serve & Return" : "Stockholm League Pickleball",
+      format: {
+        ...course.format,
+        full_description: presentationType === "clinic" ? "Teknikträning med coach." : "Tävlingsdag hos Pickla.",
+        presentation_type: presentationType,
+      },
+    });
+    renderCourse();
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Boka plats · ${formatCommerceMoney(149500)}` })).toBeDisabled();
+    if (instructorCopy) expect(screen.getByText(instructorCopy)).toBeInTheDocument();
+    else expect(screen.queryByText("Instruktör vid varje tillfälle")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Kursplatsen|plats på kursen/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("Course V1 Admin", () => {
   it("uses the existing Schedule surface for Format, Series and Session preview", async () => {
     mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
     render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
-    fireEvent.click(screen.getByRole("button", { name: /Kurser/ }));
-    expect(await screen.findByText("1. Kursformat")).toBeInTheDocument();
-    expect(screen.getByText("2. Konkret kursserie")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    expect(await screen.findByText("1. Format")).toBeInTheDocument();
+    expect(screen.getByText("2. Konkret serie")).toBeInTheDocument();
     expect(await screen.findByText(/7\/12 platser/)).toBeInTheDocument();
     expect(screen.getByText("Instruktör krävs")).toBeInTheDocument();
     expect(screen.getByText("Kommande tillfällen")).toBeInTheDocument();
@@ -137,9 +199,9 @@ describe("Course V1 Admin", () => {
     });
 
     render(<AdminCourses venueId="c0100000-0000-4000-8000-000000000002" />, { wrapper: wrapper("/hub/admin/schedule") });
-    fireEvent.click(screen.getByRole("button", { name: /Kurser/ }));
-    await screen.findByText("2. Konkret kursserie");
-    fireEvent.change(screen.getAllByRole("combobox")[2], { target: { value: "format-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    await screen.findByText("2. Konkret serie");
+    fireEvent.change(screen.getByLabelText("Format"), { target: { value: "format-1" } });
     fireEvent.change(screen.getByPlaceholderText("Pickla 101 · Höst 2026"), { target: { value: "Pickla 101 · Höst 2026" } });
     fireEvent.change(screen.getByLabelText("Start"), { target: { value: "2026-09-08" } });
     fireEvent.change(screen.getByLabelText("Slut"), { target: { value: "2026-10-13" } });
@@ -148,10 +210,10 @@ describe("Course V1 Admin", () => {
     fireEvent.click(screen.getByRole("button", { name: "Bana 3" }));
 
     expect(await screen.findByText("Privat bokning · 17:30–19:30")).toBeInTheDocument();
-    expect(screen.getByText("Ändra schema eller resurser innan kursen kan sparas.")).toBeInTheDocument();
+    expect(screen.getByText("Ändra schema eller resurser innan serien kan sparas.")).toBeInTheDocument();
     expect(screen.getAllByText("Konflikt")).toHaveLength(1);
     expect(screen.getAllByText("Ledig")).toHaveLength(5);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Skapa kurs och tillfällen" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Skapa serie och tillfällen" })).toBeDisabled());
   });
 
   it("edits reusable Format content and reloads a draft Series into the canonical preview", async () => {
@@ -181,23 +243,24 @@ describe("Course V1 Admin", () => {
     mocks.updateCourseSeries.mockResolvedValue(draftCourse);
 
     render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
-    fireEvent.click(screen.getByRole("button", { name: /Kurser/ }));
-    await screen.findByText("1. Kursformat");
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    await screen.findByText("1. Format");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Redigera" })[0]);
     expect(screen.getByLabelText("Kort beskrivning")).toHaveValue("Dina första fyra veckor med pickleball.");
-    expect((screen.getByLabelText("Full beskrivning och kursinnehåll") as HTMLTextAreaElement).value).toContain("Tillfälle 1");
+    expect((screen.getByLabelText("Full beskrivning och innehåll") as HTMLTextAreaElement).value).toContain("Tillfälle 1");
     fireEvent.change(screen.getByLabelText("Kort beskrivning"), { target: { value: "Ny kort text" } });
-    fireEvent.change(screen.getByLabelText("Full beskrivning och kursinnehåll"), { target: { value: "Ny lång text" } });
+    fireEvent.change(screen.getByLabelText("Full beskrivning och innehåll"), { target: { value: "Ny lång text" } });
     fireEvent.click(screen.getByRole("button", { name: "Spara format" }));
     await waitFor(() => expect(mocks.updateCourseFormat).toHaveBeenCalledWith(expect.objectContaining({
       format_id: "format-1",
       description: "Ny kort text",
       full_description: "Ny lång text",
+      presentation_type: "course",
     })));
 
     fireEvent.click(screen.getAllByRole("button", { name: "Redigera" }).at(-1)!);
-    expect(screen.getByRole("heading", { name: "2. Redigera kursutkast" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "2. Redigera serieutkast" })).toBeInTheDocument();
     expect(screen.getByLabelText("Serienamn")).toHaveValue("Pickla 101 · Höst 2026");
     await waitFor(() => expect(mocks.previewCourseSeries).toHaveBeenCalledWith(expect.objectContaining({ series_id: "series-1" })));
     expect(await screen.findAllByText("Ledig")).toHaveLength(6);

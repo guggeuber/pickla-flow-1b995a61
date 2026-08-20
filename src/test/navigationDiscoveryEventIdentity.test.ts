@@ -111,8 +111,9 @@ describe("Navigation, discovery and event identity contract", () => {
     expect(detail).toContain("selectedCustomerPrice?.displayLabel");
   });
 
-  it("uses named images in schedule, detail and OG while Home keeps compact Course truth", () => {
+  it("uses named images in schedule, detail and OG while Home keeps compact Series truth", () => {
     const today = read("src/pages/TodayPage.tsx");
+    const homeSeries = read("src/components/series/SeriesRegistrationCard.tsx");
     const openPlay = read("src/pages/OpenPlayPage.tsx");
     const event = read("src/pages/EventPage.tsx");
     const og = read("supabase/functions/api-event-public/index.ts");
@@ -123,9 +124,9 @@ describe("Navigation, discovery and event identity contract", () => {
     expect(og).toContain("preview.activity_session.image_urls?.[0]");
     expect(og).toContain("path === 'event-og'");
     expect(og).toContain("path === 'course-og'");
-    const courseCard = today.slice(today.indexOf('data-testid="home-course-card"'), today.indexOf('courseHome?.mode === "next"'));
-    expect(courseCard).toContain("course.format?.description");
-    expect(courseCard).not.toContain("full_description");
-    expect(courseCard).toContain("rounded-full bg-black");
+    expect(today).toContain("<SeriesRegistrationCard");
+    expect(homeSeries).toContain("series.format?.description");
+    expect(homeSeries).not.toContain("full_description");
+    expect(homeSeries).toContain("rounded-full bg-black");
   });
 });
