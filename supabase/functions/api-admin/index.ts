@@ -15,6 +15,13 @@ import {
   type CapacityIntervalInput,
   type CapacityResource,
 } from '../_shared/capacity.ts';
+import {
+  activitySeriesManagementProjection,
+  activitySeriesOwnershipFromRelation,
+  genericActivitySessionUpdates,
+  isManagedActivitySeries,
+  MANAGED_SERIES_MESSAGE,
+} from '../_shared/series_management.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -134,6 +141,44 @@ function cleanNamedEventImageUrls(value: unknown) {
   const urls = [...new Set(value.map((url) => String(url || '').trim()).filter((url) => /^https:\/\//.test(url)))];
   if (urls.length > 3) throw new Error('Högst tre bilder kan användas');
   return urls;
+}
+
+async function loadActivitySeriesOwnership(admin: any, venueId: string, seriesId: string) {
+  return await admin
+    .from('activity_series')
+    .select('id, name, format_id, access_product_id')
+    .eq('id', seriesId)
+    .eq('venue_id', venueId)
+    .maybeSingle();
+}
+
+async function loadManagedSeriesForProduct(admin: any, venueId: string, productId: string) {
+  const linked = await admin
+    .from('activity_series')
+    .select('id, name, format_id, access_product_id')
+    .eq('venue_id', venueId)
+    .eq('access_product_id', productId)
+    .limit(1)
+    .maybeSingle();
+  if (linked.error || linked.data) return linked;
+
+  // Fail closed for legacy/partial managed rows that still carry the canonical
+  // product key but predate access_product_id linkage.
+  const product = await admin
+    .from('access_products')
+    .select('product_key')
+    .eq('venue_id', venueId)
+    .eq('id', productId)
+    .maybeSingle();
+  if (product.error || !product.data?.product_key) return { data: null, error: product.error };
+  return await admin
+    .from('activity_series')
+    .select('id, name, format_id, access_product_id')
+    .eq('venue_id', venueId)
+    .not('format_id', 'is', null)
+    .eq('product_key', product.data.product_key)
+    .limit(1)
+    .maybeSingle();
 }
 
 function normalizeActivitySessionPayload(body: Record<string, any>) {
@@ -6103,6 +6148,9 @@ Deno.serve(async (req) => {
         .select('*').eq('id', productId).eq('venue_id', venueId).maybeSingle();
       if (existingError) return errorResponse(existingError.message);
       if (!existing) return errorResponse('Product not found', 404);
+      const { data: managedSeries, error: managedSeriesError } = await loadManagedSeriesForProduct(admin, venueId, productId);
+      if (managedSeriesError) return errorResponse(managedSeriesError.message);
+      if (managedSeries) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const merged = { ...existing, ...safeUpdates };
       const compatibility = deriveCommerceCompatibilityFields(merged, existing);
       const { data, error: e } = await admin.from('access_products')
@@ -6119,6 +6167,9 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'products') {
       const productId = url.searchParams.get('productId');
       if (!productId) return errorResponse('Missing productId');
+      const { data: managedSeries, error: managedSeriesError } = await loadManagedSeriesForProduct(admin, venueId, productId);
+      if (managedSeriesError) return errorResponse(managedSeriesError.message);
+      if (managedSeries) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const { error: e } = await admin.from('access_products').delete().eq('id', productId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
@@ -6140,6 +6191,9 @@ Deno.serve(async (req) => {
         .select('id').eq('venue_id', venueId).in('id', [sourceProductId, targetProductId]);
       if (ownedError) return errorResponse(ownedError.message);
       if ((ownedProducts || []).length !== 2) return errorResponse('Products must belong to the selected venue', 403);
+      const { data: managedSeries, error: managedSeriesError } = await loadManagedSeriesForProduct(admin, venueId, sourceProductId);
+      if (managedSeriesError) return errorResponse(managedSeriesError.message);
+      if (managedSeries) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const { data, error: e } = await admin.from('product_relationships').upsert({
         venue_id: venueId,
         source_product_id: sourceProductId,
@@ -6157,6 +6211,13 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'product-relationships') {
       const relationshipId = url.searchParams.get('relationshipId');
       if (!relationshipId) return errorResponse('Missing relationshipId');
+      const { data: relationship, error: relationshipError } = await admin.from('product_relationships')
+        .select('id, source_product_id').eq('id', relationshipId).eq('venue_id', venueId).maybeSingle();
+      if (relationshipError) return errorResponse(relationshipError.message);
+      if (!relationship) return errorResponse('Product relationship not found', 404);
+      const { data: managedSeries, error: managedSeriesError } = await loadManagedSeriesForProduct(admin, venueId, relationship.source_product_id);
+      if (managedSeriesError) return errorResponse(managedSeriesError.message);
+      if (managedSeries) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const { error: e } = await admin.from('product_relationships')
         .delete().eq('id', relationshipId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
@@ -6168,12 +6229,16 @@ Deno.serve(async (req) => {
       const { data, error: e } = await admin.from('activity_series')
         .select('*').eq('venue_id', venueId).order('created_at', { ascending: false });
       if (e) return errorResponse(e.message);
-      return jsonResponse(data, 200, 15);
+      return jsonResponse((data || []).map((series: any) => ({
+        ...series,
+        ...activitySeriesManagementProjection(series),
+      })), 200, 15);
     }
 
     if (req.method === 'POST' && path === 'activity-series') {
       const { venueId: _v, ...body } = await req.json();
       if (!body.name) return errorResponse('Missing name');
+      if (body.series_type === 'course') return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const { data, error: e } = await admin.from('activity_series').insert({
         venue_id: venueId,
         name: body.name,
@@ -6194,6 +6259,11 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'activity-series') {
       const { seriesId, ...updates } = await req.json();
       if (!seriesId) return errorResponse('Missing seriesId');
+      const { data: ownership, error: ownershipError } = await loadActivitySeriesOwnership(admin, venueId, seriesId);
+      if (ownershipError) return errorResponse(ownershipError.message);
+      if (!ownership) return errorResponse('Activity series not found', 404);
+      if (isManagedActivitySeries(ownership)) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      if (updates.series_type === 'course') return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const allowed = ['name', 'description', 'series_type', 'sport_type', 'status', 'product_key', 'start_date', 'end_date', 'total_sessions', 'metadata'];
       const safeUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => allowed.includes(key)));
       if (Object.prototype.hasOwnProperty.call(updates, 'image_urls')) safeUpdates.image_urls = cleanNamedEventImageUrls(updates.image_urls);
@@ -6206,6 +6276,10 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'activity-series') {
       const seriesId = url.searchParams.get('seriesId');
       if (!seriesId) return errorResponse('Missing seriesId');
+      const { data: ownership, error: ownershipError } = await loadActivitySeriesOwnership(admin, venueId, seriesId);
+      if (ownershipError) return errorResponse(ownershipError.message);
+      if (!ownership) return errorResponse('Activity series not found', 404);
+      if (isManagedActivitySeries(ownership)) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const { error: e } = await admin.from('activity_series').delete().eq('id', seriesId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
@@ -6213,17 +6287,35 @@ Deno.serve(async (req) => {
 
     if (req.method === 'GET' && path === 'activity-sessions') {
       const { data, error: e } = await admin.from('activity_sessions')
-        .select('*, activity_series(id, name, series_type, image_urls, activity_formats(image_urls))')
+        .select('*, activity_series(id, name, series_type, image_urls, format_id, access_product_id, activity_formats(image_urls))')
         .eq('venue_id', venueId)
         .order('start_time', { ascending: true });
       if (e) return errorResponse(e.message);
-      const sessionsWithHosts = await attachActivitySessionHosts(admin, data || []);
+      const projected = (data || []).map((session: any) => {
+        const parent = session.activity_series || null;
+        const ownership = parent
+          ? activitySeriesManagementProjection(parent)
+          : { management_mode: 'standalone_session', schedule_editable: true };
+        return {
+          ...session,
+          ...ownership,
+          activity_series: parent ? { ...parent, ...activitySeriesManagementProjection(parent) } : null,
+        };
+      });
+      const sessionsWithHosts = await attachActivitySessionHosts(admin, projected);
       return jsonResponse(sessionsWithHosts, 200, 15);
     }
 
     if (req.method === 'POST' && path === 'activity-sessions') {
       const { venueId: _v, ...body } = await req.json();
       if (!body.name || !body.start_time || !body.end_time) return errorResponse('Missing name/start_time/end_time');
+      if (body.session_type === 'course') return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      if (body.series_id) {
+        const { data: ownership, error: ownershipError } = await loadActivitySeriesOwnership(admin, venueId, String(body.series_id));
+        if (ownershipError) return errorResponse(ownershipError.message);
+        if (!ownership) return errorResponse('Activity series not found', 404);
+        if (isManagedActivitySeries(ownership)) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      }
       const hostCustomerIds = normalizeHostCustomerIds(body.host_customer_ids);
       const normalized = normalizeActivitySessionPayload(body);
       const recurrenceDays = Array.isArray(body.recurrence_days) ? body.recurrence_days : null;
@@ -6279,18 +6371,32 @@ Deno.serve(async (req) => {
     if (req.method === 'PATCH' && path === 'activity-sessions') {
       const { sessionId, ...updates } = await req.json();
       if (!sessionId) return errorResponse('Missing sessionId');
-      const hostCustomerIds = normalizeHostCustomerIds(updates.host_customer_ids);
-      const normalized = normalizeActivitySessionPayload(updates);
-      const hostValidation = await validateActivitySessionHostCustomers(admin, hostCustomerIds);
-      if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
       const { data: existingSession, error: existingError } = await admin
         .from('activity_sessions')
-        .select('id, venue_id, name, session_date, recurrence_days, start_time, end_time, court_ids, requires_staffing, is_active, publish_status')
+        .select('*, activity_series(id, name, format_id, access_product_id)')
         .eq('id', sessionId)
         .eq('venue_id', venueId)
         .maybeSingle();
       if (existingError) return errorResponse(existingError.message);
       if (!existingSession?.id) return errorResponse('Activity session not found', 404);
+      if (isManagedActivitySeries(activitySeriesOwnershipFromRelation(existingSession.activity_series))) {
+        return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      }
+      const hostCustomerIds = normalizeHostCustomerIds(updates.host_customer_ids);
+      const normalized = genericActivitySessionUpdates(normalizeActivitySessionPayload(updates));
+      if (normalized.session_type === 'course') return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      if (Object.prototype.hasOwnProperty.call(normalized, 'series_id') && normalized.series_id) {
+        const { data: targetOwnership, error: targetOwnershipError } = await loadActivitySeriesOwnership(
+          admin,
+          venueId,
+          String(normalized.series_id),
+        );
+        if (targetOwnershipError) return errorResponse(targetOwnershipError.message);
+        if (!targetOwnership) return errorResponse('Activity series not found', 404);
+        if (isManagedActivitySeries(targetOwnership)) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      }
+      const hostValidation = await validateActivitySessionHostCustomers(admin, hostCustomerIds);
+      if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
       if (normalized.first_visit_offer_enabled === true && /fredagsklubben/i.test(String(normalized.name || existingSession.name || ''))) {
         return errorResponse('Prova-på får inte aktiveras på Fredagsklubben', 400);
       }
@@ -6320,6 +6426,17 @@ Deno.serve(async (req) => {
     if (req.method === 'DELETE' && path === 'activity-sessions') {
       const sessionId = url.searchParams.get('sessionId');
       if (!sessionId) return errorResponse('Missing sessionId');
+      const { data: existingSession, error: existingError } = await admin
+        .from('activity_sessions')
+        .select('id, activity_series(id, name, format_id, access_product_id)')
+        .eq('id', sessionId)
+        .eq('venue_id', venueId)
+        .maybeSingle();
+      if (existingError) return errorResponse(existingError.message);
+      if (!existingSession) return errorResponse('Activity session not found', 404);
+      if (isManagedActivitySeries(activitySeriesOwnershipFromRelation(existingSession.activity_series))) {
+        return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      }
       const { error: e } = await admin.from('activity_sessions').delete().eq('id', sessionId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });

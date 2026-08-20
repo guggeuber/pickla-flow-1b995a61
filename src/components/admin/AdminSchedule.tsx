@@ -180,7 +180,6 @@ const SERIES_TYPES = [
   { key: "club_night", label: "Klubbkväll" },
   { key: "training", label: "Träning" },
   { key: "competition", label: "Tävling" },
-  { key: "course", label: "Kurs/serie" },
 ];
 
 const inputStyle = {
@@ -324,6 +323,21 @@ const sessionScopeLabel = (session: any) => {
   if (session?.session_date) return "Enskilt pass";
   return "Återkommande schema";
 };
+
+type ScheduleOwnershipProjection = {
+  management_mode?: string | null;
+  format_id?: string | null;
+  access_product_id?: string | null;
+  activity_series?: ScheduleOwnershipProjection | null;
+};
+
+const isManagedScheduleSeries = (series: ScheduleOwnershipProjection | null | undefined) => (
+  series?.management_mode === "managed_series" || Boolean(series?.format_id || series?.access_product_id)
+);
+
+const isManagedScheduleSession = (session: ScheduleOwnershipProjection | null | undefined) => (
+  session?.management_mode === "managed_series" || isManagedScheduleSeries(session?.activity_series)
+);
 
 const accessSummary = (includedInDayPass: boolean, includedInUnlimited: boolean) => {
   const parts = [];
@@ -1038,6 +1052,13 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     start_time: startTime,
     end_time: endTime,
   });
+
+  const openManagedSeriesEditor = () => {
+    const section = document.querySelector<HTMLElement>('[data-testid="admin-courses"]');
+    const toggle = section?.querySelector<HTMLButtonElement>('button[aria-expanded]');
+    if (toggle?.getAttribute("aria-expanded") !== "true") toggle?.click();
+    section?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const createPreview = pricingPreview({
     onlinePrice: createOnlinePrice,
     deskPrice: numericPrice(deskPrice || createOnlinePrice, createOnlinePrice),
@@ -1060,7 +1081,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Schema bygger på två nivåer</p>
         <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
           <div className="rounded-xl bg-muted/50 p-3">
-            <span className="font-bold text-foreground">Program / serie</span> är gruppen, till exempel Fredagsklubben eller Vårkurs.
+            <span className="font-bold text-foreground">Program / serie</span> är gruppen för vardagsschemat, till exempel Fredagsklubben.
           </div>
           <div className="rounded-xl bg-muted/50 p-3">
             <span className="font-bold text-foreground">Schema-pass</span> är tiden, priset och kapaciteten som kunder kan boka.
@@ -1073,7 +1094,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         <input
           value={seriesName}
           onChange={(e) => setSeriesName(e.target.value)}
-          placeholder="Fredagsklubben, Pickla Open, Vårkurs Nybörjare..."
+          placeholder="Fredagsklubben, Pickla Open, Gruppträning..."
           className="w-full rounded-xl px-3 py-2.5 text-sm outline-none"
           style={inputStyle}
         />
@@ -1098,6 +1119,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           {series.map((item) => {
             const draft = seriesDrafts[item.id] || {};
             const isEditing = editingSeriesId === item.id;
+            const isManaged = isManagedScheduleSeries(item);
             return (
               <motion.div key={item.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4">
                 {isEditing ? (
@@ -1166,12 +1188,20 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         {item.product_key ? ` · ${productMap[item.product_key]?.name || "Produkt saknas"}` : ""}
                       </p>
                     </div>
-                    <button onClick={() => startEditSeries(item)} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground flex items-center gap-1">
-                      <Edit3 className="h-3 w-3" /> Redigera
-                    </button>
-                    <button onClick={() => { if (confirm("Ta bort programmet? Pass kopplade till serien kan påverkas.")) deleteSeries.mutate(item.id); }} className="text-muted-foreground/50 hover:text-destructive">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {isManaged ? (
+                      <button type="button" onClick={openManagedSeriesEditor} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground">
+                        Hanteras i Program & event
+                      </button>
+                    ) : (
+                      <>
+                        <button onClick={() => startEditSeries(item)} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground flex items-center gap-1">
+                          <Edit3 className="h-3 w-3" /> Redigera
+                        </button>
+                        <button onClick={() => { if (confirm("Ta bort programmet? Pass kopplade till serien kan påverkas.")) deleteSeries.mutate(item.id); }} className="text-muted-foreground/50 hover:text-destructive">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </motion.div>
@@ -1205,7 +1235,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           </select>
           <select value={seriesId} onChange={(e) => setSeriesId(e.target.value)} className={baseInputClass} style={inputStyle}>
             <option value="">Enskilt pass</option>
-            {series.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            {series.filter((item) => !isManagedScheduleSeries(item)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </div>
         <div className="rounded-xl bg-muted/40 p-3 space-y-2">
@@ -1381,6 +1411,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         {sessions.map((session) => {
           const product = session.product_key ? productMap[session.product_key] : null;
           const isEditing = editingSessionId === session.id;
+          const isManaged = isManagedScheduleSession(session);
           const draft = sessionDrafts[session.id] || {};
           const activeDraftProductKey = draft.product_key || session.product_key || productKeyForActivityTicket(draft.session_type || session.session_type || "open_play");
           const activeDraftProduct = productMap[activeDraftProductKey] || product;
@@ -1452,7 +1483,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                     </select>
                     <select value={draft.series_id || ""} onChange={(e) => setSessionDrafts((current) => ({ ...current, [session.id]: { ...draft, series_id: e.target.value } }))} className={baseInputClass} style={inputStyle}>
                       <option value="">Enskilt pass</option>
-                      {series.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                      {series.filter((item) => !isManagedScheduleSeries(item)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-3">
@@ -1903,18 +1934,26 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                     )}
                   </div>
                   <div className="flex flex-col gap-1 items-end">
-                    <button onClick={() => startEditSession(session)} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground flex items-center gap-1">
-                      <Edit3 className="h-3 w-3" /> Redigera
-                    </button>
-                    <button
-                      onClick={() => updateSession.mutate({ sessionId: session.id, is_active: !session.is_active })}
-                      className={`text-[10px] px-2 py-1 rounded-full font-semibold ${session.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}
-                    >
-                      {session.is_active ? "Aktiv" : "Av"}
-                    </button>
-                    <button onClick={() => { if (confirm("Ta bort passet?")) deleteSession.mutate(session.id); }} className="text-muted-foreground/50 hover:text-destructive">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {isManaged ? (
+                      <button type="button" onClick={openManagedSeriesEditor} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground">
+                        Genererat av Program & event
+                      </button>
+                    ) : (
+                      <>
+                        <button onClick={() => startEditSession(session)} className="rounded-full bg-muted px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground flex items-center gap-1">
+                          <Edit3 className="h-3 w-3" /> Redigera
+                        </button>
+                        <button
+                          onClick={() => updateSession.mutate({ sessionId: session.id, is_active: !session.is_active })}
+                          className={`text-[10px] px-2 py-1 rounded-full font-semibold ${session.is_active ? "bg-badge-paid/15 text-badge-paid" : "bg-destructive/15 text-destructive"}`}
+                        >
+                          {session.is_active ? "Aktiv" : "Av"}
+                        </button>
+                        <button onClick={() => { if (confirm("Ta bort passet?")) deleteSession.mutate(session.id); }} className="text-muted-foreground/50 hover:text-destructive">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

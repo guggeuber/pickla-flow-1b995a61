@@ -241,7 +241,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
 
   return (
     <section className="mb-6 rounded-2xl border border-border bg-card p-4" data-testid="admin-courses">
-      <button type="button" onClick={() => setOpen((value) => !value)} className="flex w-full items-center justify-between text-left">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex w-full items-center justify-between text-left">
         <div><p className="text-xs font-black uppercase tracking-wider text-muted-foreground">Series</p><h2 className="mt-1 text-lg font-black">Program</h2><p className="mt-1 text-xs text-muted-foreground">Format → serie → tillfällen</p></div>
         <ChevronDown className={`h-5 w-5 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
