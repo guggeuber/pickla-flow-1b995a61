@@ -112,7 +112,7 @@ describe("Commerce R1 activity draft", () => {
     expect(commerceApiSource).toContain("suppliedDraftScope !== canonicalDraftScope");
     expect(commerceApiSource).toContain("resolveOrCreateGuestCustomerByEmail");
     expect(commerceApiSource).toContain("if (suppliedDraftScope && !userId)");
-    expect(commerceApiSource).toContain("resolveActivityPricingDecision");
+    expect(commerceApiSource).toContain("resolveScopeAwarePricingDecision");
     expect(migrationSource).toContain("idx_commerce_orders_active_activity_draft");
     expect(migrationSource).toContain("draft_scope LIKE 'activity:%'");
     expect(migrationSource).not.toContain("ALTER COLUMN user_id DROP NOT NULL");

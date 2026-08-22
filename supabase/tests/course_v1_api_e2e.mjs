@@ -155,6 +155,9 @@ const guardian = await createUser("guardian");
 const finalSeatA = await createUser("final-a");
 const finalSeatB = await createUser("final-b");
 const failing = await createUser("payment", "fail");
+const seriesMember = await createUser("series-member");
+const sessionEntitled = await createUser("session-entitled");
+const parkerBuyer = await createUser("parker-buyer");
 await rest("venue_staff", "", { method: "POST", body: {
   venue_id: ids.venue,
   user_id: operator.id,
@@ -296,6 +299,8 @@ pass("Draft Series editing", "preview and conflicts recompute; save is atomic; p
 
 const created = await createSeries();
 const seriesId = created.series.id;
+const seriesProduct = (await rest("access_products", `id=eq.${created.series.access_product_id}&select=id,product_key,base_price_sek`)).payload[0];
+assert(seriesProduct?.product_key && Number(seriesProduct.base_price_sek) === 1495, "Series access product truth missing");
 pass("Series generation", "one Series, six closed Sessions, existing staffing projection");
 
 const activityConflict = await previewSeries();
@@ -461,19 +466,27 @@ const home = (await course(`home?v=${encodeURIComponent(`course-v1-${run}`)}`, {
 assert(home.mode === "registration" && home.item.id === seriesId, "Home did not project registration deadline truth");
 pass("Public/Home projection", "registration deadline and anonymous capacity only");
 
+await rest("activity_sessions", `id=eq.${created.sessions[0].id}`, { method: "PATCH", body: { price_sek: 1 } });
 const adultPurchase = await checkoutCourse({
   seriesId,
   user: payer,
   participant: { participant_type: "adult", participant_name: "Adult Participant", participant_email: `adult-${run}@example.test` },
 });
 assert(adultPurchase.order.status === "checkout_pending" && adultPurchase.order.total_inc_vat_minor === 149500, "Course checkout did not freeze one upfront order");
-await webhook(checkoutEvent({
+const adultLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${adultPurchase.order.id}&select=unit_price_minor,resolver_snapshot,activity_series_id`)).payload[0];
+assert(adultLine.unit_price_minor === 149500, "generated Session price overrode Series product price");
+assert(adultLine.resolver_snapshot?.scope_type === "activity_series" && adultLine.resolver_snapshot?.scope_id === seriesId, "Series resolver scope was not frozen");
+assert(adultLine.resolver_snapshot?.pricing_reason === "series_product_base_price", "Series base price did not use the shared resolver reason");
+assert(adultLine.resolver_snapshot?.series_fill?.capacity === 12 && adultLine.resolver_snapshot?.series_fill?.committedCount === 0, "Series capacity/fill context was not frozen");
+const adultEvent = checkoutEvent({
   id: `evt_course_adult_${run}`,
   sessionId: adultPurchase.order.stripe_session_id,
   orderId: adultPurchase.order.id,
   version: adultPurchase.order.version,
   email: payer.email,
-}));
+});
+await webhook(adultEvent);
+await webhook(adultEvent);
 
 const commitment = (await rest("series_commitments", `activity_series_id=eq.${seriesId}&select=*`)).payload;
 const entitlements = (await rest("access_entitlements", `source_type=eq.series_commitment&source_id=eq.${commitment[0]?.id}&select=*`)).payload;
@@ -484,7 +497,126 @@ assert(commitment[0].payer_customer_id !== commitment[0].participant_customer_id
 assert(entitlements.length === 1 && entitlements[0].entitlement_type === "series_access" && entitlements[0].meter_type === "unlimited", "payment did not create one non-consuming Series entitlement");
 assert(registrations.length === 6, "commitment did not project six expected participations");
 assert(receipts.length === 1 && Number(receipts[0].total_inc_vat_sek) === 1495, "one canonical receipt was not created");
-pass("Adult payer != player", "one order, one commitment, one entitlement, six projections");
+pass("Adult payer != player", "shared Series price; one order, one commitment, one entitlement, six projections; replay idempotent");
+
+const memberTier = (await rest("membership_tiers", "", { method: "POST", body: {
+  venue_id: ids.venue,
+  name: `Series Member ${run}`,
+  monthly_price: 499,
+  discount_percent: 0,
+  is_active: true,
+} })).payload[0];
+await rest("membership_tier_pricing", "", { method: "POST", body: {
+  tier_id: memberTier.id,
+  product_type: seriesProduct.product_key,
+  fixed_price: 1295,
+  label: "Kurspris medlem",
+} });
+await rest("memberships", "", { method: "POST", body: {
+  user_id: seriesMember.id,
+  venue_id: ids.venue,
+  tier_id: memberTier.id,
+  status: "active",
+} });
+await rest("activity_formats", `id=eq.${format.id}`, { method: "PATCH", body: { presentation_type: "social_event" } });
+const memberPurchase = await checkoutCourse({
+  seriesId,
+  user: seriesMember,
+  participant: { participant_type: "self" },
+});
+assert(memberPurchase.order.total_inc_vat_minor === 129500, "explicit Series product membership price was not applied");
+const memberLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${memberPurchase.order.id}&select=unit_price_minor,resolver_snapshot`)).payload[0];
+assert(memberLine.unit_price_minor === 129500 && memberLine.resolver_snapshot?.pricing_reason === "membership_tier_pricing", "Series member-price provenance was not frozen");
+assert(memberLine.resolver_snapshot?.membership_tier_name === memberTier.name, "Series membership tier provenance missing");
+await webhook(checkoutEvent({
+  id: `evt_course_member_${run}`,
+  sessionId: memberPurchase.order.stripe_session_id,
+  orderId: memberPurchase.order.id,
+  version: memberPurchase.order.version,
+  email: seriesMember.email,
+  amount: 129500,
+}));
+const memberOrderLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${memberPurchase.order.id}&select=series_commitment_id`)).payload[0];
+assert(memberOrderLine.series_commitment_id, "member-priced Series purchase did not create its one Commitment");
+pass("Series membership pricing", "explicit product member price is shared; presentation type does not affect price");
+
+const parkerCreated = (await course("series", {
+  method: "POST",
+  token: operator.token,
+  body: seriesBody({
+    name: "Parker Brunch",
+    startDate: "2027-09-05",
+    endDate: "2027-09-05",
+    totalSessions: 1,
+    priceSek: 199,
+    recurrenceDays: [0],
+    startTime: "13:00",
+    endTime: "18:00",
+    registrationOpensAt: "2026-08-01T00:00:00Z",
+    registrationClosesAt: "2027-09-05T10:30:00Z",
+  }),
+})).payload;
+assert(parkerCreated.sessions.length === 1, "Parker social event did not create one canonical Session");
+await course("series", { method: "PATCH", token: operator.token, body: { series_id: parkerCreated.series.id, status: "active" } });
+const parkerPurchase = await checkoutCourse({
+  seriesId: parkerCreated.series.id,
+  user: parkerBuyer,
+  participant: { participant_type: "self" },
+});
+assert(parkerPurchase.order.total_inc_vat_minor === 19900, "Parker Series did not resolve its access-product base price");
+const parkerLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${parkerPurchase.order.id}&select=unit_price_minor,resolver_snapshot`)).payload[0];
+assert(parkerLine.unit_price_minor === 19900 && parkerLine.resolver_snapshot?.pricing_reason === "series_product_base_price", "Parker price was not frozen from the shared Series resolver");
+await webhook(checkoutEvent({
+  id: `evt_course_parker_${run}`,
+  sessionId: parkerPurchase.order.stripe_session_id,
+  orderId: parkerPurchase.order.id,
+  version: parkerPurchase.order.version,
+  email: parkerBuyer.email,
+  amount: 19900,
+}));
+const parkerCommitments = (await rest("series_commitments", `activity_series_id=eq.${parkerCreated.series.id}&select=id`)).payload;
+assert(parkerCommitments.length === 1, "Parker payment did not create exactly one Series Commitment");
+pass("Parker Brunch pricing", "social-event presentation keeps one 199 kr Series purchase and one Commitment");
+await rest("activity_formats", `id=eq.${format.id}`, { method: "PATCH", body: { presentation_type: "course" } });
+
+const nonCoveringCart = (await commerce("course-cart", {
+  method: "POST",
+  token: sessionEntitled.token,
+  body: { series_id: seriesId, participant_type: "self" },
+})).payload;
+const nonCoveringCustomer = (await rest("customers", `auth_user_id=eq.${sessionEntitled.id}&select=id`)).payload[0];
+await rest("access_entitlements", "", { method: "POST", body: {
+  venue_id: ids.venue,
+  user_id: sessionEntitled.id,
+  customer_id: nonCoveringCustomer.id,
+  entitlement_type: "session_ticket",
+  status: "active",
+  source_type: "test_fixture",
+  source_id: crypto.randomUUID(),
+  activity_session_id: created.sessions[1].id,
+  session_date: created.sessions[1].session_date,
+  valid_date: created.sessions[1].session_date,
+  includes_session_types: ["course"],
+} });
+const nonCoveringCheckout = (await commerce("checkout", {
+  method: "POST",
+  token: sessionEntitled.token,
+  body: {
+    token: nonCoveringCart.cart_token,
+    expected_version: nonCoveringCart.order.version,
+    journey_id: crypto.randomBytes(24).toString("hex"),
+    success_path: `/commerce/confirmed?token=${encodeURIComponent(nonCoveringCart.cart_token)}`,
+    cancel_path: `/course/${seriesId}`,
+  },
+})).payload;
+const nonCoveringOrder = (await rest("commerce_orders", `id=eq.${nonCoveringCheckout.order_id}&select=id,version,stripe_session_id,total_inc_vat_minor`)).payload[0];
+assert(nonCoveringOrder.total_inc_vat_minor === 149500, "Session entitlement incorrectly covered a Series purchase");
+await webhook({
+  id: `evt_course_non_covering_expired_${run}`,
+  type: "checkout.session.expired",
+  data: { object: { id: nonCoveringOrder.stripe_session_id, metadata: { commerce_order_id: nonCoveringOrder.id } } },
+});
+pass("Series entitlement boundary", "non-covering Session entitlement leaves Series at product price");
 
 const my = (await course("my", { token: payer.token })).payload;
 assert(my.items.length === 1 && my.items[0].total_sessions === 6, "My Page API did not project one Course");

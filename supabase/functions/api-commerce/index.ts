@@ -1,7 +1,7 @@
 import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { requireVenueRole } from '../_shared/authorization.ts';
-import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
+import { resolveScopeAwarePricingDecision } from '../_shared/scope_pricing.ts';
 import {
   resolveCustomerIdForUser,
   resolveOrCreateCustomerIdForUser,
@@ -946,7 +946,7 @@ async function resolveLines(
       }
       if (purchaseKind === 'course') {
         const { data: series, error: seriesError } = await admin.from('activity_series')
-          .select('id, venue_id, status, start_date, registration_opens_at, registration_closes_at, access_product_id')
+          .select('id, venue_id, status, start_date, end_date, capacity, registration_opens_at, registration_closes_at, access_product_id')
           .eq('id', line.activity_series_id)
           .eq('venue_id', order.venue_id)
           .eq('series_type', 'course')
@@ -959,30 +959,59 @@ async function resolveLines(
           throw new Error(seriesError?.message || 'Kursanmälan är stängd.');
         }
         if (Number(product.base_price_sek || 0) <= 0) throw new Error('Kursen saknar pris i Admin.');
+        const decision = await resolveScopeAwarePricingDecision({
+          client: admin,
+          scopeType: 'activity_series',
+          scopeId: line.activity_series_id,
+          venueId: order.venue_id,
+          organizationId: venue.organization_id,
+          userId: line.beneficiary_user_id || userId || null,
+          customerId: line.beneficiary_customer_id || customerId,
+          salesChannel: 'online',
+          effectiveAt: now.toISO(),
+          accessProduct: product,
+          series,
+        });
+        unitPriceMinor = Math.round(Number(decision.finalAmountSek || 0) * 100);
         resolverSnapshot = {
-          product_key: product.product_key,
+          scope_type: decision.scopeType,
+          scope_id: decision.scopeId,
+          access_product_id: decision.accessProductId,
+          sales_channel: decision.salesChannel,
+          product_key: decision.productKey,
           purchase_kind: 'course',
-          pricing_reason: 'course_upfront_price',
-          applied_price_type: 'course_upfront_price',
+          pricing_reason: decision.pricingReason,
+          applied_price_type: decision.pricingReason,
           final_price_minor: unitPriceMinor,
-          access_decision: 'purchase_required',
+          access_decision: decision.accessDecision,
+          entitlement_type: decision.entitlementType,
+          source_entitlement_id: decision.accessDecision === 'entitlement_included' ? decision.sourceId : null,
+          access_reason: decision.accessReason,
+          funding_type: decision.fundingType,
+          funder: decision.funder,
+          consumption_required: decision.consumptionRequired,
+          membership_id: decision.membershipId,
+          membership_tier_name: decision.membershipTierName,
           activity_series_id: line.activity_series_id,
           series_start_date: series.start_date,
+          series_fill: decision.seriesFill,
           quote_changed: false,
-          debug: { base_amount_sek: Number(product.base_price_sek || 0), pricing_reason: 'course_upfront_price' },
+          debug: decision.debug,
         };
       } else {
-        const decision = await resolveActivityPricingDecision({
+        const decision = await resolveScopeAwarePricingDecision({
           client: admin,
+          scopeType: 'activity_session',
+          scopeId: line.activity_session_id,
           venueId: order.venue_id,
           userId,
           customerId,
-          activitySessionId: line.activity_session_id,
           sessionDate: line.session_date,
           requestedProductKey: product.product_key,
           requestedAmountSek: Number(product.base_price_sek || 0),
           purchaseKind,
           salesChannel: 'online',
+          accessProduct: product,
           applyEarlyBird: options.applyEarlyBird !== false,
           applyFirstVisit: options.applyFirstVisit !== false,
         });
@@ -1123,7 +1152,7 @@ async function acquireParticipationHold(
     return {
       ...hold,
       final_price_minor: Number(regularResolvedLine?.unit_price_minor || 0),
-      applied_price_type: 'course_upfront_price',
+      applied_price_type: String(regularResolvedLine?.resolver_snapshot?.pricing_reason || 'series_product_base_price'),
       early_bird_remaining: null,
       quote_changed: false,
     };
