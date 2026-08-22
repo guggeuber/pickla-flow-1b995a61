@@ -442,6 +442,14 @@ export function checkInCommerceGuest(token: string) {
   return apiPost<{ checked_in: boolean; registration_id: string }>("api-commerce", "guest-checkin", { token }, { auth: "omit" });
 }
 
+export function checkInCommerceRegistration(venueId: string, registrationId: string) {
+  return apiPost<{ checked_in: boolean }>("api-checkins", "self", {
+    venue_id: venueId,
+    entry_type: "session_ticket",
+    entitlement_id: registrationId,
+  });
+}
+
 export function cancelCommerceActivityOrder(reference: string, options: ApiRequestOptions = {}) {
   return apiPost<CommerceOrderResponse & { cancellation_pending?: boolean }>("api-commerce", "cancel", { reference }, options);
 }
@@ -478,10 +486,11 @@ export async function resumeCommerceActivityDraft(
   options: ApiRequestOptions = {},
 ) {
   try {
+    const expectedStatuses = Array.from(new Set([...(options.expectedStatuses || []), 404]));
     return await apiGet<CommerceOrderResponse>("api-commerce", "draft", {
       venueId,
       scope,
-    }, options);
+    }, { ...options, expectedStatuses });
   } catch (error) {
     if (Number((error as { status?: unknown })?.status || 0) === 404) return null;
     throw error;
@@ -522,5 +531,15 @@ export function writeActivityCommerceSelection(key: string, quantities: Record<s
     window.sessionStorage.setItem(key, JSON.stringify(quantities));
   } catch {
     // The active page remains usable when browser storage is unavailable.
+  }
+}
+
+export function clearActivityCommerceSelection(key: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(key);
+    window.sessionStorage.removeItem(`${key}:purchase-kind`);
+  } catch {
+    // A completed purchase remains durable even when browser storage is unavailable.
   }
 }

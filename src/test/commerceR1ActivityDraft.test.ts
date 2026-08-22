@@ -14,6 +14,7 @@ vi.mock("@/lib/api", () => ({
 import {
   activityCommerceDraftScope,
   activityCommerceSelectionKey,
+  clearActivityCommerceSelection,
   createCommerceCart,
   isCommerceOrderIdReference,
   readActivityCommerceSelection,
@@ -54,6 +55,19 @@ describe("Commerce R1 activity draft", () => {
     expect(window.sessionStorage.getItem(key)).not.toMatch(/price|total|email|name/i);
   });
 
+  it("clears only mutable activity selection after durable purchase confirmation", () => {
+    const key = activityCommerceSelectionKey("session-1", "2026-07-29");
+    writeActivityCommerceSelection(key, { racket: 2 });
+    window.sessionStorage.setItem(`${key}:purchase-kind`, "day_pass");
+    window.sessionStorage.setItem("pickla:unrelated", "keep");
+
+    clearActivityCommerceSelection(key);
+
+    expect(window.sessionStorage.getItem(key)).toBeNull();
+    expect(window.sessionStorage.getItem(`${key}:purchase-kind`)).toBeNull();
+    expect(window.sessionStorage.getItem("pickla:unrelated")).toBe("keep");
+  });
+
   it("sends the canonical scope and product quantities without client totals", async () => {
     api.post.mockResolvedValue({ cart_token: "order-reference" });
     const scope = activityCommerceDraftScope("session-1", "2026-07-29");
@@ -78,6 +92,10 @@ describe("Commerce R1 activity draft", () => {
   it("treats a missing draft as an empty state but preserves other failures", async () => {
     api.get.mockRejectedValueOnce(Object.assign(new Error("Cart not found"), { status: 404 }));
     await expect(resumeCommerceActivityDraft("venue-1", "activity:session-1:2026-07-29")).resolves.toBeNull();
+    expect(api.get).toHaveBeenLastCalledWith("api-commerce", "draft", {
+      venueId: "venue-1",
+      scope: "activity:session-1:2026-07-29",
+    }, { expectedStatuses: [404] });
 
     const authError = Object.assign(new Error("Unauthorized"), { status: 401 });
     api.get.mockRejectedValueOnce(authError);

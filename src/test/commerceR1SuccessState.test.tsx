@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,9 @@ import CommerceOrderPage from "@/pages/CommerceOrderPage";
 
 const mocks = vi.hoisted(() => ({
   fetchOrder: vi.fn(),
+  checkInGuest: vi.fn(),
+  checkInRegistration: vi.fn(),
+  checkInAvailable: false,
   auth: { loading: false, user: null as { id: string } | null },
 }));
 
@@ -14,7 +17,7 @@ vi.mock("@/hooks/useAuth", () => ({ useAuth: () => mocks.auth }));
 vi.mock("@/components/PicklaTopBar", () => ({
   PicklaTopBar: () => <div data-testid="pickla-top-bar" />,
 }));
-vi.mock("@/lib/activityTiming", () => ({ activityCheckInAvailable: () => false }));
+vi.mock("@/lib/activityTiming", () => ({ activityCheckInAvailable: () => mocks.checkInAvailable }));
 vi.mock("@/lib/entryResolver", () => ({ preserveIntendedRoute: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/commerce", async (importOriginal) => {
@@ -24,7 +27,8 @@ vi.mock("@/lib/commerce", async (importOriginal) => {
     fetchCommerceOrder: mocks.fetchOrder,
     confirmCommerceGuestIdentity: vi.fn(),
     claimCommerceOrderAccount: vi.fn(),
-    checkInCommerceGuest: vi.fn(),
+    checkInCommerceGuest: mocks.checkInGuest,
+    checkInCommerceRegistration: mocks.checkInRegistration,
     cancelCommerceActivityOrder: vi.fn(),
   };
 });
@@ -111,6 +115,9 @@ beforeEach(() => {
   mocks.auth.user = null;
   mocks.fetchOrder.mockReset();
   mocks.fetchOrder.mockResolvedValue(orderResponse());
+  mocks.checkInGuest.mockReset().mockResolvedValue({ checked_in: true, registration_id: "registration-1" });
+  mocks.checkInRegistration.mockReset().mockResolvedValue({ checked_in: true });
+  mocks.checkInAvailable = false;
 });
 
 afterEach(cleanup);
@@ -186,6 +193,35 @@ describe("Commerce R1 confirmed purchase state", () => {
     expect(screen.queryByRole("link", { name: "Visa biljett" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Spara bokningen" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Avboka" })).not.toBeInTheDocument();
+  });
+
+  it("checks in an account-owned purchase through durable registration truth", async () => {
+    mocks.auth.user = { id: "member-1" };
+    mocks.checkInAvailable = true;
+    mocks.fetchOrder.mockResolvedValue(orderResponse({
+      requires_guest_claim: false,
+      account_claimed: true,
+    }));
+    renderOrder();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Checka in" }));
+
+    await waitFor(() => expect(mocks.checkInRegistration).toHaveBeenCalledWith("venue-1", "registration-1"));
+    expect(mocks.checkInGuest).not.toHaveBeenCalled();
+  });
+
+  it("keeps possession-token check-in for an account-later guest", async () => {
+    mocks.checkInAvailable = true;
+    mocks.fetchOrder.mockResolvedValue(orderResponse({
+      requires_guest_claim: false,
+      account_claimed: false,
+    }));
+    renderOrder();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Checka in" }));
+
+    await waitFor(() => expect(mocks.checkInGuest).toHaveBeenCalledWith("x".repeat(32)));
+    expect(mocks.checkInRegistration).not.toHaveBeenCalled();
   });
 
   it("keeps account-later guests on the ticket activation journey", async () => {

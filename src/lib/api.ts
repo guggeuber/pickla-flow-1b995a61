@@ -17,7 +17,12 @@ export class ApiRequestError extends Error {
 
 export type ApiRequestOptions = {
   auth?: "session" | "omit";
+  expectedStatuses?: number[];
 };
+
+function shouldReportApiFailure(status: number, options: ApiRequestOptions) {
+  return !options.expectedStatuses?.includes(status);
+}
 
 async function getAuthHeaders(
   includeJsonContentType = true,
@@ -36,7 +41,8 @@ async function getAuthHeaders(
   return headers;
 }
 
-function logApiTiming(method: string, url: string, startedAt: number, status?: number, error?: unknown) {
+function logApiTiming(method: string, url: string, startedAt: number, status?: number, error?: unknown, expected = false) {
+  if (expected) return;
   const duration = Math.round(performance.now() - startedAt);
   if (!import.meta.env.DEV && duration < SLOW_API_MS && !error) return;
 
@@ -69,17 +75,19 @@ export async function apiGet<T = unknown>(
   const startedAt = performance.now();
   const requestUrl = url.toString();
   const res = await fetch(requestUrl, { headers });
-  logApiTiming("GET", requestUrl, startedAt, res.status);
+  logApiTiming("GET", requestUrl, startedAt, res.status, undefined, !shouldReportApiFailure(res.status, options));
   if (!res.ok) {
     const message = await readErrorBody(res);
-    reportApiFailure({
-      method: "GET",
-      fn,
-      endpoint,
-      status: res.status,
-      message,
-      duration_ms: Math.round(performance.now() - startedAt),
-    });
+    if (shouldReportApiFailure(res.status, options)) {
+      reportApiFailure({
+        method: "GET",
+        fn,
+        endpoint,
+        status: res.status,
+        message,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
+    }
     throw new ApiRequestError(message, res.status);
   }
   return res.json();
@@ -99,17 +107,19 @@ export async function apiPost<T = unknown>(
     headers,
     body: JSON.stringify(body),
   });
-  logApiTiming("POST", requestUrl, startedAt, res.status);
+  logApiTiming("POST", requestUrl, startedAt, res.status, undefined, !shouldReportApiFailure(res.status, options));
   if (!res.ok) {
     const message = await readErrorBody(res);
-    reportApiFailure({
-      method: "POST",
-      fn,
-      endpoint,
-      status: res.status,
-      message,
-      duration_ms: Math.round(performance.now() - startedAt),
-    });
+    if (shouldReportApiFailure(res.status, options)) {
+      reportApiFailure({
+        method: "POST",
+        fn,
+        endpoint,
+        status: res.status,
+        message,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
+    }
     throw new ApiRequestError(message, res.status);
   }
   return res.json();

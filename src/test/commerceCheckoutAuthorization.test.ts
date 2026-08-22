@@ -13,7 +13,7 @@ vi.mock("@/lib/clientObservability", () => ({
   reportApiFailure: mocks.reportApiFailure,
 }));
 
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost, ApiRequestError } from "@/lib/api";
 
 const CART_TOKEN = "opaque-cart-token-that-is-long-enough-for-tests";
 
@@ -61,5 +61,22 @@ describe("commerce checkout Authorization", () => {
     const headers = init?.headers as Record<string, string>;
     expect(headers.Authorization).toBe(`Bearer ${accessToken}`);
     expect(headers.Authorization).not.toContain(CART_TOKEN);
+  });
+
+  it("does not report an explicitly expected missing draft as a client failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.getSession.mockResolvedValue({ data: { session: { access_token: "header.payload.signature" } } });
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ error: "Cart not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    await expect(apiGet("api-commerce", "draft", {
+      venueId: "venue-1",
+      scope: "activity:session-1:2026-08-21",
+    }, { expectedStatuses: [404] })).rejects.toEqual(new ApiRequestError("Cart not found", 404));
+
+    expect(mocks.reportApiFailure).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 });

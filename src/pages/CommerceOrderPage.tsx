@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Loader2, MessageCircle, ReceiptText, Share2, Ticket, XCircle } from "lucide-react";
 import { DateTime } from "luxon";
@@ -10,7 +10,10 @@ import { activityCheckInAvailable } from "@/lib/activityTiming";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import {
   COMMERCE_PICKUP_COPY,
+  activityCommerceSelectionKey,
   checkInCommerceGuest,
+  checkInCommerceRegistration,
+  clearActivityCommerceSelection,
   claimCommerceOrderAccount,
   commerceRacketPickupQuantity,
   commerceRacketSuccessInstruction,
@@ -47,12 +50,22 @@ export default function CommerceOrderPage() {
     onError: (error: Error) => toast.error(error.message || "Kunde inte koppla köpet"),
   });
   const checkIn = useMutation({
-    mutationFn: () => checkInCommerceGuest(token),
+    mutationFn: () => {
+      const registrationId = query.data?.activity_access?.registration_id;
+      const venueId = query.data?.order.venue_id;
+      return user && query.data?.order.account_claimed && registrationId && venueId
+        ? checkInCommerceRegistration(venueId, registrationId)
+        : checkInCommerceGuest(token);
+    },
     onSuccess: async () => { toast.success("Du är incheckad"); await query.refetch(); },
     onError: (error: Error) => toast.error(error.message || "Kunde inte checka in"),
   });
   const activity = query.data?.activity_access;
   const course = query.data?.course_access;
+  useEffect(() => {
+    if (query.data?.order.status !== "paid" || !activity?.activity_session_id || !activity.session_date) return;
+    clearActivityCommerceSelection(activityCommerceSelectionKey(activity.activity_session_id, activity.session_date));
+  }, [activity?.activity_session_id, activity?.session_date, query.data?.order.status]);
   const coursePresentation = seriesPresentation(course?.presentation_type);
   const courseOccurrenceSummary = course
     ? coursePresentation.hideSingleOccurrenceCount && Number(course.total_sessions) === 1
@@ -115,8 +128,8 @@ export default function CommerceOrderPage() {
       }
       await navigator.clipboard.writeText(shareUrl);
       toast.success("Länk kopierad");
-    } catch (error: any) {
-      if (error?.name !== "AbortError") toast.error("Kunde inte dela länken");
+    } catch (error: unknown) {
+      if (!(error instanceof Error) || error.name !== "AbortError") toast.error("Kunde inte dela länken");
     }
   };
   const heading = waiting
