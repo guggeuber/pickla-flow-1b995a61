@@ -51,6 +51,13 @@ type CourseResourcePreviewRow = {
   }>;
 };
 
+type SeriesStaffGrantParticipant = {
+  kind: 'customer' | 'dependent';
+  id: string;
+  name: string;
+  detail: string | null;
+};
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AGE_GROUPS = new Set(['adult', 'youth', 'all_ages']);
 const LEVELS = new Set(['intro', 'beginner', 'intermediate', 'advanced']);
@@ -83,6 +90,19 @@ async function courseSeries(admin: ServiceClient, seriesId: string) {
   return data;
 }
 
+async function managedSellableSeries(admin: ServiceClient, seriesId: string) {
+  if (!UUID.test(seriesId)) throw new Error('Invalid Series');
+  const { data, error } = await admin.from('activity_series')
+    .select('id, venue_id, format_id, access_product_id, status')
+    .eq('id', seriesId)
+    .not('format_id', 'is', null)
+    .not('access_product_id', 'is', null)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error('Series not found');
+  return data;
+}
+
 async function seriesCapacity(admin: ServiceClient, series: CourseSeriesRow) {
   const { data, error } = await admin.rpc('capacity_fill', {
     p_venue_id: series.venue_id,
@@ -107,6 +127,113 @@ function registrationState(series: CourseSeriesRow, now = DateTime.now().toUTC()
   if (opens?.isValid && now < opens) return 'upcoming';
   if (closes?.isValid && now >= closes) return 'closed';
   return 'open';
+}
+
+function customerName(customer: Record<string, unknown> | null | undefined) {
+  if (!customer) return 'Kund';
+  const displayName = cleanText(customer.display_name, 160);
+  const fullName = [cleanText(customer.first_name, 80), cleanText(customer.last_name, 80)].filter(Boolean).join(' ');
+  return displayName || fullName || cleanText(customer.primary_email, 160) || 'Kund';
+}
+
+async function listSeriesStaffGrants(admin: ServiceClient, venueId: string) {
+  const { data: commitments, error } = await admin.from('series_commitments')
+    .select('id, activity_series_id, participant_customer_id, dependent_participant_id, status, activated_at, cancelled_at, metadata')
+    .eq('venue_id', venueId)
+    .eq('commitment_type', 'participant')
+    .eq('metadata->>funding_source', 'series_staff_grant')
+    .order('activated_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  if (!commitments?.length) return [];
+
+  const customerIds = [...new Set(commitments.map((row) => row.participant_customer_id).filter(Boolean))];
+  const dependentIds = [...new Set(commitments.map((row) => row.dependent_participant_id).filter(Boolean))];
+  const [{ data: customers, error: customerError }, { data: dependents, error: dependentError }] = await Promise.all([
+    customerIds.length
+      ? admin.from('customers').select('id, display_name, first_name, last_name, primary_email').in('id', customerIds)
+      : Promise.resolve({ data: [], error: null }),
+    dependentIds.length
+      ? admin.from('dependent_participants').select('id, first_name, birth_year, guardian_customer_id').in('id', dependentIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (customerError || dependentError) throw new Error(customerError?.message || dependentError?.message || 'Series grants unavailable');
+
+  const guardianIds = [...new Set((dependents || []).map((row) => row.guardian_customer_id).filter(Boolean))];
+  const { data: guardians, error: guardianError } = guardianIds.length
+    ? await admin.from('customers').select('id, display_name, first_name, last_name, primary_email').in('id', guardianIds)
+    : { data: [], error: null };
+  if (guardianError) throw new Error(guardianError.message);
+
+  const customerById = new Map((customers || []).map((row) => [row.id, row]));
+  const dependentById = new Map((dependents || []).map((row) => [row.id, row]));
+  const guardianById = new Map((guardians || []).map((row) => [row.id, row]));
+
+  return commitments.map((commitment) => {
+    const dependent = commitment.dependent_participant_id ? dependentById.get(commitment.dependent_participant_id) : null;
+    const participant: SeriesStaffGrantParticipant = dependent
+      ? {
+        kind: 'dependent',
+        id: dependent.id,
+        name: dependent.first_name,
+        detail: `Vårdnadshavare: ${customerName(guardianById.get(dependent.guardian_customer_id))}`,
+      }
+      : {
+        kind: 'customer',
+        id: commitment.participant_customer_id,
+        name: customerName(customerById.get(commitment.participant_customer_id)),
+        detail: customerById.get(commitment.participant_customer_id)?.primary_email || null,
+      };
+    return {
+      id: commitment.id,
+      activity_series_id: commitment.activity_series_id,
+      status: commitment.status,
+      activated_at: commitment.activated_at,
+      cancelled_at: commitment.cancelled_at,
+      participant,
+      provenance_label: 'Friplats · Pickla',
+      grant_reason: cleanText(commitment.metadata?.grant_reason, 500) || null,
+    };
+  });
+}
+
+async function findSeriesGrantParticipants(admin: ServiceClient, organizationId: string, search: string) {
+  const [{ data: customers, error: customerError }, { data: dependents, error: dependentError }] = await Promise.all([
+    admin.from('customers')
+      .select('id, display_name, first_name, last_name, primary_email')
+      .eq('organization_id', organizationId)
+      .eq('status', 'active')
+      .is('merged_into_id', null)
+      .order('updated_at', { ascending: false })
+      .limit(500),
+    admin.from('dependent_participants')
+      .select('id, first_name, birth_year, guardian_customer_id')
+      .eq('organization_id', organizationId)
+      .eq('status', 'active')
+      .order('updated_at', { ascending: false })
+      .limit(500),
+  ]);
+  if (customerError || dependentError) throw new Error(customerError?.message || dependentError?.message || 'Participants unavailable');
+
+  const customerById = new Map((customers || []).map((row) => [row.id, row]));
+  const needle = search.trim().toLocaleLowerCase('sv');
+  const adults = (customers || []).map((customer) => ({
+    kind: 'customer' as const,
+    id: customer.id,
+    name: customerName(customer),
+    detail: customer.primary_email || null,
+  }));
+  const subordinate = (dependents || []).map((dependent) => ({
+    kind: 'dependent' as const,
+    id: dependent.id,
+    name: dependent.first_name,
+    detail: [
+      dependent.birth_year ? `Född ${dependent.birth_year}` : null,
+      `Vårdnadshavare: ${customerName(customerById.get(dependent.guardian_customer_id))}`,
+    ].filter(Boolean).join(' · '),
+  }));
+  return [...adults, ...subordinate]
+    .filter((participant) => `${participant.name} ${participant.detail || ''}`.toLocaleLowerCase('sv').includes(needle))
+    .slice(0, 12);
 }
 
 async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, userId?: string | null) {
@@ -170,7 +297,7 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
   const filters = [`participant_customer_id.eq.${customerId}`, `payer_customer_id.eq.${customerId}`];
   if (dependentIds.length) filters.push(`dependent_participant_id.in.(${dependentIds.join(',')})`);
   const { data: commitments, error } = await admin.from('series_commitments')
-    .select('id, activity_series_id, participant_customer_id, dependent_participant_id, payer_customer_id, status, activated_at')
+    .select('id, activity_series_id, participant_customer_id, dependent_participant_id, payer_customer_id, status, activated_at, metadata')
     .eq('commitment_type', 'participant')
     .in('status', ['active', 'completed'])
     .or(filters.join(','))
@@ -215,6 +342,9 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
       next_session: next,
       completed_sessions: completed,
       total_sessions: sessions.length,
+      access: commitment.metadata?.funding_source === 'series_staff_grant'
+        ? { label: 'Friplats', detail: 'Ingår · Pickla' }
+        : null,
     };
   });
 }
@@ -364,6 +494,80 @@ const coursesHandler = async (req: Request) => {
       return jsonResponse({ items: await listMyCourses(admin, auth.userId) }, 200, 5);
     }
 
+    if (req.method === 'GET' && path === 'grant-participants') {
+      const venueId = String(url.searchParams.get('venueId') || '');
+      const search = cleanText(url.searchParams.get('search'), 120);
+      await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
+      const venueRow = await venue(admin, { id: venueId });
+      if (search.length < 2) return jsonResponse({ items: [] }, 200, 0);
+      return jsonResponse({
+        items: await findSeriesGrantParticipants(admin, venueRow.organization_id, search),
+      }, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'staff-grant') {
+      const body = await req.json();
+      const venueId = String(body.venue_id || body.venueId || '');
+      const seriesId = String(body.series_id || '');
+      const participantKind = String(body.participant_kind || '');
+      const participantId = String(body.participant_id || '');
+      const grantReason = cleanText(body.reason, 500);
+      const requestId = cleanText(body.request_id, 200);
+      if (!UUID.test(venueId) || !UUID.test(seriesId) || !UUID.test(participantId)
+        || !['customer', 'dependent'].includes(participantKind) || !grantReason || !requestId) {
+        return errorResponse('Series, participant, reason and request id are required', 400);
+      }
+      await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
+      // Grant authority follows managed sellable-Series ownership, never the
+      // customer presentation type or the historical Course projection label.
+      const series = await managedSellableSeries(admin, seriesId);
+      if (series.venue_id !== venueId) return errorResponse('Series not found', 404);
+      const { data, error } = await admin.rpc('grant_series_staff_place', {
+        p_venue_id: venueId,
+        p_activity_series_id: seriesId,
+        p_actor_user_id: auth.userId,
+        p_participant_customer_id: participantKind === 'customer' ? participantId : null,
+        p_dependent_participant_id: participantKind === 'dependent' ? participantId : null,
+        p_reason: grantReason,
+        p_request_id: requestId,
+      });
+      if (error) throw new Error(error.message);
+      const result = Array.isArray(data) ? data[0] : data;
+      if (!result?.ok) {
+        const message = result?.reason === 'capacity_full'
+          ? 'Serien är full'
+          : 'Deltagaren har redan en aktiv plats';
+        return jsonResponse({ error: message, code: result?.reason || 'series_staff_grant_rejected' }, 409, 0);
+      }
+      const grants = await listSeriesStaffGrants(admin, venueId);
+      return jsonResponse({
+        ...result,
+        grant: grants.find((grant) => grant.id === result.commitment_id) || null,
+      }, result.reason === 'granted' ? 201 : 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'staff-grant-cancel') {
+      const body = await req.json();
+      const venueId = String(body.venue_id || body.venueId || '');
+      const commitmentId = String(body.commitment_id || '');
+      const cancellationReason = cleanText(body.reason, 500);
+      const requestId = cleanText(body.request_id, 200);
+      if (!UUID.test(venueId) || !UUID.test(commitmentId) || !cancellationReason || !requestId) {
+        return errorResponse('Commitment, reason and request id are required', 400);
+      }
+      await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
+      const { data, error } = await admin.rpc('cancel_series_staff_place', {
+        p_venue_id: venueId,
+        p_commitment_id: commitmentId,
+        p_actor_user_id: auth.userId,
+        p_reason: cancellationReason,
+        p_request_id: requestId,
+      });
+      if (error) throw new Error(error.message);
+      const result = Array.isArray(data) ? data[0] : data;
+      return jsonResponse(result, 200, 0);
+    }
+
     if (req.method === 'GET' && path === 'admin') {
       const venueId = String(url.searchParams.get('venueId') || '');
       await requireVenueRole(admin, auth.userId, venueId, ['venue_admin']);
@@ -376,8 +580,14 @@ const coursesHandler = async (req: Request) => {
         admin.from('venue_courts').select('id, name, court_number, sport_type').eq('venue_id', venueId).eq('is_available', true).order('court_number'),
       ]);
       if (formatError || seriesError || courtsError) throw new Error(formatError?.message || seriesError?.message || courtsError?.message || 'Course admin unavailable');
+      const grants = await listSeriesStaffGrants(admin, venueId);
       const projected = [];
-      for (const series of seriesRows || []) projected.push(await projectCourse(admin, series, null));
+      for (const series of seriesRows || []) {
+        projected.push({
+          ...await projectCourse(admin, series, null),
+          staff_grants: grants.filter((grant) => grant.activity_series_id === series.id && grant.status === 'active'),
+        });
+      }
       return jsonResponse({ formats: formats || [], series: projected, courts: courts || [] }, 200, 5);
     }
 
@@ -635,9 +845,11 @@ const coursesHandler = async (req: Request) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Course request failed';
     const status = message.startsWith('Forbidden') ? 403
+      : message.includes('series_staff_grant_forbidden') ? 403
       : /not found/i.test(message) ? 404
+      : /series_staff_grant_(series_ineligible|idempotency_key_reused|cancellation_only|commitment_not_active)/.test(message) ? 409
       : message.includes('course_resource_conflict') ? 409
-      : /required|unavailable|does not produce/i.test(message) ? 400
+      : /required|unavailable|does not produce|participant_required/i.test(message) ? 400
       : 500;
     return errorResponse(message, status);
   }

@@ -80,6 +80,25 @@ export type CourseSeries = {
   venue: { id: string; name: string; slug: string };
   sessions: CourseSession[];
   commitment?: Record<string, unknown> | null;
+  staff_grants?: SeriesStaffGrant[];
+};
+
+export type SeriesGrantParticipant = {
+  kind: "customer" | "dependent";
+  id: string;
+  name: string;
+  detail: string | null;
+};
+
+export type SeriesStaffGrant = {
+  id: string;
+  activity_series_id: string;
+  status: "active" | "cancelled";
+  activated_at: string;
+  cancelled_at: string | null;
+  participant: SeriesGrantParticipant;
+  provenance_label: "Friplats · Pickla";
+  grant_reason: string | null;
 };
 
 // The API exposes sellable capacity as a nested projection. Keep it distinct
@@ -101,6 +120,7 @@ export type MyCourseItem = {
   next_session: CourseSession | null;
   completed_sessions: number;
   total_sessions: number;
+  access?: { label: "Friplats"; detail: "Ingår · Pickla" } | null;
 };
 
 export function fetchCourseDetail(seriesId: string) {
@@ -158,4 +178,41 @@ export function previewCourseSeries(input: Record<string, unknown>) {
 
 export function updateCourseSeries(input: Record<string, unknown>) {
   return apiPatch<CourseDetail>("api-courses", "series", input);
+}
+
+export function findSeriesGrantParticipants(venueId: string, search: string) {
+  return apiGet<{ items: SeriesGrantParticipant[] }>("api-courses", "grant-participants", { venueId, search });
+}
+
+export function grantSeriesStaffPlace(input: {
+  venue_id: string;
+  series_id: string;
+  participant_kind: "customer" | "dependent";
+  participant_id: string;
+  reason: string;
+  request_id: string;
+}) {
+  return apiPost<{
+    ok: true;
+    commitment_id: string;
+    entitlement_id: string;
+    available_count: number;
+    reason: string;
+    grant: SeriesStaffGrant;
+  }>("api-courses", "staff-grant", input);
+}
+
+export function cancelSeriesStaffPlace(input: {
+  venue_id: string;
+  commitment_id: string;
+  reason: string;
+  request_id: string;
+}) {
+  return apiPost<{
+    ok: true;
+    commitment_id: string;
+    entitlement_id: string;
+    available_count: number;
+    reason: string;
+  }>("api-courses", "staff-grant-cancel", input);
 }

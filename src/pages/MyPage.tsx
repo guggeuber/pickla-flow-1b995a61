@@ -2704,6 +2704,7 @@ const MyPage = () => {
                         <div className="min-w-0">
                           <p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{course.series.name}</p>
                           {course.participant.kind === "dependent" ? <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>Deltagare: {course.participant.first_name}</p> : null}
+                          {course.access ? <p className="mt-1 text-xs font-semibold" style={{ color: BLUE }}>{course.access.label} · {course.access.detail}</p> : null}
                           <p className="mt-2 text-xs" style={{ color: TEXT_MUTED }}>{next ? `Nästa: ${nextDate} ${String(next.start_time).slice(0, 5)}` : "Programmet är avslutat"}</p>
                         </div>
                         <span className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{presentation.hideSingleOccurrenceCount && course.total_sessions === 1 ? presentation.label : occurrenceProgressLabel(Math.min(course.completed_sessions + 1, course.total_sessions), course.total_sessions)}</span>

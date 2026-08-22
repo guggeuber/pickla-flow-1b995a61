@@ -1,16 +1,20 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { AlertTriangle, CalendarDays, Check, ChevronDown, ImagePlus, Loader2, Pencil, Plus, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, ChevronDown, Gift, ImagePlus, Loader2, Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   createCourseFormat,
   createCourseSeries,
+  cancelSeriesStaffPlace,
   fetchCourseAdmin,
+  findSeriesGrantParticipants,
+  grantSeriesStaffPlace,
   previewCourseSeries,
   type CourseFormat,
   type CourseResourcePreviewRow,
   type CourseSeries,
+  type SeriesGrantParticipant,
   updateCourseFormat,
   updateCourseSeries,
 } from "@/lib/courses";
@@ -62,12 +66,28 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
   const [days, setDays] = useState<number[]>([2]);
   const [courtIds, setCourtIds] = useState<string[]>([]);
 
+  const [grantSeriesId, setGrantSeriesId] = useState<string | null>(null);
+  const [grantSearch, setGrantSearch] = useState("");
+  const [grantParticipant, setGrantParticipant] = useState<SeriesGrantParticipant | null>(null);
+  const [grantReason, setGrantReason] = useState("");
+  const [grantRequestId, setGrantRequestId] = useState("");
+  const [cancelGrantId, setCancelGrantId] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelRequestId, setCancelRequestId] = useState("");
+
   const query = useQuery({
     queryKey: ["admin-courses", venueId],
     queryFn: () => fetchCourseAdmin(venueId),
     enabled: Boolean(venueId),
   });
   const data = query.data;
+  const normalizedGrantSearch = grantSearch.trim();
+  const participantSearch = useQuery({
+    queryKey: ["series-grant-participants", venueId, normalizedGrantSearch],
+    queryFn: () => findSeriesGrantParticipants(venueId, normalizedGrantSearch),
+    enabled: Boolean(grantSeriesId && normalizedGrantSearch.length >= 2),
+    staleTime: 15_000,
+  });
 
   const previewDates = useMemo(() => {
     if (!startDate || !endDate || !days.length) return [];
@@ -236,6 +256,67 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const resetGrant = () => {
+    setGrantSeriesId(null);
+    setGrantSearch("");
+    setGrantParticipant(null);
+    setGrantReason("");
+    setGrantRequestId("");
+    setCancelGrantId(null);
+    setCancelReason("");
+    setCancelRequestId("");
+  };
+  const openGrant = (seriesId: string) => {
+    if (grantSeriesId === seriesId) {
+      resetGrant();
+      return;
+    }
+    resetGrant();
+    setGrantSeriesId(seriesId);
+    setGrantRequestId(crypto.randomUUID());
+  };
+  const selectGrantParticipant = (participant: SeriesGrantParticipant) => {
+    setGrantParticipant(participant);
+    setGrantSearch(participant.name);
+  };
+  const grantPlace = useMutation({
+    mutationFn: () => grantSeriesStaffPlace({
+      venue_id: venueId,
+      series_id: grantSeriesId!,
+      participant_kind: grantParticipant!.kind,
+      participant_id: grantParticipant!.id,
+      reason: grantReason.trim(),
+      request_id: grantRequestId,
+    }),
+    onSuccess: async () => {
+      await refresh();
+      resetGrant();
+      toast.success("Plats given");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const startCancelGrant = (grantId: string) => {
+    setCancelGrantId(grantId);
+    setCancelReason("");
+    setCancelRequestId(crypto.randomUUID());
+  };
+  const cancelPlace = useMutation({
+    mutationFn: () => cancelSeriesStaffPlace({
+      venue_id: venueId,
+      commitment_id: cancelGrantId!,
+      reason: cancelReason.trim(),
+      request_id: cancelRequestId,
+    }),
+    onSuccess: async () => {
+      await refresh();
+      setCancelGrantId(null);
+      setCancelReason("");
+      setCancelRequestId("");
+      toast.success("Friplatsen är borttagen");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const saveSeriesDisabled = !formatId || !name || !startDate || !endDate || !registrationOpen || !registrationClose
     || !previewEnabled || resourcePreview.isFetching || !resourcePreview.data || resourcePreview.data.has_conflicts || saveSeries.isPending;
 
@@ -297,7 +378,113 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
 
         <div className="border-t border-border pt-5">
           <h3 className="font-bold">Serier</h3>
-          <div className="mt-3 grid gap-2">{query.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : (data?.series || []).map((series) => <div key={series.id} className="rounded-xl border border-border p-3"><div className="flex items-start justify-between gap-3"><div><p className="font-bold">{series.name}</p><p className="mt-1 text-xs text-muted-foreground">{series.sessions.length} tillfällen · {series.capacity.committed_count}/{series.capacity.capacity} platser</p><p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><Users className="h-3 w-3" />{series.sessions.some((session) => session.requires_staffing) ? "Instruktör krävs" : "Ingen instruktör krävs"}</p></div>{series.status === "draft" ? <div className="flex gap-2"><button type="button" onClick={() => editSeries(series)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-border px-3 text-xs font-bold"><Pencil className="h-3.5 w-3.5" />Redigera</button><button type="button" onClick={() => publish.mutate(series.id)} disabled={publish.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground"><Check className="h-3 w-3" />Publicera</button></div> : <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-xs font-bold text-emerald-700">Öppen</span>}</div><div className="mt-3 border-t border-border pt-3"><p className="text-xs font-bold">Kommande tillfällen</p><ol className="mt-2 grid gap-1.5">{series.sessions.filter((session) => session.is_active).map((session) => <li key={session.id} className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><span>{session.series_occurrence_index}. {DateTime.fromISO(session.session_date).setLocale("sv").toFormat("ccc d MMM")}</span><span>{session.start_time.slice(0, 5)}–{session.end_time.slice(0, 5)}</span></li>)}</ol></div></div>)}</div>
+          <div className="mt-3 grid gap-2">
+            {query.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : (data?.series || []).map((series) => {
+              const grantOpen = grantSeriesId === series.id;
+              const activeGrants = series.staff_grants || [];
+              return <div key={series.id} className="rounded-xl border border-border p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-bold">{series.name}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {series.sessions.length} tillfällen · {series.capacity.committed_count}/{series.capacity.capacity} platser
+                    </p>
+                    <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                      <Users className="h-3 w-3" />
+                      {series.sessions.some((session) => session.requires_staffing) ? "Instruktör krävs" : "Ingen instruktör krävs"}
+                    </p>
+                  </div>
+                  {series.status === "draft" ? <div className="flex gap-2">
+                    <button type="button" onClick={() => editSeries(series)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-border px-3 text-xs font-bold"><Pencil className="h-3.5 w-3.5" />Redigera</button>
+                    <button type="button" onClick={() => publish.mutate(series.id)} disabled={publish.isPending} className="inline-flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground"><Check className="h-3 w-3" />Publicera</button>
+                  </div> : <div className="flex flex-wrap justify-end gap-2">
+                    <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-xs font-bold text-emerald-700">Öppen</span>
+                    <button type="button" onClick={() => openGrant(series.id)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-border px-3 text-xs font-bold"><Gift className="h-3.5 w-3.5" />Ge plats</button>
+                  </div>}
+                </div>
+
+                {grantOpen ? <div className="mt-3 rounded-xl border border-border bg-background p-3" data-testid="series-staff-grant">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold">Ge plats · {series.name}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {series.capacity.committed_count} av {series.capacity.capacity} bokade · {series.capacity.available_count} platser kvar
+                      </p>
+                    </div>
+                    <button type="button" onClick={resetGrant} aria-label="Stäng Ge plats"><X className="h-4 w-4" /></button>
+                  </div>
+
+                  <label className="mt-3 grid gap-1 text-xs font-semibold">
+                    Sök deltagare
+                    <input
+                      className={inputClass}
+                      value={grantSearch}
+                      onChange={(event) => { setGrantSearch(event.target.value); setGrantParticipant(null); }}
+                      placeholder="Namn eller e-post"
+                    />
+                  </label>
+                  {participantSearch.isFetching ? <p className="mt-2 text-xs text-muted-foreground">Söker…</p> : null}
+                  {!grantParticipant && participantSearch.data?.items.length ? <div className="mt-2 grid gap-1">
+                    {participantSearch.data.items.map((participant) => <button
+                      key={`${participant.kind}:${participant.id}`}
+                      type="button"
+                      onClick={() => selectGrantParticipant(participant)}
+                      className="rounded-lg border border-border p-2 text-left"
+                    >
+                      <span className="block text-xs font-bold">{participant.name}</span>
+                      {participant.detail ? <span className="mt-0.5 block text-[11px] text-muted-foreground">{participant.detail}</span> : null}
+                    </button>)}
+                  </div> : null}
+                  {grantParticipant ? <p className="mt-2 rounded-lg bg-muted p-2 text-xs"><span className="font-bold">Vald:</span> {grantParticipant.name}{grantParticipant.kind === "dependent" ? " · barn/ungdom" : ""}</p> : null}
+
+                  <label className="mt-3 grid gap-1 text-xs font-semibold">
+                    Anledning
+                    <textarea
+                      className={`${inputClass} min-h-20 py-2`}
+                      value={grantReason}
+                      onChange={(event) => setGrantReason(event.target.value)}
+                      placeholder="Varför ger Pickla den här platsen?"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => grantPlace.mutate()}
+                    disabled={!grantParticipant || !grantReason.trim() || !grantRequestId || grantPlace.isPending || series.capacity.available_count <= 0}
+                    className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-40"
+                  >
+                    {grantPlace.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4" />}
+                    Ge plats
+                  </button>
+
+                  {activeGrants.length ? <div className="mt-4 border-t border-border pt-3">
+                    <p className="text-xs font-bold">Givna platser</p>
+                    <div className="mt-2 grid gap-2">{activeGrants.map((grant) => <div key={grant.id} className="rounded-lg border border-border p-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-bold">{grant.participant.name}</p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">{grant.provenance_label}</p>
+                          {grant.grant_reason ? <p className="mt-1 text-[11px] text-muted-foreground">{grant.grant_reason}</p> : null}
+                        </div>
+                        {cancelGrantId !== grant.id ? <button type="button" onClick={() => startCancelGrant(grant.id)} className="text-xs font-bold text-destructive">Ta bort plats</button> : null}
+                      </div>
+                      {cancelGrantId === grant.id ? <div className="mt-2 grid gap-2">
+                        <input aria-label={`Anledning till att ta bort ${grant.participant.name}`} className={inputClass} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Anledning krävs" />
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => cancelPlace.mutate()} disabled={!cancelReason.trim() || cancelPlace.isPending} className="h-9 rounded-lg bg-destructive px-3 text-xs font-bold text-destructive-foreground disabled:opacity-40">Bekräfta</button>
+                          <button type="button" onClick={() => setCancelGrantId(null)} className="h-9 rounded-lg border border-border px-3 text-xs font-bold">Avbryt</button>
+                        </div>
+                      </div> : null}
+                    </div>)}</div>
+                  </div> : null}
+                </div> : null}
+
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="text-xs font-bold">Kommande tillfällen</p>
+                  <ol className="mt-2 grid gap-1.5">{series.sessions.filter((session) => session.is_active).map((session) => <li key={session.id} className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><span>{session.series_occurrence_index}. {DateTime.fromISO(session.session_date).setLocale("sv").toFormat("ccc d MMM")}</span><span>{session.start_time.slice(0, 5)}–{session.end_time.slice(0, 5)}</span></li>)}</ol>
+                </div>
+              </div>;
+            })}
+          </div>
         </div>
       </div> : null}
     </section>

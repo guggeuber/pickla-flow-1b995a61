@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   updateCourseFormat: vi.fn(),
   createCourseSeries: vi.fn(),
   updateCourseSeries: vi.fn(),
+  findSeriesGrantParticipants: vi.fn(),
+  grantSeriesStaffPlace: vi.fn(),
+  cancelSeriesStaffPlace: vi.fn(),
 }));
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
@@ -28,6 +31,9 @@ vi.mock("@/lib/courses", () => ({
   updateCourseFormat: mocks.updateCourseFormat,
   createCourseSeries: mocks.createCourseSeries,
   updateCourseSeries: mocks.updateCourseSeries,
+  findSeriesGrantParticipants: mocks.findSeriesGrantParticipants,
+  grantSeriesStaffPlace: mocks.grantSeriesStaffPlace,
+  cancelSeriesStaffPlace: mocks.cancelSeriesStaffPlace,
 }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="topbar" /> }));
 vi.mock("@/lib/commerce", () => ({
@@ -158,6 +164,45 @@ describe("Course V1 customer flow", () => {
 });
 
 describe("Course V1 Admin", () => {
+  it("grants an identified participant a non-financial Series place with a required reason", async () => {
+    const participant = { kind: "customer", id: "customer-anna", name: "Anna Andersson", detail: "anna@example.test" };
+    mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [{ ...course, staff_grants: [] }], courts: [] });
+    mocks.findSeriesGrantParticipants.mockResolvedValue({ items: [participant] });
+    mocks.grantSeriesStaffPlace.mockResolvedValue({
+      ok: true,
+      commitment_id: "commitment-1",
+      entitlement_id: "entitlement-1",
+      available_count: 4,
+      reason: "granted",
+      grant: {
+        id: "commitment-1",
+        activity_series_id: "series-1",
+        status: "active",
+        participant,
+        provenance_label: "Friplats · Pickla",
+      },
+    });
+
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ge plats" }));
+
+    expect(screen.getByText("7 av 12 bokade · 5 platser kvar")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Sök deltagare"), { target: { value: "Anna" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Anna Andersson/ }));
+    fireEvent.change(screen.getByLabelText("Anledning"), { target: { value: "Community-värd" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Ge plats" }).at(-1)!);
+
+    await waitFor(() => expect(mocks.grantSeriesStaffPlace).toHaveBeenCalledWith(expect.objectContaining({
+      venue_id: "venue-1",
+      series_id: "series-1",
+      participant_kind: "customer",
+      participant_id: "customer-anna",
+      reason: "Community-värd",
+      request_id: expect.any(String),
+    })));
+  });
+
   it("uses the existing Schedule surface for Format, Series and Session preview", async () => {
     mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
     render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
