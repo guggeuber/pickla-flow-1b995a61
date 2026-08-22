@@ -259,7 +259,7 @@ const draftEditBody = {
   name: "Pickla 101 · Redigerat utkast",
   start_date: "2027-05-04",
   end_date: "2027-05-25",
-  registration_opens_at: "2027-01-15T00:00:00Z",
+  registration_opens_at: "2026-08-01T00:00:00Z",
   registration_closes_at: "2027-05-03T21:59:00Z",
   capacity: 10,
   price_sek: 1595,
@@ -518,6 +518,32 @@ await rest("memberships", "", { method: "POST", body: {
   tier_id: memberTier.id,
   status: "active",
 } });
+await rest("membership_tier_pricing", "", { method: "POST", body: {
+  tier_id: memberTier.id,
+  product_type: editedDraft.product.product_key,
+  fixed_price: 1395,
+  label: "Fyratillfälleskurs medlem",
+} });
+const fourOccurrencePurchase = await checkoutCourse({
+  seriesId: draft.series.id,
+  user: seriesMember,
+  participant: { participant_type: "self" },
+});
+assert(fourOccurrencePurchase.order.total_inc_vat_minor === 139500, "four-occurrence Series member price was not applied once at Series scope");
+await webhook(checkoutEvent({
+  id: `evt_course_four_member_${run}`,
+  sessionId: fourOccurrencePurchase.order.stripe_session_id,
+  orderId: fourOccurrencePurchase.order.id,
+  version: fourOccurrencePurchase.order.version,
+  email: seriesMember.email,
+  amount: 139500,
+}));
+const fourOccurrenceLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${fourOccurrencePurchase.order.id}&select=series_commitment_id,resolver_snapshot`)).payload[0];
+const fourOccurrenceEntitlements = (await rest("access_entitlements", `source_type=eq.series_commitment&source_id=eq.${fourOccurrenceLine.series_commitment_id}&select=id`)).payload;
+const fourOccurrenceRegistrations = (await rest("session_registrations", `series_commitment_id=eq.${fourOccurrenceLine.series_commitment_id}&select=id`)).payload;
+assert(fourOccurrenceLine.resolver_snapshot?.pricing_reason === "membership_tier_pricing", "four-occurrence Series did not freeze membership provenance");
+assert(fourOccurrenceLine.series_commitment_id && fourOccurrenceEntitlements.length === 1 && fourOccurrenceRegistrations.length === 4, "four-occurrence Series did not remain one Commitment, one entitlement and four projections");
+pass("Multi-occurrence Series member pricing", "one purchase; one Commitment; one entitlement; four projected registrations");
 await rest("activity_formats", `id=eq.${format.id}`, { method: "PATCH", body: { presentation_type: "social_event" } });
 const memberPurchase = await checkoutCourse({
   seriesId,
@@ -538,6 +564,10 @@ await webhook(checkoutEvent({
 }));
 const memberOrderLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${memberPurchase.order.id}&select=series_commitment_id`)).payload[0];
 assert(memberOrderLine.series_commitment_id, "member-priced Series purchase did not create its one Commitment");
+const memberReceipt = (await rest("booking_receipts", `commerce_order_id=eq.${memberPurchase.order.id}&select=total_inc_vat_sek`)).payload;
+const memberLedger = (await rest("ledger_entries", `commerce_order_id=eq.${memberPurchase.order.id}&select=amount_inc_vat_minor`)).payload;
+assert(memberReceipt.length === 1 && Number(memberReceipt[0].total_inc_vat_sek) === 1295, "multi-occurrence member receipt did not use the frozen Series price");
+assert(memberLedger.length === 1 && memberLedger[0].amount_inc_vat_minor === 129500, "multi-occurrence member ledger did not use the frozen Series price");
 pass("Series membership pricing", "explicit product member price is shared; presentation type does not affect price");
 
 const parkerCreated = (await course("series", {
@@ -577,6 +607,36 @@ await webhook(checkoutEvent({
 const parkerCommitments = (await rest("series_commitments", `activity_series_id=eq.${parkerCreated.series.id}&select=id`)).payload;
 assert(parkerCommitments.length === 1, "Parker payment did not create exactly one Series Commitment");
 pass("Parker Brunch pricing", "social-event presentation keeps one 199 kr Series purchase and one Commitment");
+
+await rest("membership_tier_pricing", "", { method: "POST", body: {
+  tier_id: memberTier.id,
+  product_type: parkerCreated.product.product_key,
+  fixed_price: 169,
+  label: "Parker medlemspris",
+} });
+const parkerMemberPurchase = await checkoutCourse({
+  seriesId: parkerCreated.series.id,
+  user: seriesMember,
+  participant: { participant_type: "self" },
+});
+assert(parkerMemberPurchase.order.total_inc_vat_minor === 16900, "one-off Series fixed member price was not applied");
+const parkerMemberLineBeforePayment = (await rest("commerce_order_lines", `commerce_order_id=eq.${parkerMemberPurchase.order.id}&select=unit_price_minor,resolver_snapshot`)).payload[0];
+assert(parkerMemberLineBeforePayment.unit_price_minor === 16900 && parkerMemberLineBeforePayment.resolver_snapshot?.pricing_reason === "membership_tier_pricing", "one-off member-price provenance was not frozen");
+await webhook(checkoutEvent({
+  id: `evt_course_parker_member_${run}`,
+  sessionId: parkerMemberPurchase.order.stripe_session_id,
+  orderId: parkerMemberPurchase.order.id,
+  version: parkerMemberPurchase.order.version,
+  email: seriesMember.email,
+  amount: 16900,
+}));
+const parkerMemberLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${parkerMemberPurchase.order.id}&select=series_commitment_id`)).payload[0];
+const parkerMemberReceipt = (await rest("booking_receipts", `commerce_order_id=eq.${parkerMemberPurchase.order.id}&select=total_inc_vat_sek`)).payload;
+const parkerMemberLedger = (await rest("ledger_entries", `commerce_order_id=eq.${parkerMemberPurchase.order.id}&select=amount_inc_vat_minor`)).payload;
+assert(parkerMemberLine.series_commitment_id, "one-off member purchase did not create one Series Commitment");
+assert(parkerMemberReceipt.length === 1 && Number(parkerMemberReceipt[0].total_inc_vat_sek) === 169, "one-off member receipt did not use 169 kr");
+assert(parkerMemberLedger.length === 1 && parkerMemberLedger[0].amount_inc_vat_minor === 16900, "one-off member ledger did not use 169 kr");
+pass("One-off Series member pricing", "199 → 169; receipt and ledger preserve the frozen member price");
 await rest("activity_formats", `id=eq.${format.id}`, { method: "PATCH", body: { presentation_type: "course" } });
 
 const nonCoveringCart = (await commerce("course-cart", {

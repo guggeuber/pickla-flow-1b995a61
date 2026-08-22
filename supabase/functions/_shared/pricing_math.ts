@@ -3,6 +3,8 @@ export type MembershipProductPriceRow = {
   discount_percent?: number | string | null;
 };
 
+export type MembershipProductPriceMode = 'fixed' | 'percent';
+
 export function roundSek(value: number) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
@@ -10,6 +12,30 @@ export function roundSek(value: number) {
 export function applyPercentDiscount(baseAmountSek: number, percent: number) {
   const boundedPercent = Math.min(100, Math.max(0, Number(percent || 0)));
   return Math.max(0, roundSek(baseAmountSek * (1 - (boundedPercent / 100))));
+}
+
+export function membershipProductPriceMode(row: MembershipProductPriceRow): MembershipProductPriceMode | null {
+  const hasFixed = row.fixed_price !== null && row.fixed_price !== undefined;
+  const hasPercent = row.discount_percent !== null && row.discount_percent !== undefined;
+  if (hasFixed === hasPercent) return null;
+  return hasFixed ? 'fixed' : 'percent';
+}
+
+export function membershipProductPricePreview(
+  baseAmountSek: number,
+  row: MembershipProductPriceRow,
+) {
+  const mode = membershipProductPriceMode(row);
+  if (!mode) return null;
+  const value = Number(mode === 'fixed' ? row.fixed_price : row.discount_percent);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (mode === 'fixed') {
+    const amount = roundSek(value);
+    return amount <= roundSek(baseAmountSek) ? { mode, value: amount, finalAmountSek: amount } : null;
+  }
+  if (value > 100) return null;
+  const amount = applyPercentDiscount(baseAmountSek, value);
+  return amount > 0 ? { mode, value, finalAmountSek: amount } : null;
 }
 
 /**
@@ -23,11 +49,8 @@ export function selectPositiveMembershipProductPrice(
   rows: MembershipProductPriceRow[],
 ) {
   const candidates = rows
-    .filter((row) => row.fixed_price != null || row.discount_percent != null)
-    .map((row) => row.fixed_price != null
-      ? roundSek(Number(row.fixed_price))
-      : applyPercentDiscount(baseAmountSek, Number(row.discount_percent || 0)))
-    .filter((amount) => Number.isFinite(amount) && amount > 0);
+    .map((row) => membershipProductPricePreview(baseAmountSek, row)?.finalAmountSek ?? null)
+    .filter((amount): amount is number => amount != null);
 
   return candidates.length > 0 ? Math.min(...candidates) : null;
 }

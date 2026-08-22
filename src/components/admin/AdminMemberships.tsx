@@ -40,6 +40,9 @@ interface MembershipEntitlement {
 interface AccessProduct {
   product_key: string;
   name: string;
+  base_price_sek: number;
+  is_active: boolean;
+  status: string;
 }
 
 interface ProductTypeOption {
@@ -78,6 +81,10 @@ const FALLBACK_PRODUCT_TYPES = [
   { key: "guest_pass", label: "Gästpass" },
 ];
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 const EditableTierPricingRow = ({
   pricing,
   productTypes,
@@ -104,9 +111,10 @@ const EditableTierPricingRow = ({
     mutationFn: (body: Record<string, unknown>) => apiPatch("api-memberships", "tier-pricing", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tier-pricing", pricing.tier_id] });
+      qc.invalidateQueries({ queryKey: ["series-member-pricing"] });
       toast.success("Prisregel uppdaterad");
     },
-    onError: (e: any) => toast.error(e.message || "Kunde inte uppdatera prisregeln"),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte uppdatera prisregeln")),
   });
 
   const handleSave = () => {
@@ -200,13 +208,14 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
   const [newVat, setNewVat] = useState("6");
 
   const addPricing = useMutation({
-    mutationFn: (body: any) => apiPost("api-memberships", "tier-pricing", body),
+    mutationFn: (body: Record<string, unknown>) => apiPost("api-memberships", "tier-pricing", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tier-pricing", tier.id] });
+      qc.invalidateQueries({ queryKey: ["series-member-pricing"] });
       toast.success("Pris tillagt!");
       setNewProduct(""); setNewValue("");
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte lägga till prisregeln")),
   });
 
   const deletePricing = useMutation({
@@ -221,12 +230,13 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
     onSuccess: () => {
       toast.success("Borttaget");
     },
-    onError: (e: any, _id, context) => {
+    onError: (error: unknown, _id, context) => {
       if (context?.previous) qc.setQueryData(["tier-pricing", tier.id], context.previous);
-      toast.error(e?.message || "Kunde inte ta bort prisregeln");
+      toast.error(errorMessage(error, "Kunde inte ta bort prisregeln"));
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["tier-pricing", tier.id] });
+      qc.invalidateQueries({ queryKey: ["series-member-pricing"] });
     },
   });
 
@@ -246,11 +256,10 @@ const TierPricingEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
   };
 
   // Products already configured
-  const productTypes = [
-    { key: "court_hourly", label: "Bana per timme" },
-    ...((products || []).map((product) => ({ key: product.product_key, label: product.name }))),
-    ...FALLBACK_PRODUCT_TYPES.filter((fallback) => !(products || []).some((product) => product.product_key === fallback.key) && fallback.key !== "court_hourly"),
-  ];
+  const productTypes = Array.from(new Map([
+    ...((products || []).filter((product) => product.is_active && product.status === "active").map((product) => [product.product_key, { key: product.product_key, label: product.name }] as const)),
+    ...FALLBACK_PRODUCT_TYPES.filter((fallback) => (pricing || []).some((row) => row.product_type === fallback.key) && !(products || []).some((product) => product.product_key === fallback.key)).map((fallback) => [fallback.key, fallback] as const),
+  ]).values());
   const usedProducts = (pricing || []).map(p => p.product_type);
   const availableProducts = productTypes.filter(p => !usedProducts.includes(p.key));
 
@@ -345,12 +354,12 @@ const MembershipBenefitsEditor = ({ tier }: { tier: MembershipTier }) => {
   }, [entitlements]);
 
   const saveBenefits = useMutation({
-    mutationFn: (body: any) => apiPatch("api-memberships", "tier-entitlements", body),
+    mutationFn: (body: Record<string, unknown>) => apiPatch("api-memberships", "tier-entitlements", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tier-entitlements", tier.id] });
       toast.success("Förmåner sparade");
     },
-    onError: (e: any) => toast.error(e.message || "Kunde inte spara förmåner"),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte spara förmåner")),
   });
 
   const handleSave = () => {
@@ -441,7 +450,7 @@ const TierDetailsEditor = ({ tier, venueId }: { tier: MembershipTier; venueId: s
       qc.invalidateQueries({ queryKey: ["membership-tiers", venueId] });
       toast.success("Nivå uppdaterad");
     },
-    onError: (e: any) => toast.error(e.message || "Kunde inte uppdatera nivån"),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte uppdatera nivån")),
   });
 
   const handleSave = () => {
@@ -542,7 +551,7 @@ const EditableMembershipRow = ({
       qc.invalidateQueries({ queryKey: ["venue-memberships", venueId] });
       toast.success("Medlemskap uppdaterat");
     },
-    onError: (e: any) => toast.error(e.message || "Kunde inte uppdatera medlemskapet"),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte uppdatera medlemskapet")),
   });
 
   const handleSave = () => {
@@ -674,17 +683,17 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
   const [assignNotes, setAssignNotes] = useState("");
 
   const addTier = useMutation({
-    mutationFn: (body: any) => apiPost("api-memberships", "tiers", body),
+    mutationFn: (body: Record<string, unknown>) => apiPost("api-memberships", "tiers", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["membership-tiers", venueId] });
       toast.success("Medlemskapsnivå skapad!");
       setName(""); setDesc(""); setMonthlyPrice("");
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte skapa medlemsnivån")),
   });
 
   const updateTier = useMutation({
-    mutationFn: (body: any) => apiPatch("api-memberships", "tiers", body),
+    mutationFn: (body: Record<string, unknown>) => apiPatch("api-memberships", "tiers", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["membership-tiers", venueId] });
       toast.success("Uppdaterad");
@@ -697,11 +706,11 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
       qc.invalidateQueries({ queryKey: ["membership-tiers", venueId] });
       toast.success("Borttagen");
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte ta bort medlemsnivån")),
   });
 
   const assignMembership = useMutation({
-    mutationFn: (body: any) => apiPost("api-memberships", "assign-email", body),
+    mutationFn: (body: Record<string, unknown>) => apiPost("api-memberships", "assign-email", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["venue-memberships", venueId] });
       toast.success("Medlemskap tilldelat");
@@ -711,7 +720,7 @@ const AdminMemberships = ({ venueId }: { venueId: string }) => {
       setAssignPhone("");
       setAssignNotes("");
     },
-    onError: (e: any) => toast.error(e.message || "Kunde inte tilldela medlemskap"),
+    onError: (error: unknown) => toast.error(errorMessage(error, "Kunde inte tilldela medlemskap")),
   });
 
   const handleAdd = () => {

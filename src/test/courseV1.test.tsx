@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import AdminCourses from "@/components/admin/AdminCourses";
@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   user: null as null | { id: string },
   fetchCourseDetail: vi.fn(),
   fetchCourseAdmin: vi.fn(),
+  fetchSeriesMemberPricing: vi.fn(),
   previewCourseSeries: vi.fn(),
   createCourseCart: vi.fn(),
   createCourseFormat: vi.fn(),
@@ -19,12 +20,15 @@ const mocks = vi.hoisted(() => ({
   findSeriesGrantParticipants: vi.fn(),
   grantSeriesStaffPlace: vi.fn(),
   cancelSeriesStaffPlace: vi.fn(),
+  saveSeriesMemberPricing: vi.fn(),
+  removeSeriesMemberPricing: vi.fn(),
 }));
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
 vi.mock("@/lib/courses", () => ({
   fetchCourseDetail: mocks.fetchCourseDetail,
   fetchCourseAdmin: mocks.fetchCourseAdmin,
+  fetchSeriesMemberPricing: mocks.fetchSeriesMemberPricing,
   previewCourseSeries: mocks.previewCourseSeries,
   createCourseCart: mocks.createCourseCart,
   createCourseFormat: mocks.createCourseFormat,
@@ -34,6 +38,8 @@ vi.mock("@/lib/courses", () => ({
   findSeriesGrantParticipants: mocks.findSeriesGrantParticipants,
   grantSeriesStaffPlace: mocks.grantSeriesStaffPlace,
   cancelSeriesStaffPlace: mocks.cancelSeriesStaffPlace,
+  saveSeriesMemberPricing: mocks.saveSeriesMemberPricing,
+  removeSeriesMemberPricing: mocks.removeSeriesMemberPricing,
 }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="topbar" /> }));
 vi.mock("@/lib/commerce", () => ({
@@ -48,11 +54,15 @@ const course = {
   recurrence_days: [2], start_time: "18:00", end_time: "19:00", court_ids: [], registration_state: "open",
   customer_has_commitment: false,
   format: { id: "format-1", name: "Pickla 101", description: "Dina första fyra veckor med pickleball.", full_description: "Introduktion\n\nTillfälle 1 · Grepp och grundslag.\nTillfälle 2 · Serve och retur.\n\nDetta ingår\nInstruktör och lånerack.", image_urls: [], age_group: "adult", level: "beginner", requires_instructor: true, presentation_type: "course" },
-  product: { id: "product-1", name: "Pickla 101", description: null, base_price_sek: 1495, vat_rate: 6 },
+  product: { id: "product-1", product_key: "course_pickla_101", name: "Pickla 101", description: null, base_price_sek: 1495, vat_rate: 6 },
   venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
   capacity: { capacity: 12, committed_count: 7, active_holds_count: 0, available_count: 5 },
   sessions: Array.from({ length: 6 }, (_, index) => ({ id: `session-${index + 1}`, session_date: `2026-09-${String(8 + index * 7).padStart(2, "0")}`, start_time: "18:00", end_time: "19:00", court_ids: [], requires_staffing: true, is_active: true, series_occurrence_index: index + 1 })),
 };
+
+beforeEach(() => {
+  mocks.fetchSeriesMemberPricing.mockResolvedValue({ series: [] });
+});
 
 function wrapper(initial = "/course/series-1?v=pickla-arena-sthlm") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -164,6 +174,51 @@ describe("Course V1 customer flow", () => {
 });
 
 describe("Course V1 Admin", () => {
+  it("edits the canonical Series product member price and renders the server preview", async () => {
+    mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
+    mocks.fetchSeriesMemberPricing.mockResolvedValue({
+      series: [{
+        series_id: course.id,
+        product: {
+          id: course.product.id,
+          venue_id: course.venue_id,
+          product_key: course.product.product_key,
+          product_kind: "series_access",
+          name: course.product.name,
+          base_price_sek: course.product.base_price_sek,
+          is_active: true,
+          status: "active",
+        },
+        tiers: [{
+          tier: { id: "tier-play", name: "Play", color: null, sort_order: 1 },
+          rule: { id: "rule-play", tier_id: "tier-play", product_type: course.product.product_key, fixed_price: 1295, discount_percent: null, vat_rate: 6, label: "Play", mode: "fixed" },
+          preview: { ordinary_price_sek: 1495, resolved_price_sek: 1295, mode: "fixed", value: 1295 },
+        }],
+      }],
+    });
+    mocks.saveSeriesMemberPricing.mockResolvedValue({ id: "rule-play" });
+
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+
+    const section = await screen.findByTestId("series-member-pricing");
+    expect(within(section).getByText("Ordinarie 1 495 kr")).toBeInTheDocument();
+    const row = within(section).getByTestId("series-member-price-tier-play");
+    expect(within(row).getByText("1 295 kr")).toBeInTheDocument();
+    fireEvent.change(within(row).getByLabelText("Play prismodell"), { target: { value: "percent" } });
+    fireEvent.change(within(row).getByRole("textbox"), { target: { value: "15" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Spara" }));
+
+    await waitFor(() => expect(mocks.saveSeriesMemberPricing).toHaveBeenCalledWith({
+      ruleId: "rule-play",
+      tierId: "tier-play",
+      productKey: "course_pickla_101",
+      mode: "percent",
+      value: 15,
+      label: "Play · Pickla 101",
+    }));
+  });
+
   it("grants an identified participant a non-financial Series place with a required reason", async () => {
     const participant = { kind: "customer", id: "customer-anna", name: "Anna Andersson", detail: "anna@example.test" };
     mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [{ ...course, staff_grants: [] }], courts: [] });

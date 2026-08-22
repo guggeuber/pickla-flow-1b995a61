@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
 import type { SeriesPresentationType } from "@/lib/seriesPresentation";
 
 export type CourseFormat = {
@@ -72,6 +72,7 @@ export type CourseSeries = {
   format: CourseFormat;
   product: {
     id: string;
+    product_key: string;
     name: string;
     description: string | null;
     base_price_sek: number;
@@ -81,6 +82,41 @@ export type CourseSeries = {
   sessions: CourseSession[];
   commitment?: Record<string, unknown> | null;
   staff_grants?: SeriesStaffGrant[];
+};
+
+export type SeriesMemberPricingTier = {
+  tier: { id: string; name: string; color: string | null; sort_order: number | null };
+  rule: {
+    id: string;
+    tier_id: string;
+    product_type: string;
+    fixed_price: number | null;
+    discount_percent: number | null;
+    vat_rate: number | null;
+    label: string | null;
+    mode: "fixed" | "percent";
+  } | null;
+  preview: {
+    ordinary_price_sek: number;
+    resolved_price_sek: number;
+    mode: "fixed" | "percent";
+    value: number;
+  } | null;
+};
+
+export type SeriesMemberPricingItem = {
+  series_id: string;
+  product: {
+    id: string;
+    venue_id: string;
+    product_key: string;
+    product_kind: string;
+    name: string;
+    base_price_sek: number;
+    is_active: boolean;
+    status: string;
+  } | null;
+  tiers: SeriesMemberPricingTier[];
 };
 
 export type SeriesGrantParticipant = {
@@ -158,6 +194,34 @@ export function fetchCourseAdmin(venueId: string) {
     "admin",
     { venueId },
   );
+}
+
+export function fetchSeriesMemberPricing(venueId: string) {
+  return apiGet<{ series: SeriesMemberPricingItem[] }>("api-memberships", "series-tier-pricing", { venueId });
+}
+
+export function saveSeriesMemberPricing(input: {
+  ruleId?: string | null;
+  tierId: string;
+  productKey: string;
+  mode: "fixed" | "percent";
+  value: number;
+  label: string;
+}) {
+  const body = {
+    ...(input.ruleId ? { id: input.ruleId } : { tierId: input.tierId }),
+    product_type: input.productKey,
+    fixed_price: input.mode === "fixed" ? input.value : null,
+    discount_percent: input.mode === "percent" ? input.value : null,
+    label: input.label,
+  };
+  return input.ruleId
+    ? apiPatch("api-memberships", "tier-pricing", body)
+    : apiPost("api-memberships", "tier-pricing", body);
+}
+
+export function removeSeriesMemberPricing(ruleId: string) {
+  return apiDelete("api-memberships", `tier-pricing?id=${encodeURIComponent(ruleId)}`);
 }
 
 export function createCourseFormat(input: Record<string, unknown>) {
