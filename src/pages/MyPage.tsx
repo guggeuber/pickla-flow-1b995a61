@@ -36,7 +36,7 @@ import {
   type CommerceRegistrationManagementState,
 } from "@/lib/commerce";
 import { fetchMyCourses } from "@/lib/courses";
-import { occurrenceProgressLabel, seriesPresentation } from "@/lib/seriesPresentation";
+import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -2695,6 +2695,11 @@ const MyPage = () => {
                 {ownedSeries.map((course) => {
                   const next = course.next_session;
                   const presentation = seriesPresentation(course.series.presentation_type);
+                  const customerTitle = seriesCustomerTitle({
+                    seriesName: course.series.name,
+                    formatName: course.series.format_name,
+                    presentationType: presentation.type,
+                  });
                   const nextDate = next
                     ? DateTime.fromISO(next.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("ccc d MMM")
                     : null;
@@ -2702,7 +2707,7 @@ const MyPage = () => {
                     <Link key={course.commitment.id} to={`/course/${course.series.id}?v=${encodeURIComponent(venueSlug)}`} className="rounded-xl p-4 text-left active:scale-[0.98] transition-transform" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{course.series.name}</p>
+                          <p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{customerTitle}</p>
                           {course.participant.kind === "dependent" ? <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>Deltagare: {course.participant.first_name}</p> : null}
                           {course.access ? <p className="mt-1 text-xs font-semibold" style={{ color: BLUE }}>{course.access.label} · {course.access.detail}</p> : null}
                           <p className="mt-2 text-xs" style={{ color: TEXT_MUTED }}>{next ? `Nästa: ${nextDate} ${String(next.start_time).slice(0, 5)}` : "Programmet är avslutat"}</p>

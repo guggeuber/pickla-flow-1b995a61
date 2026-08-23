@@ -1,6 +1,6 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 
@@ -44,6 +44,7 @@ function createQueryClient() {
 function seedMyPageQueries(queryClient: QueryClient, input: {
   bookings?: Record<string, unknown>[];
   registrations?: Record<string, unknown>[];
+  courses?: Record<string, unknown>[];
 }) {
   const currentYear = new Date().getFullYear();
   queryClient.setQueryData(["player-profile", auth.user.id], {
@@ -55,6 +56,7 @@ function seedMyPageQueries(queryClient: QueryClient, input: {
   });
   queryClient.setQueryData(["my-bookings", auth.user.id], input.bookings || []);
   queryClient.setQueryData(["my-session-registrations", auth.user.id], input.registrations || []);
+  queryClient.setQueryData(["my-courses", auth.user.id], { items: input.courses || [] });
   queryClient.setQueryData(["my-event-registrations", auth.user.id], []);
   queryClient.setQueryData(["my-membership", auth.user.id], null);
   queryClient.setQueryData(["my-passes", auth.user.id], {
@@ -84,6 +86,7 @@ function seedMyPageQueries(queryClient: QueryClient, input: {
 function renderMyPage(route: string, input: {
   bookings?: Record<string, unknown>[];
   registrations?: Record<string, unknown>[];
+  courses?: Record<string, unknown>[];
 }) {
   const queryClient = createQueryClient();
   seedMyPageQueries(queryClient, input);
@@ -98,7 +101,72 @@ function renderMyPage(route: string, input: {
 
 afterEach(cleanup);
 
+beforeEach(() => {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+      clear: () => values.clear(),
+    },
+  });
+});
+
 describe("MyPage detail routes", () => {
+  it("uses Format identity for an owned social event and keeps House Comp copy", async () => {
+    renderMyPage("/my", {
+      courses: [{
+        commitment: { id: "commitment-parker", status: "active" },
+        series: {
+          id: "series-parker",
+          venue_id: "venue-id",
+          name: "Parker",
+          format_name: "Parker Brunch",
+          start_date: "2026-09-05",
+          end_date: "2026-09-05",
+          total_sessions: 1,
+          presentation_type: "social_event",
+        },
+        participant: { kind: "customer" },
+        next_session: { id: "session-parker", session_date: "2026-09-05", start_time: "13:00:00", end_time: "18:00:00" },
+        completed_sessions: 0,
+        total_sessions: 1,
+        access: { label: "Friplats", detail: "Ingår · Pickla" },
+      }],
+    });
+
+    expect(await screen.findByText("Parker Brunch")).toBeInTheDocument();
+    expect(screen.queryByText("Parker")).not.toBeInTheDocument();
+    expect(screen.getByText("Friplats · Ingår · Pickla")).toBeInTheDocument();
+  });
+
+  it("keeps the concrete Series run name for an owned Course", async () => {
+    renderMyPage("/my", {
+      courses: [{
+        commitment: { id: "commitment-course", status: "active" },
+        series: {
+          id: "series-course",
+          venue_id: "venue-id",
+          name: "Pickla 101 · Höst 2026",
+          format_name: "Pickla 101",
+          start_date: "2026-09-08",
+          end_date: "2026-09-29",
+          total_sessions: 4,
+          presentation_type: "course",
+        },
+        participant: { kind: "customer" },
+        next_session: { id: "session-course", session_date: "2026-09-08", start_time: "18:00:00", end_time: "19:00:00" },
+        completed_sessions: 0,
+        total_sessions: 4,
+        access: null,
+      }],
+    });
+
+    expect(await screen.findByText("Pickla 101 · Höst 2026")).toBeInTheDocument();
+  });
+
   it("renders a valid registration detail drawer from /my?registration=<valid-id>", async () => {
     const registrationId = "valid-registration-id";
     const sessionDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);

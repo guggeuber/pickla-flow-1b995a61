@@ -175,7 +175,7 @@ export type CourseDetail = Omit<CourseSeries, "capacity"> & {
 
 export type MyCourseItem = {
   commitment: { id: string; status: string; dependent_participant_id?: string | null };
-  series: { id: string; venue_id: string; name: string; start_date: string; end_date: string; total_sessions: number; presentation_type?: SeriesPresentationType };
+  series: { id: string; venue_id: string; name: string; format_name?: string | null; start_date: string; end_date: string; total_sessions: number; presentation_type?: SeriesPresentationType };
   participant: { kind: "customer" | "dependent"; id?: string; first_name?: string; birth_year?: number };
   next_session: CourseSession | null;
   completed_sessions: number;

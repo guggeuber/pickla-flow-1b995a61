@@ -243,12 +243,18 @@ async function auditDayPassShareClaim(
   }
 }
 
-async function getActiveMembershipWithBenefits(adminClient: ReturnType<typeof getServiceClient>, userId: string) {
-  const { data: membership } = await adminClient
+async function getActiveMembershipWithBenefits(
+  adminClient: ReturnType<typeof getServiceClient>,
+  userId: string,
+  venueId?: string | null,
+) {
+  let query = adminClient
     .from('memberships')
     .select('id, tier_id, venue_id, starts_at, expires_at, membership_tiers(id, name, color, description, monthly_price, membership_entitlements(entitlement_type, value, period, sport_type))')
     .eq('user_id', userId)
-    .eq('status', 'active')
+    .eq('status', 'active');
+  if (venueId) query = query.eq('venue_id', venueId);
+  const { data: membership } = await query
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -660,6 +666,14 @@ Deno.serve(async (req) => {
 
     // ─── GET /my-passes ── unified: all passes + allowance info ───
     if (req.method === 'GET' && path === 'my-passes') {
+      const requestedVenueId = String(url.searchParams.get('venueId') || '').trim() || null;
+      const requestedPlayDate = String(url.searchParams.get('date') || '').trim();
+      const playDate = requestedPlayDate
+        ? DateTime.fromISO(requestedPlayDate, { zone: 'Europe/Stockholm' })
+        : DateTime.now().setZone('Europe/Stockholm');
+      if (!playDate.isValid || (requestedPlayDate && !/^\d{4}-\d{2}-\d{2}$/.test(requestedPlayDate))) {
+        return errorResponse('Invalid play date', 400);
+      }
       // Get all user's active day passes
       const { data: passes } = await adminClient
         .from('day_passes')
@@ -686,18 +700,18 @@ Deno.serve(async (req) => {
         is_free: (p.price === 0 || p.price === null),
       }));
 
-      const membership = await getActiveMembershipWithBenefits(adminClient, userId);
+      const membership = await getActiveMembershipWithBenefits(adminClient, userId, requestedVenueId);
       const hasMembership = !!membership;
       const openPlayUnlimited = benefitValue(membership, 'open_play_unlimited') > 0;
       const guestGrant = await ensureMonthlyGuestVouchers(adminClient, membership, userId);
       const guestVouchers = (guestGrant.vouchers || []).map(voucherToClient);
       const usableGuestVouchers = guestVouchers.filter((voucher: any) => voucher.status === 'unused');
-      const now = DateTime.now().setZone('Europe/Stockholm');
-      const weekStart = now.startOf('week').toISODate()!;
-      const weekEnd = now.endOf('week').toISODate()!;
+      const weekStart = playDate.startOf('week').toISODate()!;
+      const weekEnd = playDate.endOf('week').toISODate()!;
       const courtHoursAllowed = benefitValue(membership, 'court_hours_per_week');
-      const courtHoursUsed = courtHoursAllowed > 0 && membership?.venue_id
-        ? await calculateIncludedCourtHoursFromBookings(adminClient, userId, membership.venue_id, weekStart, weekEnd)
+      const allowanceVenueId = requestedVenueId || membership?.venue_id || null;
+      const courtHoursUsed = courtHoursAllowed > 0 && allowanceVenueId
+        ? await calculateIncludedCourtHoursFromBookings(adminClient, userId, allowanceVenueId, weekStart, weekEnd)
         : 0;
 
       const allowance = {
@@ -728,6 +742,7 @@ Deno.serve(async (req) => {
         allowance,
         shares: shares || [],
         court_hours: {
+          play_date: playDate.toISODate(),
           allowed: courtHoursAllowed,
           used: courtHoursUsed,
           remaining: Math.max(courtHoursAllowed - courtHoursUsed, 0),

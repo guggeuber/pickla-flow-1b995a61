@@ -26,7 +26,7 @@ import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 import { fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
 import { inheritedEventImages } from "@/lib/eventMedia";
 import { SeriesRegistrationCard } from "@/components/series/SeriesRegistrationCard";
-import { occurrenceProgressLabel, seriesPresentation } from "@/lib/seriesPresentation";
+import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 
 
 const PAGE_BG = "#fffaf7";
@@ -945,13 +945,18 @@ export default function TodayPage() {
               {courseHome?.mode === "next" && courseHome.item ? (() => {
                 const item = courseHome.item as MyCourseItem;
                 const presentation = seriesPresentation(item.series.presentation_type);
+                const customerTitle = seriesCustomerTitle({
+                  seriesName: item.series.name,
+                  formatName: item.series.format_name,
+                  presentationType: presentation.type,
+                });
                 const occurrenceCopy = presentation.hideSingleOccurrenceCount && item.total_sessions === 1
                   ? null
                   : occurrenceProgressLabel(Math.min(item.completed_sessions + 1, item.total_sessions), item.total_sessions);
                 return (
                   <button type="button" onClick={() => navigate(`/course/${item.series.id}?v=${encodeURIComponent(slug)}`)} className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }}>
                     <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Nästa</p>
-                    <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{item.series.name}</h2>
+                    <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{customerTitle}</h2>
                     <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{[occurrenceCopy, item.next_session ? DateTime.fromISO(item.next_session.session_date).setLocale("sv").toFormat("cccc HH:mm").replace("00:00", String(item.next_session.start_time).slice(0, 5)) : null].filter(Boolean).join(" · ")}</p>
                   </button>
                 );

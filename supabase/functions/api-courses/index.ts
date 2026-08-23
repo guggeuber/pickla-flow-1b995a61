@@ -348,10 +348,10 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
   if (seriesError || sessionError) throw new Error(seriesError?.message || sessionError?.message || 'Course projection unavailable');
   const formatIds = [...new Set((seriesRows || []).map((row) => row.format_id).filter(Boolean))];
   const { data: formatRows, error: formatError } = formatIds.length
-    ? await admin.from('activity_formats').select('id, presentation_type').in('id', formatIds)
+    ? await admin.from('activity_formats').select('id, name, presentation_type').in('id', formatIds)
     : { data: [], error: null };
   if (formatError) throw new Error(formatError.message);
-  const presentationByFormat = new Map((formatRows || []).map((format) => [format.id, format.presentation_type || 'course']));
+  const formatById = new Map((formatRows || []).map((format) => [format.id, format]));
   const dependentById = new Map((dependentRows || []).map((row) => [row.id, row]));
   const now = DateTime.now().setZone('Europe/Stockholm');
   return commitments.map((commitment) => {
@@ -367,7 +367,11 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
     }).length;
     return {
       commitment,
-      series: series ? { ...series, presentation_type: presentationByFormat.get(series.format_id) || 'course' } : series,
+      series: series ? {
+        ...series,
+        format_name: formatById.get(series.format_id)?.name || null,
+        presentation_type: formatById.get(series.format_id)?.presentation_type || 'course',
+      } : series,
       participant: commitment.dependent_participant_id
         ? { kind: 'dependent', ...(dependentById.get(commitment.dependent_participant_id) || {}) }
         : { kind: 'customer' },
