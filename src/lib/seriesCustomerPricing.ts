@@ -74,3 +74,8 @@ export function frozenSeriesLinePriceLabel(snapshot: Record<string, unknown> | n
   }
   return null;
 }
+
+export function seriesBookingCta(price: SeriesPricePresentation, defaultCta: string) {
+  const action = price.label === "Early Bird" ? "Boka Early Bird" : defaultCta;
+  return `${action} · ${money(price.finalPriceMinor)}`;
+}

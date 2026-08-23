@@ -30,7 +30,7 @@ import {
   purchaseErrorMessage,
   withPurchaseSessionRecovery,
 } from "@/lib/purchaseSessionRecovery";
-import { occurrenceCountLabel, seriesPresentation } from "@/lib/seriesPresentation";
+import { occurrenceCountLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 
 type ResolvedLine = CommerceOrderLine & { unit_price_minor: number; product_name: string };
 
@@ -132,6 +132,7 @@ export default function CommerceCartPage() {
   const activity = orderQuery.data?.activity_access;
   const course = orderQuery.data?.course_access;
   const coursePresentation = seriesPresentation(course?.presentation_type);
+  const courseTitle = course ? seriesCustomerTitle({ seriesName: course.name, formatName: course.format_name, presentationType: course.presentation_type }) : "";
   const courseOccurrenceSummary = course
     ? coursePresentation.hideSingleOccurrenceCount && Number(course.total_sessions) === 1
       ? `${DateTime.fromISO(course.start_date).setLocale("sv").toFormat("d MMMM")} · ${String(course.start_time).slice(0, 5)}–${String(course.end_time).slice(0, 5)}`
@@ -288,7 +289,7 @@ export default function CommerceCartPage() {
         {course ? (
           <section className="pb-6">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">{coursePresentation.label}</p>
-            <h2 className="mt-1 text-lg font-black">{course.name}</h2>
+            <h2 className="mt-1 text-lg font-black">{courseTitle}</h2>
             <p className="mt-2 text-sm font-semibold text-slate-600">{courseOccurrenceSummary}</p>
             {course.participant_name ? <p className="mt-1 text-sm text-slate-500">Deltagare: {course.participant_name}</p> : null}
             {course.venue_name ? <p className="mt-1 text-sm text-slate-500">{course.venue_name}</p> : null}

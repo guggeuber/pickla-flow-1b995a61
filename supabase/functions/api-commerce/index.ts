@@ -484,7 +484,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
   if (participation?.activity_series_id) {
     const [{ data: series }, { data: venue }, { data: dependent }] = await Promise.all([
       admin.from('activity_series')
-        .select('id, name, start_date, end_date, start_time, end_time, total_sessions, status, activity_formats(presentation_type)')
+        .select('id, name, start_date, end_date, start_time, end_time, total_sessions, status, activity_formats(name, presentation_type)')
         .eq('id', participation.activity_series_id)
         .eq('venue_id', order.venue_id)
         .maybeSingle(),
@@ -503,6 +503,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
       end_time: series.end_time,
       total_sessions: series.total_sessions,
       presentation_type: seriesFormat?.presentation_type || 'course',
+      format_name: seriesFormat?.name || null,
       venue_name: venue?.name || null,
       venue_slug: venue?.slug || null,
       participant_name: dependent?.first_name || null,

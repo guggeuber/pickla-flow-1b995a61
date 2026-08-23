@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CalendarDays, Check, ChevronRight, Loader2, MapPin, Users } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, Loader2, Users } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -9,8 +9,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { createCourseCart, fetchCourseDetail } from "@/lib/courses";
 import { formatCommerceMoney } from "@/lib/commerce";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
-import { seriesPricePresentation } from "@/lib/seriesCustomerPricing";
-import { occurrenceCountLabel, seriesPresentation } from "@/lib/seriesPresentation";
+import { seriesBookingCta, seriesPricePresentation } from "@/lib/seriesCustomerPricing";
+import { occurrenceCountLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 
 type ParticipantType = "self" | "adult" | "dependent";
 
@@ -81,6 +81,10 @@ export default function CourseSeriesPage() {
   const socialEvent = presentation.type === "social_event";
   const supportsParticipantChoice = presentation.type === "course";
   const selectedParticipantPricePending = supportsParticipantChoice && participantType !== "self";
+  const title = seriesCustomerTitle({ seriesName: course.name, formatName: course.format?.name, presentationType: presentation.type });
+  const bookingCta = socialEvent
+    ? seriesBookingCta(price, presentation.bookingCta)
+    : `${presentation.bookingCta} · ${formatCommerceMoney(price.finalPriceMinor)}`;
   const open = course.registration_state === "open" && available > 0 && !course.customer_has_commitment;
   const requiresGuestDetails = !user;
   const ready = open
@@ -92,16 +96,15 @@ export default function CourseSeriesPage() {
     <div className="min-h-[100dvh] bg-white text-slate-950">
       <PicklaTopBar slug={venueSlug} background="#fff" />
       <main className="mx-auto w-full max-w-xl px-5 pb-40 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
-        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt={course.name} className={presentation.imageProminence === "prominent" ? "-mx-5 mb-7 block h-auto w-[calc(100%+2.5rem)] max-w-none" : "mb-6 block h-auto w-full rounded-[24px]"} data-testid="series-detail-image" /> : null}
+        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt={title} className={socialEvent ? "mb-5 block h-auto w-full rounded-[24px]" : "mb-6 block h-auto w-full rounded-[24px]"} data-testid="series-detail-image" /> : null}
         <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{presentation.label}</p>
-        <h1 className="mt-2 text-3xl font-black leading-tight">{course.name}</h1>
+        <h1 className="mt-2 text-3xl font-black leading-tight">{title}</h1>
         {!socialEvent && (course.format?.description || course.description) ? <p className="mt-3 text-base leading-relaxed text-slate-600">{course.format?.description || course.description}</p> : null}
 
         {socialEvent && sessions.length === 1 ? (
-          <section className="mt-5 grid gap-2 text-base font-bold">
+          <section className="mt-4 grid gap-1.5 text-base font-bold">
             <p>{swedishDate(sessions[0].session_date)} · {String(sessions[0].start_time).slice(0, 5)}–{String(sessions[0].end_time).slice(0, 5)}</p>
-            <p className="flex items-center gap-2 text-sm text-slate-600"><MapPin className="h-4 w-4" />{course.venue?.name}</p>
-            <p className="flex items-center gap-2 text-sm text-slate-600"><Users className="h-4 w-4" />{available} {available === 1 ? "plats" : "platser"} kvar</p>
+            <p className="text-sm text-slate-600">{course.venue?.name} · {available} {available === 1 ? "plats" : "platser"} kvar</p>
           </section>
         ) : (
           <section className="mt-8 grid gap-4 border-y border-black/10 py-6">
@@ -111,15 +114,15 @@ export default function CourseSeriesPage() {
           </section>
         )}
 
-        <section className={`${socialEvent ? "mt-7 rounded-[20px] bg-slate-50 px-5 py-4" : "mt-7"}`} data-testid="series-price-offer">
+        <section className={socialEvent ? "mt-5 border-y border-black/10 py-4" : "mt-7"} data-testid="series-price-offer">
           {selectedParticipantPricePending ? <p className="text-sm font-semibold text-slate-600">Priset bekräftas för deltagaren i nästa steg.</p> : <><p className="text-sm font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{price.primary}</p>{price.context ? <p className="mt-1 text-sm font-semibold text-slate-600">{price.context}</p> : null}</>}
         </section>
 
-        {course.format?.full_description ? <section className="mt-8">
+        {course.format?.full_description ? <section className={socialEvent ? "mt-6" : "mt-8"}>
           <h2 className="text-lg font-black">{presentation.contentHeading}</h2>
           {socialEvent && (course.format?.description || course.description) ? <p className="mt-3 text-base leading-relaxed text-slate-700">{course.format?.description || course.description}</p> : null}
           <div className="mt-3 whitespace-pre-line text-sm leading-7 text-slate-600">{course.format.full_description}</div>
-        </section> : socialEvent && (course.format?.description || course.description) ? <section className="mt-8"><h2 className="text-lg font-black">{presentation.contentHeading}</h2><p className="mt-3 text-base leading-relaxed text-slate-700">{course.format?.description || course.description}</p></section> : null}
+        </section> : socialEvent && (course.format?.description || course.description) ? <section className="mt-6"><h2 className="text-lg font-black">{presentation.contentHeading}</h2><p className="mt-3 text-base leading-relaxed text-slate-700">{course.format?.description || course.description}</p></section> : null}
 
         {supportsParticipantChoice ? <section className="mt-8">
           <h2 className="text-lg font-black">Vem ska delta?</h2>
@@ -149,7 +152,7 @@ export default function CourseSeriesPage() {
           {course.customer_has_commitment ? <p className="mb-3 text-center text-sm font-bold">Du har redan en plats.</p> : null}
           <button type="button" onClick={() => buy.mutate()} disabled={!ready || buy.isPending} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
             {buy.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-            {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : selectedParticipantPricePending ? "Fortsätt" : `${presentation.bookingCta} · ${formatCommerceMoney(price.finalPriceMinor)}`}
+            {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : selectedParticipantPricePending ? "Fortsätt" : bookingCta}
           </button>
         </div>
       </footer>

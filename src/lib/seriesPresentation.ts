@@ -76,6 +76,18 @@ export function seriesPresentation(value: unknown): SeriesPresentation {
   return PRESENTATIONS[normalizeSeriesPresentationType(value)];
 }
 
+export function seriesCustomerTitle(input: {
+  seriesName: string | null | undefined;
+  formatName: string | null | undefined;
+  presentationType: unknown;
+}) {
+  const seriesName = String(input.seriesName || "").trim();
+  const formatName = String(input.formatName || "").trim();
+  return normalizeSeriesPresentationType(input.presentationType) === "social_event"
+    ? formatName || seriesName
+    : seriesName || formatName;
+}
+
 export function occurrenceCountLabel(count: number) {
   return `${count} ${count === 1 ? "tillfälle" : "tillfällen"}`;
 }

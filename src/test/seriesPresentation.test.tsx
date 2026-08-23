@@ -5,9 +5,10 @@ import { SeriesRegistrationCard } from "@/components/series/SeriesRegistrationCa
 import type { CourseDetail } from "@/lib/courses";
 import {
   occurrenceCountLabel,
+  seriesCustomerTitle,
   seriesPresentation,
 } from "@/lib/seriesPresentation";
-import { frozenSeriesLinePriceLabel, seriesPricePresentation } from "@/lib/seriesCustomerPricing";
+import { frozenSeriesLinePriceLabel, seriesBookingCta, seriesPricePresentation } from "@/lib/seriesCustomerPricing";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
@@ -16,7 +17,7 @@ function fixture(presentationType: "course" | "social_event" | "clinic" | "tourn
     id: `series-${presentationType}`,
     venue_id: "venue-1",
     format_id: `format-${presentationType}`,
-    name: presentationType === "social_event" ? "Parker Brunch" : "Pickla 101 · Hösten 2026",
+    name: presentationType === "social_event" ? "Parker" : "Pickla 101 · Hösten 2026",
     description: null,
     image_urls: ["https://example.test/parker-brunch.webp"],
     status: "active",
@@ -81,7 +82,7 @@ describe("Series presentation projection", () => {
     expect(screen.getByTestId("home-series-image")).not.toHaveClass("object-cover");
     expect(screen.getByText("Early Bird · 149 kr")).toBeInTheDocument();
     expect(screen.getByText("Första 10 platserna · sedan 199 kr")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Boka plats · 149 kr" }));
+    fireEvent.click(screen.getByRole("button", { name: "Boka Early Bird · 149 kr" }));
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
@@ -101,8 +102,14 @@ describe("Series presentation projection", () => {
     });
     expect(membership).toEqual({ label: "Medlemspris", finalPriceMinor: 12900, primary: "Medlemspris · 129 kr", context: "Play+" });
     expect(membership.primary).not.toContain("Early Bird");
+    expect(seriesBookingCta(membership, "Boka plats")).toBe("Boka plats · 129 kr");
     expect(frozenSeriesLinePriceLabel({ pricing_reason: "early_bird" })).toBe("Early Bird");
     expect(frozenSeriesLinePriceLabel({ pricing_reason: "membership_tier_pricing", membership_tier_name: "Play+" })).toBe("Medlemspris · Play+");
+  });
+
+  it("uses Format identity for social events without changing Course run names", () => {
+    expect(seriesCustomerTitle({ seriesName: "Parker", formatName: "Parker Brunch", presentationType: "social_event" })).toBe("Parker Brunch");
+    expect(seriesCustomerTitle({ seriesName: "Pickla 101 · Hösten 2026", formatName: "Pickla 101", presentationType: "course" })).toBe("Pickla 101 · Hösten 2026");
   });
 
   it("keeps the Course Home card compact and text-led", () => {

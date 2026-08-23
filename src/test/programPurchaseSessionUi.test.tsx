@@ -199,6 +199,54 @@ describe("program purchase request UI guard", () => {
     expect(ticketIcon.parentElement).not.toHaveClass("bg-slate-100", "rounded-xl");
   });
 
+  it("keeps the canonical social-event identity and frozen Early Bird price in cart", async () => {
+    const initialOrder = await mocks.fetchOrder();
+    const lines = [{
+      ...initialOrder.lines[0],
+      product_key: "parker_brunch",
+      product_name: "Parker Brunch",
+      unit_price_minor: 14900,
+      line_total_inc_vat_minor: 14900,
+      activity_series_id: "series-parker",
+      resolver_snapshot: {
+        purchase_kind: "course",
+        pricing_reason: "early_bird",
+        final_price_minor: 14900,
+        debug: { base_amount_sek: 199 },
+      },
+      product_snapshot: { base_price_sek: 199 },
+    }];
+    const seriesOrder = {
+      ...initialOrder,
+      lines,
+      course_access: {
+        activity_series_id: "series-parker",
+        name: "Parker",
+        format_name: "Parker Brunch",
+        presentation_type: "social_event",
+        start_date: "2026-09-05",
+        end_date: "2026-09-05",
+        start_time: "13:00",
+        end_time: "18:00",
+        total_sessions: 1,
+        venue_name: "Pickla Stockholm",
+      },
+    };
+    mocks.fetchOrder.mockResolvedValue(seriesOrder);
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: { id: "order-1", version: 1, currency: "SEK" }, lines, checkout_ready: true };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart();
+
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(screen.getByText("Early Bird")).toBeInTheDocument();
+    expect(screen.getByText("149 kr")).toBeInTheDocument();
+    expect(screen.getByText("199 kr")).toHaveClass("line-through");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Betala 149 kr" })).toBeEnabled());
+  });
+
   it("keeps guest contact details separate from pickup guidance", async () => {
     mocks.auth.user = null;
     const initialOrder = await mocks.fetchOrder();

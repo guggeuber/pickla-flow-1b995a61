@@ -117,7 +117,7 @@ describe("Course V1 customer flow", () => {
     mocks.fetchCourseDetail.mockResolvedValue({
       ...course,
       id: "parker-brunch",
-      name: "Parker Brunch",
+      name: "Parker",
       start_date: "2026-09-05",
       end_date: "2026-09-05",
       total_sessions: 1,
@@ -151,17 +151,50 @@ describe("Course V1 customer flow", () => {
     expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
     expect(screen.getByText("EVENT")).toBeInTheDocument();
     expect(screen.getByText(/5 september · 13:00–18:00/)).toBeInTheDocument();
-    expect(screen.getByText("40 platser kvar")).toBeInTheDocument();
+    expect(screen.getByText(/Pickla Stockholm · 40 platser kvar/)).toBeInTheDocument();
     expect(screen.getByText("Early Bird · 149 kr")).toBeInTheDocument();
     expect(screen.getByText("Första 10 platserna · sedan 199 kr")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Boka plats · 149 kr" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Boka Early Bird · 149 kr" })).toBeDisabled();
     expect(screen.getByTestId("series-detail-image")).toHaveAttribute("src", "https://example.test/parker-brunch.webp");
+    expect(screen.getByTestId("series-detail-image")).toHaveClass("w-full", "rounded-[24px]");
     expect(screen.getByTestId("series-detail-image")).not.toHaveClass("object-cover");
+    expect(screen.getByTestId("series-detail-image")).not.toHaveClass("-mx-5");
     expect(screen.queryByText(/1 tillfällen?/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Instruktör vid varje tillfälle/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Kursplatsen|plats på kursen/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "En annan vuxen" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Ett barn jag ansvarar för" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the normal social-event CTA when a lower member price beats Early Bird", async () => {
+    mocks.user = { id: "member-1" };
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      id: "parker-brunch",
+      name: "Parker",
+      total_sessions: 1,
+      image_urls: [],
+      format: { ...course.format, name: "Parker Brunch", presentation_type: "social_event", requires_instructor: false },
+      product: { ...course.product, base_price_sek: 199 },
+      pricing: {
+        scope_type: "activity_series",
+        list_price_minor: 19900,
+        final_price_minor: 12900,
+        pricing_reason: "membership_tier_pricing",
+        sales_channel: "online",
+        checkout_label: "129 kr",
+        membership_tier_name: "Play+",
+        early_bird: { configured: true, active: true, applied: false, price_minor: 14900, slots: 10, remaining: 7 },
+      },
+      capacity: { capacity: 40, committed_count: 3, active_holds_count: 0, available_count: 37 },
+      sessions: [{ id: "parker-session", session_date: "2026-09-05", start_time: "13:00", end_time: "18:00", court_ids: [], requires_staffing: false, is_active: true, series_occurrence_index: 1 }],
+    });
+    renderCourse();
+
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(screen.getByText("Medlemspris · 129 kr")).toBeInTheDocument();
+    expect(screen.queryByText(/Early Bird · 149 kr/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Boka plats · 129 kr" })).toBeEnabled();
   });
 
   it("does not present the payer's member quote as another participant's price", async () => {
