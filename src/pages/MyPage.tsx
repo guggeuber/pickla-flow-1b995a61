@@ -35,7 +35,8 @@ import {
   fetchCommerceRegistrationManagement,
   type CommerceRegistrationManagementState,
 } from "@/lib/commerce";
-import { fetchMyCourses } from "@/lib/courses";
+import { useMyCourses } from "@/hooks/useMyCourses";
+import { useMySessionRegistrations, type MySessionRegistration } from "@/hooks/useMySessionRegistrations";
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
@@ -97,30 +98,6 @@ type MyEventRegistration = {
   events: MyEventSummary | null;
 };
 
-type MyActivitySessionSummary = {
-  id: string;
-  name: string | null;
-  session_type: string | null;
-  session_date: string | null;
-  start_time: string | null;
-  end_time: string | null;
-  venue_id: string | null;
-  venues?: { name: string | null; slug: string | null } | null;
-};
-
-type MySessionRegistration = {
-  id: string;
-  venue_id: string | null;
-  activity_session_id: string;
-  session_date: string;
-  user_id: string;
-  status: string | null;
-  price_paid_sek: number | null;
-  stripe_session_id: string | null;
-  created_at: string | null;
-  activity_sessions: MyActivitySessionSummary | null;
-};
-
 type MyReceiptItem = {
   id: string;
   type: string;
@@ -161,25 +138,6 @@ function usePlayerProfile() {
         .single();
       if (error) throw error;
       return data;
-    },
-  });
-}
-
-function useMySessionRegistrations() {
-  const { user } = useAuth();
-  return useQuery<MySessionRegistration[]>({
-    queryKey: ["my-session-registrations", user?.id],
-    enabled: !!user,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("session_registrations")
-        .select("id, venue_id, activity_session_id, session_date, user_id, status, price_paid_sek, stripe_session_id, created_at, activity_sessions(id, name, session_type, session_date, start_time, end_time, venue_id, venues(name, slug))")
-        .eq("user_id", user!.id)
-        .neq("status", "cancelled")
-        .order("session_date", { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      return (data || []) as unknown as MySessionRegistration[];
     },
   });
 }
@@ -2460,11 +2418,7 @@ const MyPage = () => {
   const { data: profile } = usePlayerProfile();
   const { data: bookings } = useMyBookings();
   const { data: sessionRegistrations } = useMySessionRegistrations();
-  const { data: myCourses } = useQuery({
-    queryKey: ["my-courses", user?.id],
-    queryFn: fetchMyCourses,
-    enabled: Boolean(user),
-  });
+  const { data: myCourses } = useMyCourses();
   const ownedSeries = myCourses?.items || [];
   const ownsNonCourseSeries = ownedSeries.some((owned) => seriesPresentation(owned.series.presentation_type).type !== "course");
   const { data: eventRegistrations } = useMyEventRegistrations();

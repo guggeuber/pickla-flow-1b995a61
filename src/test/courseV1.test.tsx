@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   saveSeriesMemberPricing: vi.fn(),
   removeSeriesMemberPricing: vi.fn(),
   saveSeriesEarlyBird: vi.fn(),
+  shareOrCopy: vi.fn(),
 }));
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
@@ -48,6 +49,7 @@ vi.mock("@/lib/commerce", () => ({
   formatCommerceMoney: (minor: number) => `${Math.round(minor / 100).toLocaleString("sv-SE")} kr`,
 }));
 vi.mock("@/lib/entryResolver", () => ({ preserveIntendedRoute: vi.fn() }));
+vi.mock("@/lib/share", () => ({ shareOrCopy: mocks.shareOrCopy }));
 
 const course = {
   id: "series-1", venue_id: "venue-1", format_id: "format-1", name: "Pickla 101 · Höst 2026",
@@ -64,6 +66,7 @@ const course = {
 
 beforeEach(() => {
   mocks.fetchSeriesMemberPricing.mockResolvedValue({ series: [] });
+  mocks.shareOrCopy.mockResolvedValue("shared");
 });
 
 function wrapper(initial = "/course/series-1?v=pickla-arena-sthlm") {
@@ -195,6 +198,32 @@ describe("Course V1 customer flow", () => {
     expect(screen.getByText("Medlemspris · 129 kr")).toBeInTheDocument();
     expect(screen.queryByText(/Early Bird · 149 kr/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Boka plats · 129 kr" })).toBeEnabled();
+  });
+
+  it("shows durable ownership and canonical sharing without reselling an owned social event", async () => {
+    mocks.user = { id: "owner-1" };
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      id: "parker-brunch",
+      name: "Parker",
+      customer_has_commitment: true,
+      total_sessions: 1,
+      format: { ...course.format, name: "Parker Brunch", presentation_type: "social_event", requires_instructor: false },
+      product: { ...course.product, base_price_sek: 199 },
+      capacity: { capacity: 40, committed_count: 1, active_holds_count: 0, available_count: 39 },
+      sessions: [{ id: "parker-session", session_date: "2026-09-05", start_time: "13:00", end_time: "18:00", court_ids: [], requires_staffing: false, is_active: true, series_occurrence_index: 1 }],
+    });
+    renderCourse();
+
+    expect(await screen.findByText("Du har en plats")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Visa" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Boka plats/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dela Parker Brunch" }));
+    await waitFor(() => expect(mocks.shareOrCopy).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Parker Brunch",
+      url: "http://localhost:3000/course/parker-brunch?v=pickla-arena-sthlm",
+      copyText: "http://localhost:3000/course/parker-brunch?v=pickla-arena-sthlm",
+    })));
   });
 
   it("does not present the payer's member quote as another participant's price", async () => {

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Check, Loader2, Share2 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
@@ -27,6 +28,8 @@ import { fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/cou
 import { inheritedEventImages } from "@/lib/eventMedia";
 import { SeriesRegistrationCard } from "@/components/series/SeriesRegistrationCard";
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
+import { shareOrCopy } from "@/lib/share";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 
 const PAGE_BG = "#fffaf7";
@@ -897,6 +900,16 @@ export default function TodayPage() {
     }
     navigate(featuredItem.href);
   };
+  const shareOwnedSeries = async (item: MyCourseItem) => {
+    const title = seriesCustomerTitle({
+      seriesName: item.series.name,
+      formatName: item.series.format_name,
+      presentationType: item.series.presentation_type,
+    });
+    const path = `/course/${encodeURIComponent(item.series.id)}?v=${encodeURIComponent(slug)}`;
+    const result = await shareOrCopy({ title, text: title, url: canonicalAppUrl(path), copyText: canonicalAppUrl(path) });
+    if (result === "copied") toast.success("Länk kopierad");
+  };
 
   return (
     <div className="min-h-[100dvh] pb-10 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
@@ -953,12 +966,18 @@ export default function TodayPage() {
                 const occurrenceCopy = presentation.hideSingleOccurrenceCount && item.total_sessions === 1
                   ? null
                   : occurrenceProgressLabel(Math.min(item.completed_sessions + 1, item.total_sessions), item.total_sessions);
+                const destination = `/course/${item.series.id}?v=${encodeURIComponent(slug)}`;
                 return (
-                  <button type="button" onClick={() => navigate(`/course/${item.series.id}?v=${encodeURIComponent(slug)}`)} className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }}>
+                  <section className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="owned-series-home-card">
                     <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Nästa</p>
                     <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{customerTitle}</h2>
                     <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{[occurrenceCopy, item.next_session ? DateTime.fromISO(item.next_session.session_date).setLocale("sv").toFormat("cccc HH:mm").replace("00:00", String(item.next_session.start_time).slice(0, 5)) : null].filter(Boolean).join(" · ")}</p>
-                  </button>
+                    <p className="mt-3 flex items-center gap-1.5 text-sm font-bold"><Check className="h-4 w-4" /> Du har en plats</p>
+                    <div className="mt-4 flex gap-2">
+                      <button type="button" onClick={() => navigate(destination)} className="rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Visa</button>
+                      {presentation.type === "social_event" ? <button type="button" onClick={() => void shareOwnedSeries(item)} className="flex items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm font-black"><Share2 className="h-4 w-4" /> Dela</button> : null}
+                    </div>
+                  </section>
                 );
               })() : null}
               {todayListItems.length > 0 && (

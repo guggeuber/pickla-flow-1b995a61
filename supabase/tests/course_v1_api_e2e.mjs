@@ -909,8 +909,9 @@ pass("Series entitlement boundary", "non-covering Session entitlement leaves Ser
 const my = (await course("my", { token: payer.token })).payload;
 assert(my.items.length === 1 && my.items[0].total_sessions === 6, "My Page API did not project one Course");
 const homeMine = (await course(`home?v=${encodeURIComponent(`course-v1-${run}`)}`, { token: payer.token })).payload;
-assert(homeMine.mode === "next", "payer did not receive the managed Course projection");
-pass("My Course ownership", "participant truth stays separate from payer ownership");
+assert(homeMine.mode !== "next", "distant owned Series incorrectly displaced immediate Home discovery");
+assert(!(homeMine.mode === "registration" && homeMine.item?.id === seriesId), "owned Series was re-sold after its Home next-card was suppressed");
+pass("My Course ownership", "distant ownership remains on My Page and cannot be re-sold on Home");
 
 const originalSession = created.sessions[2];
 await course("session", { method: "PATCH", token: operator.token, body: { session_id: originalSession.id, session_date: "2026-09-24" } });

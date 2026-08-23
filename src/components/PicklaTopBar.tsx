@@ -1,5 +1,5 @@
-import { ArrowRight, Calendar, LogIn, Menu, ShoppingBag, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowRight, Calendar, Loader2, LogIn, Menu, ShoppingBag, X } from "lucide-react";
+import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
@@ -7,10 +7,7 @@ import { useVenueStatusBySlug } from "@/lib/venueStatus";
 import { useGlobalShopCartIndicator } from "@/hooks/useGlobalShopCartIndicator";
 import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { useMyBookings } from "@/hooks/useMyBookings";
-import { buildBookingHistory, formatBookingHistoryTime } from "@/lib/bookingHistory";
-import { getBookingChatResourceId, getBookingCourtLabel } from "@/lib/bookingGroups";
-import { BookingStatusChip } from "@/components/bookings/BookingStatusChip";
+import { useCustomerUpcoming } from "@/hooks/useCustomerUpcoming";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -22,11 +19,8 @@ export function PicklaTopBar({ slug = "pickla-arena-sthlm", venueName, showVenue
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
-  const { data: bookingRows = [] } = useMyBookings();
-  const upcomingBookings = useMemo(
-    () => buildBookingHistory(bookingRows).filter((booking) => booking.history_status === "upcoming"),
-    [bookingRows],
-  );
+  const { data: upcoming = [], isLoading: upcomingLoading } = useCustomerUpcoming(slug, open && Boolean(user));
+  const upcomingPreview = upcoming.slice(0, 3);
   const { venue, status } = useVenueStatusBySlug(slug);
   const shopCart = useGlobalShopCartIndicator(venue?.id);
   const resolvedVenueName = venueName || venue?.name?.replace("Pickla Arena ", "Pickla ") || "Pickla Stockholm";
@@ -60,16 +54,15 @@ export function PicklaTopBar({ slug = "pickla-arena-sthlm", venueName, showVenue
         <nav className="mx-auto w-full max-w-md flex-1 overflow-y-auto px-5 pt-5" aria-label="Huvudmeny">
           {[["Schema", `/today?v=${encodeURIComponent(slug)}`], ["Boka bana", `/book?v=${encodeURIComponent(slug)}`], ["Kurser", `/courses?v=${encodeURIComponent(slug)}`], ["Priser & medlemskap", `/prices?v=${encodeURIComponent(slug)}`], ["Butik", `/shop?v=${encodeURIComponent(slug)}`], ["Min sida", user ? `/my?v=${encodeURIComponent(slug)}` : `/auth?redirect=${encodeURIComponent("/my")}&v=${encodeURIComponent(slug)}`]].map(([label, href]) => <button key={label} type="button" onClick={() => go(href)} className="flex min-h-16 w-full items-center justify-between border-b border-black/10 px-1 text-left text-[21px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}><span>{label}</span><ArrowRight className="h-4 w-4 text-neutral-400" /></button>)}
           {user ? <section className="mt-7 space-y-2 pb-5">
-            <p className="px-1 text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>Mina bokningar</p>
-            {upcomingBookings.length ? upcomingBookings.map((booking) => {
-              const ref = String(booking.primary_booking_ref || booking.booking_ref || booking.id || getBookingChatResourceId(booking));
-              return <button key={getBookingChatResourceId(booking) || ref} type="button" onClick={() => go(`/my?booking=${encodeURIComponent(ref)}&v=${encodeURIComponent(slug)}`)} className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-left text-neutral-950">
+            <p className="px-1 text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>Kommande</p>
+            {upcomingLoading ? <div className="flex items-center gap-2 rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-[13px] text-neutral-500"><Loader2 className="h-4 w-4 animate-spin" /> Hämtar kommande…</div> : upcomingPreview.length ? upcomingPreview.map((item) => {
+              return <button key={item.id} type="button" onClick={() => go(item.destinationUrl)} className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-left text-neutral-950">
                 <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]"><Calendar className="h-5 w-5" /></span>
-                <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-bold" style={{ fontFamily: FONT_HEADING }}>{getBookingCourtLabel(booking)}</span><span className="block truncate text-[12px] text-neutral-500">{formatBookingHistoryTime(booking)}</span></span>
-                <BookingStatusChip status={booking.history_status} />
+                <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-bold" style={{ fontFamily: FONT_HEADING }}>{item.title}</span><span className="block truncate text-[12px] text-neutral-500">{item.timeLabel}</span><span className="mt-0.5 block truncate text-[10px] font-bold uppercase tracking-[0.08em] text-neutral-400">{item.typeLabel} · {item.stateLabel}</span></span>
                 <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
               </button>;
-            }) : <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-[13px] text-neutral-500">Inga kommande bokningar</div>}
+            }) : <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-[13px] text-neutral-500">Inget kommande just nu</div>}
+            {upcoming.length > 3 ? <button type="button" onClick={() => go(`/my?v=${encodeURIComponent(slug)}`)} className="w-full px-1 pt-2 text-left text-[12px] font-bold text-neutral-600 underline underline-offset-4">Visa alla på Min sida</button> : null}
           </section> : null}
         </nav>
         <div className="shrink-0 border-t border-black/10 bg-white">

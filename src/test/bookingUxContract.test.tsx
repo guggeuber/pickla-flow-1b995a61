@@ -7,6 +7,7 @@ import { BookingConversationIndicator } from "@/components/bookings/BookingConve
 const bookingPageSource = readFileSync("src/pages/BookingPage.tsx", "utf8");
 const myPageSource = readFileSync("src/pages/MyPage.tsx", "utf8");
 const topBarSource = readFileSync("src/components/PicklaTopBar.tsx", "utf8");
+const upcomingSource = readFileSync("src/lib/customerUpcoming.ts", "utf8");
 
 afterEach(cleanup);
 
@@ -40,12 +41,15 @@ describe("final booking UX contract", () => {
     expect(myPageSource).toContain("visible={bookingHasConversation(b, conversationRooms)}");
   });
 
-  it("keeps full ownership on My Page while the menu exposes only the upcoming quick preview", () => {
+  it("keeps full ownership on My Page while the menu exposes only three normalized upcoming items", () => {
     expect(myPageSource).toContain("useMyBookings()");
     expect(myPageSource).toContain("buildBookingHistory(");
     expect(myPageSource).toContain("BookingStatusChip");
-    expect(topBarSource).toContain("useMyBookings()");
-    expect(topBarSource).toContain('booking.history_status === "upcoming"');
+    expect(topBarSource).toContain("useCustomerUpcoming(slug");
+    expect(topBarSource).toContain("upcoming.slice(0, 3)");
+    expect(upcomingSource).toContain("buildBookingHistory");
+    expect(upcomingSource).toContain('source: "session_registration"');
+    expect(upcomingSource).toContain('source: "series_occurrence"');
     expect(topBarSource).not.toContain("pastBookings");
     expect(topBarSource).not.toContain("showPast");
     expect(topBarSource).toContain('["Min sida"');

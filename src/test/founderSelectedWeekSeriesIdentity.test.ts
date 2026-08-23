@@ -50,18 +50,20 @@ describe("owned Series customer identity", () => {
     expect(myPage).toContain("{course.access.label} · {course.access.detail}");
   });
 
-  it("documents the existing Home next-card rule without broadening it", () => {
+  it("limits owned-Series Home interruption to the established today/tomorrow horizon", () => {
     const coursesApi = read("supabase/functions/api-courses/index.ts");
-    expect(coursesApi).toContain(".order('activated_at', { ascending: false })");
-    expect(coursesApi).toContain("mine.find((item) => item.series?.venue_id === venueRow.id && item.commitment?.status === 'active' && item.next_session)");
-    expect(coursesApi).not.toContain("home_next_threshold");
+    expect(coursesApi).toContain("const homeHorizonEnd = homeNow.plus({ days: 1 }).endOf('day')");
+    expect(coursesApi).toContain("ends > homeNow && starts <= homeHorizonEnd");
+    expect(coursesApi).toContain("if (projected.customer_has_commitment) continue");
   });
 
-  it("keeps hamburger preview scoped to canonical court bookings only", () => {
+  it("uses one customer-upcoming read projection without merging ownership truth", () => {
     const topBar = read("src/components/PicklaTopBar.tsx");
-    expect(topBar).toContain("useMyBookings()");
-    expect(topBar).toContain('booking.history_status === "upcoming"');
-    expect(topBar).not.toContain("fetchMyCourses");
-    expect(topBar).not.toContain("useMySessionRegistrations");
+    const upcoming = read("src/lib/customerUpcoming.ts");
+    expect(topBar).toContain("useCustomerUpcoming(slug");
+    expect(topBar).toContain("upcoming.slice(0, 3)");
+    expect(upcoming).toContain("buildBookingHistory");
+    expect(upcoming).toContain('registration.series_commitment_id || registration.activity_sessions?.session_type === "course"');
+    expect(upcoming).toContain("item.commitment?.status === \"active\" && item.next_session");
   });
 });

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CalendarDays, Check, ChevronRight, Loader2, Users } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, Loader2, Share2, Users } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -11,6 +11,8 @@ import { formatCommerceMoney } from "@/lib/commerce";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { seriesBookingCta, seriesPricePresentation } from "@/lib/seriesCustomerPricing";
 import { occurrenceCountLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
+import { shareOrCopy } from "@/lib/share";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 
 type ParticipantType = "self" | "adult" | "dependent";
 
@@ -91,13 +93,22 @@ export default function CourseSeriesPage() {
     && (!requiresGuestDetails || (payerName.trim() && payerEmail.includes("@")))
     && (participantType !== "adult" || (participantName.trim() && participantEmail.includes("@")))
     && (participantType !== "dependent" || (user && childName.trim() && Number(childBirthYear) > 1900));
+  const shareSeries = async () => {
+    const path = `/course/${encodeURIComponent(course.id)}?v=${encodeURIComponent(venueSlug)}`;
+    const url = canonicalAppUrl(path);
+    const result = await shareOrCopy({ title, text: title, url, copyText: url });
+    if (result === "copied") toast.success("Länk kopierad");
+  };
 
   return (
     <div className="min-h-[100dvh] bg-white text-slate-950">
       <PicklaTopBar slug={venueSlug} background="#fff" />
       <main className="mx-auto w-full max-w-xl px-5 pb-40 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
         {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt={title} className={socialEvent ? "mb-5 block h-auto w-full rounded-[24px]" : "mb-6 block h-auto w-full rounded-[24px]"} data-testid="series-detail-image" /> : null}
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{presentation.label}</p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{presentation.label}</p>
+          {socialEvent ? <button type="button" onClick={() => void shareSeries()} className="flex items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm font-black" aria-label={`Dela ${title}`}><Share2 className="h-4 w-4" /> Dela</button> : null}
+        </div>
         <h1 className="mt-2 text-3xl font-black leading-tight">{title}</h1>
         {!socialEvent && (course.format?.description || course.description) ? <p className="mt-3 text-base leading-relaxed text-slate-600">{course.format?.description || course.description}</p> : null}
 
@@ -149,11 +160,10 @@ export default function CourseSeriesPage() {
       </main>
       <footer className="fixed inset-x-0 bottom-0 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
         <div className="mx-auto max-w-xl">
-          {course.customer_has_commitment ? <p className="mb-3 text-center text-sm font-bold">Du har redan en plats.</p> : null}
-          <button type="button" onClick={() => buy.mutate()} disabled={!ready || buy.isPending} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
+          {course.customer_has_commitment ? <div className="flex items-center gap-3"><p className="flex min-h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-4 text-sm font-black text-emerald-800"><Check className="h-5 w-5" /> Du har en plats</p><button type="button" onClick={() => navigate(`/my?v=${encodeURIComponent(venueSlug)}`)} className="min-h-14 rounded-2xl border border-black/15 px-5 text-sm font-black">Visa</button></div> : <button type="button" onClick={() => buy.mutate()} disabled={!ready || buy.isPending} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
             {buy.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
             {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : selectedParticipantPricePending ? "Fortsätt" : bookingCta}
-          </button>
+          </button>}
         </div>
       </footer>
     </div>

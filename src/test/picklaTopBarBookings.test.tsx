@@ -4,18 +4,29 @@ import { MemoryRouter } from "react-router-dom";
 
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 
-const { useMyBookingsMock } = vi.hoisted(() => ({ useMyBookingsMock: vi.fn() }));
+const { useCustomerUpcomingMock } = vi.hoisted(() => ({ useCustomerUpcomingMock: vi.fn() }));
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "user-1", email: "spelare@pickla.test" } }) }));
-vi.mock("@/hooks/useMyBookings", () => ({ useMyBookings: useMyBookingsMock }));
+vi.mock("@/hooks/useCustomerUpcoming", () => ({ useCustomerUpcoming: useCustomerUpcomingMock }));
 vi.mock("@/lib/venueStatus", () => ({
   useVenueStatusBySlug: () => ({ venue: { id: "venue-1", name: "Pickla Arena Stockholm" }, status: { open: true, venueStatusTone: "open" } }),
 }));
 vi.mock("@/hooks/useGlobalShopCartIndicator", () => ({ useGlobalShopCartIndicator: () => ({ count: 0, reference: null }) }));
 vi.mock("@/components/VenueStatusDrawer", () => ({ VenueStatusDrawer: () => null }));
 
-function booking(id: string, court: string, startTime: string, endTime: string, status = "confirmed") {
-  return { id, booking_ref: id, status, start_time: startTime, end_time: endTime, venue_courts: { name: court } };
+function upcoming(id: string, title: string, startsAt: string, source: "court_booking" | "session_registration" | "series_occurrence") {
+  return {
+    id,
+    source,
+    title,
+    typeLabel: source === "court_booking" ? "Bana" : source === "series_occurrence" ? "EVENT" : "Open Play",
+    stateLabel: source === "court_booking" ? "Bokad" : source === "series_occurrence" ? "Du har en plats" : "Anmäld",
+    startsAt,
+    endsAt: null,
+    timeLabel: startsAt,
+    venue: { name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
+    destinationUrl: source === "court_booking" ? `/my?booking=${id}` : source === "series_occurrence" ? `/course/${id}` : `/program/${id}`,
+  };
 }
 
 function renderMenu() {
@@ -27,13 +38,13 @@ describe("PicklaTopBar global navigation and booking ownership", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-11T12:00:00Z"));
-    useMyBookingsMock.mockReturnValue({ data: [] });
+    useCustomerUpcomingMock.mockReturnValue({ data: [] });
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    useMyBookingsMock.mockReset();
+    useCustomerUpcomingMock.mockReset();
   });
 
   it("uses the ratified six-row menu and restores the contextual account card", () => {
@@ -48,25 +59,27 @@ describe("PicklaTopBar global navigation and booking ownership", () => {
     expect(screen.queryByText("Min statistik")).not.toBeInTheDocument();
   });
 
-  it("shows only ongoing and future bookings, nearest first", () => {
-    useMyBookingsMock.mockReturnValue({
+  it("shows the three nearest customer-owned activities across canonical sources", () => {
+    useCustomerUpcomingMock.mockReturnValue({
       data: [
-        booking("later", "Bana senare", "2026-08-12T15:00:00Z", "2026-08-12T16:00:00Z"),
-        booking("completed", "Bana klar", "2026-08-10T10:00:00Z", "2026-08-10T11:00:00Z", "completed"),
-        booking("soon", "Bana snart", "2026-08-11T13:00:00Z", "2026-08-11T14:00:00Z"),
-        booking("cancelled", "Bana avbokad", "2026-08-11T15:00:00Z", "2026-08-11T16:00:00Z", "cancelled"),
-        booking("ongoing", "Bana pågår", "2026-08-11T11:30:00Z", "2026-08-11T12:30:00Z"),
+        upcoming("court", "Bana 1", "idag 13:00", "court_booking"),
+        upcoming("open-play", "Open Play", "idag 17:00", "session_registration"),
+        upcoming("parker", "Parker Brunch", "lör 13:00", "series_occurrence"),
+        upcoming("later", "Bana senare", "sön 18:00", "court_booking"),
       ],
     });
     renderMenu();
-    expect(screen.queryByText("Bana klar")).not.toBeInTheDocument();
-    expect(screen.queryByText("Bana avbokad")).not.toBeInTheDocument();
-    expect(screen.getAllByText(/^Bana (pågår|snart|senare)$/).map((node) => node.textContent)).toEqual(["Bana pågår", "Bana snart", "Bana senare"]);
+    expect(screen.getByText("Kommande")).toBeInTheDocument();
+    expect(screen.getByText("Bana 1")).toBeInTheDocument();
+    expect(screen.getByText("Open Play")).toBeInTheDocument();
+    expect(screen.getByText("Parker Brunch")).toBeInTheDocument();
+    expect(screen.queryByText("Bana senare")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Visa alla på Min sida" })).toBeInTheDocument();
   });
 
   it("uses the upcoming empty state", () => {
     renderMenu();
-    expect(screen.getByText("Inga kommande bokningar")).toBeInTheDocument();
+    expect(screen.getByText("Inget kommande just nu")).toBeInTheDocument();
   });
 
   it("centers the open and close controls in the same desktop max-width rail", () => {

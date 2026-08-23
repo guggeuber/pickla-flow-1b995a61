@@ -486,7 +486,24 @@ const coursesHandler = async (req: Request) => {
       });
       if (userId) {
         const mine = await listMyCourses(admin, userId);
-        const active = mine.find((item) => item.series?.venue_id === venueRow.id && item.commitment?.status === 'active' && item.next_session);
+        const homeNow = DateTime.now().setZone('Europe/Stockholm');
+        const homeHorizonEnd = homeNow.plus({ days: 1 }).endOf('day');
+        const active = mine
+          .filter((item) => item.series?.venue_id === venueRow.id && item.commitment?.status === 'active' && item.next_session)
+          .filter((item) => {
+            const next = item.next_session;
+            if (!next) return false;
+            const starts = DateTime.fromISO(`${next.session_date}T${String(next.start_time).slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+            const ends = DateTime.fromISO(`${next.session_date}T${String(next.end_time).slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+            return starts.isValid && ends.isValid && ends > homeNow && starts <= homeHorizonEnd;
+          })
+          .sort((a, b) => {
+            const aNext = a.next_session!;
+            const bNext = b.next_session!;
+            const aStart = DateTime.fromISO(`${aNext.session_date}T${String(aNext.start_time).slice(0, 8)}`, { zone: 'Europe/Stockholm' }).toMillis();
+            const bStart = DateTime.fromISO(`${bNext.session_date}T${String(bNext.start_time).slice(0, 8)}`, { zone: 'Europe/Stockholm' }).toMillis();
+            return aStart - bStart;
+          })[0];
         if (active) return jsonResponse({ mode: 'next', item: active }, 200, 0);
       }
       const now = DateTime.now().toUTC().toISO();
@@ -502,6 +519,7 @@ const coursesHandler = async (req: Request) => {
       if (error) throw new Error(error.message);
       for (const series of data || []) {
         const projected = await projectCourse(admin, series, userId);
+        if (projected.customer_has_commitment) continue;
         if (projected.capacity.available_count > 0) return jsonResponse({ mode: 'registration', item: projected }, 200, userId ? 0 : 5);
       }
       return jsonResponse({ mode: 'none', item: null }, 200, 5);
