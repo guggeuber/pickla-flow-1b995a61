@@ -77,6 +77,11 @@ export type CourseSeries = {
     description: string | null;
     base_price_sek: number;
     vat_rate: number;
+    status: string;
+    is_active: boolean;
+    scarcity_mode: "none" | "early_bird" | "capacity";
+    early_bird_price_minor: number | null;
+    early_bird_slots: number | null;
   };
   venue: { id: string; name: string; slug: string };
   sessions: CourseSession[];
@@ -242,6 +247,28 @@ export function previewCourseSeries(input: Record<string, unknown>) {
 
 export function updateCourseSeries(input: Record<string, unknown>) {
   return apiPatch<CourseDetail>("api-courses", "series", input);
+}
+
+export function saveSeriesEarlyBird(input: {
+  seriesId: string;
+  enabled: boolean;
+  priceSek?: number;
+  slots?: number;
+}) {
+  return apiPatch<{
+    series_id: string;
+    product: CourseSeries["product"];
+    preview: {
+      ordinary_price_sek: number;
+      early_bird_price_sek: number | null;
+      early_bird_slots: number | null;
+    };
+  }>("api-courses", "series-early-bird", {
+    series_id: input.seriesId,
+    enabled: input.enabled,
+    price_sek: input.enabled ? input.priceSek : null,
+    slots: input.enabled ? input.slots : null,
+  });
 }
 
 export function findSeriesGrantParticipants(venueId: string, search: string) {

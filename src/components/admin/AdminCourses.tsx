@@ -13,6 +13,7 @@ import {
   grantSeriesStaffPlace,
   previewCourseSeries,
   removeSeriesMemberPricing,
+  saveSeriesEarlyBird,
   saveSeriesMemberPricing,
   type CourseFormat,
   type CourseResourcePreviewRow,
@@ -139,6 +140,93 @@ function SeriesMemberPricingEditor({ venueId, item }: { venueId: string; item?: 
     </div>
     <div className="mt-2 grid gap-2">
       {item.tiers.length ? item.tiers.map((tier) => <SeriesMemberPriceRow key={tier.tier.id} venueId={venueId} product={item.product!} pricing={tier} />) : <p className="text-xs text-muted-foreground">Inga aktiva medlemsnivåer.</p>}
+    </div>
+  </div>;
+}
+
+function SeriesEarlyBirdEditor({ venueId, series }: { venueId: string; series: CourseSeries }) {
+  const queryClient = useQueryClient();
+  const configured = series.product.scarcity_mode === "early_bird";
+  const [enabled, setEnabled] = useState(configured);
+  const [price, setPrice] = useState(String(series.product.early_bird_price_minor == null ? "" : series.product.early_bird_price_minor / 100));
+  const [slots, setSlots] = useState(String(series.product.early_bird_slots ?? ""));
+
+  useEffect(() => {
+    setEnabled(configured);
+    setPrice(String(series.product.early_bird_price_minor == null ? "" : series.product.early_bird_price_minor / 100));
+    setSlots(String(series.product.early_bird_slots ?? ""));
+  }, [configured, series.product.early_bird_price_minor, series.product.early_bird_slots]);
+
+  const save = useMutation({
+    mutationFn: () => saveSeriesEarlyBird({
+      seriesId: series.id,
+      enabled,
+      priceSek: Number(price),
+      slots: Number(slots),
+    }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-courses", venueId] }),
+        queryClient.invalidateQueries({ queryKey: ["series-member-pricing", venueId] }),
+      ]);
+      toast.success(enabled ? "Early Bird är sparat" : "Early Bird är avstängt");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const numericPrice = Number(price);
+  const numericSlots = Number(slots);
+  const invalid = enabled && (
+    !Number.isFinite(numericPrice)
+    || numericPrice <= 0
+    || numericPrice >= Number(series.product.base_price_sek || 0)
+    || !Number.isInteger(numericSlots)
+    || numericSlots < 1
+    || numericSlots > series.capacity.capacity
+  );
+  const unchanged = enabled === configured
+    && (!enabled || (
+      Math.round(numericPrice * 100) === Number(series.product.early_bird_price_minor)
+      && numericSlots === Number(series.product.early_bird_slots)
+    ));
+
+  return <div className="mt-3 rounded-xl border border-border bg-background p-3" data-testid="series-early-bird">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <p className="text-xs font-black uppercase tracking-wider">Early Bird</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">Första vinnande betalda platserna</p>
+      </div>
+      <label className="inline-flex items-center gap-2 text-xs font-bold">
+        <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+        Early Bird
+      </label>
+    </div>
+    {enabled ? <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+      <label htmlFor={`series-early-bird-price-${series.id}`} className="grid gap-1 text-xs font-semibold">
+        Early Bird-pris
+        <span className="relative">
+          <input id={`series-early-bird-price-${series.id}`} className={`${inputClass} w-full pr-8`} inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">kr</span>
+        </span>
+      </label>
+      <label htmlFor={`series-early-bird-slots-${series.id}`} className="grid gap-1 text-xs font-semibold">
+        Första
+        <span className="relative">
+          <input id={`series-early-bird-slots-${series.id}`} className={`${inputClass} w-full pr-16`} inputMode="numeric" value={slots} onChange={(event) => setSlots(event.target.value)} />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">platser</span>
+        </span>
+      </label>
+      <button type="button" onClick={() => save.mutate()} disabled={save.isPending || invalid || unchanged} className="inline-flex h-10 items-center justify-center gap-1 rounded-lg border border-border px-3 text-xs font-bold disabled:opacity-40">
+        {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Spara
+      </button>
+    </div> : <button type="button" onClick={() => save.mutate()} disabled={save.isPending || unchanged} className="mt-3 inline-flex h-10 items-center justify-center gap-1 rounded-lg border border-border px-3 text-xs font-bold disabled:opacity-40">
+      {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Spara
+    </button>}
+    <div className="mt-3 grid gap-1 border-t border-border pt-3 text-xs">
+      <p className="flex justify-between gap-3"><span className="text-muted-foreground">Ordinarie</span><strong>{formatSek(series.product.base_price_sek)}</strong></p>
+      {enabled && !invalid ? <>
+        <p className="flex justify-between gap-3"><span className="text-muted-foreground">Early Bird</span><strong>{formatSek(numericPrice)}</strong></p>
+        <p className="flex justify-between gap-3"><span className="text-muted-foreground">Första</span><strong>{numericSlots} platser</strong></p>
+      </> : null}
     </div>
   </div>;
 }
@@ -518,6 +606,8 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
                     <button type="button" onClick={() => openGrant(series.id)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-border px-3 text-xs font-bold"><Gift className="h-3.5 w-3.5" />Ge plats</button>
                   </div>}
                 </div>
+
+                {series.product ? <SeriesEarlyBirdEditor venueId={venueId} series={series} /> : null}
 
                 {memberPricing.isLoading ? <p className="mt-3 text-xs text-muted-foreground">Hämtar medlemspriser…</p> : null}
                 {memberPricing.isError ? <p className="mt-3 text-xs text-destructive">Medlemspriserna kunde inte hämtas.</p> : null}

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   cancelSeriesStaffPlace: vi.fn(),
   saveSeriesMemberPricing: vi.fn(),
   removeSeriesMemberPricing: vi.fn(),
+  saveSeriesEarlyBird: vi.fn(),
 }));
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
@@ -40,6 +41,7 @@ vi.mock("@/lib/courses", () => ({
   cancelSeriesStaffPlace: mocks.cancelSeriesStaffPlace,
   saveSeriesMemberPricing: mocks.saveSeriesMemberPricing,
   removeSeriesMemberPricing: mocks.removeSeriesMemberPricing,
+  saveSeriesEarlyBird: mocks.saveSeriesEarlyBird,
 }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="topbar" /> }));
 vi.mock("@/lib/commerce", () => ({
@@ -174,6 +176,33 @@ describe("Course V1 customer flow", () => {
 });
 
 describe("Course V1 Admin", () => {
+  it("configures product-owned Series Early Bird and shows the compact preview", async () => {
+    mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
+    mocks.saveSeriesEarlyBird.mockResolvedValue({
+      series_id: course.id,
+      product: { ...course.product, scarcity_mode: "early_bird", early_bird_price_minor: 129500, early_bird_slots: 3 },
+      preview: { ordinary_price_sek: 1495, early_bird_price_sek: 1295, early_bird_slots: 3 },
+    });
+
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+
+    const section = await screen.findByTestId("series-early-bird");
+    fireEvent.click(within(section).getByRole("checkbox", { name: "Early Bird" }));
+    fireEvent.change(within(section).getByLabelText(/Early Bird-pris/), { target: { value: "1295" } });
+    fireEvent.change(within(section).getByLabelText(/Första/), { target: { value: "3" } });
+    expect(within(section).getByText("1 295 kr")).toBeInTheDocument();
+    expect(within(section).getByText("3 platser")).toBeInTheDocument();
+    fireEvent.click(within(section).getByRole("button", { name: "Spara" }));
+
+    await waitFor(() => expect(mocks.saveSeriesEarlyBird).toHaveBeenCalledWith({
+      seriesId: "series-1",
+      enabled: true,
+      priceSek: 1295,
+      slots: 3,
+    }));
+  });
+
   it("edits the canonical Series product member price and renders the server preview", async () => {
     mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
     mocks.fetchSeriesMemberPricing.mockResolvedValue({

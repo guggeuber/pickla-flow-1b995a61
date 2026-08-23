@@ -44,6 +44,9 @@ type CommerceProduct = CommerceProductLike & {
   product_kind?: string | null;
   name: string;
   description?: string | null;
+  scarcity_mode?: string | null;
+  early_bird_price_minor?: number | string | null;
+  early_bird_slots?: number | string | null;
   commerce_kind: string;
   fulfillment_type: string;
   resolver_rules?: Record<string, unknown> | null;
@@ -101,6 +104,8 @@ type DeskFulfillmentItem = {
 const DESK_PICKUP_INSTRUCTION = 'Hämtas vid disken.';
 const FIRST_VISIT_STRIPE_EXPIRY_SECONDS = 31 * 60;
 const FIRST_VISIT_HOLD_TTL_SECONDS = 32 * 60;
+const SERIES_EARLY_BIRD_STRIPE_EXPIRY_SECONDS = 31 * 60;
+const SERIES_EARLY_BIRD_HOLD_TTL_SECONDS = 32 * 60;
 
 function appendStripeFormValue(body: URLSearchParams, key: string, value: unknown) {
   if (value === undefined || value === null) return;
@@ -576,7 +581,7 @@ async function createCourseCart(
     throw new Error('Kursanmälan är stängd.');
   }
   const { data: product, error: productError } = await admin.from('access_products')
-    .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, base_price_sek, vat_rate, resolver_rules, status, is_active, commerce_enabled')
+    .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, resolver_rules, status, is_active, commerce_enabled')
     .eq('id', series.access_product_id)
     .eq('venue_id', series.venue_id)
     .eq('product_kind', 'series_access')
@@ -885,7 +890,7 @@ async function resolveLines(
   const productIds = lines.map((line) => line.product_id).filter(Boolean);
   const { data: products, error } = await admin
     .from('access_products')
-    .select('id, venue_id, product_key, product_kind, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
+    .select('id, venue_id, product_key, product_kind, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
     .in('id', productIds);
   if (error) throw new Error(error.message);
   const productsById = new Map<string, CommerceProduct>(
@@ -971,6 +976,7 @@ async function resolveLines(
           effectiveAt: now.toISO(),
           accessProduct: product,
           series,
+          applyEarlyBird: options.applyEarlyBird !== false,
         });
         unitPriceMinor = Math.round(Number(decision.finalAmountSek || 0) * 100);
         resolverSnapshot = {
@@ -995,6 +1001,7 @@ async function resolveLines(
           activity_series_id: line.activity_series_id,
           series_start_date: series.start_date,
           series_fill: decision.seriesFill,
+          early_bird_remaining: (decision.debug?.early_bird as { remaining?: number | null } | undefined)?.remaining ?? null,
           quote_changed: false,
           debug: decision.debug,
         };
@@ -1112,6 +1119,18 @@ async function assertParticipationCapacityAvailable(admin: AdminClient, order: a
   }
 }
 
+type ParticipationPricingHold = {
+  ok?: boolean;
+  hold_id?: string;
+  final_price_minor?: number;
+  applied_price_type?: string;
+  early_bird_remaining?: number | null;
+  quote_changed?: boolean;
+  available_count?: number | null;
+  series_fill_count?: number;
+  early_bird_allocated_count?: number;
+};
+
 async function acquireParticipationHold(
   admin: AdminClient,
   order: any,
@@ -1120,7 +1139,7 @@ async function acquireParticipationHold(
   quotedResolvedLine: any,
   userId: string | null,
   customerId: string | null,
-) {
+): Promise<ParticipationPricingHold> {
   if (line.activity_series_id) {
     const { data: series, error: seriesError } = await admin.from('activity_series')
       .select('id, start_date')
@@ -1129,17 +1148,18 @@ async function acquireParticipationHold(
       .eq('series_type', 'course')
       .maybeSingle();
     if (seriesError || !series) throw new Error(seriesError?.message || 'Course not found');
-    const { data, error } = await admin.rpc('acquire_capacity_hold', {
+    const { data, error } = await admin.rpc('acquire_series_pricing_hold', {
       p_venue_id: order.venue_id,
-      p_scope_type: 'activity_series',
-      p_scope_id: line.activity_series_id,
-      p_session_date: series.start_date,
+      p_activity_series_id: line.activity_series_id,
       p_user_id: userId,
       p_customer_id: customerId,
       p_source_type: 'commerce_order',
       p_source_id: line.id,
       p_idempotency_key: `commerce:${order.id}:${line.id}:v${order.version}`,
-      p_ttl_seconds: 1800,
+      p_regular_price_minor: Number(regularResolvedLine?.unit_price_minor || 0),
+      p_regular_price_type: String(regularResolvedLine?.resolver_snapshot?.pricing_reason || 'series_product_base_price'),
+      p_quoted_price_minor: Number(quotedResolvedLine?.unit_price_minor || 0),
+      p_ttl_seconds: SERIES_EARLY_BIRD_HOLD_TTL_SECONDS,
       p_metadata: {
         commerce_order_id: order.id,
         commerce_order_line_id: line.id,
@@ -1147,15 +1167,9 @@ async function acquireParticipationHold(
       },
     }).maybeSingle();
     if (error) throw new Error(error.message);
-    const hold = (data || {}) as { ok?: boolean; hold_id?: string };
+    const hold = (data || {}) as ParticipationPricingHold;
     if (!hold.ok || !hold.hold_id) throw new Error('Kursen är fullbokad.');
-    return {
-      ...hold,
-      final_price_minor: Number(regularResolvedLine?.unit_price_minor || 0),
-      applied_price_type: String(regularResolvedLine?.resolver_snapshot?.pricing_reason || 'series_product_base_price'),
-      early_bird_remaining: null,
-      quote_changed: false,
-    };
+    return hold;
   }
   const regularPriceType = String(regularResolvedLine?.resolver_snapshot?.pricing_reason || 'regular_price');
   const quotedPriceType = String(quotedResolvedLine?.resolver_snapshot?.pricing_reason || regularPriceType);
@@ -1179,14 +1193,7 @@ async function acquireParticipationHold(
     },
   }).maybeSingle();
   if (error) throw new Error(error.message);
-  const hold = (data || {}) as {
-    ok?: boolean;
-    hold_id?: string;
-    final_price_minor?: number;
-    applied_price_type?: string;
-    early_bird_remaining?: number | null;
-    quote_changed?: boolean;
-  };
+  const hold = (data || {}) as ParticipationPricingHold;
   if (!hold.ok || !hold.hold_id) throw new Error('Platsen hann tas — välj ett annat pass.');
   return hold;
 }
@@ -2129,6 +2136,17 @@ const commerceHandler = async (req: Request) => {
           }, 409, 0);
         }
         if (resolvedParticipation) {
+          const previousDebug = resolvedParticipation.resolver_snapshot?.debug || {};
+          const earlyBirdDebug = previousDebug.early_bird || {};
+          const nextSeriesFill = {
+            ...(resolvedParticipation.resolver_snapshot?.series_fill || {}),
+            fill_count: pricingHold.series_fill_count
+              ?? resolvedParticipation.resolver_snapshot?.series_fill?.fill_count
+              ?? null,
+            available_count: pricingHold.available_count
+              ?? resolvedParticipation.resolver_snapshot?.series_fill?.available_count
+              ?? null,
+          };
           resolvedParticipation.capacity_hold_id = holdId;
           resolvedParticipation.unit_price_minor = Number(pricingHold.final_price_minor || 0);
           resolvedParticipation.resolver_snapshot = {
@@ -2137,7 +2155,22 @@ const commerceHandler = async (req: Request) => {
             applied_price_type: pricingHold.applied_price_type || resolvedParticipation.resolver_snapshot?.pricing_reason,
             final_price_minor: Number(pricingHold.final_price_minor || 0),
             early_bird_remaining: pricingHold.early_bird_remaining ?? null,
+            series_fill: nextSeriesFill,
             quote_changed: false,
+            debug: {
+              ...previousDebug,
+              pricing_reason: pricingHold.applied_price_type || previousDebug.pricing_reason,
+              pricing_source: pricingHold.applied_price_type || previousDebug.pricing_source,
+              series_fill: nextSeriesFill,
+              early_bird: {
+                ...earlyBirdDebug,
+                applied: pricingHold.applied_price_type === 'early_bird',
+                remaining: pricingHold.early_bird_remaining ?? earlyBirdDebug.remaining ?? null,
+                allocated_count: pricingHold.early_bird_allocated_count
+                  ?? earlyBirdDebug.allocated_count
+                  ?? null,
+              },
+            },
           };
         }
       }
@@ -2222,6 +2255,8 @@ const commerceHandler = async (req: Request) => {
           },
           ...(checkoutAppliedPriceType === 'first_visit_offer'
             ? { expires_at: Math.floor(Date.now() / 1000) + FIRST_VISIT_STRIPE_EXPIRY_SECONDS }
+            : checkoutAppliedPriceType === 'early_bird' && Boolean(participation[0]?.activity_series_id)
+              ? { expires_at: Math.floor(Date.now() / 1000) + SERIES_EARLY_BIRD_STRIPE_EXPIRY_SECONDS }
             : {}),
           success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${cancelPath}`,

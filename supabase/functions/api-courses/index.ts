@@ -242,7 +242,7 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
       ? admin.from('activity_formats').select('id, name, description, full_description, image_urls, age_group, level, requires_instructor, presentation_type').eq('id', series.format_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     series.access_product_id
-      ? admin.from('access_products').select('id, product_key, name, description, base_price_sek, vat_rate, status, product_kind').eq('id', series.access_product_id).maybeSingle()
+      ? admin.from('access_products').select('id, venue_id, product_key, name, description, base_price_sek, vat_rate, status, is_active, product_kind, scarcity_mode, early_bird_price_minor, early_bird_slots').eq('id', series.access_product_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     admin.from('venues').select('id, name, slug').eq('id', series.venue_id).maybeSingle(),
     admin.from('activity_sessions')
@@ -655,6 +655,82 @@ const coursesHandler = async (req: Request) => {
         if (existing.venue_id !== schedule.venueId) return errorResponse('Course not found', 404);
       }
       return jsonResponse(await previewCourseResourceSchedule(admin, schedule, excludeSeriesId), 200, 0);
+    }
+
+    if (req.method === 'PATCH' && path === 'series-early-bird') {
+      const body = await req.json();
+      const series = await managedSellableSeries(admin, String(body.series_id || ''));
+      await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
+      if (!['draft', 'active', 'paused'].includes(String(series.status || ''))) {
+        return errorResponse('Early Bird kan inte ändras för en avslutad serie.', 409);
+      }
+      const { data: product, error: productError } = await admin.from('access_products')
+        .select('id, venue_id, product_key, product_kind, base_price_sek, status, is_active')
+        .eq('id', series.access_product_id)
+        .eq('venue_id', series.venue_id)
+        .maybeSingle();
+      if (productError) throw new Error(productError.message);
+      if (!product || product.product_kind !== 'series_access' || product.status !== 'active' || product.is_active !== true) {
+        return errorResponse('Seriens prissättningsprodukt är inte aktiv.', 409);
+      }
+
+      const enabled = body.enabled === true;
+      let updates: Record<string, unknown> = {
+        scarcity_mode: 'none',
+        early_bird_price_minor: null,
+        early_bird_slots: null,
+      };
+      if (enabled) {
+        const priceSek = Number(body.price_sek);
+        const priceMinor = Math.round(priceSek * 100);
+        const requestedSlots = Number(body.slots);
+        const slots = requestedSlots;
+        const basePriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
+        const { data: seriesRow, error: seriesError } = await admin.from('activity_series')
+          .select('capacity')
+          .eq('id', series.id)
+          .eq('venue_id', series.venue_id)
+          .maybeSingle();
+        if (seriesError) throw new Error(seriesError.message);
+        const capacity = Math.floor(Number(seriesRow?.capacity || 0));
+        if (!Number.isFinite(priceSek) || priceMinor <= 0) {
+          return errorResponse('Early Bird-priset måste vara större än 0 kr.', 400);
+        }
+        if (priceMinor >= basePriceMinor) {
+          return errorResponse('Early Bird-priset måste vara lägre än ordinarie pris.', 400);
+        }
+        if (!Number.isInteger(requestedSlots) || slots < 1) {
+          return errorResponse('Early Bird måste omfatta ett helt antal platser, minst en.', 400);
+        }
+        if (capacity < 1 || slots > capacity) {
+          return errorResponse('Antalet Early Bird-platser får inte överstiga seriens kapacitet.', 400);
+        }
+        updates = {
+          scarcity_mode: 'early_bird',
+          early_bird_price_minor: priceMinor,
+          early_bird_slots: slots,
+        };
+      }
+      const { data: updated, error: updateError } = await admin.from('access_products')
+        .update(updates)
+        .eq('id', product.id)
+        .eq('venue_id', series.venue_id)
+        .eq('product_kind', 'series_access')
+        .select('id, venue_id, product_key, name, base_price_sek, scarcity_mode, early_bird_price_minor, early_bird_slots')
+        .maybeSingle();
+      if (updateError) throw new Error(updateError.message);
+      if (!updated) return errorResponse('Seriens prissättningsprodukt kunde inte uppdateras.', 409);
+      return jsonResponse({
+        series_id: series.id,
+        product: updated,
+        preview: {
+          ordinary_price_sek: Number(updated.base_price_sek || 0),
+          early_bird_price_sek: updated.early_bird_price_minor == null
+            ? null
+            : Number(updated.early_bird_price_minor) / 100,
+          early_bird_slots: updated.early_bird_slots == null ? null : Number(updated.early_bird_slots),
+        },
+      }, 200, 0);
     }
 
     if (req.method === 'POST' && path === 'series') {

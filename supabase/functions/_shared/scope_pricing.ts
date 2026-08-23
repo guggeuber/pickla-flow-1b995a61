@@ -14,6 +14,9 @@ type AccessProductInput = {
   product_key: string;
   product_kind?: string | null;
   base_price_sek?: number | string | null;
+  scarcity_mode?: string | null;
+  early_bird_price_minor?: number | string | null;
+  early_bird_slots?: number | string | null;
   resolver_rules?: Record<string, unknown> | null;
 };
 
@@ -46,6 +49,7 @@ export type ActivitySeriesPricingInput = CommonPricingInput & {
   scopeType: 'activity_series';
   scopeId: string;
   series?: any | null;
+  applyEarlyBird?: boolean;
 };
 
 export type ScopeAwarePricingInput = ActivitySessionPricingInput | ActivitySeriesPricingInput;
@@ -132,7 +136,7 @@ async function resolveSeriesPricingDecision(input: ActivitySeriesPricingInput): 
     ? input.accessProduct
     : (await input.client
       .from('access_products')
-      .select('id, venue_id, product_key, product_kind, base_price_sek, resolver_rules')
+      .select('id, venue_id, product_key, product_kind, base_price_sek, scarcity_mode, early_bird_price_minor, early_bird_slots, resolver_rules')
       .eq('id', series.access_product_id)
       .eq('venue_id', input.venueId)
       .maybeSingle()).data;
@@ -187,6 +191,36 @@ async function resolveSeriesPricingDecision(input: ActivitySeriesPricingInput): 
     }
   }
 
+  const earlyBirdPriceMinor = Math.round(Number(product.early_bird_price_minor || 0));
+  const earlyBirdSlots = Math.floor(Number(product.early_bird_slots || 0));
+  const earlyBirdConfigured = product.scarcity_mode === 'early_bird';
+  if (earlyBirdConfigured && (
+    earlyBirdPriceMinor <= 0
+    || earlyBirdSlots < 1
+    || earlyBirdPriceMinor >= Math.round(baseAmountSek * 100)
+    || (fill.capacity != null && earlyBirdSlots > fill.capacity)
+  )) {
+    throw new Error('Series Early Bird configuration is invalid');
+  }
+  let earlyBirdAllocatedCount = 0;
+  let earlyBirdRemaining = 0;
+  let earlyBirdApplied = false;
+  if (earlyBirdConfigured) {
+    const { data: earlyBirdFillRows, error: earlyBirdFillError } = await input.client.rpc('series_early_bird_fill', {
+      p_venue_id: input.venueId,
+      p_activity_series_id: series.id,
+    });
+    if (earlyBirdFillError) throw new Error(earlyBirdFillError.message);
+    const earlyBirdFill = Array.isArray(earlyBirdFillRows) ? earlyBirdFillRows[0] : earlyBirdFillRows;
+    earlyBirdAllocatedCount = Number(earlyBirdFill?.fill_count || 0);
+    earlyBirdRemaining = Math.max(earlyBirdSlots - earlyBirdAllocatedCount, 0);
+    if (input.applyEarlyBird !== false && earlyBirdRemaining > 0 && earlyBirdPriceMinor < Math.round(finalAmountSek * 100)) {
+      finalAmountSek = roundSek(earlyBirdPriceMinor / 100);
+      pricingReason = 'early_bird';
+      earlyBirdApplied = true;
+    }
+  }
+
   const checkoutLabel = formatSek(finalAmountSek);
   const customerPresentation = activityCustomerPricePresentation({
     identifiedCustomer: Boolean(input.userId || input.customerId),
@@ -214,6 +248,18 @@ async function resolveSeriesPricingDecision(input: ActivitySeriesPricingInput): 
     access_decision: accessDecision,
     membership_id: membershipId,
     membership_tier_name: membershipTierName,
+    early_bird: {
+      configured: earlyBirdConfigured,
+      active: earlyBirdConfigured && earlyBirdRemaining > 0,
+      applied: earlyBirdApplied,
+      price_minor: earlyBirdConfigured ? earlyBirdPriceMinor : null,
+      slots: earlyBirdConfigured ? earlyBirdSlots : null,
+      allocated_count: earlyBirdAllocatedCount,
+      remaining: earlyBirdConfigured ? earlyBirdRemaining : null,
+      superseded_by: earlyBirdConfigured && !earlyBirdApplied && earlyBirdRemaining > 0
+        ? pricingReason
+        : null,
+    },
     effective_at: input.effectiveAt || new Date().toISOString(),
     series_fill: {
       capacity: fill.capacity,
@@ -223,7 +269,7 @@ async function resolveSeriesPricingDecision(input: ActivitySeriesPricingInput): 
       available_count: fill.availableCount,
     },
     entitlement_scope_support: 'series_purchase_entitlement_not_applied_without_commitment_funding_contract',
-    future_rules: ['series_early_bird', 'series_channel_price', 'series_promo'],
+    future_rules: ['series_channel_price', 'series_promo'],
   };
 
   return {

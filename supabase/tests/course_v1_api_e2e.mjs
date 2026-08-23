@@ -158,6 +158,10 @@ const failing = await createUser("payment", "fail");
 const seriesMember = await createUser("series-member");
 const sessionEntitled = await createUser("session-entitled");
 const parkerBuyer = await createUser("parker-buyer");
+const earlyBirdA = await createUser("early-bird-a");
+const earlyBirdB = await createUser("early-bird-b");
+const earlyBirdC = await createUser("early-bird-c");
+const earlyBirdD = await createUser("early-bird-d");
 await rest("venue_staff", "", { method: "POST", body: {
   venue_id: ids.venue,
   user_id: operator.id,
@@ -234,6 +238,15 @@ async function createSeries(options = {}) {
   assert(created.sessions.every((session) => session.closed_to_public === true && session.requires_staffing === true), "Course Sessions are not closed/staffed");
   await course("series", { method: "PATCH", token: operator.token, body: { series_id: created.series.id, status: "active" } });
   return created;
+}
+
+async function configureSeriesEarlyBird(seriesId, { priceSek, slots, expected } = {}) {
+  return course("series-early-bird", {
+    method: "PATCH",
+    token: operator.token,
+    expected,
+    body: { series_id: seriesId, enabled: true, price_sek: priceSek, slots },
+  });
 }
 
 const freePreview = await previewSeries();
@@ -637,6 +650,221 @@ assert(parkerMemberLine.series_commitment_id, "one-off member purchase did not c
 assert(parkerMemberReceipt.length === 1 && Number(parkerMemberReceipt[0].total_inc_vat_sek) === 169, "one-off member receipt did not use 169 kr");
 assert(parkerMemberLedger.length === 1 && parkerMemberLedger[0].amount_inc_vat_minor === 16900, "one-off member ledger did not use 169 kr");
 pass("One-off Series member pricing", "199 → 169; receipt and ledger preserve the frozen member price");
+
+const earlyBirdOneOff = (await course("series", {
+  method: "POST",
+  token: operator.token,
+  body: seriesBody({
+    name: "Series Early Bird · One-off",
+    startDate: "2028-01-10",
+    endDate: "2028-01-10",
+    totalSessions: 1,
+    capacity: 40,
+    priceSek: 199,
+    recurrenceDays: [1],
+    startTime: "13:00",
+    endTime: "18:00",
+    registrationOpensAt: "2026-01-01T00:00:00Z",
+    registrationClosesAt: "2028-01-10T10:30:00Z",
+  }),
+})).payload;
+await course("series", { method: "PATCH", token: operator.token, body: { series_id: earlyBirdOneOff.series.id, status: "active" } });
+await configureSeriesEarlyBird(earlyBirdOneOff.series.id, { priceSek: 199, slots: 1, expected: 400 });
+await configureSeriesEarlyBird(earlyBirdOneOff.series.id, { priceSek: 149, slots: 1.5, expected: 400 });
+await configureSeriesEarlyBird(earlyBirdOneOff.series.id, { priceSek: 149, slots: 41, expected: 400 });
+const configuredOneOff = (await configureSeriesEarlyBird(earlyBirdOneOff.series.id, { priceSek: 149, slots: 1 })).payload;
+assert(configuredOneOff.preview.ordinary_price_sek === 199 && configuredOneOff.preview.early_bird_price_sek === 149 && configuredOneOff.preview.early_bird_slots === 1, "Series Early Bird Admin preview is incorrect");
+
+const [earlyCartA, earlyCartB] = await Promise.all([
+  commerce("course-cart", { method: "POST", token: earlyBirdA.token, body: { series_id: earlyBirdOneOff.series.id, participant_type: "self" } }),
+  commerce("course-cart", { method: "POST", token: earlyBirdB.token, body: { series_id: earlyBirdOneOff.series.id, participant_type: "self" } }),
+]);
+const earlyCheckout = (cart, user, expected = [200, 409]) => commerce("checkout", {
+  method: "POST",
+  token: user.token,
+  expected,
+  body: {
+    token: cart.payload.cart_token,
+    expected_version: cart.payload.order.version,
+    journey_id: crypto.randomBytes(24).toString("hex"),
+    success_path: "/commerce/confirmed",
+    cancel_path: `/course/${earlyBirdOneOff.series.id}`,
+  },
+});
+const earlyConcurrent = await Promise.all([
+  earlyCheckout(earlyCartA, earlyBirdA),
+  earlyCheckout(earlyCartB, earlyBirdB),
+]);
+assert(earlyConcurrent.filter((result) => result.response.status === 200).length === 1, "final Series Early Bird slot had no winner");
+assert(earlyConcurrent.filter((result) => result.response.status === 409).length === 1, "final Series Early Bird slot was allocated twice");
+const earlyWinnerIndex = earlyConcurrent.findIndex((result) => result.response.status === 200);
+const earlyWinner = earlyConcurrent[earlyWinnerIndex].payload;
+const earlyWinnerUser = earlyWinnerIndex === 0 ? earlyBirdA : earlyBirdB;
+const earlyLoser = earlyConcurrent.find((result) => result.response.status === 409).payload;
+assert(earlyLoser.quote_changed === true && earlyLoser.pricing.final_price_minor === 19900, "losing concurrent checkout was not explicitly repriced to base");
+const earlyWinnerOrder = (await rest("commerce_orders", `id=eq.${earlyWinner.order_id}&select=id,version,stripe_session_id,total_inc_vat_minor`)).payload[0];
+const earlyWinnerLineBeforePayment = (await rest("commerce_order_lines", `commerce_order_id=eq.${earlyWinner.order_id}&select=id,unit_price_minor,resolver_snapshot`)).payload[0];
+assert(earlyWinnerOrder.total_inc_vat_minor === 14900 && earlyWinnerLineBeforePayment.unit_price_minor === 14900, "winning Series checkout did not freeze 149 kr");
+assert(earlyWinnerLineBeforePayment.resolver_snapshot?.scope_type === "activity_series" && earlyWinnerLineBeforePayment.resolver_snapshot?.pricing_reason === "early_bird", "Series Early Bird snapshot lacks canonical scope/reason");
+const earlyPaidEvent = checkoutEvent({
+  id: `evt_series_early_one_${run}`,
+  sessionId: earlyWinnerOrder.stripe_session_id,
+  orderId: earlyWinnerOrder.id,
+  version: earlyWinnerOrder.version,
+  email: earlyWinnerUser.email,
+  amount: 14900,
+});
+await webhook(earlyPaidEvent);
+await webhook(earlyPaidEvent);
+const earlyWinnerLine = (await rest("commerce_order_lines", `id=eq.${earlyWinnerLineBeforePayment.id}&select=series_commitment_id`)).payload[0];
+const earlyReceipts = (await rest("booking_receipts", `commerce_order_id=eq.${earlyWinnerOrder.id}&select=id,total_inc_vat_sek`)).payload;
+const earlyLedger = (await rest("ledger_entries", `commerce_order_id=eq.${earlyWinnerOrder.id}&select=id,amount_inc_vat_minor`)).payload;
+const earlyEntitlements = (await rest("access_entitlements", `source_type=eq.series_commitment&source_id=eq.${earlyWinnerLine.series_commitment_id}&select=id`)).payload;
+assert(earlyWinnerLine.series_commitment_id && earlyReceipts.length === 1 && earlyLedger.length === 1 && earlyEntitlements.length === 1, "paid Series Early Bird did not preserve one accounting/commitment/entitlement chain");
+assert(Number(earlyReceipts[0].total_inc_vat_sek) === 149 && earlyLedger[0].amount_inc_vat_minor === 14900, "Early Bird receipt/ledger amount does not match Stripe");
+
+const afterEarlyPaid = await checkoutCourse({
+  seriesId: earlyBirdOneOff.series.id,
+  user: earlyBirdC,
+  participant: { participant_type: "self" },
+});
+assert(afterEarlyPaid.order.total_inc_vat_minor === 19900, "paid Series Early Bird allocation did not permanently close its slot");
+await webhook({
+  id: `evt_series_early_after_paid_expired_${run}`,
+  type: "checkout.session.expired",
+  data: { object: { id: afterEarlyPaid.order.stripe_session_id, metadata: { commerce_order_id: afterEarlyPaid.order.id } } },
+});
+pass("One-off Series Early Bird", "one atomic 149 kr winner; next price 199 kr; webhook replay stays idempotent");
+
+const expirySeries = (await course("series", {
+  method: "POST",
+  token: operator.token,
+  body: seriesBody({
+    name: "Series Early Bird · Expiry",
+    startDate: "2028-01-17",
+    endDate: "2028-01-17",
+    totalSessions: 1,
+    capacity: 4,
+    priceSek: 199,
+    recurrenceDays: [1],
+    startTime: "13:00",
+    endTime: "18:00",
+    registrationOpensAt: "2026-01-01T00:00:00Z",
+    registrationClosesAt: "2028-01-17T10:30:00Z",
+  }),
+})).payload;
+await course("series", { method: "PATCH", token: operator.token, body: { series_id: expirySeries.series.id, status: "active" } });
+await configureSeriesEarlyBird(expirySeries.series.id, { priceSek: 149, slots: 1 });
+const expiringPurchase = await checkoutCourse({ seriesId: expirySeries.series.id, user: earlyBirdA, participant: { participant_type: "self" } });
+assert(expiringPurchase.order.total_inc_vat_minor === 14900, "expiring Series checkout did not win Early Bird");
+await webhook({
+  id: `evt_series_early_expired_${run}`,
+  type: "checkout.session.expired",
+  data: { object: { id: expiringPurchase.order.stripe_session_id, metadata: { commerce_order_id: expiringPurchase.order.id } } },
+});
+const expiredOrderRights = (await rest("series_commitments", `commerce_order_id=eq.${expiringPurchase.order.id}&select=id`)).payload;
+const expiredOrderReceipts = (await rest("booking_receipts", `commerce_order_id=eq.${expiringPurchase.order.id}&select=id`)).payload;
+const afterExpiry = await checkoutCourse({ seriesId: expirySeries.series.id, user: earlyBirdB, participant: { participant_type: "self" } });
+assert(afterExpiry.order.total_inc_vat_minor === 14900 && expiredOrderRights.length === 0 && expiredOrderReceipts.length === 0, "expired checkout did not release Early Bird without creating durable truth");
+await webhook({
+  id: `evt_series_early_expired_cleanup_${run}`,
+  type: "checkout.session.expired",
+  data: { object: { id: afterExpiry.order.stripe_session_id, metadata: { commerce_order_id: afterExpiry.order.id } } },
+});
+pass("Series Early Bird expiry", "abandoned Stripe checkout releases capacity and scarcity allocation");
+
+const memberCompetition = (await course("series", {
+  method: "POST",
+  token: operator.token,
+  body: seriesBody({
+    name: "Series Early Bird · Member precedence",
+    startDate: "2028-01-24",
+    endDate: "2028-01-24",
+    totalSessions: 1,
+    capacity: 4,
+    priceSek: 199,
+    recurrenceDays: [1],
+    startTime: "13:00",
+    endTime: "18:00",
+    registrationOpensAt: "2026-01-01T00:00:00Z",
+    registrationClosesAt: "2028-01-24T10:30:00Z",
+  }),
+})).payload;
+await course("series", { method: "PATCH", token: operator.token, body: { series_id: memberCompetition.series.id, status: "active" } });
+await configureSeriesEarlyBird(memberCompetition.series.id, { priceSek: 149, slots: 2 });
+const memberCompetitionRule = (await rest("membership_tier_pricing", "", { method: "POST", body: {
+  tier_id: memberTier.id,
+  product_type: memberCompetition.product.product_key,
+  fixed_price: 129,
+  label: "Member beats Early Bird",
+} })).payload[0];
+const lowerMemberPurchase = await checkoutCourse({ seriesId: memberCompetition.series.id, user: seriesMember, participant: { participant_type: "self" } });
+assert(lowerMemberPurchase.order.total_inc_vat_minor === 12900, "129 kr member price did not beat 149 kr Early Bird");
+const fillAfterLowerMember = (await request(`${apiUrl}/rest/v1/rpc/series_early_bird_fill`, {
+  method: "POST",
+  body: { p_venue_id: ids.venue, p_activity_series_id: memberCompetition.series.id },
+})).payload[0];
+assert(fillAfterLowerMember.fill_count === 0, "lower member price consumed a Series Early Bird slot");
+await webhook({
+  id: `evt_series_member_lower_expired_${run}`,
+  type: "checkout.session.expired",
+  data: { object: { id: lowerMemberPurchase.order.stripe_session_id, metadata: { commerce_order_id: lowerMemberPurchase.order.id } } },
+});
+await rest("membership_tier_pricing", `id=eq.${memberCompetitionRule.id}`, { method: "PATCH", body: { fixed_price: 169 } });
+const earlyBeatsMember = await checkoutCourse({ seriesId: memberCompetition.series.id, user: seriesMember, participant: { participant_type: "self" } });
+assert(earlyBeatsMember.order.total_inc_vat_minor === 14900, "149 kr Early Bird did not beat 169 kr member price");
+const earlyBeatsMemberLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${earlyBeatsMember.order.id}&select=resolver_snapshot`)).payload[0];
+assert(earlyBeatsMemberLine.resolver_snapshot?.pricing_reason === "early_bird", "winning Early Bird/member precedence was not frozen");
+await webhook({
+  id: `evt_series_member_higher_expired_${run}`,
+  type: "checkout.session.expired",
+  data: { object: { id: earlyBeatsMember.order.stripe_session_id, metadata: { commerce_order_id: earlyBeatsMember.order.id } } },
+});
+pass("Series Early Bird/member precedence", "129 member wins without allocation; 149 Early Bird beats 169 member; no stacking");
+
+const multiEarlyBird = (await course("series", {
+  method: "POST",
+  token: operator.token,
+  body: seriesBody({
+    name: "Series Early Bird · Four occurrences",
+    startDate: "2028-02-07",
+    endDate: "2028-02-28",
+    totalSessions: 4,
+    capacity: 8,
+    priceSek: 1495,
+    recurrenceDays: [1],
+    startTime: "18:00",
+    endTime: "19:00",
+    registrationOpensAt: "2026-01-01T00:00:00Z",
+    registrationClosesAt: "2028-02-07T15:30:00Z",
+  }),
+})).payload;
+await course("series", { method: "PATCH", token: operator.token, body: { series_id: multiEarlyBird.series.id, status: "active" } });
+await configureSeriesEarlyBird(multiEarlyBird.series.id, { priceSek: 1295, slots: 3 });
+const multiBuyers = [earlyBirdA, earlyBirdB, earlyBirdC, earlyBirdD];
+const multiPurchases = [];
+for (let index = 0; index < multiBuyers.length; index += 1) {
+  const purchase = await checkoutCourse({ seriesId: multiEarlyBird.series.id, user: multiBuyers[index], participant: { participant_type: "self" } });
+  const expectedAmount = index < 3 ? 129500 : 149500;
+  assert(purchase.order.total_inc_vat_minor === expectedAmount, `multi-occurrence Series allocation ${index + 1} resolved the wrong price`);
+  await webhook(checkoutEvent({
+    id: `evt_series_early_multi_${index}_${run}`,
+    sessionId: purchase.order.stripe_session_id,
+    orderId: purchase.order.id,
+    version: purchase.order.version,
+    email: multiBuyers[index].email,
+    amount: expectedAmount,
+  }));
+  multiPurchases.push(purchase);
+}
+const multiFirstLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${multiPurchases[0].order.id}&select=series_commitment_id,resolver_snapshot`)).payload[0];
+const multiFirstEntitlements = (await rest("access_entitlements", `source_type=eq.series_commitment&source_id=eq.${multiFirstLine.series_commitment_id}&select=id`)).payload;
+const multiFirstRegistrations = (await rest("session_registrations", `series_commitment_id=eq.${multiFirstLine.series_commitment_id}&select=id`)).payload;
+assert(multiFirstLine.resolver_snapshot?.pricing_reason === "early_bird" && multiFirstEntitlements.length === 1 && multiFirstRegistrations.length === 4, "multi-occurrence Early Bird became per-Session Commerce");
+const multiLastLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${multiPurchases[3].order.id}&select=resolver_snapshot`)).payload[0];
+assert(multiLastLine.resolver_snapshot?.pricing_reason === "series_product_base_price", "fourth multi-occurrence Series purchase did not return to base price");
+pass("Multi-occurrence Series Early Bird", "first three 1295; fourth 1495; one Commitment/entitlement and four projections per purchase");
+
 await rest("activity_formats", `id=eq.${format.id}`, { method: "PATCH", body: { presentation_type: "course" } });
 
 const nonCoveringCart = (await commerce("course-cart", {
