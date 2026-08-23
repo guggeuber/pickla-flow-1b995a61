@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CalendarDays, Check, ChevronRight, Loader2, Users } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, Loader2, MapPin, Users } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { createCourseCart, fetchCourseDetail } from "@/lib/courses";
 import { formatCommerceMoney } from "@/lib/commerce";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import { seriesPricePresentation } from "@/lib/seriesCustomerPricing";
 import { occurrenceCountLabel, seriesPresentation } from "@/lib/seriesPresentation";
 
 type ParticipantType = "self" | "adult" | "dependent";
@@ -76,6 +77,10 @@ export default function CourseSeriesPage() {
   if (!course || query.isError) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><main className="mx-auto max-w-xl px-6 pt-32 text-center">Sidan kunde inte öppnas.</main></div>;
 
   const available = Number(course.capacity.available_count || 0);
+  const price = seriesPricePresentation({ pricing: course.pricing, basePriceSek: course.product.base_price_sek });
+  const socialEvent = presentation.type === "social_event";
+  const supportsParticipantChoice = presentation.type === "course";
+  const selectedParticipantPricePending = supportsParticipantChoice && participantType !== "self";
   const open = course.registration_state === "open" && available > 0 && !course.customer_has_commitment;
   const requiresGuestDetails = !user;
   const ready = open
@@ -87,23 +92,36 @@ export default function CourseSeriesPage() {
     <div className="min-h-[100dvh] bg-white text-slate-950">
       <PicklaTopBar slug={venueSlug} background="#fff" />
       <main className="mx-auto w-full max-w-xl px-5 pb-40 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
-        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt={course.name} className={presentation.imageProminence === "prominent" ? "-mx-5 mb-7 aspect-[16/10] w-[calc(100%+2.5rem)] object-cover" : "mb-6 aspect-video w-full rounded-[24px] object-cover"} data-testid="series-detail-image" /> : null}
+        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt={course.name} className={presentation.imageProminence === "prominent" ? "-mx-5 mb-7 block h-auto w-[calc(100%+2.5rem)] max-w-none" : "mb-6 block h-auto w-full rounded-[24px]"} data-testid="series-detail-image" /> : null}
         <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{presentation.label}</p>
         <h1 className="mt-2 text-3xl font-black leading-tight">{course.name}</h1>
-        <p className="mt-3 text-base leading-relaxed text-slate-600">{course.format?.description || course.description}</p>
+        {!socialEvent && (course.format?.description || course.description) ? <p className="mt-3 text-base leading-relaxed text-slate-600">{course.format?.description || course.description}</p> : null}
 
-        <section className="mt-8 grid gap-4 border-y border-black/10 py-6">
-          <div className="flex gap-3"><CalendarDays className="mt-0.5 h-5 w-5" /><div>{presentation.hideSingleOccurrenceCount && sessions.length === 1 ? <><p className="font-bold">{swedishDate(sessions[0].session_date)}</p><p className="mt-1 text-sm text-slate-500">{String(sessions[0].start_time).slice(0, 5)}–{String(sessions[0].end_time).slice(0, 5)}</p></> : <><p className="font-bold">{occurrenceCountLabel(sessions.length)} · {scheduleLabel}</p><p className="mt-1 text-sm text-slate-500">{swedishDate(course.start_date)}–{swedishDate(course.end_date)}</p></>}</div></div>
-          <div className="flex gap-3"><Users className="mt-0.5 h-5 w-5" /><div><p className="font-bold">{available} {available === 1 ? "plats" : "platser"} kvar</p><p className="mt-1 text-sm text-slate-500">{course.venue?.name}</p></div></div>
-          {presentation.showInstructor && course.format?.requires_instructor && presentation.instructorLabel ? <div className="flex gap-3"><Check className="mt-0.5 h-5 w-5" /><p className="font-bold">{presentation.instructorLabel}</p></div> : null}
+        {socialEvent && sessions.length === 1 ? (
+          <section className="mt-5 grid gap-2 text-base font-bold">
+            <p>{swedishDate(sessions[0].session_date)} · {String(sessions[0].start_time).slice(0, 5)}–{String(sessions[0].end_time).slice(0, 5)}</p>
+            <p className="flex items-center gap-2 text-sm text-slate-600"><MapPin className="h-4 w-4" />{course.venue?.name}</p>
+            <p className="flex items-center gap-2 text-sm text-slate-600"><Users className="h-4 w-4" />{available} {available === 1 ? "plats" : "platser"} kvar</p>
+          </section>
+        ) : (
+          <section className="mt-8 grid gap-4 border-y border-black/10 py-6">
+            <div className="flex gap-3"><CalendarDays className="mt-0.5 h-5 w-5" /><div>{presentation.hideSingleOccurrenceCount && sessions.length === 1 ? <><p className="font-bold">{swedishDate(sessions[0].session_date)}</p><p className="mt-1 text-sm text-slate-500">{String(sessions[0].start_time).slice(0, 5)}–{String(sessions[0].end_time).slice(0, 5)}</p></> : <><p className="font-bold">{occurrenceCountLabel(sessions.length)} · {scheduleLabel}</p><p className="mt-1 text-sm text-slate-500">{swedishDate(course.start_date)}–{swedishDate(course.end_date)}</p></>}</div></div>
+            <div className="flex gap-3"><Users className="mt-0.5 h-5 w-5" /><div><p className="font-bold">{available} {available === 1 ? "plats" : "platser"} kvar</p><p className="mt-1 text-sm text-slate-500">{course.venue?.name}</p></div></div>
+            {presentation.showInstructor && course.format?.requires_instructor && presentation.instructorLabel ? <div className="flex gap-3"><Check className="mt-0.5 h-5 w-5" /><p className="font-bold">{presentation.instructorLabel}</p></div> : null}
+          </section>
+        )}
+
+        <section className={`${socialEvent ? "mt-7 rounded-[20px] bg-slate-50 px-5 py-4" : "mt-7"}`} data-testid="series-price-offer">
+          {selectedParticipantPricePending ? <p className="text-sm font-semibold text-slate-600">Priset bekräftas för deltagaren i nästa steg.</p> : <><p className="text-sm font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{price.primary}</p>{price.context ? <p className="mt-1 text-sm font-semibold text-slate-600">{price.context}</p> : null}</>}
         </section>
 
         {course.format?.full_description ? <section className="mt-8">
           <h2 className="text-lg font-black">{presentation.contentHeading}</h2>
+          {socialEvent && (course.format?.description || course.description) ? <p className="mt-3 text-base leading-relaxed text-slate-700">{course.format?.description || course.description}</p> : null}
           <div className="mt-3 whitespace-pre-line text-sm leading-7 text-slate-600">{course.format.full_description}</div>
-        </section> : null}
+        </section> : socialEvent && (course.format?.description || course.description) ? <section className="mt-8"><h2 className="text-lg font-black">{presentation.contentHeading}</h2><p className="mt-3 text-base leading-relaxed text-slate-700">{course.format?.description || course.description}</p></section> : null}
 
-        <section className="mt-8">
+        {supportsParticipantChoice ? <section className="mt-8">
           <h2 className="text-lg font-black">Vem ska delta?</h2>
           <div className="mt-3 grid gap-2">
             {([
@@ -119,7 +137,7 @@ export default function CourseSeriesPage() {
           {requiresGuestDetails ? <div className="mt-4 grid gap-3"><input aria-label="Betalarens namn" value={payerName} onChange={(event) => setPayerName(event.target.value)} placeholder="Ditt namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Betalarens e-post" value={payerEmail} onChange={(event) => setPayerEmail(event.target.value)} placeholder="Din e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></div> : null}
           {participantType === "adult" ? <div className="mt-4 grid gap-3"><input aria-label="Deltagarens namn" value={participantName} onChange={(event) => setParticipantName(event.target.value)} placeholder="Deltagarens namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Deltagarens e-post" value={participantEmail} onChange={(event) => setParticipantEmail(event.target.value)} placeholder="Deltagarens e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></div> : null}
           {participantType === "dependent" ? user ? <div className="mt-4 grid gap-3"><input aria-label="Barnets förnamn" value={childName} onChange={(event) => setChildName(event.target.value)} placeholder="Barnets förnamn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Barnets födelseår" value={childBirthYear} onChange={(event) => setChildBirthYear(event.target.value)} placeholder="Födelseår" inputMode="numeric" className="h-12 rounded-xl border border-black/15 px-3" /><p className="text-xs leading-relaxed text-slate-500">Uppgifterna visas bara för dig och behörig personal.</p></div> : <button type="button" onClick={() => buy.mutate()} className="mt-4 flex items-center gap-2 text-sm font-bold underline underline-offset-4">Logga in för att anmäla barn <ChevronRight className="h-4 w-4" /></button> : null}
-        </section>
+        </section> : requiresGuestDetails ? <section className="mt-8 grid gap-3"><h2 className="text-lg font-black">Dina uppgifter</h2><input aria-label="Betalarens namn" value={payerName} onChange={(event) => setPayerName(event.target.value)} placeholder="Ditt namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Betalarens e-post" value={payerEmail} onChange={(event) => setPayerEmail(event.target.value)} placeholder="Din e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></section> : null}
 
         {presentation.type === "course" ? <section className="mt-8 border-t border-black/10 pt-6">
           <h2 className="font-black">Kursplatsen gäller hela serien</h2>
@@ -131,7 +149,7 @@ export default function CourseSeriesPage() {
           {course.customer_has_commitment ? <p className="mb-3 text-center text-sm font-bold">Du har redan en plats.</p> : null}
           <button type="button" onClick={() => buy.mutate()} disabled={!ready || buy.isPending} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
             {buy.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-            {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : `${presentation.bookingCta} · ${formatCommerceMoney(Number(course.product.base_price_sek) * 100)}`}
+            {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : selectedParticipantPricePending ? "Fortsätt" : `${presentation.bookingCta} · ${formatCommerceMoney(price.finalPriceMinor)}`}
           </button>
         </div>
       </footer>

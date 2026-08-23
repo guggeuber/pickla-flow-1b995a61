@@ -83,10 +83,29 @@ export type CourseSeries = {
     early_bird_price_minor: number | null;
     early_bird_slots: number | null;
   };
+  pricing?: SeriesCustomerPricing | null;
   venue: { id: string; name: string; slug: string };
   sessions: CourseSession[];
   commitment?: Record<string, unknown> | null;
   staff_grants?: SeriesStaffGrant[];
+};
+
+export type SeriesCustomerPricing = {
+  scope_type: "activity_series";
+  list_price_minor: number;
+  final_price_minor: number;
+  pricing_reason: "series_product_base_price" | "membership_tier_pricing" | "early_bird" | string;
+  sales_channel: string;
+  checkout_label: string;
+  membership_tier_name: string | null;
+  early_bird: {
+    configured: boolean;
+    active: boolean;
+    applied: boolean;
+    price_minor: number | null;
+    slots: number | null;
+    remaining: number | null;
+  };
 };
 
 export type SeriesMemberPricingTier = {

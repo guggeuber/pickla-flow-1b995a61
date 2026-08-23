@@ -7,6 +7,7 @@ import {
   occurrenceCountLabel,
   seriesPresentation,
 } from "@/lib/seriesPresentation";
+import { frozenSeriesLinePriceLabel, seriesPricePresentation } from "@/lib/seriesCustomerPricing";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
@@ -43,7 +44,17 @@ function fixture(presentationType: "course" | "social_event" | "clinic" | "tourn
       level: "beginner",
       requires_instructor: true,
     },
-    product: { id: "product-1", name: "Plats", description: null, base_price_sek: 199, vat_rate: 6 },
+    product: { id: "product-1", product_key: "parker", name: "Plats", description: null, base_price_sek: 199, vat_rate: 6, status: "active", is_active: true, scarcity_mode: "early_bird", early_bird_price_minor: 14900, early_bird_slots: 10 },
+    pricing: presentationType === "social_event" ? {
+      scope_type: "activity_series",
+      list_price_minor: 19900,
+      final_price_minor: 14900,
+      pricing_reason: "early_bird",
+      sales_channel: "online",
+      checkout_label: "149 kr",
+      membership_tier_name: null,
+      early_bird: { configured: true, active: true, applied: true, price_minor: 14900, slots: 10, remaining: 10 },
+    } : null,
     venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
     sessions: [],
     capacity: { capacity: 40, committed_count: 0, active_holds_count: 0, available_count: 40 },
@@ -67,8 +78,31 @@ describe("Series presentation projection", () => {
     expect(screen.getByText("Event · anmälan öppen")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
     expect(screen.getByTestId("home-series-image")).toHaveAttribute("src", "https://example.test/parker-brunch.webp");
-    fireEvent.click(screen.getByRole("button", { name: /Boka plats/ }));
+    expect(screen.getByTestId("home-series-image")).not.toHaveClass("object-cover");
+    expect(screen.getByText("Early Bird · 149 kr")).toBeInTheDocument();
+    expect(screen.getByText("Första 10 platserna · sedan 199 kr")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Boka plats · 149 kr" }));
     expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("formats only the canonical winning Series price and frozen cart reason", () => {
+    const membership = seriesPricePresentation({
+      basePriceSek: 199,
+      pricing: {
+        scope_type: "activity_series",
+        list_price_minor: 19900,
+        final_price_minor: 12900,
+        pricing_reason: "membership_tier_pricing",
+        sales_channel: "online",
+        checkout_label: "129 kr",
+        membership_tier_name: "Play+",
+        early_bird: { configured: true, active: true, applied: false, price_minor: 14900, slots: 10, remaining: 7 },
+      },
+    });
+    expect(membership).toEqual({ label: "Medlemspris", finalPriceMinor: 12900, primary: "Medlemspris · 129 kr", context: "Play+" });
+    expect(membership.primary).not.toContain("Early Bird");
+    expect(frozenSeriesLinePriceLabel({ pricing_reason: "early_bird" })).toBe("Early Bird");
+    expect(frozenSeriesLinePriceLabel({ pricing_reason: "membership_tier_pricing", membership_tier_name: "Play+" })).toBe("Medlemspris · Play+");
   });
 
   it("keeps the Course Home card compact and text-led", () => {

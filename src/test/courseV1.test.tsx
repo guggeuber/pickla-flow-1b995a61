@@ -133,6 +133,16 @@ describe("Course V1 customer flow", () => {
         requires_instructor: true,
       },
       product: { ...course.product, base_price_sek: 199 },
+      pricing: {
+        scope_type: "activity_series",
+        list_price_minor: 19900,
+        final_price_minor: 14900,
+        pricing_reason: "early_bird",
+        sales_channel: "online",
+        checkout_label: "149 kr",
+        membership_tier_name: null,
+        early_bird: { configured: true, active: true, applied: true, price_minor: 14900, slots: 10, remaining: 10 },
+      },
       capacity: { capacity: 40, committed_count: 0, active_holds_count: 0, available_count: 40 },
       sessions: [{ id: "parker-session", session_date: "2026-09-05", start_time: "13:00", end_time: "18:00", court_ids: [], requires_staffing: true, is_active: true, series_occurrence_index: 1 }],
     });
@@ -140,14 +150,41 @@ describe("Course V1 customer flow", () => {
 
     expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
     expect(screen.getByText("EVENT")).toBeInTheDocument();
-    expect(screen.getByText("5 september")).toBeInTheDocument();
-    expect(screen.getByText("13:00–18:00")).toBeInTheDocument();
+    expect(screen.getByText(/5 september · 13:00–18:00/)).toBeInTheDocument();
     expect(screen.getByText("40 platser kvar")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Boka plats · 199 kr" })).toBeDisabled();
+    expect(screen.getByText("Early Bird · 149 kr")).toBeInTheDocument();
+    expect(screen.getByText("Första 10 platserna · sedan 199 kr")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Boka plats · 149 kr" })).toBeDisabled();
     expect(screen.getByTestId("series-detail-image")).toHaveAttribute("src", "https://example.test/parker-brunch.webp");
+    expect(screen.getByTestId("series-detail-image")).not.toHaveClass("object-cover");
     expect(screen.queryByText(/1 tillfällen?/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Instruktör vid varje tillfälle/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Kursplatsen|plats på kursen/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "En annan vuxen" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ett barn jag ansvarar för" })).not.toBeInTheDocument();
+  });
+
+  it("does not present the payer's member quote as another participant's price", async () => {
+    mocks.user = { id: "payer-1" };
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      pricing: {
+        scope_type: "activity_series",
+        list_price_minor: 149500,
+        final_price_minor: 127100,
+        pricing_reason: "membership_tier_pricing",
+        sales_channel: "online",
+        checkout_label: "1 271 kr",
+        membership_tier_name: "Play",
+        early_bird: { configured: false, active: false, applied: false, price_minor: null, slots: null, remaining: null },
+      },
+    });
+    renderCourse();
+
+    expect(await screen.findByText("Medlemspris · 1 271 kr")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "En annan vuxen" }));
+    expect(screen.getByText("Priset bekräftas för deltagaren i nästa steg.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fortsätt" })).toBeDisabled();
   });
 
   it.each([

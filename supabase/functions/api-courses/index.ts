@@ -2,6 +2,7 @@ import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { requireVenueRole } from '../_shared/authorization.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
+import { resolveScopeAwarePricingDecision } from '../_shared/scope_pricing.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 type ServiceClient = ReturnType<typeof getServiceClient>;
@@ -271,11 +272,42 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
   }
   const seriesImages = Array.isArray(series.image_urls) ? series.image_urls.filter(Boolean) : [];
   const formatImages = Array.isArray(formatResult.data?.image_urls) ? formatResult.data.image_urls.filter(Boolean) : [];
+  const pricingDecision = productResult.data
+    ? await resolveScopeAwarePricingDecision({
+      client: admin,
+      scopeType: 'activity_series',
+      scopeId: series.id,
+      venueId: series.venue_id,
+      userId: userId || null,
+      customerId: null,
+      salesChannel: 'online',
+      accessProduct: productResult.data,
+      series,
+    })
+    : null;
+  const earlyBird = pricingDecision?.debug?.early_bird as Record<string, unknown> | undefined;
   return {
     ...series,
     format: formatResult.data || null,
     image_urls: (seriesImages.length ? seriesImages : formatImages).slice(0, 3),
     product: productResult.data || null,
+    pricing: pricingDecision ? {
+      scope_type: pricingDecision.scopeType,
+      list_price_minor: Math.round(Number(pricingDecision.listAmountSek || 0) * 100),
+      final_price_minor: Math.round(Number(pricingDecision.finalAmountSek || 0) * 100),
+      pricing_reason: pricingDecision.pricingReason,
+      sales_channel: pricingDecision.salesChannel,
+      checkout_label: pricingDecision.checkoutLabel,
+      membership_tier_name: pricingDecision.membershipTierName,
+      early_bird: {
+        configured: earlyBird?.configured === true,
+        active: earlyBird?.active === true,
+        applied: earlyBird?.applied === true,
+        price_minor: earlyBird?.price_minor == null ? null : Number(earlyBird.price_minor),
+        slots: earlyBird?.slots == null ? null : Number(earlyBird.slots),
+        remaining: earlyBird?.remaining == null ? null : Number(earlyBird.remaining),
+      },
+    } : null,
     venue: venueResult.data || null,
     sessions: sessionsResult.data || [],
     capacity,
@@ -439,7 +471,7 @@ const coursesHandler = async (req: Request) => {
       const series = await courseSeries(admin, String(url.searchParams.get('seriesId') || ''));
       const projected = await projectCourse(admin, series, userId);
       if (projected.status !== 'active') return errorResponse('Course not found', 404);
-      return jsonResponse(projected, 200, 5);
+      return jsonResponse(projected, 200, userId ? 0 : 5);
     }
 
     if (req.method === 'GET' && path === 'home') {
@@ -466,7 +498,7 @@ const coursesHandler = async (req: Request) => {
       if (error) throw new Error(error.message);
       for (const series of data || []) {
         const projected = await projectCourse(admin, series, userId);
-        if (projected.capacity.available_count > 0) return jsonResponse({ mode: 'registration', item: projected }, 200, 5);
+        if (projected.capacity.available_count > 0) return jsonResponse({ mode: 'registration', item: projected }, 200, userId ? 0 : 5);
       }
       return jsonResponse({ mode: 'none', item: null }, 200, 5);
     }

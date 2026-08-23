@@ -78,4 +78,18 @@ describe("Series Early Bird constitutional contract", () => {
     expect(admin).toContain("Early Bird-pris");
     expect(admin).toContain("Ordinarie");
   });
+
+  it("projects customer Series pricing through the shared resolver without exposing resolver debug", () => {
+    const api = read("supabase/functions/api-courses/index.ts");
+    const projection = api.slice(api.indexOf("async function projectCourse"), api.indexOf("async function listMyCourses"));
+
+    expect(projection).toContain("resolveScopeAwarePricingDecision");
+    expect(projection).toContain("scopeType: 'activity_series'");
+    expect(projection).toContain("pricing_reason: pricingDecision.pricingReason");
+    expect(projection).toContain("membership_tier_name: pricingDecision.membershipTierName");
+    expect(projection).toContain("early_bird:");
+    expect(projection).not.toContain("debug: pricingDecision.debug");
+    expect(api).toContain("jsonResponse(projected, 200, userId ? 0 : 5)");
+    expect(api).toContain("jsonResponse({ mode: 'registration', item: projected }, 200, userId ? 0 : 5)");
+  });
 });

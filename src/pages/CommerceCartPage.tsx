@@ -20,6 +20,7 @@ import {
   type CommerceOrderLine,
 } from "@/lib/commerce";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
+import { frozenSeriesLinePriceLabel } from "@/lib/seriesCustomerPricing";
 import {
   CHECKOUT_EMAIL_REQUIRED_MESSAGE,
   PURCHASE_SESSION_ERROR_MESSAGE,
@@ -299,6 +300,7 @@ export default function CommerceCartPage() {
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
             const isCourseLine = Boolean(course) && line.resolver_snapshot?.purchase_kind === "course";
             const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
+            const frozenSeriesPriceLabel = isCourseLine ? frozenSeriesLinePriceLabel(line.resolver_snapshot) : null;
             const lineName = isCourseLine ? coursePresentation.type === "course" ? "Kursplats" : "Plats" : isDayPassLine ? line.product_name : isActivityParticipationLine ? "Personlig plats" : line.product_name;
             const LineIcon = line.commerce_kind === "participation" ? Ticket : ShoppingBag;
             const lineMetadata = isRacketLine && racketInstruction
@@ -318,6 +320,7 @@ export default function CommerceCartPage() {
                   <LineIcon data-testid={line.commerce_kind === "participation" ? "commerce-line-ticket-icon" : "commerce-line-product-icon"} className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                   <div className="min-w-0">
                     <p className="font-bold">{lineName}</p>
+                    {frozenSeriesPriceLabel ? <p className="mt-1 text-xs font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{frozenSeriesPriceLabel}</p> : null}
                     {lineMetadata ? <p className="mt-1 text-xs leading-relaxed text-slate-600">{lineMetadata}</p> : null}
                     {standaloneShopCart ? (
                       <div className="mt-3 flex flex-wrap items-center gap-2">
