@@ -192,6 +192,34 @@ function registrationState(series: CourseSeriesRow, now = DateTime.now().toUTC()
   return 'open';
 }
 
+function projectSeriesIncludedAccess(product: Record<string, unknown> | null, sessions: Array<Record<string, unknown>>) {
+  const resolverRules = (product?.resolver_rules || {}) as Record<string, unknown>;
+  const includedBenefits = (resolverRules.included_benefits || {}) as Record<string, unknown>;
+  const openPlayRule = (includedBenefits.open_play_series_period || {}) as Record<string, unknown>;
+  const activeSessions = sessions
+    .filter((session) => session.is_active === true && session.publish_status === 'published' && session.session_date)
+    .sort((left, right) => String(left.session_date).localeCompare(String(right.session_date))
+      || String(left.start_time || '').localeCompare(String(right.start_time || '')));
+  const first = activeSessions[0];
+  const last = activeSessions[activeSessions.length - 1];
+  const starts = first
+    ? DateTime.fromISO(String(first.session_date), { zone: 'Europe/Stockholm' }).startOf('day')
+    : null;
+  const expires = last
+    ? DateTime.fromISO(String(last.session_date), { zone: 'Europe/Stockholm' }).plus({ days: 1 }).startOf('day')
+    : null;
+  return {
+    open_play_series_period: {
+      enabled: openPlayRule.enabled === true,
+      starts_at: starts?.isValid ? starts.toUTC().toISO() : null,
+      expires_at: expires?.isValid ? expires.toUTC().toISO() : null,
+      start_date: first?.session_date || null,
+      end_date: last?.session_date || null,
+      period_source: 'active_series_occurrences',
+    },
+  };
+}
+
 function customerName(customer: Record<string, unknown> | null | undefined) {
   if (!customer) return 'Kund';
   const displayName = cleanText(customer.display_name, 160);
@@ -305,7 +333,7 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
       ? admin.from('activity_formats').select('id, name, description, full_description, image_urls, age_group, level, requires_instructor, presentation_type').eq('id', series.format_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     series.access_product_id
-      ? admin.from('access_products').select('id, venue_id, product_key, name, description, base_price_sek, vat_rate, status, is_active, product_kind, scarcity_mode, early_bird_price_minor, early_bird_slots').eq('id', series.access_product_id).maybeSingle()
+      ? admin.from('access_products').select('id, venue_id, product_key, name, description, base_price_sek, vat_rate, status, is_active, product_kind, scarcity_mode, early_bird_price_minor, early_bird_slots, resolver_rules').eq('id', series.access_product_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     admin.from('venues').select('id, name, slug').eq('id', series.venue_id).maybeSingle(),
     admin.from('activity_sessions')
@@ -348,6 +376,7 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
     })
     : null;
   const earlyBird = pricingDecision?.debug?.early_bird as Record<string, unknown> | undefined;
+  const sessions = (sessionsResult.data || []) as Array<Record<string, unknown>>;
   return {
     ...series,
     format: formatResult.data || null,
@@ -371,7 +400,8 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
       },
     } : null,
     venue: venueResult.data || null,
-    sessions: sessionsResult.data || [],
+    sessions,
+    included_access: projectSeriesIncludedAccess(productResult.data, sessions),
     capacity,
     registration_state: registrationState(series),
     customer_has_commitment: Boolean(commitment),
@@ -399,15 +429,23 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
   if (error) throw new Error(error.message);
   if (!commitments?.length) return [];
   const seriesIds = [...new Set(commitments.map((row) => row.activity_series_id))];
-  const [{ data: seriesRows, error: seriesError }, { data: sessionRows, error: sessionError }] = await Promise.all([
+  const commitmentIds = commitments.map((row) => row.id);
+  const [{ data: seriesRows, error: seriesError }, { data: sessionRows, error: sessionError }, { data: benefitRows, error: benefitError }] = await Promise.all([
     admin.from('activity_series').select('id, venue_id, format_id, name, start_date, end_date, total_sessions, status').in('id', seriesIds),
     admin.from('activity_sessions')
-      .select('id, series_id, session_date, start_time, end_time, is_active, series_occurrence_index')
+      .select('id, series_id, session_date, start_time, end_time, is_active, publish_status, series_occurrence_index')
       .in('series_id', seriesIds)
       .eq('is_active', true)
+      .eq('publish_status', 'published')
       .order('session_date'),
+    admin.from('access_entitlements')
+      .select('id, source_id, status, starts_at, expires_at, access_reason')
+      .eq('source_type', 'series_benefit')
+      .eq('entitlement_type', 'series_access')
+      .eq('scope_type', 'open_play')
+      .in('source_id', commitmentIds),
   ]);
-  if (seriesError || sessionError) throw new Error(seriesError?.message || sessionError?.message || 'Course projection unavailable');
+  if (seriesError || sessionError || benefitError) throw new Error(seriesError?.message || sessionError?.message || benefitError?.message || 'Course projection unavailable');
   const formatIds = [...new Set((seriesRows || []).map((row) => row.format_id).filter(Boolean))];
   const { data: formatRows, error: formatError } = formatIds.length
     ? await admin.from('activity_formats').select('id, name, presentation_type').in('id', formatIds)
@@ -415,6 +453,7 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
   if (formatError) throw new Error(formatError.message);
   const formatById = new Map((formatRows || []).map((format) => [format.id, format]));
   const dependentById = new Map((dependentRows || []).map((row) => [row.id, row]));
+  const benefitByCommitmentId = new Map((benefitRows || []).map((row) => [row.source_id, row]));
   const now = DateTime.now().setZone('Europe/Stockholm');
   return commitments.map((commitment) => {
     const series = (seriesRows || []).find((row) => row.id === commitment.activity_series_id);
@@ -440,6 +479,14 @@ async function listMyCourses(admin: ServiceClient, userId: string) {
       next_session: next,
       completed_sessions: completed,
       total_sessions: sessions.length,
+      included_access: benefitByCommitmentId.has(commitment.id) ? {
+        open_play_series_period: {
+          enabled: benefitByCommitmentId.get(commitment.id)?.status !== 'revoked',
+          starts_at: benefitByCommitmentId.get(commitment.id)?.starts_at || null,
+          expires_at: benefitByCommitmentId.get(commitment.id)?.expires_at || null,
+          access_reason: benefitByCommitmentId.get(commitment.id)?.access_reason || null,
+        },
+      } : null,
       access: commitment.metadata?.funding_source === 'series_staff_grant'
         ? { label: 'Friplats', detail: 'Ingår · Pickla' }
         : null,
@@ -869,6 +916,32 @@ const coursesHandler = async (req: Request) => {
       }, 200, 0);
     }
 
+    if (req.method === 'PATCH' && path === 'series-included-access') {
+      const body = await req.json();
+      const series = await managedSellableSeries(admin, String(body.series_id || ''));
+      await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
+      if (!['draft', 'active', 'paused'].includes(String(series.status || ''))) {
+        return errorResponse('Inkluderad access kan inte ändras för en avslutad omgång.', 409);
+      }
+      if (typeof body.open_play_series_period_enabled !== 'boolean') {
+        return errorResponse('Välj om Open Play ska ingå under erbjudandets period.', 400);
+      }
+      const { data, error } = await admin.rpc('set_series_open_play_benefit', {
+        p_series_id: series.id,
+        p_enabled: body.open_play_series_period_enabled,
+      });
+      if (error) {
+        if (error.message.includes('series_open_play_benefit_commercial_history_locked')) {
+          return errorResponse('Inkluderad access är låst eftersom deltagare eller betalningshistorik finns.', 409);
+        }
+        if (error.message.includes('series_open_play_benefit_product_invalid')) {
+          return errorResponse('Omgångens accessprodukt är inte giltig.', 409);
+        }
+        throw new Error(error.message);
+      }
+      return jsonResponse(data, 200, 0);
+    }
+
     if (req.method === 'POST' && path === 'series') {
       const body = await req.json();
       const venueId = String(body.venue_id || body.venueId || '');
@@ -1076,6 +1149,7 @@ const coursesHandler = async (req: Request) => {
       : message.includes('series_staff_grant_forbidden') ? 403
       : /not found/i.test(message) ? 404
       : /series_staff_grant_(series_ineligible|idempotency_key_reused|cancellation_only|commitment_not_active)/.test(message) ? 409
+      : /series_open_play_benefit_(commercial_history_locked|product_invalid)/.test(message) ? 409
       : message.includes('course_resource_conflict') ? 409
       : /required|unavailable|does not produce|participant_required/i.test(message) ? 400
       : 500;

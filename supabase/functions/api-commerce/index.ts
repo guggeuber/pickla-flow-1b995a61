@@ -1205,7 +1205,7 @@ async function releaseHold(admin: AdminClient, holdId?: string | null, reason = 
 }
 
 async function commitFreeParticipation(admin: AdminClient, order: any, line: any, resolvedLine: any, userId: string | null, customerId: string | null, holdId: string) {
-  const canonicalEntitlementType = ['punch_card', 'partner_access'].includes(String(resolvedLine?.resolver_snapshot?.entitlement_type || ''))
+  const canonicalEntitlementType = ['series_access', 'punch_card', 'partner_access'].includes(String(resolvedLine?.resolver_snapshot?.entitlement_type || ''))
     ? String(resolvedLine.resolver_snapshot.entitlement_type)
     : null;
   const canonicalEntitlementId = canonicalEntitlementType

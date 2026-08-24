@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   saveSeriesMemberPricing: vi.fn(),
   removeSeriesMemberPricing: vi.fn(),
   saveSeriesEarlyBird: vi.fn(),
+  saveSeriesIncludedAccess: vi.fn(),
   shareOrCopy: vi.fn(),
 }));
 
@@ -43,6 +44,7 @@ vi.mock("@/lib/courses", () => ({
   saveSeriesMemberPricing: mocks.saveSeriesMemberPricing,
   removeSeriesMemberPricing: mocks.removeSeriesMemberPricing,
   saveSeriesEarlyBird: mocks.saveSeriesEarlyBird,
+  saveSeriesIncludedAccess: mocks.saveSeriesIncludedAccess,
 }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="topbar" /> }));
 vi.mock("@/lib/commerce", () => ({
@@ -61,7 +63,8 @@ const course = {
   product: { id: "product-1", product_key: "course_pickla_101", name: "Pickla 101", description: null, base_price_sek: 1495, vat_rate: 6 },
   venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
   capacity: { capacity: 12, committed_count: 7, active_holds_count: 0, available_count: 5 },
-  sessions: Array.from({ length: 6 }, (_, index) => ({ id: `session-${index + 1}`, session_date: `2026-09-${String(8 + index * 7).padStart(2, "0")}`, start_time: "18:00", end_time: "19:00", court_ids: [], requires_staffing: true, is_active: true, series_occurrence_index: index + 1 })),
+  included_access: { open_play_series_period: { enabled: true, starts_at: "2026-09-07T22:00:00Z", expires_at: "2026-10-13T22:00:00Z", start_date: "2026-09-08", end_date: "2026-10-13", period_source: "active_series_occurrences" } },
+  sessions: ["2026-09-08", "2026-09-15", "2026-09-22", "2026-09-29", "2026-10-06", "2026-10-13"].map((sessionDate, index) => ({ id: `session-${index + 1}`, session_date: sessionDate, start_time: "18:00", end_time: "19:00", court_ids: [], requires_staffing: true, is_active: true, publish_status: "published", series_occurrence_index: index + 1 })),
 };
 
 beforeEach(() => {
@@ -90,8 +93,22 @@ describe("Course V1 customer flow", () => {
     expect(screen.getByText("Dina första fyra veckor med pickleball.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Om kursen" })).toBeInTheDocument();
     expect(screen.getByText(/Tillfälle 1 · Grepp och grundslag/)).toBeInTheDocument();
+    const occurrences = screen.getByTestId("course-occurrences");
+    expect(within(occurrences).getByText("Tis 8 sep · 18:00–19:00")).toBeInTheDocument();
+    expect(within(occurrences).getByText("Tis 13 okt · 18:00–19:00")).toBeInTheDocument();
+    expect(within(occurrences).getAllByRole("listitem")).toHaveLength(6);
+    const inclusions = screen.getByTestId("course-inclusions");
+    expect(within(inclusions).getByText("Fri Open Play under hela kursperioden")).toBeInTheDocument();
+    expect(within(inclusions).getByText(/alla vanliga Open Play ingår/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Din plats gäller hela kursen" })).toBeInTheDocument();
     expect(screen.getByText(/Missade tillfällen återbetalas inte/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Boka kurs · ${formatCommerceMoney(149500)}` })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Dela Pickla 101 · Höst 2026" }));
+    await waitFor(() => expect(mocks.shareOrCopy).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Pickla 101 · Höst 2026",
+      url: "http://localhost:3000/course/series-1?v=pickla-arena-sthlm",
+      copyText: "http://localhost:3000/course/series-1?v=pickla-arena-sthlm",
+    })));
   });
 
   it("requires guardian authentication before collecting subordinate identity", async () => {
@@ -275,6 +292,31 @@ describe("Course V1 customer flow", () => {
 });
 
 describe("Course V1 Admin", () => {
+  it("configures product-owned Open Play access using the canonical occurrence period", async () => {
+    mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
+    mocks.saveSeriesIncludedAccess.mockResolvedValue({
+      series_id: course.id,
+      access_product_id: course.product.id,
+      enabled: false,
+      starts_at: "2026-09-07T22:00:00Z",
+      expires_at: "2026-10-13T22:00:00Z",
+    });
+
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Redigera omgång Pickla 101 · Höst 2026" }));
+
+    const section = await screen.findByTestId("series-included-access");
+    expect(within(section).getByText("Gäller: 8 sep → 13 okt")).toBeInTheDocument();
+    fireEvent.click(within(section).getByRole("checkbox", { name: "Open Play under erbjudandets period" }));
+    fireEvent.click(within(section).getByRole("button", { name: "Spara" }));
+
+    await waitFor(() => expect(mocks.saveSeriesIncludedAccess).toHaveBeenCalledWith({
+      seriesId: "series-1",
+      openPlaySeriesPeriodEnabled: false,
+    }));
+  });
+
   it("configures product-owned Series Early Bird and shows the compact preview", async () => {
     mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
     mocks.saveSeriesEarlyBird.mockResolvedValue({

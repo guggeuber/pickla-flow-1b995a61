@@ -614,10 +614,11 @@ export async function resolveActivityPricingDecision({
     }
   }
 
-  // Existing Founder, membership and day-access semantics above remain authoritative.
-  // Only the new occurrence/partner types enter through the canonical resolver, and
-  // they override paid/member-discount amounts before Early Bird is considered.
-  if (purchaseKind === 'activity_ticket' && userId && finalAmountSek > 0) {
+  // A configured Series benefit is an explicit, person-owned Open Play right.
+  // It wins during its validity period even when another entitlement would also
+  // make the occurrence free. Punch/partner behavior stays unchanged and only
+  // replaces a positive payable amount.
+  if (purchaseKind === 'activity_ticket' && userId) {
     entitlementCustomerId ||= await resolveCustomerIdForUser(client, userId);
     if (entitlementCustomerId) {
       const occurrence = activitySessionOccurrenceInterval(sessionDate, session.start_time, session.end_time);
@@ -629,11 +630,15 @@ export async function resolveActivityPricingDecision({
         p_service_date: sessionDate,
         p_at: occurrence?.startISO || new Date().toISOString(),
         p_product_key: productKey,
-        p_access_context: { entitlement_types: ['punch_card', 'partner_access'] },
+        p_access_context: { entitlement_types: ['series_access', 'punch_card', 'partner_access'] },
       });
       if (canonicalError) {
         console.error('canonical activity entitlement lookup failed', canonicalError.message);
-      } else if (canonicalAccess?.covered && ['punch_card', 'partner_access'].includes(String(canonicalAccess.entitlement_type || ''))) {
+      } else if (
+        canonicalAccess?.covered
+        && ['series_access', 'punch_card', 'partner_access'].includes(String(canonicalAccess.entitlement_type || ''))
+        && (String(canonicalAccess.entitlement_type || '') === 'series_access' || finalAmountSek > 0)
+      ) {
         finalAmountSek = 0;
         accessDecision = 'entitlement_included';
         entitlementType = String(canonicalAccess.entitlement_type);

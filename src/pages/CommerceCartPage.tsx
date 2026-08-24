@@ -59,9 +59,11 @@ function includedLineLabel(line: CommerceOrderLine) {
   const debug = (snapshot.debug && typeof snapshot.debug === "object" ? snapshot.debug : {}) as Record<string, unknown>;
   const reason = String(snapshot.pricing_reason || debug.pricing_reason || "");
   const accessDecision = String(snapshot.access_decision || debug.access_decision || "");
+  const accessReason = String(snapshot.access_reason || debug.access_reason || "");
   const membershipName = String(snapshot.membership_tier_name || debug.membership_tier_name || "");
   if (reason === "playing_host" || reason === "host_comp") return "Ingår — du är värd";
   if (accessDecision === "day_access_included") return "Ingår idag";
+  if (accessReason) return accessReason;
   return `Ingår i ${membershipName || "medlemskap"}`;
 }
 

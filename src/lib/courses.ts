@@ -21,7 +21,20 @@ export type CourseSession = {
   court_ids: string[];
   requires_staffing: boolean;
   is_active: boolean;
+  publish_status?: string;
   series_occurrence_index: number;
+};
+
+export type SeriesIncludedAccess = {
+  open_play_series_period: {
+    enabled: boolean;
+    starts_at: string | null;
+    expires_at: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    access_reason?: string | null;
+    period_source?: "active_series_occurrences" | string;
+  };
 };
 
 export type CourseResourceConflict = {
@@ -83,7 +96,9 @@ export type CourseSeries = {
     scarcity_mode: "none" | "early_bird" | "capacity";
     early_bird_price_minor: number | null;
     early_bird_slots: number | null;
+    resolver_rules?: Record<string, unknown>;
   };
+  included_access?: SeriesIncludedAccess | null;
   pricing?: SeriesCustomerPricing | null;
   venue: { id: string; name: string; slug: string };
   sessions: CourseSession[];
@@ -195,6 +210,7 @@ export type MyCourseItem = {
   completed_sessions: number;
   total_sessions: number;
   access?: { label: "Friplats"; detail: "Ingår · Pickla" } | null;
+  included_access?: SeriesIncludedAccess | null;
 };
 
 export function fetchCourseDetail(seriesId: string) {
@@ -301,6 +317,22 @@ export function saveSeriesEarlyBird(input: {
     enabled: input.enabled,
     price_sek: input.enabled ? input.priceSek : null,
     slots: input.enabled ? input.slots : null,
+  });
+}
+
+export function saveSeriesIncludedAccess(input: {
+  seriesId: string;
+  openPlaySeriesPeriodEnabled: boolean;
+}) {
+  return apiPatch<{
+    series_id: string;
+    access_product_id: string;
+    enabled: boolean;
+    starts_at: string | null;
+    expires_at: string | null;
+  }>("api-courses", "series-included-access", {
+    series_id: input.seriesId,
+    open_play_series_period_enabled: input.openPlaySeriesPeriodEnabled,
   });
 }
 

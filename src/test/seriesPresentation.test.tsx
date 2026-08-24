@@ -59,6 +59,16 @@ function fixture(presentationType: "course" | "social_event" | "clinic" | "tourn
     venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
     sessions: [],
     capacity: { capacity: 40, committed_count: 0, active_holds_count: 0, available_count: 40 },
+    included_access: {
+      open_play_series_period: {
+        enabled: presentationType === "course",
+        starts_at: presentationType === "course" ? "2026-09-04T22:00:00Z" : null,
+        expires_at: presentationType === "course" ? "2026-09-26T22:00:00Z" : null,
+        start_date: presentationType === "course" ? "2026-09-05" : null,
+        end_date: presentationType === "course" ? "2026-09-26" : null,
+        period_source: "active_series_occurrences",
+      },
+    },
   };
 }
 
@@ -76,7 +86,7 @@ describe("Series presentation projection", () => {
   it("gives Parker Brunch a prominent Home image and place CTA", () => {
     const onOpen = vi.fn();
     render(<SeriesRegistrationCard series={fixture("social_event")} onOpen={onOpen} />);
-    expect(screen.getByText("Event · anmälan öppen")).toBeInTheDocument();
+    expect(screen.getByText("EVENT · Anmälan öppen")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
     expect(screen.getByTestId("home-series-image")).toHaveAttribute("src", "https://example.test/parker-brunch.webp");
     expect(screen.getByTestId("home-series-image")).not.toHaveClass("object-cover");
@@ -112,11 +122,27 @@ describe("Series presentation projection", () => {
     expect(seriesCustomerTitle({ seriesName: "Pickla 101 · Hösten 2026", formatName: "Pickla 101", presentationType: "course" })).toBe("Pickla 101 · Hösten 2026");
   });
 
-  it("keeps the Course Home card compact and text-led", () => {
+  it("uses the shared artwork-led Home shell and canonical benefit USP for Course", () => {
     render(<SeriesRegistrationCard series={fixture("course")} onOpen={() => undefined} />);
-    expect(screen.getByText("Anmälan öppen")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Boka kurs/ })).toBeInTheDocument();
+    expect(screen.getByText("KURS · Anmälan öppen")).toBeInTheDocument();
+    expect(screen.getByTestId("home-series-image")).toHaveAttribute("src", "https://example.test/parker-brunch.webp");
+    expect(screen.getByTestId("home-series-image")).not.toHaveClass("object-cover");
+    expect(screen.getByText("Fri Open Play ingår")).toBeInTheDocument();
+    expect(screen.getByText("Spela fritt mellan kurstillfällena")).toBeInTheDocument();
+    expect(screen.queryByText("Pris · 199 kr")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Boka kurs · 199 kr" })).toBeInTheDocument();
+  });
+
+  it("does not fabricate artwork, benefit or open registration state", () => {
+    const noArtwork = fixture("course");
+    noArtwork.image_urls = [];
+    noArtwork.included_access!.open_play_series_period.enabled = false;
+    noArtwork.registration_state = "closed";
+    render(<SeriesRegistrationCard series={noArtwork} onOpen={() => undefined} />);
     expect(screen.queryByTestId("home-series-image")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("home-series-benefit")).not.toBeInTheDocument();
+    expect(screen.getByText("Pris · 199 kr")).toBeInTheDocument();
+    expect(screen.getByText("KURS · Anmälan stängd")).toBeInTheDocument();
   });
 
   it("filters /courses at both API and UI boundaries", () => {

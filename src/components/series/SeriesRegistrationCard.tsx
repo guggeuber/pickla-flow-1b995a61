@@ -12,12 +12,18 @@ const FONT_MONO = "'Space Mono', monospace";
 
 export function SeriesRegistrationCard({ series, onOpen }: { series: CourseDetail; onOpen: () => void }) {
   const presentation = seriesPresentation(series.format?.presentation_type);
-  const prominentImage = presentation.imageProminence === "prominent" ? series.image_urls?.[0] : null;
+  const artwork = series.image_urls?.[0] || null;
   const price = seriesPricePresentation({ pricing: series.pricing, basePriceSek: series.product.base_price_sek });
   const title = seriesCustomerTitle({ seriesName: series.name, formatName: series.format?.name, presentationType: presentation.type });
-  const cta = presentation.type === "social_event"
-    ? seriesBookingCta(price, presentation.bookingCta)
-    : `${presentation.bookingCta} · ${Math.round(price.finalPriceMinor / 100).toLocaleString("sv-SE")} kr`;
+  const cta = seriesBookingCta(price, presentation.bookingCta);
+  const registrationLabel = series.registration_state === "open"
+    ? "Anmälan öppen"
+    : series.registration_state === "upcoming"
+      ? "Anmälan öppnar snart"
+      : "Anmälan stängd";
+  const eyebrow = `${presentation.label} · ${registrationLabel}`;
+  const includedOpenPlay = presentation.type === "course"
+    && series.included_access?.open_play_series_period.enabled === true;
 
   return (
     <article
@@ -26,17 +32,22 @@ export function SeriesRegistrationCard({ series, onOpen }: { series: CourseDetai
       data-testid="home-series-card"
       data-presentation-type={presentation.type}
     >
-      {prominentImage ? (
-        <img src={prominentImage} alt={title} className="block h-auto w-full" data-testid="home-series-image" />
+      {artwork ? (
+        <img src={artwork} alt={title} className="block h-auto w-full" data-testid="home-series-image" />
       ) : null}
       <div className="p-5">
         <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>
-          {presentation.registrationEyebrow}
+          {eyebrow}
         </p>
         <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{title}</h2>
         {series.format?.description ? <p className="mt-2 text-sm leading-relaxed" style={{ color: MUTED }}>{series.format.description}</p> : null}
-        <p className="mt-2 text-sm font-black" style={{ color: PINK }}>{price.primary}</p>
-        {price.context ? <p className="mt-1 text-xs font-semibold" style={{ color: MUTED }}>{price.context}</p> : null}
+        {includedOpenPlay ? <div className="mt-3" data-testid="home-series-benefit">
+          <p className="text-sm font-black uppercase tracking-[0.08em]" style={{ color: PINK }}>Fri Open Play ingår</p>
+          <p className="mt-1 text-xs font-semibold" style={{ color: MUTED }}>Spela fritt mellan kurstillfällena</p>
+        </div> : <>
+          <p className="mt-2 text-sm font-black" style={{ color: PINK }}>{price.primary}</p>
+          {price.context ? <p className="mt-1 text-xs font-semibold" style={{ color: MUTED }}>{price.context}</p> : null}
+        </>}
         <p className="mt-2 text-sm font-bold" style={{ color: MUTED }}>
           {DateTime.fromISO(series.start_date).setLocale("sv").toFormat("d MMMM")} · {series.capacity.available_count} platser kvar
         </p>

@@ -475,7 +475,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       ? "Ingår — du är värd"
       : selectedPricing?.accessDecision === "day_access_included"
       ? "Ingår idag"
-      : `Ingår i ${membershipName || "medlemskap"}`
+      : selectedPricing?.accessReason || `Ingår i ${membershipName || "medlemskap"}`
     : null;
   const memberContextLine = !userHasMembership && pricingMode === "member_discount" && specialMemberPrice < onlinePrice
     ? <>Medlemmar spelar för {formatSek(specialMemberPrice)} eller fritt</>

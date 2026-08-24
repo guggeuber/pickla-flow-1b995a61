@@ -230,6 +230,8 @@ export type BackendActivityPricingDecision = {
   effectivePriceSek?: number | null;
   requiresCheckout?: boolean | null;
   accessDecision?: "paid" | "membership_included" | "day_access_included" | "free_day_pass" | string | null;
+  entitlementType?: string | null;
+  accessReason?: string | null;
   productKey?: string | null;
   customerPresentation?: CustomerActivityPricePresentation | null;
   debug?: {
@@ -295,7 +297,7 @@ export function mergeBackendActivityPricing(
   const includedLabel = decision.requiresCheckout === false
     ? decision.accessDecision === "day_access_included"
       ? "Ingår idag"
-      : "Ingår"
+      : decision.accessReason || "Ingår"
     : null;
 
   if (specialPricing) {

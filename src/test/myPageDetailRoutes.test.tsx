@@ -161,10 +161,18 @@ describe("MyPage detail routes", () => {
         completed_sessions: 0,
         total_sessions: 4,
         access: null,
+        included_access: {
+          open_play_series_period: {
+            enabled: true,
+            starts_at: "2026-09-07T22:00:00Z",
+            expires_at: "2026-09-29T22:00:00Z",
+          },
+        },
       }],
     });
 
     expect(await screen.findByText("Pickla 101 · Höst 2026")).toBeInTheDocument();
+    expect(screen.getByText("Fri Open Play under kursperioden")).toBeInTheDocument();
   });
 
   it("renders a valid registration detail drawer from /my?registration=<valid-id>", async () => {

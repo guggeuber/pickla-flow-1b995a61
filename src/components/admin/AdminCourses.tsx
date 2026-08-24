@@ -14,6 +14,7 @@ import {
   previewCourseSeries,
   removeSeriesMemberPricing,
   saveSeriesEarlyBird,
+  saveSeriesIncludedAccess,
   saveSeriesMemberPricing,
   type CourseFormat,
   type CourseResourcePreviewRow,
@@ -244,6 +245,53 @@ function SeriesEarlyBirdEditor({ venueId, series }: { venueId: string; series: C
         <p className="flex justify-between gap-3"><span className="text-muted-foreground">Första</span><strong>{numericSlots} platser</strong></p>
       </> : null}
     </div>
+  </div>;
+}
+
+function SeriesIncludedAccessEditor({ venueId, series }: { venueId: string; series: CourseSeries }) {
+  const queryClient = useQueryClient();
+  const configured = series.included_access?.open_play_series_period.enabled === true;
+  const [enabled, setEnabled] = useState(configured);
+  const rule = series.included_access?.open_play_series_period;
+  const commerciallyLocked = Number(series.edit_policy?.commitment_count || 0) > 0
+    || Number(series.edit_policy?.order_history_count || 0) > 0;
+
+  useEffect(() => setEnabled(configured), [configured]);
+
+  const save = useMutation({
+    mutationFn: () => saveSeriesIncludedAccess({
+      seriesId: series.id,
+      openPlaySeriesPeriodEnabled: enabled,
+    }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin-courses", venueId] });
+      toast.success(enabled ? "Open Play ingår under erbjudandets period" : "Inkluderad Open Play är avstängd");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const startDate = rule?.start_date;
+  const endDate = rule?.end_date;
+  return <div className="mt-3 rounded-xl border border-border bg-background p-3" data-testid="series-included-access">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-xs font-black uppercase tracking-wider">Inkluderad access</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">Förmånen följer de faktiska tillfällena.</p>
+      </div>
+      <label className="inline-flex items-center gap-2 text-xs font-bold">
+        <input type="checkbox" checked={enabled} disabled={commerciallyLocked} onChange={(event) => setEnabled(event.target.checked)} />
+        Open Play under erbjudandets period
+      </label>
+    </div>
+    {enabled ? <p className="mt-3 text-xs font-semibold">
+      Gäller: {startDate && endDate
+        ? `${DateTime.fromISO(startDate).setLocale("sv").toFormat("d MMM").replaceAll(".", "")} → ${DateTime.fromISO(endDate).setLocale("sv").toFormat("d MMM").replaceAll(".", "")}`
+        : "när omgångens aktiva tillfällen finns"}
+    </p> : null}
+    {commerciallyLocked ? <p className="mt-2 text-[11px] text-muted-foreground">Inställningen är låst eftersom deltagare eller betalningshistorik finns.</p> : null}
+    <button type="button" onClick={() => save.mutate()} disabled={save.isPending || enabled === configured || commerciallyLocked} className="mt-3 inline-flex h-10 items-center justify-center gap-1 rounded-lg border border-border px-3 text-xs font-bold disabled:opacity-40">
+      {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Spara
+    </button>
   </div>;
 }
 
@@ -742,6 +790,7 @@ export default function AdminCourses({
           </div>
 
           {editingSeries?.product ? <SeriesEarlyBirdEditor venueId={venueId} series={editingSeries} /> : null}
+          {editingSeries?.product ? <SeriesIncludedAccessEditor venueId={venueId} series={editingSeries} /> : null}
           {editingSeriesId && memberPricing.isLoading ? <p className="mt-3 text-xs text-muted-foreground">Hämtar medlemspriser…</p> : null}
           {editingSeriesId && memberPricing.isError ? <p className="mt-3 text-xs text-destructive">Medlemspriserna kunde inte hämtas.</p> : null}
           {editingSeriesId && !memberPricing.isLoading && !memberPricing.isError ? <SeriesMemberPricingEditor

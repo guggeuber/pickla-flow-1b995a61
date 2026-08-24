@@ -61,7 +61,12 @@ describe("canonical entitlement foundation", () => {
   });
 
   it("keeps Commerce provenance intact until actual check-in", () => {
-    expect(activityPricing).toContain("entitlement_types: ['punch_card', 'partner_access']");
+    const canonicalActivityEntitlements = activityPricing.match(
+      /p_access_context:\s*\{\s*entitlement_types:\s*\[([^\]]+)]\s*}/,
+    )?.[1] || "";
+    for (const entitlementType of ["series_access", "punch_card", "partner_access"]) {
+      expect(canonicalActivityEntitlements).toContain(`'${entitlementType}'`);
+    }
     expect(activityPricing).toContain("accessDecision = 'entitlement_included'");
     expect(commerceApi).toContain("source_entitlement_id: decision.accessDecision === 'entitlement_included'");
     expect(commerceApi).toContain("access_reason: resolver.access_reason || null");
