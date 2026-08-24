@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
+import { shouldRetryQuery } from "@/lib/queryRetry";
 
 export function useAdminCheck() {
   const { session } = useAuth();
@@ -486,7 +487,7 @@ export function useAdminCapacity(
       timezone: "Europe/Stockholm",
     }),
     refetchInterval: 60_000,
-    retry: 1,
+    retry: (failureCount, error) => failureCount < 1 && shouldRetryQuery(failureCount, error),
   });
 }
 
@@ -575,7 +576,7 @@ export function useAdminOperationsWeek(
       timezone: "Europe/Stockholm",
     }),
     refetchInterval: 60_000,
-    retry: 1,
+    retry: (failureCount, error) => failureCount < 1 && shouldRetryQuery(failureCount, error),
   });
 }
 

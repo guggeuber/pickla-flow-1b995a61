@@ -82,8 +82,13 @@ import PricesMembershipPage from "./pages/PricesMembershipPage";
 import { Loader2 } from "lucide-react";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { enforceCanonicalHost } from "@/lib/canonicalOrigin";
+import { shouldRetryQuery } from "@/lib/queryRetry";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: shouldRetryQuery },
+  },
+});
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();

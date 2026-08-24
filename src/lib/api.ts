@@ -1,4 +1,10 @@
-import { getSessionSingleFlight } from "@/lib/authSessionSingleFlight";
+import {
+  getSessionSingleFlight,
+  isTerminalAuthFailureInProgress,
+  rememberTerminallyRejectedAccessToken,
+  recoverSessionAfterUnauthorized,
+  terminateInvalidSessionSingleFlight,
+} from "@/lib/authSessionSingleFlight";
 import { reportApiFailure } from "@/lib/clientObservability";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
@@ -20,25 +26,39 @@ export type ApiRequestOptions = {
   expectedStatuses?: number[];
 };
 
+type ApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+type ApiRequestInput = {
+  method: ApiMethod;
+  fn: string;
+  endpoint: string;
+  params?: Record<string, string>;
+  body?: Record<string, unknown>;
+  options: ApiRequestOptions;
+};
+
 function shouldReportApiFailure(status: number, options: ApiRequestOptions) {
   return !options.expectedStatuses?.includes(status);
 }
 
-async function getAuthHeaders(
-  includeJsonContentType = true,
-  authMode: ApiRequestOptions["auth"] = "session",
-): Promise<Record<string, string>> {
+function buildHeaders(includeJsonContentType: boolean, accessToken: string | null) {
   const headers: Record<string, string> = {};
-  if (includeJsonContentType) {
-    headers["Content-Type"] = "application/json";
-  }
-  if (authMode === "session") {
-    const { data: { session } } = await getSessionSingleFlight();
-    if (session?.access_token) {
-      headers["Authorization"] = `Bearer ${session.access_token}`;
-    }
-  }
+  if (includeJsonContentType) headers["Content-Type"] = "application/json";
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   return headers;
+}
+
+async function getRequestAccessToken(authMode: ApiRequestOptions["auth"] = "session") {
+  if (authMode === "omit") return null;
+  if (isTerminalAuthFailureInProgress()) {
+    throw new ApiRequestError("Authentication session is being cleared", 401);
+  }
+
+  const { data: { session } } = await getSessionSingleFlight();
+  if (isTerminalAuthFailureInProgress()) {
+    throw new ApiRequestError("Authentication session is being cleared", 401);
+  }
+  return session?.access_token ?? null;
 }
 
 function logApiTiming(method: string, url: string, startedAt: number, status?: number, error?: unknown, expected = false) {
@@ -58,157 +78,108 @@ function logApiTiming(method: string, url: string, startedAt: number, status?: n
 
 async function readErrorBody(res: Response) {
   const data = await res.json().catch(() => ({}));
-  return data.error || `API error ${res.status}`;
+  return typeof data?.error === "string" ? data.error : `API error ${res.status}`;
 }
 
-export async function apiGet<T = unknown>(
+function requestUrl(fn: string, endpoint: string, params?: Record<string, string>) {
+  const url = new URL(`${BASE_URL}/${fn}/${endpoint}`);
+  if (params) Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  return url.toString();
+}
+
+async function apiRequest<T>({ method, fn, endpoint, params, body, options }: ApiRequestInput): Promise<T> {
+  const startedAt = performance.now();
+  const url = requestUrl(fn, endpoint, params);
+  const includeJsonContentType = body !== undefined;
+  const originalAccessToken = await getRequestAccessToken(options.auth);
+
+  const send = (accessToken: string | null) => fetch(url, {
+    method,
+    headers: buildHeaders(includeJsonContentType, accessToken),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+
+  let response = await send(originalAccessToken);
+  const shouldRecover = response.status === 401
+    && options.auth !== "omit"
+    && Boolean(originalAccessToken)
+    && !options.expectedStatuses?.includes(401);
+
+  if (shouldRecover) {
+    const recovery = await recoverSessionAfterUnauthorized(originalAccessToken!);
+    if (recovery.accessToken) {
+      response = await send(recovery.accessToken);
+      if (response.status === 401) {
+        rememberTerminallyRejectedAccessToken(originalAccessToken!);
+        rememberTerminallyRejectedAccessToken(recovery.accessToken);
+        await terminateInvalidSessionSingleFlight();
+      }
+    } else if (!recovery.terminalFailureAlreadyHandled) {
+      await terminateInvalidSessionSingleFlight();
+    }
+  }
+
+  const expected = !shouldReportApiFailure(response.status, options);
+  logApiTiming(method, url, startedAt, response.status, undefined, expected);
+  if (!response.ok) {
+    const message = await readErrorBody(response);
+    if (!expected) {
+      reportApiFailure({
+        method,
+        fn,
+        endpoint,
+        status: response.status,
+        message,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
+    }
+    throw new ApiRequestError(message, response.status);
+  }
+
+  return response.json();
+}
+
+export function apiGet<T = unknown>(
   fn: string,
   endpoint: string,
   params?: Record<string, string>,
   options: ApiRequestOptions = {},
-): Promise<T> {
-  const headers = await getAuthHeaders(false, options.auth);
-  const url = new URL(`${BASE_URL}/${fn}/${endpoint}`);
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  }
-  const startedAt = performance.now();
-  const requestUrl = url.toString();
-  const res = await fetch(requestUrl, { headers });
-  logApiTiming("GET", requestUrl, startedAt, res.status, undefined, !shouldReportApiFailure(res.status, options));
-  if (!res.ok) {
-    const message = await readErrorBody(res);
-    if (shouldReportApiFailure(res.status, options)) {
-      reportApiFailure({
-        method: "GET",
-        fn,
-        endpoint,
-        status: res.status,
-        message,
-        duration_ms: Math.round(performance.now() - startedAt),
-      });
-    }
-    throw new ApiRequestError(message, res.status);
-  }
-  return res.json();
+) {
+  return apiRequest<T>({ method: "GET", fn, endpoint, params, options });
 }
 
-export async function apiPost<T = unknown>(
+export function apiPost<T = unknown>(
   fn: string,
   endpoint: string,
   body: Record<string, unknown>,
   options: ApiRequestOptions = {},
-): Promise<T> {
-  const headers = await getAuthHeaders(true, options.auth);
-  const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
-  const startedAt = performance.now();
-  const res = await fetch(requestUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  logApiTiming("POST", requestUrl, startedAt, res.status, undefined, !shouldReportApiFailure(res.status, options));
-  if (!res.ok) {
-    const message = await readErrorBody(res);
-    if (shouldReportApiFailure(res.status, options)) {
-      reportApiFailure({
-        method: "POST",
-        fn,
-        endpoint,
-        status: res.status,
-        message,
-        duration_ms: Math.round(performance.now() - startedAt),
-      });
-    }
-    throw new ApiRequestError(message, res.status);
-  }
-  return res.json();
+) {
+  return apiRequest<T>({ method: "POST", fn, endpoint, body, options });
 }
 
-export async function apiPut<T = unknown>(
+export function apiPut<T = unknown>(
   fn: string,
   endpoint: string,
   body: Record<string, unknown>,
   options: ApiRequestOptions = {},
-): Promise<T> {
-  const headers = await getAuthHeaders(true, options.auth);
-  const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
-  const startedAt = performance.now();
-  const res = await fetch(requestUrl, {
-    method: "PUT",
-    headers,
-    body: JSON.stringify(body),
-  });
-  logApiTiming("PUT", requestUrl, startedAt, res.status);
-  if (!res.ok) {
-    const message = await readErrorBody(res);
-    reportApiFailure({
-      method: "PUT",
-      fn,
-      endpoint,
-      status: res.status,
-      message,
-      duration_ms: Math.round(performance.now() - startedAt),
-    });
-    throw new ApiRequestError(message, res.status);
-  }
-  return res.json();
+) {
+  return apiRequest<T>({ method: "PUT", fn, endpoint, body, options });
 }
 
-export async function apiPatch<T = unknown>(
+export function apiPatch<T = unknown>(
   fn: string,
   endpoint: string,
-  body: Record<string, unknown>
-): Promise<T> {
-  const headers = await getAuthHeaders();
-  const requestUrl = `${BASE_URL}/${fn}/${endpoint}`;
-  const startedAt = performance.now();
-  const res = await fetch(requestUrl, {
-    method: "PATCH",
-    headers,
-    body: JSON.stringify(body),
-  });
-  logApiTiming("PATCH", requestUrl, startedAt, res.status);
-  if (!res.ok) {
-    const message = await readErrorBody(res);
-    reportApiFailure({
-      method: "PATCH",
-      fn,
-      endpoint,
-      status: res.status,
-      message,
-      duration_ms: Math.round(performance.now() - startedAt),
-    });
-    throw new Error(message);
-  }
-  return res.json();
+  body: Record<string, unknown>,
+  options: ApiRequestOptions = {},
+) {
+  return apiRequest<T>({ method: "PATCH", fn, endpoint, body, options });
 }
 
-export async function apiDelete<T = unknown>(
+export function apiDelete<T = unknown>(
   fn: string,
   endpoint: string,
-  params?: Record<string, string>
-): Promise<T> {
-  const headers = await getAuthHeaders();
-  const url = new URL(`${BASE_URL}/${fn}/${endpoint}`);
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  }
-  const startedAt = performance.now();
-  const requestUrl = url.toString();
-  const res = await fetch(requestUrl, { method: "DELETE", headers });
-  logApiTiming("DELETE", requestUrl, startedAt, res.status);
-  if (!res.ok) {
-    const message = await readErrorBody(res);
-    reportApiFailure({
-      method: "DELETE",
-      fn,
-      endpoint,
-      status: res.status,
-      message,
-      duration_ms: Math.round(performance.now() - startedAt),
-    });
-    throw new Error(message);
-  }
-  return res.json();
+  params?: Record<string, string>,
+  options: ApiRequestOptions = {},
+) {
+  return apiRequest<T>({ method: "DELETE", fn, endpoint, params, options });
 }

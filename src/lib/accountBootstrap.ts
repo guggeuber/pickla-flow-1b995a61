@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { terminateInvalidSessionSingleFlight } from "@/lib/authSessionSingleFlight";
 
 export type AccountIdentityRecord = {
   id?: string | null;
@@ -31,6 +32,14 @@ type BootstrapTable = {
 };
 type BootstrapSupabase = { from: (table: string) => BootstrapTable };
 
+type SessionUserResult = {
+  data: { user: { id: string } | null };
+  error: unknown | null;
+};
+
+type SessionValidator = () => Promise<SessionUserResult>;
+type InvalidSessionTerminator = () => Promise<unknown>;
+
 const bootstrapSupabase = supabase as unknown as BootstrapSupabase;
 
 function optionalText(value: unknown) {
@@ -56,6 +65,42 @@ export function normalizeAccountIdentity(value: unknown): AccountIdentityRecord 
 
 function bootstrapError(scope: string, error: { message?: string } | null) {
   return new Error(`Account bootstrap ${scope} failed: ${error?.message || "Unknown error"}`);
+}
+
+function authErrorDetails(error: unknown) {
+  if (!error || typeof error !== "object") return { name: "", code: "", status: null as number | null };
+  const authError = error as { name?: unknown; code?: unknown; status?: unknown };
+  return {
+    name: typeof authError.name === "string" ? authError.name : "",
+    code: typeof authError.code === "string" ? authError.code : "",
+    status: typeof authError.status === "number" ? authError.status : null,
+  };
+}
+
+function isUnrecoverableSessionError(error: unknown) {
+  const { name, code, status } = authErrorDetails(error);
+  return name === "AuthSessionMissingError"
+    || ["bad_jwt", "refresh_token_not_found", "session_not_found", "user_not_found"].includes(code)
+    || status === 401
+    || status === 403;
+}
+
+/** Remotely validates one restored session at the authenticated app boundary. */
+export async function validateRestoredSessionWith(
+  expectedUserId: string,
+  validate: SessionValidator,
+  terminate: InvalidSessionTerminator,
+) {
+  const result = await validate();
+  if (!result.error && result.data.user?.id === expectedUserId) return result.data.user;
+
+  const mismatchedUser = !result.error && result.data.user?.id !== expectedUserId;
+  if (mismatchedUser || isUnrecoverableSessionError(result.error)) {
+    await terminate();
+  }
+
+  if (result.error instanceof Error) throw result.error;
+  throw new Error(mismatchedUser ? "Restored auth user does not match the active session" : "Auth session validation failed");
 }
 
 export async function loadAccountBootstrapWith(client: BootstrapClient, userId: string): Promise<AccountBootstrap> {
@@ -110,6 +155,11 @@ const supabaseBootstrapClient: BootstrapClient = {
   },
 };
 
-export function loadAccountBootstrap(userId: string) {
+export async function loadAccountBootstrap(userId: string) {
+  await validateRestoredSessionWith(
+    userId,
+    () => supabase.auth.getUser() as Promise<SessionUserResult>,
+    () => terminateInvalidSessionSingleFlight(),
+  );
   return loadAccountBootstrapWith(supabaseBootstrapClient, userId);
 }

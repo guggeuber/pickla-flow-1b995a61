@@ -5,7 +5,11 @@ import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { canonicalAppOrigin } from "@/lib/canonicalOrigin";
-import { getSessionSingleFlight } from "@/lib/authSessionSingleFlight";
+import {
+  getSessionSingleFlight,
+  subscribeToTerminalAuthFailure,
+} from "@/lib/authSessionSingleFlight";
+import { clearCustomerQueryCache } from "@/lib/authQueryCache";
 
 interface AuthContextType {
   user: User | null;
@@ -31,16 +35,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const claimAttempted = useRef(false);
+  const authenticatedUserId = useRef<string | null>(null);
 
   // Auto-claim pending day pass when user becomes authenticated
   useEffect(() => {
     if (!user || claimAttempted.current) return;
-    const token = localStorage.getItem(PENDING_CLAIM_KEY);
+    const token = window.localStorage?.getItem(PENDING_CLAIM_KEY);
     if (!token) return;
     claimAttempted.current = true;
     apiPost("api-day-passes", "claim", { token })
       .then(() => {
-        localStorage.removeItem(PENDING_CLAIM_KEY);
+        window.localStorage?.removeItem(PENDING_CLAIM_KEY);
         toast.success("Dagspass hämtat! Du hittar det under Mitt konto.");
       })
       .catch((error) => {
@@ -49,28 +54,48 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [user]);
 
   useEffect(() => {
+    let receivedAuthEvent = false;
+    let disposed = false;
+
+    const applySession = (nextSession: Session | null) => {
+      if (disposed) return;
+      const previousUserId = authenticatedUserId.current;
+      const nextUserId = nextSession?.user.id ?? null;
+      if (previousUserId && previousUserId !== nextUserId) {
+        void clearCustomerQueryCache(queryClient, previousUserId);
+      }
+      authenticatedUserId.current = nextUserId;
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+      setLoading(false);
+    };
+
+    const unsubscribeTerminalFailure = subscribeToTerminalAuthFailure(() => {
+      receivedAuthEvent = true;
+      applySession(null);
+    });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        setLoading(false);
+        receivedAuthEvent = true;
+        applySession(session);
       }
     );
 
     getSessionSingleFlight()
       .then(({ data: { session } }) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        setLoading(false);
+        if (!receivedAuthEvent) applySession(session);
       })
       .catch(() => {
-        setSession(null);
-        setUser(null);
-        setLoading(false);
+        if (!receivedAuthEvent) applySession(null);
       });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      disposed = true;
+      unsubscribeTerminalFailure();
+      subscription.unsubscribe();
+    };
+  }, [queryClient]);
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -105,8 +130,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
-    queryClient.clear();
+    const signingOutUserId = user?.id ?? authenticatedUserId.current;
+    setSession(null);
+    setUser(null);
+    if (signingOutUserId) void clearCustomerQueryCache(queryClient, signingOutUserId);
+    authenticatedUserId.current = null;
+    await supabase.auth.signOut({ scope: "local" });
     claimAttempted.current = false;
   };
 

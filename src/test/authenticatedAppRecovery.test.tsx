@@ -1,13 +1,27 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: null }, error: null }),
+      refreshSession: vi.fn().mockResolvedValue({ data: { session: null }, error: null }),
+      getUser: vi.fn(),
+      signOut: vi.fn().mockResolvedValue({ error: null }),
+    },
+    from: vi.fn(),
+  },
+}));
 
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { AuthenticatedBootstrapGate } from "@/components/AuthenticatedAppBootstrap";
+import { supabase } from "@/integrations/supabase/client";
 import {
   loadAccountBootstrapWith,
   normalizeAccountIdentity,
+  validateRestoredSessionWith,
   type AccountBootstrap,
 } from "@/lib/accountBootstrap";
 import { isStaleChunkError, showChunkRecovery } from "@/lib/appRecovery";
@@ -38,6 +52,12 @@ function testQueryClient() {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
 }
+
+beforeEach(() => {
+  vi.mocked(supabase.auth.getSession).mockResolvedValue({ data: { session: null }, error: null });
+  vi.mocked(supabase.auth.refreshSession).mockResolvedValue({ data: { session: null, user: null }, error: null });
+  vi.mocked(supabase.auth.signOut).mockResolvedValue({ error: null });
+});
 
 function GateHarness({
   children = <h1>Authenticated landing</h1>,
@@ -200,6 +220,44 @@ describe("authenticated application resilience", () => {
       identityMissing: false,
     });
     expect(client.fetchCustomerByUserId).toHaveBeenCalledWith("user-id");
+  });
+
+  it("remotely validates a restored session before account bootstrap continues", async () => {
+    const terminate = vi.fn();
+    const user = await validateRestoredSessionWith(
+      "affected-user-id",
+      vi.fn().mockResolvedValue({
+        data: { user: { id: "affected-user-id" } },
+        error: null,
+      }),
+      terminate,
+    );
+
+    expect(user).toEqual({ id: "affected-user-id" });
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates a remotely revoked restored session but preserves transient recovery", async () => {
+    const terminateRevoked = vi.fn().mockResolvedValue(undefined);
+    const revoked = Object.assign(new Error("Auth session missing"), {
+      name: "AuthSessionMissingError",
+      status: 400,
+      code: "session_not_found",
+    });
+    await expect(validateRestoredSessionWith(
+      "affected-user-id",
+      vi.fn().mockResolvedValue({ data: { user: null }, error: revoked }),
+      terminateRevoked,
+    )).rejects.toThrow("Auth session missing");
+    expect(terminateRevoked).toHaveBeenCalledTimes(1);
+
+    const terminateNetwork = vi.fn();
+    await expect(validateRestoredSessionWith(
+      "affected-user-id",
+      vi.fn().mockResolvedValue({ data: { user: null }, error: new TypeError("Failed to fetch") }),
+      terminateNetwork,
+    )).rejects.toThrow("Failed to fetch");
+    expect(terminateNetwork).not.toHaveBeenCalled();
   });
 
   it("renders recovery UI instead of a black screen for a top-level React exception", async () => {

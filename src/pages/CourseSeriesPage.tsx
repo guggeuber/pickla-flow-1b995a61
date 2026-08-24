@@ -5,6 +5,7 @@ import { DateTime } from "luxon";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
+import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
 import { useAuth } from "@/hooks/useAuth";
 import { createCourseCart, fetchCourseDetail } from "@/lib/courses";
 import { formatCommerceMoney } from "@/lib/commerce";
@@ -13,6 +14,7 @@ import { seriesBookingCta, seriesPricePresentation } from "@/lib/seriesCustomerP
 import { occurrenceCountLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
+import { DETAIL_ARTWORK_SIZES } from "@/lib/responsiveSupabaseImage";
 
 type ParticipantType = "self" | "adult" | "dependent";
 
@@ -114,7 +116,7 @@ export default function CourseSeriesPage() {
     <div className="min-h-[100dvh] bg-white text-slate-950">
       <PicklaTopBar slug={venueSlug} background="#fff" />
       <main className="mx-auto w-full max-w-xl px-5 pb-40 pt-[calc(env(safe-area-inset-top,0px)+96px)]">
-        {course.image_urls?.[0] ? <img src={course.image_urls[0]} alt={title} className={socialEvent ? "mb-5 block h-auto w-full rounded-[24px]" : "mb-6 block h-auto w-full rounded-[24px]"} data-testid="series-detail-image" /> : null}
+        {course.image_urls?.[0] ? <ResponsiveSupabaseImage src={course.image_urls[0]} alt={title} sizes={DETAIL_ARTWORK_SIZES} width={1280} height={720} priority className={socialEvent ? "mb-5 block h-auto w-full rounded-[24px]" : "mb-6 block h-auto w-full rounded-[24px]"} data-testid="series-detail-image" /> : null}
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">{presentation.label}</p>
           <button type="button" onClick={() => void shareSeries()} className="flex items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm font-black" aria-label={`Dela ${title}`}><Share2 className="h-4 w-4" /> Dela</button>

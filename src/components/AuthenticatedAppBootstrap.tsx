@@ -7,6 +7,7 @@ import { AppRecoveryScreen } from "@/components/AppRecoveryScreen";
 import { useAuth } from "@/hooks/useAuth";
 import { loadAccountBootstrap, type AccountBootstrap } from "@/lib/accountBootstrap";
 import { reportClientEvent } from "@/lib/clientObservability";
+import { shouldRetryQuery } from "@/lib/queryRetry";
 
 type BootstrapUser = {
   id: string;
@@ -36,7 +37,7 @@ export function AuthenticatedBootstrapGate({
     queryKey: ["authenticated-account-bootstrap", user?.id],
     enabled: !!user?.id && !authLoading && !bypass,
     queryFn: () => loadBootstrap(user!.id),
-    retry: 2,
+    retry: (failureCount, error) => failureCount < 2 && shouldRetryQuery(failureCount, error),
     retryDelay: (attempt) => Math.min(300 * 2 ** attempt, 1200),
     staleTime: 60_000,
     refetchOnWindowFocus: false,

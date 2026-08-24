@@ -1,6 +1,8 @@
 import { ArrowRight } from "lucide-react";
 import { DateTime } from "luxon";
+import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
 import type { CourseDetail } from "@/lib/courses";
+import { CARD_ARTWORK_SIZES, CARD_ARTWORK_WIDTHS } from "@/lib/responsiveSupabaseImage";
 import { seriesBookingCta, seriesPricePresentation } from "@/lib/seriesCustomerPricing";
 import { seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 
@@ -10,7 +12,15 @@ const BORDER = "rgba(17,17,17,0.07)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
-export function SeriesRegistrationCard({ series, onOpen }: { series: CourseDetail; onOpen: () => void }) {
+export function SeriesRegistrationCard({
+  series,
+  onOpen,
+  imagePriority = false,
+}: {
+  series: CourseDetail;
+  onOpen: () => void;
+  imagePriority?: boolean;
+}) {
   const presentation = seriesPresentation(series.format?.presentation_type);
   const artwork = series.image_urls?.[0] || null;
   const price = seriesPricePresentation({ pricing: series.pricing, basePriceSek: series.product.base_price_sek });
@@ -33,7 +43,17 @@ export function SeriesRegistrationCard({ series, onOpen }: { series: CourseDetai
       data-presentation-type={presentation.type}
     >
       {artwork ? (
-        <img src={artwork} alt={title} className="block h-auto w-full" data-testid="home-series-image" />
+        <ResponsiveSupabaseImage
+          src={artwork}
+          alt={title}
+          sizes={CARD_ARTWORK_SIZES}
+          widths={CARD_ARTWORK_WIDTHS}
+          width={1280}
+          height={720}
+          priority={imagePriority}
+          className="block h-auto w-full"
+          data-testid="home-series-image"
+        />
       ) : null}
       <div className="p-5">
         <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>

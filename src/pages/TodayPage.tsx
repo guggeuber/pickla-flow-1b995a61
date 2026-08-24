@@ -27,6 +27,8 @@ import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 import { fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
 import { inheritedEventImages } from "@/lib/eventMedia";
 import { SeriesRegistrationCard } from "@/components/series/SeriesRegistrationCard";
+import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
+import { CARD_ARTWORK_SIZES, CARD_ARTWORK_WIDTHS } from "@/lib/responsiveSupabaseImage";
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
@@ -723,7 +725,17 @@ function FeaturedTonightHero({
           boxShadow: "0 14px 36px rgba(17,17,17,0.06)",
         }}
       >
-        {item?.imageUrls?.[0] ? <img src={item.imageUrls[0]} alt="" className="-mx-5 -mt-5 mb-5 aspect-video w-[calc(100%+2.5rem)] object-cover" data-testid="featured-identity-image" /> : null}
+        {item?.imageUrls?.[0] ? <ResponsiveSupabaseImage
+          src={item.imageUrls[0]}
+          alt=""
+          sizes={CARD_ARTWORK_SIZES}
+          widths={CARD_ARTWORK_WIDTHS}
+          width={1280}
+          height={720}
+          priority
+          className="-mx-5 -mt-5 mb-5 aspect-video w-[calc(100%+2.5rem)] object-cover"
+          data-testid="featured-identity-image"
+        /> : null}
         <p className="text-[11px] font-black uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: PINK }}>
           {item?.firstVisitOffer?.label || activityStatus?.stateLabel || timing.eyebrow}
         </p>
@@ -952,7 +964,11 @@ export default function TodayPage() {
               {courseHome?.mode === "registration" && courseHome.item ? (() => {
                 const course = courseHome.item as CourseDetail;
                 return (
-                  <SeriesRegistrationCard series={course} onOpen={() => navigate(`/course/${course.id}?v=${encodeURIComponent(slug)}`)} />
+                  <SeriesRegistrationCard
+                    series={course}
+                    onOpen={() => navigate(`/course/${course.id}?v=${encodeURIComponent(slug)}`)}
+                    imagePriority={!featuredItem?.imageUrls?.[0]}
+                  />
                 );
               })() : null}
               {courseHome?.mode === "next" && courseHome.item ? (() => {
