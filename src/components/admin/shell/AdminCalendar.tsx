@@ -31,6 +31,7 @@ interface Props {
   venueId: string | undefined;
   venueName?: string;
   onOpenModule: (id: string) => void;
+  onOpenCatalog: (seriesId: string) => void;
 }
 
 interface MembershipTier {
@@ -77,6 +78,13 @@ function kindLabel(kind: string) {
   if (kind === "drift") return "Drift";
   if (kind === "block") return "Block";
   return kind;
+}
+
+function managedPresentationLabel(type?: string | null) {
+  if (type === "social_event") return "EVENT";
+  if (type === "clinic") return "CLINIC";
+  if (type === "tournament") return "TURNERING";
+  return "KURS";
 }
 
 function weekRange(selectedDate: string) {
@@ -300,6 +308,7 @@ function TimelineItem({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <AxChip tone={tone.chipTone}>{tone.label}</AxChip>
+          {item.managed_series_id && <AxChip tone="electric">{managedPresentationLabel(item.managed_presentation_type)}</AxChip>}
           {item.kind === "activity" && item.override_status === "hidden" && <AxChip tone="neutral">DOLD IDAG</AxChip>}
           {item.kind === "activity" && item.override_status === "cancelled" && <AxChip tone="danger">AVBOKAD</AxChip>}
           {item.kind === "event" && item.visibility && <AxChip tone="neutral">{String(item.visibility).toUpperCase()}</AxChip>}
@@ -310,7 +319,7 @@ function TimelineItem({
           {item.title}
         </p>
         <div className="mt-1.5 flex items-center gap-3 text-[11px]" style={{ color: ax("muted") }}>
-          {item.kind === "court_booking" && (
+          {(item.kind === "court_booking" || (item.kind === "activity" && item.courts?.length)) && (
             <span className="inline-flex items-center gap-1 truncate">
               {item.court_name || item.courts?.map((court) => court.name).filter(Boolean).join(", ")}
             </span>
@@ -427,7 +436,7 @@ export default function AdminCalendar(props: Props) {
         </div>
       </div>
       {view === "day" ? (
-        <AdminCalendarDay venueId={props.venueId} onOpenModule={props.onOpenModule} />
+        <AdminCalendarDay venueId={props.venueId} onOpenModule={props.onOpenModule} onOpenCatalog={props.onOpenCatalog} />
       ) : props.venueId ? (
         <div className="relative left-1/2 w-[calc(100vw-2rem)] max-w-[1440px] -translate-x-1/2">
           <AdminOperationsWeek venueId={props.venueId} venueName={props.venueName} onOpenModule={props.onOpenModule} />
@@ -439,7 +448,7 @@ export default function AdminCalendar(props: Props) {
   );
 }
 
-function AdminCalendarDay({ venueId, onOpenModule }: Props) {
+function AdminCalendarDay({ venueId, onOpenModule, onOpenCatalog }: Props) {
   const qc = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(todayStockholm());
   const [openItem, setOpenItem] = useState<AdminCalendarItem | null>(null);
@@ -946,6 +955,10 @@ function AdminCalendarDay({ venueId, onOpenModule }: Props) {
               setOpenItem(null);
               onOpenModule(id);
             }}
+            onOpenCatalog={(seriesId) => {
+              setOpenItem(null);
+              onOpenCatalog(seriesId);
+            }}
             onHide={() => activityOverride.mutate({ item: openItem, status: "hidden" })}
             onRestore={() => activityOverride.mutate({ item: openItem, status: "active" })}
             onCancel={() => setConfirmCancel(openItem)}
@@ -1198,6 +1211,7 @@ function AdminCalendarDay({ venueId, onOpenModule }: Props) {
 function ItemActions({
   item,
   onOpenModule,
+  onOpenCatalog,
   onHide,
   onRestore,
   onCancel,
@@ -1205,6 +1219,7 @@ function ItemActions({
 }: {
   item: AdminCalendarItem;
   onOpenModule: (id: string) => void;
+  onOpenCatalog: (seriesId: string) => void;
   onHide: () => void;
   onRestore: () => void;
   onCancel: () => void;
@@ -1276,6 +1291,12 @@ function ItemActions({
               </p>
             </div>
           )}
+          {item.kind === "activity" && item.courts?.length ? (
+            <div className="col-span-2">
+              <p className="font-mono uppercase tracking-wider">Banor</p>
+              <p className="mt-0.5 text-sm font-black" style={{ color: "white" }}>{item.courts.map((court) => court.name).filter(Boolean).join(" · ")}</p>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1292,6 +1313,20 @@ function ItemActions({
           >
             Öppna <ExternalLink className="h-4 w-4" />
           </button>
+        )}
+        {item.managed_series_id && (
+          <div className="rounded-2xl p-3" style={{ background: ax("electric", 0.09), border: `1px solid ${ax("electric", 0.32)}` }} data-testid="calendar-catalog-origin">
+            <p className="font-mono text-[10px] font-black uppercase tracking-[0.18em]" style={{ color: ax("electricSoft") }}>Genererat från Catalog</p>
+            <p className="mt-1 text-xs" style={{ color: ax("muted") }}>{item.managed_series_name || item.title} styr datum, banor, kapacitet och kommersiell sanning.</p>
+            <button
+              type="button"
+              onClick={() => onOpenCatalog(item.managed_series_id!)}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-black"
+              style={{ background: ax("electric"), color: ax("ink") }}
+            >
+              Öppna i Catalog <ExternalLink className="h-4 w-4" />
+            </button>
+          </div>
         )}
         {item.kind === "activity" && (
           <div className="grid grid-cols-2 gap-2">

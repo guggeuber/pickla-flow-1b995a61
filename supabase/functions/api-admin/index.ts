@@ -4759,12 +4759,19 @@ Deno.serve(async (req) => {
 
       const { data: sessions, error: sessionsError } = await admin
         .from('activity_sessions')
-        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity, product_key, metadata')
+        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity, product_key, metadata, activity_series(id, name, format_id, access_product_id, activity_formats(presentation_type))')
         .eq('venue_id', scopedVenueId)
         .eq('is_active', true)
         .order('start_time', { ascending: true })
         .limit(800);
       if (sessionsError) return errorResponse(sessionsError.message);
+
+      const activityCourtIds = uniqueStrings((sessions || []).flatMap((session) => Array.isArray(session.court_ids) ? session.court_ids : []));
+      const { data: activityCourts, error: activityCourtsError } = activityCourtIds.length
+        ? await admin.from('venue_courts').select('id, name, court_number, sport_type').eq('venue_id', scopedVenueId).in('id', activityCourtIds)
+        : { data: [], error: null };
+      if (activityCourtsError) return errorResponse(activityCourtsError.message);
+      const activityCourtById = new Map((activityCourts || []).map((court) => [court.id, court]));
 
       const activitySamples: any[] = [];
       for (const date of dates) {
@@ -4773,6 +4780,12 @@ Deno.serve(async (req) => {
           const isConcrete = session.session_date === date;
           const isRecurring = !session.session_date && Array.isArray(session.recurrence_days) && session.recurrence_days.includes(weekday);
           if (!isConcrete && !isRecurring) continue;
+          const parentSeries = Array.isArray(session.activity_series) ? session.activity_series[0] : session.activity_series;
+          const managedProjection = parentSeries ? activitySeriesManagementProjection(parentSeries) : null;
+          const managedSeries = managedProjection?.management_mode === 'managed_series' ? parentSeries : null;
+          const formatRelation = Array.isArray(managedSeries?.activity_formats)
+            ? managedSeries.activity_formats[0]
+            : managedSeries?.activity_formats;
           activitySamples.push({
             id: `activity-${session.id}-${date}`,
             source_id: session.id,
@@ -4790,7 +4803,12 @@ Deno.serve(async (req) => {
             desk_price_sek: Number(session.metadata?.desk_price_sek ?? session.price_sek ?? 0),
             pricing_channel_mode: session.metadata?.pricing_channel_mode || null,
             capacity: session.capacity || null,
-            moduleTarget: 'schedule',
+            court_ids: Array.isArray(session.court_ids) ? session.court_ids : [],
+            courts: (Array.isArray(session.court_ids) ? session.court_ids : []).map((courtId: string) => activityCourtById.get(courtId)).filter(Boolean),
+            moduleTarget: managedSeries ? null : 'schedule',
+            managed_series_id: managedSeries?.id || null,
+            managed_series_name: managedSeries?.name || null,
+            managed_presentation_type: formatRelation?.presentation_type || null,
           });
         }
       }

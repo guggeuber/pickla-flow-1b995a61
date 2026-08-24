@@ -60,6 +60,7 @@ import AdminToday from "@/components/admin/shell/AdminToday";
 import AdminCalendar from "@/components/admin/shell/AdminCalendar";
 import AdminCapacity from "@/components/admin/shell/AdminCapacity";
 import AdminSettings from "@/components/admin/shell/AdminSettings";
+import AdminCatalog from "@/components/admin/shell/AdminCatalog";
 import AdminSoon from "@/components/admin/shell/AdminSoon";
 import {
   Dialog,
@@ -145,7 +146,7 @@ const sectionLabels: Record<string, { label: string; icon: any }> = {
   hours: { label: "Öppettider", icon: Clock },
   pricing: { label: "Priser", icon: Tag },
   products: { label: "Produkter", icon: Package },
-  schedule: { label: "Schema", icon: CalendarCheck },
+  schedule: { label: "Schema · Maskinrummet", icon: CalendarCheck },
   links: { label: "Länkar", icon: Link2 },
   events: { label: "Events", icon: Trophy },
   eventLeads: { label: "Event Leads", icon: MessageSquare },
@@ -223,6 +224,7 @@ const AdminPage = () => {
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
   const [active, setActive] = useState<AdminSurfaceId>("today");
+  const [catalogSeriesId, setCatalogSeriesId] = useState<string | null>(null);
   const routeModule = adminModuleIdFromPath(modulePath);
 
   const venueId = selectedVenueId || adminData?.venueId;
@@ -335,7 +337,10 @@ const AdminPage = () => {
         </AnimatePresence>
 
         <div className="mt-3">
-          <AdminTopNav surfaces={SURFACES} active={active} onChange={setActive} />
+          <AdminTopNav surfaces={SURFACES} active={active} onChange={(surface) => {
+            if (surface === "catalog" && active !== "catalog") setCatalogSeriesId(null);
+            setActive(surface);
+          }} />
         </div>
       </div>
 
@@ -352,7 +357,15 @@ const AdminPage = () => {
               <AdminToday venueId={venueId} venueName={currentVenue?.name} onOpenSettings={openSettingsModule} />
             )}
             {active === "calendar" && (
-              <AdminCalendar venueId={venueId} venueName={currentVenue?.name} onOpenModule={openSettingsModule} />
+              <AdminCalendar
+                venueId={venueId}
+                venueName={currentVenue?.name}
+                onOpenModule={openSettingsModule}
+                onOpenCatalog={(seriesId) => {
+                  setCatalogSeriesId(seriesId);
+                  setActive("catalog");
+                }}
+              />
             )}
             {active === "pipeline" && (
               <AdminSoon
@@ -374,16 +387,11 @@ const AdminPage = () => {
               <CustomersScreen venueId={venueId} />
             )}
             {active === "catalog" && (
-              <AdminSoon
-                icon={Package}
-                phase="Phase 6"
-                title="Catalog"
-                tagline="Produkter, priser, medlemskap och schema — på samma yta."
-                bullets={[
-                  { title: "En produktsida", desc: "Produkter, eventutbud och medlemskap samlade på en tydlig yta." },
-                  { title: "Pris-koppling", desc: "Dynamiska prisregler visas direkt på produkten de styr." },
-                  { title: "Schema bredvid", desc: "Activity sessions och series länkade till sin produkt." },
-                ]}
+              <AdminCatalog
+                venueId={venueId}
+                initialSeriesId={catalogSeriesId}
+                onCloseInitialSeries={() => setCatalogSeriesId(null)}
+                onOpenModule={openSettingsModule}
               />
             )}
             {active === "settings" && (

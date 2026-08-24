@@ -55,6 +55,7 @@ export type CourseSeries = {
   format_id: string;
   name: string;
   description: string | null;
+  metadata?: Record<string, unknown>;
   image_urls: string[];
   status: string;
   start_date: string;

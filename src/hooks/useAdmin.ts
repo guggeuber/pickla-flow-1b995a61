@@ -350,7 +350,11 @@ export type AdminCalendarItem = {
   kind: "activity" | "event" | "drift" | "block" | string;
   tone: "lime" | "magenta" | "sun" | "danger" | string;
   moduleTarget?: string | null;
+  managed_series_id?: string | null;
+  managed_series_name?: string | null;
+  managed_presentation_type?: string | null;
   activity_session_id?: string;
+  court_ids?: string[];
   session_type?: string;
   registrations_count?: number;
   override_status?: string | null;

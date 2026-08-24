@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { AlertTriangle, CalendarDays, Check, ChevronDown, Gift, ImagePlus, Loader2, Pencil, Plus, Save, Trash2, Users, X } from "lucide-react";
@@ -25,7 +25,7 @@ import {
   updateCourseSeries,
 } from "@/lib/courses";
 import { namedEventImagePath, nextNamedEventImageSlot, removeNamedEventImage, uploadNamedEventImage } from "@/lib/eventMedia";
-import { SERIES_PRESENTATION_TYPES, seriesPresentation, type SeriesPresentationType } from "@/lib/seriesPresentation";
+import { occurrenceCountLabel, SERIES_PRESENTATION_TYPES, seriesPresentation, type SeriesPresentationType } from "@/lib/seriesPresentation";
 
 const DAYS = [
   { value: 1, label: "Mån" }, { value: 2, label: "Tis" }, { value: 3, label: "Ons" },
@@ -247,9 +247,23 @@ function SeriesEarlyBirdEditor({ venueId, series }: { venueId: string; series: C
   </div>;
 }
 
-export default function AdminCourses({ venueId }: { venueId: string }) {
+type AdminCoursesProps = {
+  venueId: string;
+  catalogMode?: boolean;
+  initialSeriesId?: string | null;
+  initialPresentationType?: SeriesPresentationType;
+  onDone?: () => void;
+};
+
+export default function AdminCourses({
+  venueId,
+  catalogMode = false,
+  initialSeriesId = null,
+  initialPresentationType = "course",
+  onDone,
+}: AdminCoursesProps) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(catalogMode);
   const seriesEditorRef = useRef<HTMLDivElement>(null);
 
   const [editingFormatId, setEditingFormatId] = useState<string | null>(null);
@@ -261,7 +275,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
   const [ageGroup, setAgeGroup] = useState("adult");
   const [level, setLevel] = useState("beginner");
   const [requiresInstructor, setRequiresInstructor] = useState(true);
-  const [presentationType, setPresentationType] = useState<SeriesPresentationType>("course");
+  const [presentationType, setPresentationType] = useState<SeriesPresentationType>(initialPresentationType);
 
   const [editingSeriesId, setEditingSeriesId] = useState<string | null>(null);
   const [formatId, setFormatId] = useState("");
@@ -391,7 +405,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
     setAgeGroup("adult");
     setLevel("beginner");
     setRequiresInstructor(true);
-    setPresentationType("course");
+    setPresentationType(initialPresentationType);
   };
   const editFormat = (format: CourseFormat) => {
     setEditingFormatId(format.id);
@@ -463,7 +477,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
     setCourtIds([]);
     setSeriesImages([]);
   };
-  const editSeries = (series: CourseSeries) => {
+  const editSeries = useCallback((series: CourseSeries) => {
     setEditingSeriesId(series.id);
     setFormatId(series.format_id);
     setName(series.name);
@@ -484,7 +498,15 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
         seriesEditorRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     });
-  };
+  }, []);
+  useEffect(() => {
+    if (!catalogMode || !initialSeriesId || !data || editingSeriesId === initialSeriesId) return;
+    const series = data.series.find((item) => item.id === initialSeriesId);
+    if (series) editSeries(series);
+  }, [catalogMode, data, editSeries, editingSeriesId, initialSeriesId]);
+  useEffect(() => {
+    if (catalogMode && !initialSeriesId && !editingSeriesId) setPresentationType(initialPresentationType);
+  }, [catalogMode, editingSeriesId, initialPresentationType, initialSeriesId]);
   const saveSeries = useMutation({
     mutationFn: () => {
       const input = {
@@ -504,10 +526,11 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
       const savedPaths = new Set(seriesImages.map(namedEventImagePath).filter(Boolean));
       const removedImages = (editingSeries?.image_urls || []).filter((url) => !savedPaths.has(namedEventImagePath(url)));
       const message = editingSeriesId ? "Omgången är uppdaterad" : "Omgång skapad med konkreta tillfällen";
-      resetSeries();
+      if (!catalogMode) resetSeries();
       await refresh();
       await Promise.allSettled(removedImages.map(removeNamedEventImage));
       toast.success(message);
+      if (catalogMode) onDone?.();
     },
     onError: async (error: Error) => {
       await resourcePreview.refetch();
@@ -602,13 +625,18 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
     || editingSeries?.edit_policy?.lifecycle_editable === false || saveSeries.isPending;
 
   return (
-    <section className="mb-6 rounded-2xl border border-border bg-card p-4" data-testid="admin-courses">
-      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex w-full items-center justify-between text-left">
+    <section
+      className={catalogMode ? "min-w-0" : "mb-6 rounded-2xl border border-border bg-card p-4"}
+      data-testid="admin-courses"
+      data-surface={catalogMode ? "catalog" : "legacy-schedule"}
+      style={catalogMode ? ({ "--primary": "217 100% 62%", "--primary-foreground": "220 25% 8%" } as CSSProperties) : undefined}
+    >
+      {!catalogMode ? <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex w-full items-center justify-between text-left">
         <div><p className="text-xs font-black uppercase tracking-wider text-muted-foreground">Program & Event</p><h2 className="mt-1 text-lg font-black">Koncept och omgångar</h2><p className="mt-1 text-xs text-muted-foreground">Koncept → omgång → tillfällen</p></div>
         <ChevronDown className={`h-5 w-5 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open ? <div className="mt-5 space-y-6 border-t border-border pt-5">
-        <div data-testid="managed-series-list">
+      </button> : null}
+      {catalogMode || open ? <div className={`${catalogMode ? "space-y-6" : "mt-5 space-y-6 border-t border-border pt-5"}`}>
+        {!catalogMode ? <div data-testid="managed-series-list">
           <div className="flex items-end justify-between gap-3">
             <div><p className="text-xs font-black uppercase tracking-wider text-muted-foreground">Omgångar</p><h3 className="mt-1 font-bold">Program & Event</h3></div>
             <span className="text-xs text-muted-foreground">{data?.series.length || 0} st</span>
@@ -639,9 +667,9 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
               </div>;
             })}
           </div>
-        </div>
+        </div> : null}
 
-        <div className="border-t border-border pt-5">
+        {(!catalogMode || !initialSeriesId || editingFormatId) ? <div className={catalogMode ? "rounded-2xl border border-border bg-card p-4" : "border-t border-border pt-5"}>
           <div className="flex items-center justify-between gap-3"><h3 className="font-bold">Koncept & innehåll</h3>{editingFormatId ? <button type="button" onClick={resetFormat} className="inline-flex items-center gap-1 text-xs font-bold"><X className="h-3.5 w-3.5" />Avbryt</button> : null}</div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             <input aria-label="Formatnamn" className={inputClass} value={formatName} onChange={(event) => setFormatName(event.target.value)} placeholder="Pickla 101 · Vuxen Nybörjare" />
@@ -655,16 +683,19 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
           {editingFormatId ? <div className="mt-4"><p className="text-xs font-bold">Konceptbilder · 16:9 · max 3</p><div className="mt-2 flex flex-wrap gap-2">{formatImages.map((url) => <div key={url} className="relative overflow-hidden rounded-xl border border-border"><img src={url} alt="" className="aspect-video w-28 object-cover" /><button type="button" onClick={() => deleteFormatImage(url)} className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white" aria-label="Ta bort bild"><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>{formatImages.length < 3 ? <label className="mt-2 inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 text-xs font-bold"><ImagePlus className="h-4 w-4" />{formatImageBusy ? "Laddar..." : "Lägg till bild"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={formatImageBusy} onChange={(event) => void addFormatImage(event.target.files?.[0])} /></label> : null}</div> : <p className="mt-3 text-xs text-muted-foreground">Skapa formatet först för att lägga till återanvändbara bilder.</p>}
           <button type="button" onClick={() => saveFormat.mutate()} disabled={!formatName.trim() || saveFormat.isPending} className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-40">{saveFormat.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : editingFormatId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}{editingFormatId ? "Spara format" : "Skapa format"}</button>
           {(data?.formats || []).length ? <div className="mt-4 grid gap-2">{data!.formats.map((format) => <div key={format.id} className="flex items-start justify-between gap-3 rounded-xl border border-border p-3"><div><p className="text-sm font-bold">{format.name}</p><p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{format.description || "Ingen kort beskrivning"}</p></div><button type="button" aria-label={`Redigera koncept ${format.name}`} onClick={() => editFormat(format)} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border border-border px-3 text-xs font-bold"><Pencil className="h-3.5 w-3.5" />Redigera</button></div>)}</div> : null}
-        </div>
+        </div> : null}
 
-        <div ref={seriesEditorRef} className="scroll-mt-4 border-t border-border pt-5" data-testid="managed-series-editor">
+        {catalogMode && initialSeriesId && !editingSeries ? <div className="flex min-h-40 items-center justify-center rounded-2xl border border-border bg-card p-5">
+          {query.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <p className="text-sm text-muted-foreground">Erbjudandet kunde inte öppnas.</p>}
+        </div> : null}
+        {(!catalogMode || !initialSeriesId || editingSeries) ? <div ref={seriesEditorRef} className={catalogMode ? "scroll-mt-4 rounded-2xl border border-border bg-card p-4" : "scroll-mt-4 border-t border-border pt-5"} data-testid="managed-series-editor">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-black uppercase tracking-wider text-muted-foreground">{editingSeriesId ? "Redigera omgång" : "Ny omgång"}</p>
               <h3 className="mt-1 font-bold">{editingSeriesId ? name || "Befintlig omgång" : "Skapa program eller event"}</h3>
               {editingSeries ? <p className="mt-1 text-xs text-muted-foreground">{SERIES_STATUS_LABELS[editingSeries.status] || editingSeries.status} · {editingSeries.capacity.committed_count} av {editingSeries.capacity.capacity} platser</p> : null}
             </div>
-            {editingSeriesId ? <button type="button" onClick={resetSeries} className="inline-flex items-center gap-1 text-xs font-bold"><X className="h-3.5 w-3.5" />Stäng</button> : null}
+            {editingSeriesId ? <button type="button" onClick={() => catalogMode ? onDone?.() : resetSeries()} className="inline-flex items-center gap-1 text-xs font-bold"><X className="h-3.5 w-3.5" />Stäng</button> : null}
           </div>
           {editingSeries && editingFormat ? <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/40 p-3">
             <div><p className="text-xs font-bold">Innehåll · {editingFormat.name}</p><p className="mt-0.5 text-[11px] text-muted-foreground">Beskrivning, nivå, målgrupp och instruktörskrav ägs av konceptet.</p></div>
@@ -673,7 +704,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
           {editingSeries && scheduleLockCopy ? <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{scheduleLockCopy}</span></div> : null}
           <p className="mt-4 text-xs font-black uppercase tracking-wider text-muted-foreground">Innehåll</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <select aria-label="Format" className={inputClass} value={formatId} disabled={Boolean(editingSeriesId)} onChange={(event) => setFormatId(event.target.value)}><option value="">Välj format</option>{(data?.formats || []).map((format) => <option key={format.id} value={format.id}>{format.name}</option>)}</select>
+            <select aria-label={catalogMode ? "Koncept" : "Format"} className={inputClass} value={formatId} disabled={Boolean(editingSeriesId)} onChange={(event) => setFormatId(event.target.value)}><option value="">Välj koncept</option>{(data?.formats || []).filter((format) => !catalogMode || Boolean(editingSeriesId) || format.presentation_type === initialPresentationType).map((format) => <option key={format.id} value={format.id}>{format.name}</option>)}</select>
             <input aria-label="Omgångens namn" className={inputClass} value={name} onChange={(event) => setName(event.target.value)} placeholder="Pickla 101 · Höst 2026" />
           </div>
           {editingSeriesId ? <div className="mt-3"><p className="text-xs font-bold">Omgångsbild · 16:9 · max 3</p><p className="mt-0.5 text-[11px] text-muted-foreground">Valfri bild här ersätter konceptbilden för just denna omgång.</p><div className="mt-2 flex flex-wrap gap-2">{seriesImages.map((url) => <div key={url} className="relative overflow-hidden rounded-xl border border-border"><img src={url} alt="" className="aspect-video w-28 object-cover" /><button type="button" onClick={() => deleteSeriesImage(url)} className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white" aria-label="Ta bort omgångsbild"><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>{seriesImages.length < 3 ? <label className="mt-2 inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 text-xs font-bold"><ImagePlus className="h-4 w-4" />{seriesImageBusy ? "Laddar..." : "Lägg till omgångsbild"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={seriesImageBusy} onChange={(event) => void addSeriesImage(event.target.files?.[0])} /></label> : null}</div> : null}
@@ -691,7 +722,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
           <div className="mt-3 flex flex-wrap gap-2">{DAYS.map((day) => <button key={day.value} type="button" disabled={!scheduleEditable} onClick={() => setDays((current) => current.includes(day.value) ? current.filter((value) => value !== day.value) : [...current, day.value])} className={`rounded-full border px-3 py-1.5 text-xs font-bold disabled:opacity-50 ${days.includes(day.value) ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}>{day.label}</button>)}</div>
           <p className="mt-5 text-xs font-black uppercase tracking-wider text-muted-foreground">Banor</p>
           <div className="mt-3 flex flex-wrap gap-2">{(data?.courts || []).filter((court) => court.sport_type === "pickleball").map((court) => <button key={court.id} type="button" disabled={!scheduleEditable} onClick={() => setCourtIds((current) => current.includes(court.id) ? current.filter((id) => id !== court.id) : [...current, court.id])} className={`rounded-lg border px-3 py-2 text-xs font-bold disabled:opacity-50 ${courtIds.includes(court.id) ? "border-primary" : "border-border"}`}>{court.name}</button>)}</div>
-          {previewDates.length ? <div className="mt-4 rounded-xl border border-border p-3" data-testid="course-resource-preview"><div className="flex items-center justify-between gap-3"><p className="text-xs font-bold">Förhandsvisning · {previewDates.length} tillfällen</p>{resourcePreview.isFetching ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Kontrollerar resurser</span> : null}</div>
+          {previewDates.length ? <div className="mt-4 rounded-xl border border-border p-3" data-testid="course-resource-preview"><div className="flex items-center justify-between gap-3"><p className="text-xs font-bold">Förhandsvisning · {occurrenceCountLabel(previewDates.length)}</p>{resourcePreview.isFetching ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Kontrollerar resurser</span> : null}</div>
             {!courtIds.length ? <p className="mt-2 text-xs text-destructive">Välj minst en bana för att kontrollera fysisk beläggning.</p> : null}
             {resourcePreview.isError ? <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-destructive"><AlertTriangle className="h-3.5 w-3.5" />Resurskontrollen kunde inte genomföras. Serien kan inte sparas.</p> : null}
             {previewOccurrences.length ? <ol className="mt-3 grid gap-2">{previewOccurrences.map(([index, rows]) => {
@@ -736,12 +767,12 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
               {editingSeries.status === "draft" ? <button type="button" onClick={() => changeStatus.mutate({ seriesId: editingSeries.id, status: "cancelled" })} disabled={changeStatus.isPending || Boolean(editingSeries.edit_policy?.commitment_count || editingSeries.edit_policy?.order_history_count)} className="inline-flex h-10 items-center gap-1 rounded-lg border border-destructive/30 px-3 text-xs font-bold text-destructive disabled:opacity-40">Arkivera utkast</button> : null}
             </div>
           </div> : null}
-        </div>
+        </div> : null}
 
-        <div className="border-t border-border pt-5">
+        {(!catalogMode || Boolean(editingSeriesId)) ? <div className={catalogMode ? "rounded-2xl border border-border bg-card p-4" : "border-t border-border pt-5"}>
           <h3 className="font-bold">Deltagare & tillfällen</h3>
           <div className="mt-3 grid gap-2">
-            {query.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : (data?.series || []).map((series) => {
+            {query.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : (data?.series || []).filter((series) => !catalogMode || series.id === editingSeriesId).map((series) => {
               const grantOpen = grantSeriesId === series.id;
               const activeGrants = series.staff_grants || [];
               return <div key={series.id} className="rounded-xl border border-border p-3">
@@ -844,7 +875,7 @@ export default function AdminCourses({ venueId }: { venueId: string }) {
               </div>;
             })}
           </div>
-        </div>
+        </div> : null}
       </div> : null}
     </section>
   );

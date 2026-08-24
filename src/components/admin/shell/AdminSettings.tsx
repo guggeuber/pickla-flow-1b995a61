@@ -64,7 +64,7 @@ const groups: SettingsGroup[] = [
       { id: "products", label: "Produkter", desc: "Utbud & försäljning", icon: Package, tint: ax("magenta", 0.7) },
       { id: "pricing", label: "Priser", desc: "Dynamiska regler", icon: Tag, tint: ax("lime", 0.7) },
       { id: "memberships", label: "Medlemskap", desc: "Nivåer & rabatter", icon: Crown, tint: ax("sun", 0.7) },
-      { id: "schedule", label: "Schema", desc: "Program & pass", icon: CalendarCheck, tint: ax("electric", 0.7) },
+      { id: "schedule", label: "Legacy Schema", desc: "Maskinrum för Open Play, program & pass", icon: CalendarCheck, tint: ax("electric", 0.7) },
       { id: "revenueLedger", label: "Revenue Ledger", desc: "Daglig sälj-sanning", icon: ReceiptText, tint: ax("electric", 0.7) },
       { id: "financialMaintenance", label: "Maintenance", desc: "Stripe invoice repair", icon: Wrench, tint: ax("danger", 0.7), superAdmin: true },
     ],
