@@ -285,6 +285,7 @@ describe("Course V1 Admin", () => {
 
     render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
     fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Redigera omgång Pickla 101 · Höst 2026" }));
 
     const section = await screen.findByTestId("series-early-bird");
     fireEvent.click(within(section).getByRole("checkbox", { name: "Early Bird" }));
@@ -328,6 +329,7 @@ describe("Course V1 Admin", () => {
 
     render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
     fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Redigera omgång Pickla 101 · Höst 2026" }));
 
     const section = await screen.findByTestId("series-member-pricing");
     expect(within(section).getByText("Ordinarie 1 495 kr")).toBeInTheDocument();
@@ -390,8 +392,8 @@ describe("Course V1 Admin", () => {
     mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
     render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
     fireEvent.click(screen.getByRole("button", { name: /Program/ }));
-    expect(await screen.findByText("1. Format")).toBeInTheDocument();
-    expect(screen.getByText("2. Konkret serie")).toBeInTheDocument();
+    expect(await screen.findByText("Koncept & innehåll")).toBeInTheDocument();
+    expect(screen.getByText("Program & Event", { selector: "h3" })).toBeInTheDocument();
     expect(await screen.findByText(/7\/12 platser/)).toBeInTheDocument();
     expect(screen.getByText("Instruktör krävs")).toBeInTheDocument();
     expect(screen.getByText("Kommande tillfällen")).toBeInTheDocument();
@@ -428,7 +430,7 @@ describe("Course V1 Admin", () => {
 
     render(<AdminCourses venueId="c0100000-0000-4000-8000-000000000002" />, { wrapper: wrapper("/hub/admin/schedule") });
     fireEvent.click(screen.getByRole("button", { name: /Program/ }));
-    await screen.findByText("2. Konkret serie");
+    await screen.findByText("Skapa program eller event");
     fireEvent.change(screen.getByLabelText("Format"), { target: { value: "format-1" } });
     fireEvent.change(screen.getByPlaceholderText("Pickla 101 · Höst 2026"), { target: { value: "Pickla 101 · Höst 2026" } });
     fireEvent.change(screen.getByLabelText("Start"), { target: { value: "2026-09-08" } });
@@ -441,7 +443,7 @@ describe("Course V1 Admin", () => {
     expect(screen.getByText("Ändra schema eller resurser innan serien kan sparas.")).toBeInTheDocument();
     expect(screen.getAllByText("Konflikt")).toHaveLength(1);
     expect(screen.getAllByText("Ledig")).toHaveLength(5);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Skapa serie och tillfällen" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Skapa omgång och tillfällen" })).toBeDisabled());
   });
 
   it("edits reusable Format content and reloads a draft Series into the canonical preview", async () => {
@@ -472,9 +474,9 @@ describe("Course V1 Admin", () => {
 
     render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
     fireEvent.click(screen.getByRole("button", { name: /Program/ }));
-    await screen.findByText("1. Format");
+    await screen.findByText("Koncept & innehåll");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Redigera" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Redigera koncept Pickla 101" }));
     expect(screen.getByLabelText("Kort beskrivning")).toHaveValue("Dina första fyra veckor med pickleball.");
     expect((screen.getByLabelText("Full beskrivning och innehåll") as HTMLTextAreaElement).value).toContain("Tillfälle 1");
     fireEvent.change(screen.getByLabelText("Kort beskrivning"), { target: { value: "Ny kort text" } });
@@ -487,11 +489,160 @@ describe("Course V1 Admin", () => {
       presentation_type: "course",
     })));
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Redigera" }).at(-1)!);
-    expect(screen.getByRole("heading", { name: "2. Redigera serieutkast" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Serienamn")).toHaveValue("Pickla 101 · Höst 2026");
+    fireEvent.click(screen.getByRole("button", { name: "Redigera omgång Pickla 101 · Höst 2026" }));
+    expect(screen.getByText("Redigera omgång")).toBeInTheDocument();
+    expect(screen.getByLabelText("Omgångens namn")).toHaveValue("Pickla 101 · Höst 2026");
     await waitFor(() => expect(mocks.previewCourseSeries).toHaveBeenCalledWith(expect.objectContaining({ series_id: "series-1" })));
     expect(await screen.findAllByText("Ledig")).toHaveLength(6);
+  });
+
+  it("reopens a published Series without sales and safely reconciles its schedule", async () => {
+    const courtId = "c0100000-0000-4000-8000-000000000003";
+    const published = {
+      ...course,
+      status: "active",
+      total_sessions: 4,
+      court_ids: [courtId],
+      capacity: { capacity: 8, committed_count: 0, active_holds_count: 0, available_count: 8 },
+      sessions: course.sessions.slice(0, 4),
+      edit_policy: {
+        lifecycle_editable: true,
+        schedule_editable: true,
+        schedule_lock_reason: null,
+        has_started: false,
+        commitment_count: 0,
+        active_holds_count: 0,
+        order_history_count: 0,
+        registration_count: 0,
+        staffing_assignment_count: 0,
+        minimum_capacity: 0,
+        historical_prices_frozen: false,
+      },
+    };
+    mocks.fetchCourseAdmin.mockResolvedValue({
+      formats: [course.format],
+      series: [published],
+      courts: [{ id: courtId, name: "Bana 3", sport_type: "pickleball" }],
+    });
+    mocks.previewCourseSeries.mockResolvedValue({
+      occurrence_count: 4,
+      has_conflicts: false,
+      rows: published.sessions.map((session, index) => ({
+        occurrence_index: index + 1,
+        occurrence_date: session.session_date,
+        proposed_starts_at: `${session.session_date}T17:00:00Z`,
+        proposed_ends_at: `${session.session_date}T18:00:00Z`,
+        court_id: courtId,
+        court_name: "Bana 3",
+        is_available: true,
+        conflicts: [],
+      })),
+    });
+    mocks.updateCourseSeries.mockResolvedValue(published);
+
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Redigera omgång Pickla 101 · Höst 2026" }));
+
+    expect(screen.getByText("Publicerad · 0 av 8 platser")).toBeInTheDocument();
+    expect(screen.getByLabelText("Omgångens namn")).toHaveValue("Pickla 101 · Höst 2026");
+    expect(screen.getByLabelText("Starttid")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Bana 3" })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Starttid"), { target: { value: "19:00" } });
+    fireEvent.change(screen.getByLabelText("Sluttid"), { target: { value: "20:00" } });
+
+    await waitFor(() => expect(mocks.previewCourseSeries).toHaveBeenLastCalledWith(expect.objectContaining({
+      series_id: "series-1",
+      start_time: "19:00",
+      end_time: "20:00",
+      total_sessions: 4,
+      court_ids: [courtId],
+    })));
+    fireEvent.click(await screen.findByRole("button", { name: "Spara ändringar" }));
+    await waitFor(() => expect(mocks.updateCourseSeries).toHaveBeenCalledWith(expect.objectContaining({
+      series_id: "series-1",
+      name: "Pickla 101 · Höst 2026",
+      start_time: "19:00",
+      end_time: "20:00",
+      total_sessions: 4,
+      capacity: 8,
+      price_sek: 1495,
+      court_ids: [courtId],
+    })));
+  });
+
+  it("locks schedule truth after a commitment while preserving safe future-facing edits", async () => {
+    const courtId = "c0100000-0000-4000-8000-000000000003";
+    const sold = {
+      ...course,
+      status: "active",
+      court_ids: [courtId],
+      capacity: { capacity: 8, committed_count: 2, active_holds_count: 1, available_count: 5 },
+      edit_policy: {
+        lifecycle_editable: true,
+        schedule_editable: false,
+        schedule_lock_reason: "participants_or_payments_exist" as const,
+        has_started: false,
+        commitment_count: 2,
+        active_holds_count: 1,
+        order_history_count: 2,
+        registration_count: 12,
+        staffing_assignment_count: 0,
+        minimum_capacity: 3,
+        historical_prices_frozen: true,
+      },
+    };
+    mocks.fetchCourseAdmin.mockResolvedValue({
+      formats: [course.format],
+      series: [sold],
+      courts: [{ id: courtId, name: "Bana 3", sport_type: "pickleball" }],
+    });
+    mocks.previewCourseSeries.mockResolvedValue({
+      occurrence_count: 6,
+      has_conflicts: false,
+      rows: sold.sessions.map((session, index) => ({
+        occurrence_index: index + 1,
+        occurrence_date: session.session_date,
+        proposed_starts_at: `${session.session_date}T16:00:00Z`,
+        proposed_ends_at: `${session.session_date}T17:00:00Z`,
+        court_id: courtId,
+        court_name: "Bana 3",
+        is_available: true,
+        conflicts: [],
+      })),
+    });
+    mocks.updateCourseSeries.mockResolvedValue(sold);
+
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Redigera omgång Pickla 101 · Höst 2026" }));
+
+    expect(screen.getByText(/Schemat är låst eftersom deltagare eller betalningshistorik finns/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Start")).toBeDisabled();
+    expect(screen.getByLabelText("Starttid")).toBeDisabled();
+    expect(screen.getByLabelText("Tillfällen")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Bana 3" })).toBeDisabled();
+    expect(screen.getByLabelText("Omgångens namn")).toBeEnabled();
+    expect(screen.getByLabelText("Anmälan stänger")).toBeEnabled();
+    expect(screen.getByLabelText("Ordinarie pris SEK")).toBeEnabled();
+    expect(screen.getByText(/Tidigare order, kvitto och huvudbok förblir frusna/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Total kapacitet"), { target: { value: "2" } });
+    expect(screen.getByRole("button", { name: "Spara ändringar" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Total kapacitet"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("Omgångens namn"), { target: { value: "Pickla 101 · Uppdaterad" } });
+    fireEvent.change(screen.getByLabelText("Ordinarie pris SEK"), { target: { value: "1595" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Spara ändringar" }));
+
+    await waitFor(() => expect(mocks.updateCourseSeries).toHaveBeenCalledWith(expect.objectContaining({
+      series_id: "series-1",
+      name: "Pickla 101 · Uppdaterad",
+      start_time: "18:00",
+      end_time: "19:00",
+      capacity: 10,
+      price_sek: 1595,
+      court_ids: [courtId],
+    })));
   });
 });
 

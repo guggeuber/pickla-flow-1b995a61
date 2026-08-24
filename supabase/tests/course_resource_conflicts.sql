@@ -249,4 +249,244 @@ BEGIN
 END;
 $$;
 
+-- The canonical managed-Series editor may reconcile a published run before
+-- sales. Occurrence identity is stable, conflicts roll back atomically, and
+-- adding/removing a trailing occurrence never duplicates the retained rows.
+UPDATE public.bookings SET status = 'cancelled'
+WHERE id = 'c0130000-0000-4000-8000-000000000050';
+
+DO $$
+DECLARE
+  v_before UUID[];
+  v_after UUID[];
+BEGIN
+  SELECT array_agg(id ORDER BY series_occurrence_index) INTO v_before
+  FROM public.activity_sessions
+  WHERE series_id = 'c0130000-0000-4000-8000-000000000022';
+
+  PERFORM public.update_managed_series_run(
+    'c0130000-0000-4000-8000-000000000022',
+    'Course Resource Guard · Publicerad', '{}'::TEXT[],
+    '2026-11-02', '2026-11-23',
+    '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+    10, 1695, ARRAY[1], '20:00', '21:00', 4,
+    ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+  );
+
+  SELECT array_agg(id ORDER BY series_occurrence_index) INTO v_after
+  FROM public.activity_sessions
+  WHERE series_id = 'c0130000-0000-4000-8000-000000000022';
+
+  IF v_after IS DISTINCT FROM v_before THEN
+    RAISE EXCEPTION 'Published no-sales edit replaced occurrence identity: before %, after %', v_before, v_after;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.activity_sessions
+    WHERE series_id = 'c0130000-0000-4000-8000-000000000022'
+      AND (start_time <> '20:00' OR end_time <> '21:00' OR capacity <> 10)
+  ) THEN
+    RAISE EXCEPTION 'Published no-sales edit did not reconcile Session truth';
+  END IF;
+END;
+$$;
+
+INSERT INTO public.bookings (
+  id, venue_id, venue_court_id, user_id, booked_by, start_time, end_time,
+  status, total_price, booking_ref
+) VALUES (
+  'c0130000-0000-4000-8000-000000000051',
+  'c0130000-0000-4000-8000-000000000002',
+  'c0130000-0000-4000-8000-000000000004',
+  'c0130000-0000-4000-8000-000000000010',
+  'c0130000-0000-4000-8000-000000000010',
+  '2026-11-16T20:00:00Z', '2026-11-16T21:00:00Z',
+  'confirmed', 350, 'COURSE-MANAGED-EDIT-CONFLICT'
+);
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM public.update_managed_series_run(
+      'c0130000-0000-4000-8000-000000000022',
+      'Partial published mutation forbidden', '{}'::TEXT[],
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      11, 1795, ARRAY[1], '21:00', '22:00', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Conflicting published edit was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Conflicting published edit was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%course_resource_conflict%' THEN RAISE; END IF;
+  END;
+
+  IF (SELECT name FROM public.activity_series WHERE id = 'c0130000-0000-4000-8000-000000000022') <> 'Course Resource Guard · Publicerad'
+     OR (SELECT capacity FROM public.activity_series WHERE id = 'c0130000-0000-4000-8000-000000000022') <> 10
+     OR (SELECT base_price_sek FROM public.access_products WHERE id = 'c0130000-0000-4000-8000-000000000021') <> 1695 THEN
+    RAISE EXCEPTION 'Blocked published edit left partial Series/product state';
+  END IF;
+END;
+$$;
+
+UPDATE public.bookings SET status = 'cancelled'
+WHERE id = 'c0130000-0000-4000-8000-000000000051';
+
+DO $$
+DECLARE
+  v_first_four UUID[];
+  v_after_add UUID[];
+  v_after_remove UUID[];
+BEGIN
+  SELECT array_agg(id ORDER BY series_occurrence_index) INTO v_first_four
+  FROM public.activity_sessions
+  WHERE series_id = 'c0130000-0000-4000-8000-000000000022';
+
+  PERFORM public.update_managed_series_run(
+    'c0130000-0000-4000-8000-000000000022',
+    'Course Resource Guard · Publicerad', '{}'::TEXT[],
+    '2026-11-02', '2026-11-30',
+    '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+    10, 1695, ARRAY[1], '20:00', '21:00', 5,
+    ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+  );
+  SELECT array_agg(id ORDER BY series_occurrence_index) INTO v_after_add
+  FROM public.activity_sessions
+  WHERE series_id = 'c0130000-0000-4000-8000-000000000022';
+  IF cardinality(v_after_add) <> 5 OR v_after_add[1:4] IS DISTINCT FROM v_first_four THEN
+    RAISE EXCEPTION 'Adding an occurrence duplicated/replaced retained Sessions';
+  END IF;
+
+  PERFORM public.update_managed_series_run(
+    'c0130000-0000-4000-8000-000000000022',
+    'Course Resource Guard · Publicerad', '{}'::TEXT[],
+    '2026-11-02', '2026-11-23',
+    '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+    10, 1695, ARRAY[1], '20:00', '21:00', 4,
+    ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+  );
+  SELECT array_agg(id ORDER BY series_occurrence_index) INTO v_after_remove
+  FROM public.activity_sessions
+  WHERE series_id = 'c0130000-0000-4000-8000-000000000022';
+  IF v_after_remove IS DISTINCT FROM v_first_four THEN
+    RAISE EXCEPTION 'Removing a safe trailing occurrence changed retained Session identity';
+  END IF;
+END;
+$$;
+
+INSERT INTO public.customers (id, organization_id, display_name, primary_email, email_normalized)
+VALUES
+  ('c0130000-0000-4000-8000-000000000061', 'c0130000-0000-4000-8000-000000000001', 'Committed One', 'committed-one@example.test', 'committed-one@example.test'),
+  ('c0130000-0000-4000-8000-000000000062', 'c0130000-0000-4000-8000-000000000001', 'Committed Two', 'committed-two@example.test', 'committed-two@example.test');
+
+INSERT INTO public.series_commitments (
+  id, organization_id, venue_id, activity_series_id, commitment_type,
+  participant_customer_id, status, activated_at, metadata
+) VALUES
+  ('c0130000-0000-4000-8000-000000000071', 'c0130000-0000-4000-8000-000000000001', 'c0130000-0000-4000-8000-000000000002', 'c0130000-0000-4000-8000-000000000022', 'participant', 'c0130000-0000-4000-8000-000000000061', 'active', now(), '{"funding_source":"series_staff_grant"}'::JSONB),
+  ('c0130000-0000-4000-8000-000000000072', 'c0130000-0000-4000-8000-000000000001', 'c0130000-0000-4000-8000-000000000002', 'c0130000-0000-4000-8000-000000000022', 'participant', 'c0130000-0000-4000-8000-000000000062', 'active', now(), '{"funding_source":"series_staff_grant"}'::JSONB);
+
+INSERT INTO public.membership_tiers (id, venue_id, name, is_active)
+VALUES ('c0130000-0000-4000-8000-000000000080', 'c0130000-0000-4000-8000-000000000002', 'Play', true);
+
+INSERT INTO public.membership_tier_pricing (id, tier_id, product_type, fixed_price, label)
+VALUES ('c0130000-0000-4000-8000-000000000081', 'c0130000-0000-4000-8000-000000000080', 'course_resource_guard', 1690, 'Play · Course Resource Guard');
+
+UPDATE public.access_products
+SET scarcity_mode = 'early_bird', early_bird_price_minor = 149500, early_bird_slots = 3
+WHERE id = 'c0130000-0000-4000-8000-000000000021';
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM public.update_managed_series_run(
+      'c0130000-0000-4000-8000-000000000022',
+      'Schedule side door forbidden', '{}'::TEXT[],
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      10, 1695, ARRAY[1], '21:00', '22:00', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Schedule edit with Commitments was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Schedule edit with Commitments was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%managed_series_schedule_has_participants%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM public.update_managed_series_run(
+      'c0130000-0000-4000-8000-000000000022',
+      'Capacity below fill forbidden', '{}'::TEXT[],
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      1, 1695, ARRAY[1], '20:00', '21:00', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Capacity below active Series fill was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Capacity below active Series fill was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%managed_series_capacity_below_fill%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM public.update_managed_series_run(
+      'c0130000-0000-4000-8000-000000000022',
+      'Early Bird capacity guard', '{}'::TEXT[],
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      2, 1795, ARRAY[1], '20:00', '21:00', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Capacity below active Early Bird allocation was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Capacity below active Early Bird allocation was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%managed_series_capacity_below_early_bird_slots%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM public.update_managed_series_run(
+      'c0130000-0000-4000-8000-000000000022',
+      'Early Bird price guard', '{}'::TEXT[],
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      12, 1495, ARRAY[1], '20:00', '21:00', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Base price at Early Bird price was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Base price at Early Bird price was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%managed_series_price_below_early_bird%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM public.update_managed_series_run(
+      'c0130000-0000-4000-8000-000000000022',
+      'Member price guard', '{}'::TEXT[],
+      '2026-11-02', '2026-11-23',
+      '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+      12, 1600, ARRAY[1], '20:00', '21:00', 4,
+      ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+    );
+    RAISE EXCEPTION 'Base price below active fixed member price was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'Base price below active fixed member price was accepted' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%managed_series_price_below_member_price%' THEN RAISE; END IF;
+  END;
+
+  PERFORM public.update_managed_series_run(
+    'c0130000-0000-4000-8000-000000000022',
+    'Course Resource Guard · Framtida pris', '{}'::TEXT[],
+    '2026-11-02', '2026-11-23',
+    '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
+    12, 1795, ARRAY[1], '20:00', '21:00', 4,
+    ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
+  );
+
+  IF (SELECT capacity FROM public.activity_series WHERE id = 'c0130000-0000-4000-8000-000000000022') <> 12
+     OR (SELECT base_price_sek FROM public.access_products WHERE id = 'c0130000-0000-4000-8000-000000000021') <> 1795
+     OR (SELECT COUNT(*) FROM public.series_commitments WHERE activity_series_id = 'c0130000-0000-4000-8000-000000000022') <> 2 THEN
+    RAISE EXCEPTION 'Safe future-facing edit changed Commitment truth';
+  END IF;
+END;
+$$;
+
 ROLLBACK;

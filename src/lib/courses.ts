@@ -88,6 +88,19 @@ export type CourseSeries = {
   sessions: CourseSession[];
   commitment?: Record<string, unknown> | null;
   staff_grants?: SeriesStaffGrant[];
+  edit_policy?: {
+    lifecycle_editable: boolean;
+    schedule_editable: boolean;
+    schedule_lock_reason: "lifecycle_locked" | "series_started" | "participants_or_payments_exist" | "active_checkout_holds" | "staffing_exists" | null;
+    has_started: boolean;
+    commitment_count: number;
+    active_holds_count: number;
+    order_history_count: number;
+    registration_count: number;
+    staffing_assignment_count: number;
+    minimum_capacity: number;
+    historical_prices_frozen: boolean;
+  };
 };
 
 export type SeriesCustomerPricing = {

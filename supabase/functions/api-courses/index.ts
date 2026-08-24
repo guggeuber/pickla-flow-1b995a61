@@ -121,6 +121,68 @@ async function seriesCapacity(admin: ServiceClient, series: CourseSeriesRow) {
   };
 }
 
+async function managedSeriesEditPolicy(admin: ServiceClient, series: CourseSeriesRow) {
+  const { data: sessions, error: sessionsError } = await admin.from('activity_sessions')
+    .select('id, session_date, start_time, is_active')
+    .eq('series_id', series.id)
+    .order('series_occurrence_index');
+  if (sessionsError) throw new Error(sessionsError.message);
+  const sessionIds = (sessions || []).map((session) => session.id);
+  const now = DateTime.now().setZone('Europe/Stockholm');
+  const hasStarted = (sessions || []).some((session) => {
+    if (!session.is_active || !session.session_date || !session.start_time) return false;
+    const starts = DateTime.fromISO(`${session.session_date}T${String(session.start_time).slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+    return starts.isValid && starts <= now;
+  });
+  const [commitmentsResult, activeCommitmentsResult, holdsResult, ordersResult, registrationsResult, staffingResult] = await Promise.all([
+    admin.from('series_commitments').select('id', { count: 'exact', head: true }).eq('activity_series_id', series.id),
+    admin.from('series_commitments').select('id', { count: 'exact', head: true })
+      .eq('activity_series_id', series.id).eq('status', 'active'),
+    admin.from('capacity_holds').select('id', { count: 'exact', head: true })
+      .eq('venue_id', series.venue_id).eq('scope_type', 'activity_series').eq('scope_id', series.id)
+      .eq('status', 'active').gt('expires_at', new Date().toISOString()),
+    admin.from('commerce_order_lines').select('id, commerce_orders!inner(status)', { count: 'exact', head: true })
+      .eq('activity_series_id', series.id).in('commerce_orders.status', ['checkout_pending', 'paid', 'attention', 'cancelled']),
+    sessionIds.length
+      ? admin.from('session_registrations').select('id', { count: 'exact', head: true }).in('activity_session_id', sessionIds)
+      : Promise.resolve({ count: 0, error: null }),
+    sessionIds.length
+      ? admin.from('operational_staff_assignments').select('id', { count: 'exact', head: true })
+        .eq('source_type', 'activity_session').eq('status', 'active').in('source_id', sessionIds)
+      : Promise.resolve({ count: 0, error: null }),
+  ]);
+  const policyError = commitmentsResult.error || activeCommitmentsResult.error || holdsResult.error || ordersResult.error || registrationsResult.error || staffingResult.error;
+  if (policyError) throw new Error(policyError.message);
+  const commitmentCount = Number(commitmentsResult.count || 0);
+  const activeCommitmentCount = Number(activeCommitmentsResult.count || 0);
+  const activeHoldsCount = Number(holdsResult.count || 0);
+  const orderHistoryCount = Number(ordersResult.count || 0);
+  const registrationCount = Number(registrationsResult.count || 0);
+  const staffingCount = Number(staffingResult.count || 0);
+  const lifecycleEditable = ['draft', 'active', 'paused'].includes(String(series.status || ''));
+  const scheduleEditable = lifecycleEditable && !hasStarted && commitmentCount === 0 && activeHoldsCount === 0
+    && orderHistoryCount === 0 && registrationCount === 0 && staffingCount === 0;
+  const scheduleLockReason = !lifecycleEditable ? 'lifecycle_locked'
+    : hasStarted ? 'series_started'
+    : commitmentCount > 0 || orderHistoryCount > 0 || registrationCount > 0 ? 'participants_or_payments_exist'
+    : activeHoldsCount > 0 ? 'active_checkout_holds'
+    : staffingCount > 0 ? 'staffing_exists'
+    : null;
+  return {
+    lifecycle_editable: lifecycleEditable,
+    schedule_editable: scheduleEditable,
+    schedule_lock_reason: scheduleLockReason,
+    has_started: hasStarted,
+    commitment_count: commitmentCount,
+    active_holds_count: activeHoldsCount,
+    order_history_count: orderHistoryCount,
+    registration_count: registrationCount,
+    staffing_assignment_count: staffingCount,
+    minimum_capacity: activeCommitmentCount + activeHoldsCount,
+    historical_prices_frozen: commitmentCount > 0 || orderHistoryCount > 0,
+  };
+}
+
 function registrationState(series: CourseSeriesRow, now = DateTime.now().toUTC()) {
   const opens = series.registration_opens_at ? DateTime.fromISO(series.registration_opens_at, { zone: 'utc' }) : null;
   const closes = series.registration_closes_at ? DateTime.fromISO(series.registration_closes_at, { zone: 'utc' }) : null;
@@ -457,8 +519,19 @@ async function previewCourseResourceSchedule(
 }
 
 function courseConflictResponse(preview: Awaited<ReturnType<typeof previewCourseResourceSchedule>>) {
+  const row = preview.rows.find((candidate) => !candidate.is_available && candidate.conflicts.length > 0);
+  const conflict = row?.conflicts[0];
+  const starts = conflict?.starts_at
+    ? DateTime.fromISO(conflict.starts_at).setZone('Europe/Stockholm').setLocale('sv')
+    : null;
+  const ends = conflict?.ends_at
+    ? DateTime.fromISO(conflict.ends_at).setZone('Europe/Stockholm')
+    : null;
+  const operatorMessage = row && conflict && starts?.isValid && ends?.isValid
+    ? `${row.court_name} är redan upptagen ${starts.toFormat('ccc HH:mm')}–${ends.toFormat('HH:mm')}`
+    : 'En vald bana är redan upptagen.';
   return jsonResponse({
-    error: 'Course resource conflict',
+    error: operatorMessage,
     code: 'course_resource_conflict',
     preview,
   }, 409, 0);
@@ -639,6 +712,7 @@ const coursesHandler = async (req: Request) => {
       for (const series of seriesRows || []) {
         projected.push({
           ...await projectCourse(admin, series, null),
+          edit_policy: await managedSeriesEditPolicy(admin, series),
           staff_grants: grants.filter((grant) => grant.activity_series_id === series.id && grant.status === 'active'),
         });
       }
@@ -682,16 +756,24 @@ const coursesHandler = async (req: Request) => {
       if (!UUID.test(formatId) || !name || !AGE_GROUPS.has(ageGroup) || !LEVELS.has(level) || !PRESENTATION_TYPES.has(presentationType)) {
         return errorResponse('Invalid Format', 400);
       }
-      const { data, error } = await admin.from('activity_formats').update({
-        name,
-        description: cleanText(body.description, 1000) || null,
-        full_description: cleanText(body.full_description, 20000) || null,
-        ...(body.image_urls === undefined ? {} : { image_urls: cleanImageUrls(body.image_urls, `activity-formats/${formatId}`) }),
-        age_group: ageGroup,
-        level,
-        requires_instructor: body.requires_instructor === true,
-        presentation_type: presentationType,
-      }).eq('id', formatId).eq('organization_id', venueRow.organization_id).eq('is_active', true).select('*').maybeSingle();
+      const { data: existingFormat, error: existingFormatError } = await admin.from('activity_formats')
+        .select('id, image_urls').eq('id', formatId).eq('organization_id', venueRow.organization_id).eq('is_active', true).maybeSingle();
+      if (existingFormatError) throw new Error(existingFormatError.message);
+      if (!existingFormat) return errorResponse('Course Format not found', 404);
+      const { data, error } = await admin.rpc('update_managed_series_format', {
+        p_format_id: formatId,
+        p_organization_id: venueRow.organization_id,
+        p_name: name,
+        p_description: cleanText(body.description, 1000) || null,
+        p_full_description: cleanText(body.full_description, 20000) || null,
+        p_image_urls: body.image_urls === undefined
+          ? (Array.isArray(existingFormat.image_urls) ? existingFormat.image_urls : [])
+          : cleanImageUrls(body.image_urls, `activity-formats/${formatId}`),
+        p_age_group: ageGroup,
+        p_level: level,
+        p_requires_instructor: body.requires_instructor === true,
+        p_presentation_type: presentationType,
+      });
       if (error) throw new Error(error.message);
       if (!data) return errorResponse('Course Format not found', 404);
       return jsonResponse(data, 200, 0);
@@ -873,15 +955,17 @@ const coursesHandler = async (req: Request) => {
       const series = await courseSeries(admin, String(body.series_id || ''));
       await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
       const editableFields = [
-        'name', 'start_date', 'end_date', 'registration_opens_at', 'registration_closes_at',
+        'name', 'image_urls', 'start_date', 'end_date', 'registration_opens_at', 'registration_closes_at',
         'capacity', 'price_sek', 'recurrence_days', 'start_time', 'end_time',
         'total_sessions', 'court_ids',
       ];
-      const isDraftEdit = editableFields.some((field) => body[field] !== undefined);
+      const isManagedEdit = editableFields.some((field) => body[field] !== undefined);
 
-      if (isDraftEdit) {
+      if (isManagedEdit) {
         if (body.status !== undefined) return errorResponse('Publish and edit are separate actions', 400);
-        if (series.status !== 'draft') return errorResponse('Published Course Series cannot be edited in V1', 409);
+        if (!['draft', 'active', 'paused'].includes(String(series.status || ''))) {
+          return errorResponse('Den här omgången är avslutad och kan inte längre redigeras.', 409);
+        }
         const schedule = courseScheduleInput({ ...body, venue_id: series.venue_id });
         const capacity = Math.floor(Number(body.capacity || 0));
         const priceSek = Math.round(Number(body.price_sek || 0));
@@ -891,9 +975,13 @@ const coursesHandler = async (req: Request) => {
         }
         const resourcePreview = await previewCourseResourceSchedule(admin, schedule, series.id);
         if (resourcePreview.has_conflicts) return courseConflictResponse(resourcePreview);
-        const { error } = await admin.rpc('update_course_draft_series', {
+        const imageUrls = body.image_urls === undefined
+          ? (Array.isArray(series.image_urls) ? series.image_urls : [])
+          : cleanImageUrls(body.image_urls, `activity-series/${series.id}`);
+        const { error } = await admin.rpc('update_managed_series_run', {
           p_series_id: series.id,
           p_name: name,
+          p_image_urls: imageUrls,
           p_start_date: schedule.startDate,
           p_end_date: schedule.endDate,
           p_registration_opens_at: body.registration_opens_at,
@@ -910,9 +998,15 @@ const coursesHandler = async (req: Request) => {
           if (error.message.includes('course_resource_conflict')) {
             return courseConflictResponse(await previewCourseResourceSchedule(admin, schedule, series.id));
           }
-          if (/course_series_not_draft|course_draft_has_/.test(error.message)) {
-            return errorResponse('Course draft can no longer be edited safely', 409);
-          }
+          if (error.message.includes('managed_series_capacity_below_fill')) return errorResponse('Antalet platser får inte vara lägre än aktiva platser och pågående betalningar.', 409);
+          if (error.message.includes('managed_series_capacity_below_early_bird_slots')) return errorResponse('Antalet platser får inte vara lägre än den aktiva Early Bird-gränsen.', 409);
+          if (error.message.includes('managed_series_price_below_early_bird')) return errorResponse('Ordinarie pris måste vara högre än det aktiva Early Bird-priset.', 409);
+          if (error.message.includes('managed_series_price_below_member_price')) return errorResponse('Ordinarie pris får inte sänkas under ett aktivt fast medlemspris.', 409);
+          if (error.message.includes('managed_series_schedule_started')) return errorResponse('Schemat är låst eftersom omgången har startat.', 409);
+          if (error.message.includes('managed_series_schedule_has_participants')) return errorResponse('Schemat är låst eftersom deltagare, betalning eller pågående checkout finns.', 409);
+          if (error.message.includes('managed_series_schedule_has_staffing')) return errorResponse('Ta bort aktiva bemanningsuppdrag innan schemat ändras.', 409);
+          if (error.message.includes('managed_series_product_invalid')) return errorResponse('Seriens produkt är inte aktiv eller saknar korrekt koppling.', 409);
+          if (/managed_series_(lifecycle_locked|not_found)/.test(error.message)) return errorResponse('Omgången kan inte längre redigeras.', 409);
           throw new Error(error.message);
         }
         return jsonResponse(await projectCourse(admin, await courseSeries(admin, series.id), null), 200, 0);
@@ -928,6 +1022,30 @@ const coursesHandler = async (req: Request) => {
         cancelled: [],
       };
       if (!(transitions[series.status] || []).includes(nextStatus)) return errorResponse('Invalid Course status transition', 409);
+      if (nextStatus === 'active') {
+        const schedule = courseScheduleInput({ ...series, venue_id: series.venue_id });
+        if (!schedule) return errorResponse('Schema och banor måste vara kompletta före publicering.', 409);
+        const preview = await previewCourseResourceSchedule(admin, schedule, series.id);
+        if (preview.has_conflicts) return courseConflictResponse(preview);
+        const [{ count: activeSessionCount, error: sessionsError }, { data: product, error: productError }] = await Promise.all([
+          admin.from('activity_sessions').select('id', { count: 'exact', head: true })
+            .eq('series_id', series.id).eq('is_active', true),
+          admin.from('access_products').select('id, base_price_sek, status, is_active, product_kind')
+            .eq('id', series.access_product_id).eq('venue_id', series.venue_id).maybeSingle(),
+        ]);
+        if (sessionsError || productError) throw new Error(sessionsError?.message || productError?.message || 'Publish readiness unavailable');
+        if (Number(activeSessionCount || 0) !== Number(series.total_sessions || 0)) {
+          return errorResponse('Alla tillfällen måste finnas före publicering.', 409);
+        }
+        if (!product || product.product_kind !== 'series_access' || product.status !== 'active'
+          || product.is_active !== true || Number(product.base_price_sek || 0) <= 0) {
+          return errorResponse('En aktiv produkt med giltigt pris krävs före publicering.', 409);
+        }
+        const fill = await seriesCapacity(admin, series);
+        if (fill.capacity < fill.committed_count + fill.active_holds_count) {
+          return errorResponse('Kapaciteten är lägre än aktiva platser och pågående betalningar.', 409);
+        }
+      }
       const { data, error } = await admin.from('activity_series').update({ status: nextStatus }).eq('id', series.id).select('*').single();
       if (error) throw new Error(error.message);
       return jsonResponse(await projectCourse(admin, data, null), 200, 0);
@@ -941,34 +1059,14 @@ const coursesHandler = async (req: Request) => {
         .eq('id', sessionId).maybeSingle();
       if (sessionError || !session || (session as { activity_series?: { series_type?: string } }).activity_series?.series_type !== 'course') return errorResponse('Course Session not found', 404);
       await requireVenueRole(admin, auth.userId, session.venue_id, ['venue_admin']);
-      const updates: Record<string, unknown> = {};
-      for (const field of ['session_date', 'start_time', 'end_time', 'is_active']) if (body[field] !== undefined) updates[field] = body[field];
-      if (body.court_ids !== undefined) updates.court_ids = Array.isArray(body.court_ids) ? body.court_ids : [];
-      const { data, error } = await admin.from('activity_sessions').update(updates).eq('id', session.id).select('*').single();
-      if (error) throw new Error(error.message);
-      return jsonResponse(data, 200, 0);
+      return errorResponse('Tillfället ägs av Program & Event. Ändra hela omgången där så att schema och deltagare förblir synkroniserade.', 409);
     }
 
     if (req.method === 'POST' && path === 'session') {
       const body = await req.json();
       const series = await courseSeries(admin, String(body.series_id || ''));
       await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
-      const { data: last } = await admin.from('activity_sessions').select('series_occurrence_index').eq('series_id', series.id).order('series_occurrence_index', { ascending: false }).limit(1).maybeSingle();
-      const { data: format } = series.format_id
-        ? await admin.from('activity_formats').select('requires_instructor').eq('id', series.format_id).maybeSingle()
-        : { data: null };
-      const occurrenceIndex = Number(last?.series_occurrence_index || 0) + 1;
-      const { data, error } = await admin.from('activity_sessions').insert({
-        venue_id: series.venue_id, name: series.name, session_type: 'course', sport_type: series.sport_type,
-        recurrence_days: null, session_date: body.session_date, start_time: body.start_time || series.start_time,
-        end_time: body.end_time || series.end_time, price_sek: 0, capacity: series.capacity,
-        court_ids: body.court_ids || series.court_ids, access_policy: { series_commitment_required: true },
-        is_active: true, metadata: { generated_by: 'course_series', activity_series_id: series.id, added_manually: true },
-        series_id: series.id, product_key: null, publish_status: 'published', requires_staffing: format?.requires_instructor === true,
-        closed_to_public: true, series_occurrence_index: occurrenceIndex,
-      }).select('*').single();
-      if (error) throw new Error(error.message);
-      return jsonResponse(data, 201, 0);
+      return errorResponse('Tillfällen skapas genom omgångens schema i Program & Event, inte som fristående pass.', 409);
     }
 
     return errorResponse('Not found', 404);

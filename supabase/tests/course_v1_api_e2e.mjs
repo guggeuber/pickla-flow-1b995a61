@@ -307,8 +307,16 @@ const productAfterConflict = (await rest("access_products", `id=eq.${draft.serie
 assert(draftAfterConflict.name === draftEditBody.name && draftAfterConflict.capacity === 10 && productAfterConflict.base_price_sek === 1595, "blocked draft edit partially mutated Series/product truth");
 await rest("bookings", `id=eq.${draftConflictBooking.id}`, { method: "DELETE" });
 await course("series", { method: "PATCH", token: operator.token, body: { series_id: draft.series.id, status: "active" } });
-await course("series", { method: "PATCH", token: operator.token, expected: 409, body: { ...draftEditBody, name: "Published edit forbidden" } });
-pass("Draft Series editing", "preview and conflicts recompute; save is atomic; published-zero remains immutable");
+const publishedEditBody = {
+  ...draftEditBody,
+  name: "Pickla 101 · Publicerad utan försäljning",
+  start_time: "19:30",
+  end_time: "20:30",
+};
+const publishedEdited = (await course("series", { method: "PATCH", token: operator.token, body: publishedEditBody })).payload;
+assert(publishedEdited.status === "active", "safe published edit changed publication state");
+assert(publishedEdited.sessions.length === 4 && publishedEdited.sessions.every((session, index) => session.id === originalDraftSessionIds[index] && session.start_time.startsWith("19:30")), "published no-sales reconciliation duplicated/replaced Sessions");
+pass("Managed Series editing", "draft and published-without-sales preview/reconciliation are atomic with stable occurrence identity");
 
 const created = await createSeries();
 const seriesId = created.series.id;
@@ -556,7 +564,21 @@ const fourOccurrenceEntitlements = (await rest("access_entitlements", `source_ty
 const fourOccurrenceRegistrations = (await rest("session_registrations", `series_commitment_id=eq.${fourOccurrenceLine.series_commitment_id}&select=id`)).payload;
 assert(fourOccurrenceLine.resolver_snapshot?.pricing_reason === "membership_tier_pricing", "four-occurrence Series did not freeze membership provenance");
 assert(fourOccurrenceLine.series_commitment_id && fourOccurrenceEntitlements.length === 1 && fourOccurrenceRegistrations.length === 4, "four-occurrence Series did not remain one Commitment, one entitlement and four projections");
-pass("Multi-occurrence Series member pricing", "one purchase; one Commitment; one entitlement; four projected registrations");
+const blockedSoldSchedule = await course("series", {
+  method: "PATCH",
+  token: operator.token,
+  expected: 409,
+  body: { ...publishedEditBody, start_time: "20:30", end_time: "21:30" },
+});
+assert(/deltagare|betalning/i.test(blockedSoldSchedule.payload.error), "sold Series schedule rejection was not operator-safe");
+const futureFacingSoldEdit = (await course("series", {
+  method: "PATCH",
+  token: operator.token,
+  body: { ...publishedEditBody, name: "Pickla 101 · Framtida pris", capacity: 10, price_sek: 1695 },
+})).payload;
+const frozenFourOccurrenceLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${fourOccurrencePurchase.order.id}&select=unit_price_minor,resolver_snapshot`)).payload[0];
+assert(futureFacingSoldEdit.product.base_price_sek === 1695 && frozenFourOccurrenceLine.unit_price_minor === 139500, "future price edit rewrote frozen historical purchase truth");
+pass("Multi-occurrence Series member pricing", "one purchase; one Commitment; one entitlement; four projections; sold schedule locked and historical price frozen");
 await rest("activity_formats", `id=eq.${format.id}`, { method: "PATCH", body: { presentation_type: "social_event" } });
 const memberPurchase = await checkoutCourse({
   seriesId,
@@ -914,18 +936,14 @@ assert(!(homeMine.mode === "registration" && homeMine.item?.id === seriesId), "o
 pass("My Course ownership", "distant ownership remains on My Page and cannot be re-sold on Home");
 
 const originalSession = created.sessions[2];
-await course("session", { method: "PATCH", token: operator.token, body: { session_id: originalSession.id, session_date: "2026-09-24" } });
+const blockedSessionMove = await course("session", { method: "PATCH", token: operator.token, expected: 409, body: { session_id: originalSession.id, session_date: "2026-09-24" } });
+const blockedSessionAdd = await course("session", { method: "POST", token: operator.token, expected: 409, body: { series_id: seriesId, session_date: "2026-10-20" } });
 const commitmentAfterMove = (await rest("series_commitments", `id=eq.${commitment[0].id}&select=id,status,updated_at`)).payload[0];
 const movedRegistration = (await rest("session_registrations", `series_commitment_id=eq.${commitment[0].id}&activity_session_id=eq.${originalSession.id}&select=id,status`)).payload[0];
-assert(commitmentAfterMove.id === commitment[0].id && commitmentAfterMove.status === "active" && movedRegistration?.id, "Session move rewrote or detached commitment");
-const added = (await course("session", { method: "POST", token: operator.token, body: { series_id: seriesId, session_date: "2026-10-20" } })).payload;
-const registrationsAfterAdd = (await rest("session_registrations", `series_commitment_id=eq.${commitment[0].id}&select=id`)).payload;
-assert(added.series_occurrence_index === 7 && registrationsAfterAdd.length === 7, "Session addition did not reconcile idempotently");
-await course("session", { method: "PATCH", token: operator.token, body: { session_id: added.id, is_active: false } });
-const cancelledProjection = (await rest("session_registrations", `series_commitment_id=eq.${commitment[0].id}&activity_session_id=eq.${added.id}&select=id,status`)).payload[0];
-const commitmentAfterCancellation = (await rest("series_commitments", `id=eq.${commitment[0].id}&select=id,status`)).payload[0];
-assert(cancelledProjection?.status === "cancelled" && commitmentAfterCancellation?.status === "active", "Session cancellation changed the Series Commitment or left an active expectation");
-pass("Session reconciliation", "move/add/cancel leaves commitment intact and reconciles expected participation");
+const registrationsAfterBlockedEdit = (await rest("session_registrations", `series_commitment_id=eq.${commitment[0].id}&select=id`)).payload;
+assert(/Program & Event/.test(blockedSessionMove.payload.error) && /omgångens schema/.test(blockedSessionAdd.payload.error), "managed Session side doors did not return canonical ownership guidance");
+assert(commitmentAfterMove.id === commitment[0].id && commitmentAfterMove.status === "active" && movedRegistration?.id && registrationsAfterBlockedEdit.length === 6, "blocked Session edit changed Commitment/projection truth");
+pass("Session edit boundary", "independent move/add is rejected after commitments; Commitment and projections remain intact");
 
 const childPurchase = await checkoutCourse({
   seriesId,
@@ -946,7 +964,11 @@ assert(childCommitment?.status === "active" && childMy.items[0]?.participant?.fi
 assert(!JSON.stringify(publicAfterChild).includes("Elsa") && !JSON.stringify(publicAfterChild).includes(childCommitment.dependent_participant_id), "minor leaked to public Course projection");
 pass("Child privacy", "guardian/staff-operational identity exists; public projection contains no identity");
 
-await course("session", { method: "PATCH", token: operator.token, body: { session_id: originalSession.id, session_date: stockholmToday } });
+// Controlled local timing fixture only: customer/admin mutation paths are
+// already proven closed above. This service-role test setup brings one existing
+// occurrence into the legitimate check-in window without adding a production
+// API side door.
+await rest("activity_sessions", `id=eq.${originalSession.id}`, { method: "PATCH", body: { session_date: stockholmToday } });
 const childRegistration = (await rest("session_registrations", `series_commitment_id=eq.${childCommitment.id}&activity_session_id=eq.${originalSession.id}&select=id,status`)).payload[0];
 const childEntitlementBefore = (await rest("access_entitlements", `source_type=eq.series_commitment&source_id=eq.${childCommitment.id}&select=id,uses_count`)).payload[0];
 const checkin = (await request(`${checkinsUrl}/checkin`, {
