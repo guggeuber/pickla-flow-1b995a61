@@ -57,6 +57,24 @@ function normalizedName(value: unknown, max = 120) {
   return String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
 }
 
+function cleanLeagueImageUrls(value: unknown, seriesId: string) {
+  if (!Array.isArray(value) || value.length > 1) return null;
+  const storageOrigin = Deno.env.get('SUPABASE_URL');
+  if (!storageOrigin) return null;
+  const marker = `/storage/v1/object/public/event-logos/activity-series/${seriesId}/`;
+  const urls = [...new Set(value.map((url) => String(url || '').trim()).filter(Boolean))];
+  if (urls.some((url) => {
+    try {
+      const parsed = new URL(url);
+      return parsed.origin !== new URL(storageOrigin).origin || !parsed.pathname.startsWith(marker)
+        || !/^1\.(png|jpe?g|webp)$/i.test(parsed.pathname.slice(marker.length));
+    } catch {
+      return true;
+    }
+  })) return null;
+  return urls;
+}
+
 function requestId(req: Request, body?: Record<string, unknown>) {
   return String(body?.request_id || req.headers.get('x-request-id') || crypto.randomUUID()).trim().slice(0, 200);
 }
@@ -513,6 +531,26 @@ const handler = async (req: Request) => {
       await staff(admin, authenticatedUserId, venueId);
       return jsonResponse(await operationsProjection(admin, venueId, date), 200, 0);
     }
+    if (req.method === 'PATCH' && path === 'artwork') {
+      const authenticatedUserId = userId || await requireUserId(req);
+      const body = await req.json();
+      const leagueSeasonId = String(body.league_season_id || '');
+      if (!UUID.test(leagueSeasonId)) return errorResponse('Seriespelet kunde inte hittas.', 404);
+      const { data: season, error: seasonError } = await admin.from('league_seasons')
+        .select('id, venue_id, activity_series_id').eq('id', leagueSeasonId).maybeSingle();
+      if (seasonError) throw new Error(seasonError.message);
+      if (!season) return errorResponse('Seriespelet kunde inte hittas.', 404);
+      await requireVenueRole(admin, authenticatedUserId, season.venue_id, ['venue_admin']);
+      const imageUrls = cleanLeagueImageUrls(body.image_urls, season.activity_series_id);
+      if (!imageUrls) return errorResponse('Använd Picklas Series-bilduppladdning.', 400);
+      const { data: series, error } = await admin.from('activity_series')
+        .update({ image_urls: imageUrls })
+        .eq('id', season.activity_series_id).eq('venue_id', season.venue_id).eq('series_type', 'league')
+        .select('id, image_urls').maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!series) return errorResponse('Seriespelet kunde inte hittas.', 404);
+      return jsonResponse(series, 200, 0);
+    }
     if (req.method === 'POST' && path === 'create') {
       const authenticatedUserId = userId || await requireUserId(req);
       const body = await req.json();
@@ -522,7 +560,7 @@ const handler = async (req: Request) => {
         p_venue_id: venueId,
         p_name: normalizedName(body.name),
         p_description: String(body.description || '').trim() || null,
-        p_image_urls: Array.isArray(body.image_urls) ? body.image_urls : [],
+        p_image_urls: [],
         p_night_dates: body.night_dates,
         p_court_ids: body.court_ids,
         p_registration_opens_at: body.registration_opens_at,

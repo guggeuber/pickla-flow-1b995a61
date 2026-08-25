@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 
 export type LeagueTeam = { id: string; team_name: string; status: string };
 export type LeagueStanding = {
@@ -143,6 +143,8 @@ export type LeagueAdminSeries = {
   id: string;
   venue_id: string;
   name: string;
+  description: string | null;
+  image_urls: string[];
   start_date: string;
   end_date: string;
   status: string;
@@ -201,7 +203,8 @@ export function fetchLeagueOperations(venueId: string, date: string) {
   return apiGet<LeagueOperationsProjection>("api-leagues", "operations", { venueId, date });
 }
 
-export const createLeagueSeason = (input: Record<string, unknown>) => apiPost("api-leagues", "create", input);
+export const createLeagueSeason = (input: Record<string, unknown>) => apiPost<{ season: { id: string; activity_series_id: string } }>("api-leagues", "create", input);
+export const updateLeagueArtwork = (leagueSeasonId: string, imageUrls: string[]) => apiPatch<{ id: string; image_urls: string[] }>("api-leagues", "artwork", { league_season_id: leagueSeasonId, image_urls: imageUrls });
 export const publishLeagueOffer = (leagueSeasonId: string) => apiPost("api-leagues", "publish-offer", { league_season_id: leagueSeasonId });
 export const generateLeagueFixtures = (leagueSeasonId: string) => apiPost("api-leagues", "generate-fixtures", { league_season_id: leagueSeasonId });
 export const publishLeagueFixtures = (leagueSeasonId: string) => apiPost("api-leagues", "publish-fixtures", { league_season_id: leagueSeasonId });

@@ -28,6 +28,7 @@ import EventPage from "./pages/EventPage";
 import EventPlanPublic from "./pages/EventPlanPublic";
 import BookingPage from "./pages/BookingPage";
 import GroupBookingPage from "./pages/GroupBookingPage";
+import EventBusinessPage from "./pages/EventBusinessPage";
 import EventlokalerPage from "./pages/EventlokalerPage";
 import ForetagseventPage from "./pages/ForetagseventPage";
 import KickoffPage from "./pages/KickoffPage";
@@ -78,6 +79,7 @@ import CommerceOrderPage from "./pages/CommerceOrderPage";
 import CommerceShopPage from "./pages/CommerceShopPage";
 import CourseSeriesPage from "./pages/CourseSeriesPage";
 import LeaguePage from "./pages/LeaguePage";
+import LeagueDiscoveryPage from "./pages/LeagueDiscoveryPage";
 import CoursesPage from "./pages/CoursesPage";
 import PricesMembershipPage from "./pages/PricesMembershipPage";
 import { Loader2 } from "lucide-react";
@@ -127,6 +129,7 @@ function AppRoutes() {
             <Route path="/pulse/:token" element={<PulsePage />} />
             <Route path="/shop" element={<CommerceShopPage />} />
             <Route path="/course/:seriesId" element={<CourseSeriesPage />} />
+            <Route path="/seriespel" element={<LeagueDiscoveryPage />} />
             <Route path="/seriespel/:seriesId" element={<LeaguePage />} />
             <Route path="/courses" element={<CoursesPage />} />
             <Route path="/prices" element={<PricesMembershipPage />} />
@@ -157,6 +160,7 @@ function AppRoutes() {
             <Route path="/e/:slug" element={<EventPage />} />
             <Route path="/book" element={<BookingPage />} />
             <Route path="/book/group" element={<GroupBookingPage />} />
+            <Route path="/event-foretag" element={<EventBusinessPage />} />
             <Route path="/eventlokaler" element={<EventlokalerPage />} />
             <Route path="/foretagsevent-stockholm" element={<ForetagseventPage />} />
             <Route path="/kickoff-stockholm" element={<KickoffPage />} />

@@ -41,7 +41,7 @@ describe("final booking UX contract", () => {
     expect(myPageSource).toContain("visible={bookingHasConversation(b, conversationRooms)}");
   });
 
-  it("keeps full ownership on My Page while the menu exposes only three normalized upcoming items", () => {
+  it("keeps full ownership on My Page while the menu exposes three upcoming items and one account-card entry", () => {
     expect(myPageSource).toContain("useMyBookings()");
     expect(myPageSource).toContain("buildBookingHistory(");
     expect(myPageSource).toContain("BookingStatusChip");
@@ -52,6 +52,8 @@ describe("final booking UX contract", () => {
     expect(upcomingSource).toContain('source: "series_occurrence"');
     expect(topBarSource).not.toContain("pastBookings");
     expect(topBarSource).not.toContain("showPast");
-    expect(topBarSource).toContain('["Min sida"');
+    expect(topBarSource).not.toContain('["Min sida"');
+    expect(topBarSource).toContain('user ? "Min sida" : "Logga in"');
+    expect(topBarSource).toContain('go(user ? `/my?v=${encodeURIComponent(slug)}`');
   });
 });

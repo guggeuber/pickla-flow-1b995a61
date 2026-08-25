@@ -1,12 +1,12 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 
-const { useCustomerUpcomingMock } = vi.hoisted(() => ({ useCustomerUpcomingMock: vi.fn() }));
+const { useAuthMock, useCustomerUpcomingMock } = vi.hoisted(() => ({ useAuthMock: vi.fn(), useCustomerUpcomingMock: vi.fn() }));
 
-vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "user-1", email: "spelare@pickla.test" } }) }));
+vi.mock("@/hooks/useAuth", () => ({ useAuth: useAuthMock }));
 vi.mock("@/hooks/useCustomerUpcoming", () => ({ useCustomerUpcoming: useCustomerUpcomingMock }));
 vi.mock("@/lib/venueStatus", () => ({
   useVenueStatusBySlug: () => ({ venue: { id: "venue-1", name: "Pickla Arena Stockholm" }, status: { open: true, venueStatusTone: "open" } }),
@@ -34,29 +34,77 @@ function renderMenu() {
   fireEvent.click(screen.getByRole("button", { name: "Öppna meny" }));
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="location-probe">{location.pathname}{location.search}</span>;
+}
+
 describe("PicklaTopBar global navigation and booking ownership", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-11T12:00:00Z"));
+    useAuthMock.mockReturnValue({ user: { id: "user-1", email: "spelare@pickla.test" } });
     useCustomerUpcomingMock.mockReturnValue({ data: [] });
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    useAuthMock.mockReset();
     useCustomerUpcomingMock.mockReset();
   });
 
-  it("uses the ratified six-row menu and restores the contextual account card", () => {
+  it("uses the final intent-led order without Course, Series or duplicate My Page rows", () => {
     renderMenu();
-    const expected = ["Schema", "Boka bana", "Kurser", "Priser & medlemskap", "Butik", "Min sida"];
-    expect(screen.getAllByRole("button").filter((button) => expected.includes(button.textContent || "")).map((button) => button.textContent)).toEqual(expected);
+    const nav = screen.getByRole("navigation", { name: "Huvudmeny" });
+    const expected = ["Schema", "Boka bana", "Träna", "Tävla", "Event & företag", "Medlemskap & priser", "Butik"];
+    expect(within(nav).getAllByRole("button").map((button) => button.textContent)).toEqual(expected);
+    expect(within(nav).queryByRole("button", { name: "Kurser" })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "Seriespel" })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "Min sida" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Min sida spelare@pickla.test/i })).toBeInTheDocument();
     expect(screen.getByText("spelare@pickla.test")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Spela idag/i })).toBeInTheDocument();
+    const playToday = screen.getByRole("button", { name: /Spela idag/i });
+    expect(playToday).toHaveClass("border", "bg-white");
+    expect(playToday).not.toHaveClass("bg-neutral-950", "text-white");
     expect(screen.queryByText("Boka pickleball")).not.toBeInTheDocument();
     expect(screen.queryByText("Boka darts")).not.toBeInTheDocument();
     expect(screen.queryByText("MENY")).not.toBeInTheDocument();
     expect(screen.queryByText("Min statistik")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Träna", "/courses?v=pickla-arena-sthlm"],
+    ["Tävla", "/seriespel?v=pickla-arena-sthlm"],
+    ["Event & företag", "/event-foretag?v=pickla-arena-sthlm"],
+  ])("routes %s through the existing venue context", (label, destination) => {
+    render(<MemoryRouter initialEntries={["/today?v=pickla-arena-sthlm"]}><PicklaTopBar /><LocationProbe /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Öppna meny" }));
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent(destination);
+  });
+
+  it("keeps the account card as the canonical signed-in My Page entry", () => {
+    render(<MemoryRouter><PicklaTopBar /><LocationProbe /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Öppna meny" }));
+    fireEvent.click(screen.getByRole("button", { name: /Min sida spelare@pickla.test/i }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/my?v=pickla-arena-sthlm");
+  });
+
+  it("keeps signed-out navigation safe through the account card", () => {
+    useAuthMock.mockReturnValue({ user: null });
+    render(<MemoryRouter><PicklaTopBar /><LocationProbe /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Öppna meny" }));
+    expect(screen.queryByText("Kommande")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Logga in Fortsätt till ditt konto/i }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/auth?v=pickla-arena-sthlm");
+  });
+
+  it("preserves the Spela idag route while using secondary hierarchy", () => {
+    render(<MemoryRouter initialEntries={["/shop?v=pickla-arena-sthlm"]}><PicklaTopBar /><LocationProbe /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Öppna meny" }));
+    fireEvent.click(screen.getByRole("button", { name: /Spela idag/i }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/today?v=pickla-arena-sthlm");
   });
 
   it("shows the three nearest customer-owned activities across canonical sources", () => {

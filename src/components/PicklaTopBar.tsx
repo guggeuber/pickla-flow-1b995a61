@@ -8,6 +8,7 @@ import { useGlobalShopCartIndicator } from "@/hooks/useGlobalShopCartIndicator";
 import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { useCustomerUpcoming } from "@/hooks/useCustomerUpcoming";
+import { Button } from "@/components/ui/button";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -52,7 +53,7 @@ export function PicklaTopBar({ slug = "pickla-arena-sthlm", venueName, showVenue
           {shopCart.count > 0 ? <button type="button" onClick={openCart} aria-label={`Öppna varukorg, ${shopCart.count} artiklar`} className="relative grid h-10 w-10 place-items-center rounded-full border border-black/10 bg-white"><ShoppingBag className="h-5 w-5" /><span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-neutral-950 px-1 text-[10px] font-bold text-white">{shopCart.count > 99 ? "99+" : shopCart.count}</span></button> : <span className="h-10 w-10" />}
         </div>
         <nav className="mx-auto w-full max-w-md flex-1 overflow-y-auto px-5 pt-5" aria-label="Huvudmeny">
-          {[["Schema", `/today?v=${encodeURIComponent(slug)}`], ["Boka bana", `/book?v=${encodeURIComponent(slug)}`], ["Kurser", `/courses?v=${encodeURIComponent(slug)}`], ["Priser & medlemskap", `/prices?v=${encodeURIComponent(slug)}`], ["Butik", `/shop?v=${encodeURIComponent(slug)}`], ["Min sida", user ? `/my?v=${encodeURIComponent(slug)}` : `/auth?redirect=${encodeURIComponent("/my")}&v=${encodeURIComponent(slug)}`]].map(([label, href]) => <button key={label} type="button" onClick={() => go(href)} className="flex min-h-16 w-full items-center justify-between border-b border-black/10 px-1 text-left text-[21px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}><span>{label}</span><ArrowRight className="h-4 w-4 text-neutral-400" /></button>)}
+          {[["Schema", `/today?v=${encodeURIComponent(slug)}`], ["Boka bana", `/book?v=${encodeURIComponent(slug)}`], ["Träna", `/courses?v=${encodeURIComponent(slug)}`], ["Tävla", `/seriespel?v=${encodeURIComponent(slug)}`], ["Event & företag", `/event-foretag?v=${encodeURIComponent(slug)}`], ["Medlemskap & priser", `/prices?v=${encodeURIComponent(slug)}`], ["Butik", `/shop?v=${encodeURIComponent(slug)}`]].map(([label, href]) => <button key={label} type="button" onClick={() => go(href)} className="flex min-h-16 w-full items-center justify-between border-b border-black/10 px-1 text-left text-[21px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}><span>{label}</span><ArrowRight className="h-4 w-4 text-neutral-400" /></button>)}
           {user ? <section className="mt-7 space-y-2 pb-5">
             <p className="px-1 text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>Kommande</p>
             {upcomingLoading ? <div className="flex items-center gap-2 rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-[13px] text-neutral-500"><Loader2 className="h-4 w-4 animate-spin" /> Hämtar kommande…</div> : upcomingPreview.length ? upcomingPreview.map((item) => {
@@ -73,7 +74,7 @@ export function PicklaTopBar({ slug = "pickla-arena-sthlm", venueName, showVenue
               <ArrowRight className="h-4 w-4 text-neutral-400" />
             </button>
           </div>
-          <div className="mx-auto w-full max-w-md px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-3"><button type="button" onClick={() => go(`/today?v=${encodeURIComponent(slug)}`)} className="flex min-h-14 w-full items-center justify-center gap-3 rounded-full bg-neutral-950 px-5 text-base font-black text-white" style={{ fontFamily: FONT_HEADING }}>Spela idag <ArrowRight className="h-4 w-4" /></button></div>
+          <div className="mx-auto w-full max-w-md px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-3"><Button type="button" variant="outline" size="lg" onClick={() => go(`/today?v=${encodeURIComponent(slug)}`)} className="min-h-14 w-full rounded-full border-neutral-300 bg-white text-base font-black text-neutral-950 shadow-none hover:bg-neutral-50" style={{ fontFamily: FONT_HEADING }}>Spela idag <ArrowRight className="h-4 w-4" /></Button></div>
         </div>
       </motion.aside>
     </div> : null}</AnimatePresence>
