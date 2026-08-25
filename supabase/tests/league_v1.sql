@@ -835,4 +835,205 @@ BEGIN
   ) THEN RAISE EXCEPTION 'deferred League table was created'; END IF;
 END $$;
 
+-- Browser authorization to use the League API must never imply direct table
+-- mutation rights. Assert the ACL layer first so an RLS denial alone cannot
+-- make these tests pass.
+DO $$
+DECLARE v_table TEXT;
+BEGIN
+  FOREACH v_table IN ARRAY ARRAY[
+    'league_seasons', 'league_team_entries', 'league_team_members',
+    'league_fixtures', 'league_fixture_results'
+  ] LOOP
+    IF has_table_privilege('anon', format('public.%I', v_table), 'INSERT')
+       OR has_table_privilege('anon', format('public.%I', v_table), 'UPDATE')
+       OR has_table_privilege('anon', format('public.%I', v_table), 'DELETE')
+       OR has_table_privilege('anon', format('public.%I', v_table), 'TRUNCATE')
+       OR has_table_privilege('authenticated', format('public.%I', v_table), 'INSERT')
+       OR has_table_privilege('authenticated', format('public.%I', v_table), 'UPDATE')
+       OR has_table_privilege('authenticated', format('public.%I', v_table), 'DELETE')
+       OR has_table_privilege('authenticated', format('public.%I', v_table), 'TRUNCATE') THEN
+      RAISE EXCEPTION 'League browser DML privilege remains on %', v_table;
+    END IF;
+    IF NOT has_table_privilege('service_role', format('public.%I', v_table), 'INSERT')
+       OR NOT has_table_privilege('service_role', format('public.%I', v_table), 'UPDATE')
+       OR NOT has_table_privilege('service_role', format('public.%I', v_table), 'DELETE')
+       OR NOT has_table_privilege('service_role', format('public.%I', v_table), 'TRUNCATE') THEN
+      RAISE EXCEPTION 'League service-role DML privilege missing on %', v_table;
+    END IF;
+  END LOOP;
+
+  IF has_table_privilege('anon', 'public.league_team_entries', 'SELECT')
+     OR has_table_privilege('anon', 'public.league_team_members', 'SELECT') THEN
+    RAISE EXCEPTION 'Private League roster table remains anon-readable';
+  END IF;
+  IF NOT has_table_privilege('anon', 'public.league_seasons', 'SELECT')
+     OR NOT has_table_privilege('anon', 'public.league_fixtures', 'SELECT')
+     OR NOT has_table_privilege('anon', 'public.league_fixture_results', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.league_team_entries', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.league_team_members', 'SELECT') THEN
+    RAISE EXCEPTION 'League read contract changed during security repair';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_policy policy
+    JOIN pg_class relation ON relation.oid = policy.polrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = 'public'
+      AND relation.relname IN (
+        'league_seasons', 'league_team_entries', 'league_team_members',
+        'league_fixtures', 'league_fixture_results'
+      )
+      AND policy.polcmd <> 'r'
+  ) THEN
+    RAISE EXCEPTION 'League browser mutation policy remains enabled';
+  END IF;
+END $$;
+
+-- A future public table created by the verified migration owner must not
+-- inherit browser DML. This proves the default-privilege repair itself, not
+-- only the explicit revokes on the five existing League tables.
+CREATE TABLE public.league_security_default_acl_probe (id INTEGER PRIMARY KEY);
+DO $$
+BEGIN
+  IF has_table_privilege('anon', 'public.league_security_default_acl_probe', 'INSERT')
+     OR has_table_privilege('anon', 'public.league_security_default_acl_probe', 'UPDATE')
+     OR has_table_privilege('anon', 'public.league_security_default_acl_probe', 'DELETE')
+     OR has_table_privilege('anon', 'public.league_security_default_acl_probe', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.league_security_default_acl_probe', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.league_security_default_acl_probe', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.league_security_default_acl_probe', 'DELETE')
+     OR has_table_privilege('authenticated', 'public.league_security_default_acl_probe', 'TRUNCATE') THEN
+    RAISE EXCEPTION 'postgres/public default table ACL still grants browser DML';
+  END IF;
+  IF NOT has_table_privilege('service_role', 'public.league_security_default_acl_probe', 'INSERT')
+     OR NOT has_table_privilege('service_role', 'public.league_security_default_acl_probe', 'UPDATE')
+     OR NOT has_table_privilege('service_role', 'public.league_security_default_acl_probe', 'DELETE')
+     OR NOT has_table_privilege('service_role', 'public.league_security_default_acl_probe', 'TRUNCATE') THEN
+    RAISE EXCEPTION 'postgres/public default table ACL no longer supports service-role writes';
+  END IF;
+END $$;
+DROP TABLE public.league_security_default_acl_probe;
+
+CREATE FUNCTION pg_temp.assert_league_browser_dml_denied(p_actor TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+DECLARE v_table TEXT;
+BEGIN
+  FOREACH v_table IN ARRAY ARRAY[
+    'league_seasons', 'league_team_entries', 'league_team_members',
+    'league_fixtures', 'league_fixture_results'
+  ] LOOP
+    BEGIN
+      EXECUTE format('INSERT INTO public.%I DEFAULT VALUES', v_table);
+      RAISE EXCEPTION '% directly inserted %', p_actor, v_table;
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    BEGIN
+      EXECUTE format('UPDATE public.%I SET updated_at = updated_at WHERE false', v_table);
+      RAISE EXCEPTION '% directly updated %', p_actor, v_table;
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    BEGIN
+      EXECUTE format('DELETE FROM public.%I WHERE false', v_table);
+      RAISE EXCEPTION '% directly deleted from %', p_actor, v_table;
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    BEGIN
+      EXECUTE format('TRUNCATE TABLE public.%I', v_table);
+      RAISE EXCEPTION '% directly truncated %', p_actor, v_table;
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+  END LOOP;
+END;
+$$;
+
+SELECT set_config('request.jwt.claim.sub', '', true);
+SET LOCAL ROLE anon;
+SELECT pg_temp.assert_league_browser_dml_denied('anon');
+RESET ROLE;
+
+SELECT set_config(
+  'request.jwt.claim.sub',
+  (SELECT user_id::TEXT FROM league_test_people WHERE n = 13),
+  true
+);
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+  IF public.is_venue_member(auth.uid(), '1ea90000-0000-4000-8000-000000000002') THEN
+    RAISE EXCEPTION 'normal authenticated League test user unexpectedly has staff access';
+  END IF;
+END $$;
+SELECT pg_temp.assert_league_browser_dml_denied('authenticated user');
+RESET ROLE;
+
+SELECT set_config(
+  'request.jwt.claim.sub',
+  (SELECT user_id::TEXT FROM league_test_people WHERE n = 14),
+  true
+);
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+  IF NOT public.is_venue_member(auth.uid(), '1ea90000-0000-4000-8000-000000000002') THEN
+    RAISE EXCEPTION 'League staff security test does not exercise a real staff identity';
+  END IF;
+END $$;
+SELECT pg_temp.assert_league_browser_dml_denied('authenticated venue staff');
+RESET ROLE;
+
+-- The same staff actor remains authorized through the canonical server path.
+SELECT set_config(
+  'league.test.server_team_id',
+  (SELECT entry.id::TEXT
+   FROM public.league_team_entries entry
+   JOIN league_test_state state ON state.season_id = entry.league_season_id
+   WHERE entry.status = 'active'
+   ORDER BY entry.created_at
+   LIMIT 1),
+  true
+);
+SELECT set_config(
+  'league.test.staff_user_id',
+  (SELECT user_id::TEXT FROM league_test_people WHERE n = 14),
+  true
+);
+DO $$
+DECLARE
+  v_team public.league_team_entries%ROWTYPE;
+  v_venue_id UUID;
+BEGIN
+  SELECT * INTO v_team FROM public.league_team_entries
+  WHERE id = current_setting('league.test.server_team_id')::UUID;
+  SELECT venue_id INTO v_venue_id FROM public.league_seasons WHERE id = v_team.league_season_id;
+  IF v_team.id IS NULL OR NOT public.is_venue_member(
+    current_setting('league.test.staff_user_id')::UUID,
+    v_venue_id
+  ) THEN
+    RAISE EXCEPTION 'canonical League server-path proof is not scoped to an authorized staff actor';
+  END IF;
+END $$;
+SET LOCAL ROLE service_role;
+SELECT public.rename_league_team(
+  current_setting('league.test.server_team_id')::UUID,
+  'Server Boundary Verified',
+  current_setting('league.test.staff_user_id')::UUID,
+  'league-security-server-path-0001',
+  'Security boundary contract proof'
+);
+RESET ROLE;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.league_team_entries
+    WHERE id = current_setting('league.test.server_team_id')::UUID
+      AND team_name = 'Server Boundary Verified'
+  ) THEN
+    RAISE EXCEPTION 'canonical League server mutation path stopped working';
+  END IF;
+END $$;
+
 ROLLBACK;

@@ -133,7 +133,9 @@ BEGIN
     RAISE EXCEPTION 'Direct conflicting Course Session was accepted';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM = 'Direct conflicting Course Session was accepted' THEN RAISE; END IF;
-    IF SQLERRM NOT LIKE '%course_resource_conflict%' THEN RAISE; END IF;
+    -- The shared Course/League row guard reports the generic managed-Series
+    -- conflict code; Course API/RPC preflight paths retain their Course code.
+    IF SQLERRM NOT IN ('course_resource_conflict', 'managed_series_resource_conflict') THEN RAISE; END IF;
   END;
 
   INSERT INTO public.activity_sessions (
