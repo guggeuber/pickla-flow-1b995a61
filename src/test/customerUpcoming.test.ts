@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildCustomerUpcoming } from "@/lib/customerUpcoming";
 import type { MyCourseItem } from "@/lib/courses";
 import type { MySessionRegistration } from "@/hooks/useMySessionRegistrations";
+import type { MyLeagueItem } from "@/lib/league";
 
 const now = Date.parse("2026-08-24T10:00:00Z");
 
@@ -72,5 +73,48 @@ describe("customer upcoming projection", () => {
     const [item] = buildCustomerUpcoming({ courses, venueSlug: "pickla-arena-sthlm", nowMillis: now });
     expect(JSON.stringify(item)).not.toContain("Hemligt barn");
     expect(JSON.stringify(item)).not.toContain("dependent-secret");
+  });
+
+  it("collapses five projected League registrations into one team participation with fixture context", () => {
+    const leagueDates = ["2026-09-10", "2026-09-17", "2026-09-24", "2026-10-01", "2026-10-08"];
+    const registrations = leagueDates.map((sessionDate, index): MySessionRegistration => ({
+      id: `league-registration-${index + 1}`,
+      venue_id: "venue-1",
+      activity_session_id: `league-night-${index + 1}`,
+      session_date: sessionDate,
+      user_id: "user-1",
+      status: "confirmed",
+      price_paid_sek: 0,
+      stripe_session_id: null,
+      series_commitment_id: null,
+      created_at: null,
+      activity_sessions: {
+        id: `league-night-${index + 1}`,
+        name: "Pickla Seriespel · Season 01",
+        session_type: "league",
+        session_date: sessionDate,
+        start_time: "18:00",
+        end_time: "20:00",
+        venue_id: "venue-1",
+        venues: { name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
+      },
+    }));
+    const leagues = [{
+      membership: { id: "member-1", role: "captain" },
+      team: { id: "team-1", team_name: "Dink Floyd", status: "active" },
+      season: { id: "season-1", activity_series_id: "series-1", fixtures_published_at: "2026-09-01T10:00:00Z" },
+      series: { id: "series-1", venue_id: "venue-1", name: "Pickla Seriespel · Season 01", start_date: "2026-09-10", end_date: "2026-10-08", start_time: "18:00", end_time: "20:00", image_urls: [], venues: { name: "Pickla Stockholm", slug: "pickla-arena-sthlm" } },
+      next_session: { id: "league-night-1", session_date: "2026-09-10", start_time: "18:00", end_time: "20:00" },
+      next_fixtures: [
+        { id: "fixture-1", league_night_session_id: "league-night-1", round_number: 1, block_number: 1, venue_court_id: "court-2", team_a_entry_id: "team-1", team_b_entry_id: "team-2", scheduled_start_at: "2026-09-10T16:00:00Z", scheduled_end_at: "2026-09-10T16:50:00Z", status: "scheduled", opponent_team_name: "Pickle Rick", court_name: "Bana 2" },
+        { id: "fixture-2", league_night_session_id: "league-night-1", round_number: 1, block_number: 2, venue_court_id: "court-1", team_a_entry_id: "team-3", team_b_entry_id: "team-1", scheduled_start_at: "2026-09-10T17:00:00Z", scheduled_end_at: "2026-09-10T17:50:00Z", status: "scheduled", opponent_team_name: "Kitchen Nightmares", court_name: "Bana 1" },
+      ],
+      standing: null,
+    }] satisfies MyLeagueItem[];
+
+    const result = buildCustomerUpcoming({ registrations, leagues, venueSlug: "pickla-arena-sthlm", nowMillis: now });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ source: "league_night", title: "Dink Floyd", typeLabel: "SERIESPEL" });
+    expect(result[0].timeLabel).toBe("18:00 · Bana 2 mot Pickle Rick · 19:00 · Bana 1 mot Kitchen Nightmares");
   });
 });

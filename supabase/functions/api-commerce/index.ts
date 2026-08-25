@@ -386,6 +386,7 @@ function projectOrderLine(line: DbRecord) {
     session_date: line.session_date,
     session_registration_id: line.session_registration_id,
     series_commitment_id: line.series_commitment_id,
+    league_team_entry_id: line.league_team_entry_id,
     dependent_participant_id: line.dependent_participant_id,
     parent_line_id: line.parent_line_id,
     product_snapshot: {
@@ -480,8 +481,45 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
       registration_status: registration?.status || null,
     } : null;
   }
+  let leagueAccess = null;
+  if (participation?.league_team_entry_id) {
+    const [{ data: entry }, { data: members }, { data: venue }] = await Promise.all([
+      admin.from('league_team_entries')
+        .select('id, team_name, status, league_season_id, league_seasons(activity_series_id, fixture_publication_deadline, fixtures_published_at, activity_series(name, start_date, end_date, start_time, end_time))')
+        .eq('id', participation.league_team_entry_id).maybeSingle(),
+      admin.from('league_team_members')
+        .select('id, role, status, customers(display_name, first_name, last_name)')
+        .eq('team_entry_id', participation.league_team_entry_id).in('status', ['pending', 'active']).order('role'),
+      admin.from('venues').select('name, slug').eq('id', order.venue_id).maybeSingle(),
+    ]);
+    const season = Array.isArray(entry?.league_seasons) ? entry?.league_seasons[0] : entry?.league_seasons;
+    const leagueSeries = Array.isArray(season?.activity_series) ? season.activity_series[0] : season?.activity_series;
+    leagueAccess = entry ? {
+      league_team_entry_id: entry.id,
+      league_season_id: entry.league_season_id,
+      activity_series_id: season?.activity_series_id || participation.activity_series_id,
+      team_name: entry.team_name,
+      status: entry.status,
+      series_name: leagueSeries?.name || null,
+      start_date: leagueSeries?.start_date || null,
+      end_date: leagueSeries?.end_date || null,
+      start_time: leagueSeries?.start_time || null,
+      end_time: leagueSeries?.end_time || null,
+      fixture_publication_deadline: season?.fixture_publication_deadline || null,
+      fixtures_published_at: season?.fixtures_published_at || null,
+      venue_name: venue?.name || null,
+      venue_slug: venue?.slug || null,
+      members: (members || []).map((member) => {
+        const customer = Array.isArray(member.customers) ? member.customers[0] : member.customers;
+        return {
+          role: member.role,
+          name: customer?.display_name || [customer?.first_name, customer?.last_name].filter(Boolean).join(' ') || 'Spelare',
+        };
+      }),
+    } : null;
+  }
   let courseAccess = null;
-  if (participation?.activity_series_id) {
+  if (participation?.activity_series_id && !participation?.league_team_entry_id) {
     const [{ data: series }, { data: venue }, { data: dependent }] = await Promise.all([
       admin.from('activity_series')
         .select('id, name, start_date, end_date, start_time, end_time, total_sessions, status, activity_formats(name, presentation_type)')
@@ -541,6 +579,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
     receipt_lines: receiptLines.map(projectReceiptLine),
     activity_access: activityAccess,
     course_access: courseAccess,
+    league_access: leagueAccess,
     ...(token ? { cart_token: token } : {}),
   };
 }
@@ -943,14 +982,51 @@ async function resolveLines(
     let unitPriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
     let resolverSnapshot: Record<string, unknown> = { pricing_source: 'product_base_price' };
     if (line.commerce_kind === 'participation') {
-      let purchaseKind: 'activity_ticket' | 'day_pass' | 'course' = product.product_key === 'day_access' || product.product_kind === 'day_access'
+      let purchaseKind: 'activity_ticket' | 'day_pass' | 'course' | 'league_team' = product.product_key === 'day_access' || product.product_kind === 'day_access'
         ? 'day_pass'
         : 'activity_ticket';
       if (product.product_kind === 'series_access' && line.activity_series_id) purchaseKind = 'course';
+      if (product.product_kind === 'league_team' && line.league_team_entry_id) purchaseKind = 'league_team';
       if (purchaseKind === 'day_pass' && Number(product.base_price_sek || 0) <= 0) {
         throw new Error('Heldagspass saknar pris i Admin.');
       }
-      if (purchaseKind === 'course') {
+      if (purchaseKind === 'league_team') {
+        const [{ data: team, error: teamError }, { data: season, error: seasonError }] = await Promise.all([
+          admin.from('league_team_entries')
+            .select('id, league_season_id, status, captain_customer_id, payer_customer_id, capacity_hold_id, commerce_order_id, commerce_order_line_id, pricing_reason, base_price_minor, final_price_minor')
+            .eq('id', line.league_team_entry_id).maybeSingle(),
+          admin.from('league_seasons')
+            .select('id, activity_series_id, activity_series!inner(registration_closes_at)')
+            .eq('activity_series_id', line.activity_series_id).maybeSingle(),
+        ]);
+        const seasonSeries = Array.isArray(season?.activity_series) ? season.activity_series[0] : season?.activity_series;
+        if (teamError || seasonError || !team || !season || !seasonSeries || team.league_season_id !== season.id
+          || !['pending', 'active'].includes(team.status)
+          || team.commerce_order_id !== order.id || team.commerce_order_line_id !== line.id
+          || team.payer_customer_id !== (customerId || order.customer_id)
+          || (team.status === 'pending' && DateTime.now().toUTC() >= DateTime.fromISO(seasonSeries.registration_closes_at, { zone: 'utc' }))) {
+          throw new Error(teamError?.message || seasonError?.message || 'Lagplatsen är inte längre tillgänglig.');
+        }
+        unitPriceMinor = Number(team.final_price_minor || 0);
+        if (unitPriceMinor <= 0) throw new Error('Seriespelet saknar ett giltigt lagpris.');
+        resolverSnapshot = {
+          ...(line.resolver_snapshot || {}),
+          scope: 'league_team_entry',
+          scope_type: 'league_season',
+          scope_id: team.league_season_id,
+          access_product_id: product.id,
+          purchase_kind: 'league_team',
+          league_season_id: team.league_season_id,
+          league_team_entry_id: team.id,
+          activity_series_id: line.activity_series_id,
+          pricing_reason: team.pricing_reason || 'league_team_base_price',
+          applied_price_type: team.pricing_reason || 'league_team_base_price',
+          base_team_price_minor: Number(team.base_price_minor || unitPriceMinor),
+          final_price_minor: unitPriceMinor,
+          membership_pricing_applied: false,
+          quote_changed: false,
+        };
+      } else if (purchaseKind === 'course') {
         const { data: series, error: seriesError } = await admin.from('activity_series')
           .select('id, venue_id, status, start_date, end_date, capacity, registration_opens_at, registration_closes_at, access_product_id')
           .eq('id', line.activity_series_id)
@@ -1058,6 +1134,7 @@ async function resolveLines(
       session_date: line.session_date,
       session_registration_id: line.session_registration_id,
       series_commitment_id: line.series_commitment_id,
+      league_team_entry_id: line.league_team_entry_id,
       dependent_participant_id: line.dependent_participant_id,
       parent_line_id: line.parent_line_id,
       unit_price_minor: unitPriceMinor,
@@ -1087,6 +1164,16 @@ async function resolveLines(
 
 async function assertParticipationCapacityAvailable(admin: AdminClient, order: any, lines: any[]) {
   const participation = lines.find((line) => line.commerce_kind === 'participation');
+  if (participation?.league_team_entry_id) {
+    const { data: team, error } = await admin.from('league_team_entries')
+      .select('id, status, commerce_order_id, commerce_order_line_id, capacity_hold_id')
+      .eq('id', participation.league_team_entry_id).maybeSingle();
+    if (error || !team || !['pending', 'active'].includes(team.status)
+      || team.commerce_order_id !== order.id || team.commerce_order_line_id !== participation.id) {
+      throw new Error(error?.message || 'Lagplatsen är inte längre tillgänglig.');
+    }
+    return;
+  }
   if (participation?.activity_series_id) {
     const { data: series, error: seriesError } = await admin.from('activity_series')
       .select('id, start_date')
@@ -1141,6 +1228,35 @@ async function acquireParticipationHold(
   userId: string | null,
   customerId: string | null,
 ): Promise<ParticipationPricingHold> {
+  if (line.league_team_entry_id) {
+    const [{ data: team, error: teamError }, { data: members, error: memberError }] = await Promise.all([
+      admin.from('league_team_entries')
+        .select('id, league_season_id, team_name, captain_customer_id, registration_request_id, status')
+        .eq('id', line.league_team_entry_id).maybeSingle(),
+      admin.from('league_team_members')
+        .select('customer_id, role').eq('team_entry_id', line.league_team_entry_id).in('status', ['pending', 'active']),
+    ]);
+    const player = (members || []).find((member) => member.role === 'player');
+    if (teamError || memberError || !team || !player || team.captain_customer_id !== customerId || !userId) {
+      throw new Error(teamError?.message || memberError?.message || 'Lagplatsen kunde inte reserveras.');
+    }
+    const { data, error } = await admin.rpc('reserve_league_team_entry', {
+      p_league_season_id: team.league_season_id,
+      p_captain_user_id: userId,
+      p_captain_customer_id: team.captain_customer_id,
+      p_player_customer_id: player.customer_id,
+      p_team_name: team.team_name,
+      p_registration_request_id: team.registration_request_id,
+      p_source_id: line.id,
+      p_age_confirmed: true,
+      p_quoted_price_minor: Number(quotedResolvedLine?.unit_price_minor || 0),
+      p_ttl_seconds: SERIES_EARLY_BIRD_HOLD_TTL_SECONDS,
+    }).maybeSingle();
+    if (error) throw new Error(error.message);
+    const hold = (data || {}) as ParticipationPricingHold;
+    if (!hold.ok || !hold.hold_id) throw new Error('Seriespelet är fullt.');
+    return hold;
+  }
   if (line.activity_series_id) {
     const { data: series, error: seriesError } = await admin.from('activity_series')
       .select('id, start_date')
@@ -1899,6 +2015,34 @@ const commerceHandler = async (req: Request) => {
       if (order.status === 'attention') return errorResponse('Köpet behöver hanteras av Pickla innan det kan avbokas.', 409);
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.find((line) => line.commerce_kind === 'participation');
+      if (participation?.league_team_entry_id) {
+        const { data: team, error: teamError } = await admin.from('league_team_entries')
+          .select('id, status, league_season_id, league_seasons!inner(fixtures_published_at, activity_series!inner(start_date, start_time, registration_closes_at))')
+          .eq('id', participation.league_team_entry_id).maybeSingle();
+        const season = Array.isArray(team?.league_seasons) ? team?.league_seasons[0] : team?.league_seasons;
+        const series = Array.isArray(season?.activity_series) ? season?.activity_series[0] : season?.activity_series;
+        const starts = series ? DateTime.fromISO(`${series.start_date}T${String(series.start_time || '18:00').slice(0, 8)}`, { zone: 'Europe/Stockholm' }) : null;
+        if (teamError || !team || !season || !series) return errorResponse(teamError?.message || 'Seriespelet saknas', 404);
+        if (season.fixtures_published_at || DateTime.now().toUTC() >= DateTime.fromISO(series.registration_closes_at, { zone: 'utc' })
+          || !starts?.isValid || DateTime.now().setZone('Europe/Stockholm') >= starts) {
+          return errorResponse('Efter anmälningsstängning, schemapublicering eller seriestart hanteras lagavbokning manuellt av Pickla.', 409);
+        }
+        if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
+        const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+        if (!stripeKey) throw new Error('Stripe not configured');
+        const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
+        const { data: pending, error: pendingError } = await admin.from('commerce_orders').update({
+          metadata: {
+            ...(order.metadata || {}),
+            cancellation_requested_at: order.metadata?.cancellation_requested_at || new Date().toISOString(),
+            cancellation_source: 'customer_team',
+            stripe_refund_id: refund.id,
+            league_team_entry_id: team.id,
+          },
+        }).eq('id', order.id).eq('status', 'paid').select('*').maybeSingle();
+        if (pendingError) throw new Error(pendingError.message);
+        return jsonResponse({ ...(await cartResponse(admin, pending || order)), cancellation_pending: true }, 202, 0);
+      }
       if (participation?.activity_series_id) {
         const { data: series, error: seriesError } = await admin.from('activity_series')
           .select('id, start_date, start_time')

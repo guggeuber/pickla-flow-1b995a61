@@ -5,10 +5,11 @@ import { getBookingChatResourceId, getBookingCourtLabel } from "@/lib/bookingGro
 import type { MyCourseItem } from "@/lib/courses";
 import type { MySessionRegistration } from "@/hooks/useMySessionRegistrations";
 import { seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
+import type { MyLeagueItem } from "@/lib/league";
 
 export type CustomerUpcomingItem = {
   id: string;
-  source: "court_booking" | "session_registration" | "series_occurrence";
+  source: "court_booking" | "session_registration" | "series_occurrence" | "league_night";
   title: string;
   typeLabel: string;
   stateLabel: "Bokad" | "Anmäld" | "Du har en plats";
@@ -35,6 +36,7 @@ export function buildCustomerUpcoming(input: {
   bookings?: Record<string, unknown>[];
   registrations?: MySessionRegistration[];
   courses?: MyCourseItem[];
+  leagues?: MyLeagueItem[];
   venueSlug: string;
   nowMillis?: number;
 }): CustomerUpcomingItem[] {
@@ -64,6 +66,7 @@ export function buildCustomerUpcoming(input: {
       const status = String(registration.status || "confirmed");
       if (!["confirmed", "paid", "checked_in"].includes(status)) return false;
       if (registration.series_commitment_id || registration.activity_sessions?.session_type === "course") return false;
+      if (registration.activity_sessions?.session_type === "league") return false;
       const end = stockholmSessionDateTime(registration.session_date || registration.activity_sessions?.session_date, registration.activity_sessions?.end_time);
       return !end || end.toMillis() >= nowMillis;
     })
@@ -120,6 +123,38 @@ export function buildCustomerUpcoming(input: {
     })
     .filter((item): item is CustomerUpcomingItem => Boolean(item));
 
-  return [...courtItems, ...registrationItems, ...seriesItems]
+  const leagueItems = (input.leagues || [])
+    .filter((item) => item.team?.status === "active" && item.next_session)
+    .map((item): CustomerUpcomingItem | null => {
+      const next = item.next_session!;
+      const start = stockholmSessionDateTime(next.session_date, next.start_time);
+      const end = stockholmSessionDateTime(next.session_date, next.end_time);
+      if (!start || (end && end.toMillis() < nowMillis)) return null;
+      const fixtures = item.next_fixtures || [];
+      const fixtureLabel = fixtures.length
+        ? fixtures.map((fixture) => {
+          const time = DateTime.fromISO(fixture.scheduled_start_at).setZone("Europe/Stockholm").toFormat("HH:mm");
+          const opponent = fixture.opponent_team_name ? ` mot ${fixture.opponent_team_name}` : "";
+          const court = fixture.court_name ? ` · ${fixture.court_name}` : "";
+          return `${time}${court}${opponent}`;
+        }).join(" · ")
+        : formatUpcomingTime(start, end);
+      const venue = Array.isArray(item.series.venues) ? item.series.venues[0] : item.series.venues;
+      return {
+        id: `league:${item.season.id}:${item.team.id}`,
+        source: "league_night",
+        title: item.team.team_name,
+        typeLabel: "SERIESPEL",
+        stateLabel: "Du har en plats",
+        startsAt: start.toUTC().toISO()!,
+        endsAt: end?.toUTC().toISO() || null,
+        timeLabel: fixtureLabel,
+        venue: { name: venue?.name || null, slug: venue?.slug || input.venueSlug },
+        destinationUrl: `/seriespel/${encodeURIComponent(item.series.id)}?v=${encodeURIComponent(venue?.slug || input.venueSlug)}`,
+      };
+    })
+    .filter((item): item is CustomerUpcomingItem => Boolean(item));
+
+  return [...courtItems, ...registrationItems, ...seriesItems, ...leagueItems]
     .sort((a, b) => DateTime.fromISO(a.startsAt).toMillis() - DateTime.fromISO(b.startsAt).toMillis());
 }

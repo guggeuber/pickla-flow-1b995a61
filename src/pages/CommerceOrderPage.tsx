@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { useAuth } from "@/hooks/useAuth";
 import { activityCheckInAvailable } from "@/lib/activityTiming";
+import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import {
   COMMERCE_PICKUP_COPY,
@@ -22,6 +23,7 @@ import {
   formatCommerceMoney,
 } from "@/lib/commerce";
 import { occurrenceCountLabel, seriesPresentation } from "@/lib/seriesPresentation";
+import { shareOrCopy } from "@/lib/share";
 
 function fulfillmentLabel(status: string, cancelled: boolean) {
   if (cancelled || status === "not_collected") return "Ej längre tillgänglig för uthämtning";
@@ -62,6 +64,7 @@ export default function CommerceOrderPage() {
   });
   const activity = query.data?.activity_access;
   const course = query.data?.course_access;
+  const league = query.data?.league_access;
   useEffect(() => {
     if (query.data?.order.status !== "paid" || !activity?.activity_session_id || !activity.session_date) return;
     clearActivityCommerceSelection(activityCommerceSelectionKey(activity.activity_session_id, activity.session_date));
@@ -90,7 +93,7 @@ export default function CommerceOrderPage() {
   const { order, lines, receipt } = query.data;
   const dayPassLine = lines.find((line) => line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass");
   const isDayPassPurchase = Boolean(dayPassLine);
-  const hasParticipation = Boolean(activity || course);
+  const hasParticipation = Boolean(activity || course || league);
   const isCancelled = order.status === "cancelled" || activity?.registration_status === "cancelled";
   const checkedIn = activity?.registration_status === "checked_in";
   const cancellationPending = Boolean(order.cancellation_pending);
@@ -102,8 +105,10 @@ export default function CommerceOrderPage() {
     ? `/my?registration=${encodeURIComponent(managementRegistrationId)}${activity?.venue_slug ? `&v=${encodeURIComponent(activity.venue_slug)}` : ""}`
     : null;
   const canManageBooking = Boolean(user && order.account_claimed && managementPath);
-  const participantConfirmed = course
-    ? Boolean(course.commitment_id)
+  const participantConfirmed = league
+    ? league.status === "active"
+    : course
+      ? Boolean(course.commitment_id)
     : !hasParticipation || ["confirmed", "checked_in", "no_show"].includes(String(activity?.registration_status || ""));
   const purchaseConfirmed = order.status === "paid" && participantConfirmed;
   const waiting = order.status === "checkout_pending";
@@ -117,7 +122,7 @@ export default function CommerceOrderPage() {
   const activityPath = activity?.venue_slug
     ? `/p/${activity.activity_session_id}?date=${activity.session_date}&v=${encodeURIComponent(activity.venue_slug)}&ticket=1`
     : null;
-  const resolvedVenueSlug = activity?.venue_slug || course?.venue_slug || venueSlug;
+  const resolvedVenueSlug = activity?.venue_slug || course?.venue_slug || league?.venue_slug || venueSlug;
   const shareActivity = async () => {
     if (!activity || !activityPath) return;
     const shareUrl = `${window.location.origin}${activityPath.replace(/&ticket=1$/, "")}`;
@@ -136,6 +141,8 @@ export default function CommerceOrderPage() {
     ? "Vi bekräftar ditt köp"
     : isCancelled
       ? "Köpet är avbokat"
+      : purchaseConfirmed && league
+        ? "Laget är anmält"
       : purchaseConfirmed && hasParticipation
         ? "Platsen är din"
         : purchaseConfirmed
@@ -148,7 +155,7 @@ export default function CommerceOrderPage() {
     : purchaseConfirmed && isDayPassPurchase
       ? `Du har heldagstillgång och en plats på ${activity?.name}.`
     : purchaseConfirmed && hasParticipation
-      ? course ? `Du har en plats på ${course.name}.` : `Du är anmäld till ${activity?.name}.`
+        ? league ? `Laget ${league.team_name} är anmält.` : course ? `Du har en plats på ${course.name}.` : `Du är anmäld till ${activity?.name}.`
       : purchaseConfirmed
         ? "Spara den här sidan för kvitto och orderinformation."
         : needsReview
@@ -184,6 +191,28 @@ export default function CommerceOrderPage() {
             {course.participant_name ? <p className="mt-1 text-sm text-slate-500">Deltagare: {course.participant_name}</p> : null}
             {course.venue_name ? <p className="mt-1 text-sm text-slate-500">{course.venue_name}</p> : null}
             <p className="mt-1 text-xs text-slate-500">Referens {purchaseReference}</p>
+          </section>
+        ) : null}
+        {purchaseConfirmed && league ? (
+          <section className="mb-6 px-1" data-testid="league-purchase-confirmation">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-[#ed3f8f]">Laget är anmält</p>
+            <h2 className="mt-1 text-2xl font-black">{league.team_name}</h2>
+            <p className="mt-2 text-lg font-bold">{league.series_name}</p>
+            <div className="mt-4 grid gap-1 text-sm">
+              {league.members.map((member) => <p key={member.role}><span className="text-slate-500">{member.role === "captain" ? "Lagkapten" : "Spelare 2"}</span> · <strong>{member.name}</strong></p>)}
+              <p className="mt-2 font-semibold">5 torsdagar · {String(league.start_time).slice(0, 5)}–{String(league.end_time).slice(0, 5)}</p>
+              <p className="text-slate-500">Första kvällen · {DateTime.fromISO(league.start_date).setLocale("sv").toFormat("d MMMM")}</p>
+            </div>
+            {!league.fixtures_published_at && league.fixture_publication_deadline ? <p className="mt-4 rounded-2xl bg-[#fff2f7] p-4 text-sm font-bold">Spelschemat publiceras senast {DateTime.fromISO(league.fixture_publication_deadline).setLocale("sv").toFormat("d MMMM")}.</p> : null}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Link to={`/seriespel/${league.activity_series_id}?v=${encodeURIComponent(resolvedVenueSlug)}`} className="flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-3 text-center text-sm font-black text-white">Visa Seriespel</Link>
+              <button type="button" onClick={() => void (async () => {
+                const url = canonicalAppUrl(`/seriespel/${league.activity_series_id}?v=${encodeURIComponent(resolvedVenueSlug)}`);
+                const result = await shareOrCopy({ title: league.series_name, text: "Anmäl ett lag till Pickla Seriespel", url, copyText: url });
+                if (result === "copied") toast.success("Länk kopierad");
+              })()} className="flex h-12 items-center justify-center gap-2 rounded-2xl border border-black/15 text-sm font-black"><Share2 className="h-4 w-4" /> Dela Seriespel</button>
+            </div>
+            <p className="mt-3 text-xs text-slate-500">Referens {purchaseReference}</p>
           </section>
         ) : null}
         <div className="mb-9 px-12 text-center">{waiting ? <Loader2 className="mx-auto h-7 w-7 animate-spin text-slate-600" /> : purchaseConfirmed ? <Check data-testid="commerce-success-check" className="mx-auto h-8 w-8 stroke-[1.75] text-slate-950" /> : <XCircle className="mx-auto h-7 w-7 text-slate-600" />}<h1 className="mt-5 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
@@ -226,6 +255,12 @@ export default function CommerceOrderPage() {
           <section className="mb-6 border-y border-black/10 py-5">
             <p className="text-sm leading-relaxed text-slate-600">Din kursplats gäller hela serien. Kommande tillfälle och deltagaruppgifter finns på Min sida.</p>
             {user && order.account_claimed ? <Link to={`/my?v=${encodeURIComponent(resolvedVenueSlug)}#courses`} className="mt-4 flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-black text-white">Visa min kurs</Link> : user ? <button type="button" onClick={() => claimAccount.mutate()} disabled={claimAccount.isPending} className="mt-4 h-12 w-full rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">Koppla kursköpet till mitt konto</button> : <button type="button" onClick={startAuth} className="mt-4 h-12 w-full rounded-2xl bg-slate-950 font-black text-white">Spara kursen</button>}
+          </section>
+        ) : null}
+        {purchaseConfirmed && league ? (
+          <section className="mb-6 border-y border-black/10 py-5">
+            <p className="text-sm leading-relaxed text-slate-600">Lagplatsen gäller hela Season 01. Ditt lag och kommande matcher visas som ett Seriespel på Min sida.</p>
+            <Link to={`/my?v=${encodeURIComponent(resolvedVenueSlug)}#leagues`} className="mt-4 flex h-12 items-center justify-center rounded-2xl bg-slate-950 font-black text-white">Visa mitt lag</Link>
           </section>
         ) : null}
         {!(purchaseConfirmed && hasParticipation) ? <section className="divide-y divide-black/10 border-y border-black/10">

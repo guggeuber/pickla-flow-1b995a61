@@ -84,6 +84,7 @@ function managedPresentationLabel(type?: string | null) {
   if (type === "social_event") return "EVENT";
   if (type === "clinic") return "CLINIC";
   if (type === "tournament") return "TURNERING";
+  if (type === "league") return "SERIESPEL";
   return "KURS";
 }
 

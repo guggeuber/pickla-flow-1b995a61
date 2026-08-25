@@ -4,7 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { ArrowLeft, CalendarDays, ChevronDown, ChevronRight, Crown, Loader2, Package, Plus, Tag } from "lucide-react";
 import AdminCourses from "@/components/admin/AdminCourses";
+import AdminLeague from "@/components/admin/AdminLeague";
 import { fetchCourseAdmin, type CourseDetail } from "@/lib/courses";
+import { fetchLeagueAdmin, type LeagueAdminSeason } from "@/lib/league";
 import { catalogOfferSection, sortCatalogOffers, visibleCatalogOffers, type CatalogOfferSection } from "@/lib/adminCatalog";
 import { seriesCustomerTitle, seriesPresentation, type SeriesPresentationType } from "@/lib/seriesPresentation";
 import { ax, AX_GRID_BG } from "./axTheme";
@@ -22,6 +24,7 @@ const OFFER_TYPES: Array<{ type: SeriesPresentationType; label: string; descript
   { type: "social_event", label: "Event", description: "Ett namngivet publikt event med egen identitet." },
   { type: "clinic", label: "Clinic", description: "Fokuserad träning eller workshop med coach." },
   { type: "tournament", label: "Turnering", description: "Turneringspresentation med samma Series- och Commerce-grund." },
+  { type: "league", label: "Seriespel", description: "Sex lag köper varsin lagplats. Fem League-kvällar, fixtures, resultat och tabell." },
 ];
 
 const SECTION_COPY: Record<CatalogOfferSection, { title: string; empty: string }> = {
@@ -110,6 +113,13 @@ function OfferSection({ title, items, empty, onEdit }: { title: string; items: C
   );
 }
 
+function LeagueOfferCard({ season, onEdit }: { season: LeagueAdminSeason; onEdit: () => void }) {
+  const series = Array.isArray(season.activity_series) ? season.activity_series[0] : season.activity_series;
+  const activeTeams = (season.teams || []).filter((team) => team.status === "active").length;
+  const product = Array.isArray(series?.access_products) ? series.access_products[0] : series?.access_products;
+  return <article className="relative overflow-hidden rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }} data-testid={`catalog-league-${season.id}`}><span className="absolute inset-y-3 left-0 w-1 rounded-full" style={{ background: series?.status === "active" ? ax("lime") : ax("sun") }} /><div className="ml-2 flex items-start gap-3"><div className="min-w-0 flex-1"><div className="flex gap-1.5"><AxChip tone="magenta">SERIESPEL</AxChip><AxChip tone={series?.status === "active" ? "lime" : "sun"}>{statusLabel(series?.status || "draft").toUpperCase()}</AxChip></div><h3 className="mt-2 truncate font-display text-[17px] font-black text-white">{series?.name}</h3><p className="mt-1 font-mono text-[11px]" style={{ color: ax("muted") }}>{series?.start_date ? DateTime.fromISO(series.start_date).setLocale("sv").toFormat("d MMM") : "Datum saknas"}–{series?.end_date ? DateTime.fromISO(series.end_date).setLocale("sv").toFormat("d MMM") : ""} · 5 torsdagar</p><div className="mt-3 flex gap-4 text-xs font-bold" style={{ color: ax("muted") }}><span>{activeTeams}/6 lag</span><span className="text-white">{sek(Number(product?.base_price_sek || 0))} / lag</span><span>{season.fixtures?.length || 0}/30 matcher</span></div></div><motion.button type="button" whileTap={{ scale: 0.95 }} onClick={onEdit} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-xl px-3 text-xs font-black" style={{ background: ax("electric"), color: ax("ink") }}>Öppna <ChevronRight className="h-3.5 w-3.5" /></motion.button></div></article>;
+}
+
 export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseInitialSeries, onOpenModule }: Props) {
   const [selectedSeriesId, setSelectedSeriesId] = useState<string | null>(initialSeriesId);
   const [createType, setCreateType] = useState<SeriesPresentationType | null>(null);
@@ -118,6 +128,11 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
   const query = useQuery({
     queryKey: ["admin-courses", venueId],
     queryFn: () => fetchCourseAdmin(venueId!),
+    enabled: Boolean(venueId),
+  });
+  const leagueQuery = useQuery({
+    queryKey: ["admin-leagues", venueId],
+    queryFn: () => fetchLeagueAdmin(venueId!),
     enabled: Boolean(venueId),
   });
 
@@ -135,6 +150,7 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
     return result;
   }, [query.data?.series]);
   const selectedSeries = query.data?.series.find((series) => series.id === selectedSeriesId);
+  const selectedLeague = leagueQuery.data?.seasons.find((season) => season.activity_series_id === selectedSeriesId || season.id === selectedSeriesId);
 
   const closeEditor = () => {
     setSelectedSeriesId(null);
@@ -154,16 +170,16 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
           </button>
           <div className="min-w-0 flex-1">
             <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("electricSoft") }}>Catalog · Redigera</p>
-            <h2 className="truncate font-display text-lg font-black" style={{ color: "white" }}>{selectedSeries ? seriesCustomerTitle({ seriesName: selectedSeries.name, formatName: selectedSeries.format?.name, presentationType: selectedSeries.format?.presentation_type }) : (createType ? `Nytt ${seriesPresentation(createType).label.toLowerCase()}` : "Öppnar erbjudande")}</h2>
+            <h2 className="truncate font-display text-lg font-black" style={{ color: "white" }}>{selectedLeague ? (Array.isArray(selectedLeague.activity_series) ? selectedLeague.activity_series[0]?.name : selectedLeague.activity_series?.name) : selectedSeries ? seriesCustomerTitle({ seriesName: selectedSeries.name, formatName: selectedSeries.format?.name, presentationType: selectedSeries.format?.presentation_type }) : (createType ? `Nytt ${seriesPresentation(createType).label.toLowerCase()}` : "Öppnar erbjudande")}</h2>
           </div>
         </div>
-        <AdminCourses
+        {selectedSeriesId && !selectedSeries && !selectedLeague && (query.isLoading || leagueQuery.isLoading) ? <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin" style={{ color: ax("muted") }} /></div> : createType === "league" || selectedLeague ? <AdminLeague venueId={venueId} leagueSeasonId={selectedLeague?.id || null} onDone={closeEditor} /> : <AdminCourses
           venueId={venueId}
           catalogMode
           initialSeriesId={selectedSeriesId}
           initialPresentationType={createType || selectedSeries?.format?.presentation_type || "course"}
           onDone={closeEditor}
-        />
+        />}
       </div>
     );
   }
@@ -176,7 +192,7 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
           <div>
             <div className="flex items-center gap-2"><Package className="h-4 w-4" style={{ color: ax("magenta") }} /><p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("magenta") }}>Catalog · Vad säljer vi?</p></div>
             <h2 className="mt-2 font-display text-2xl font-black" style={{ color: "white" }}>Erbjudanden</h2>
-            <p className="mt-1 max-w-sm text-xs leading-relaxed" style={{ color: ax("muted") }}>Kurser, event, clinics och turneringar med egen identitet. Tillfällena syns i samma Calendar som resten av huset.</p>
+            <p className="mt-1 max-w-sm text-xs leading-relaxed" style={{ color: ax("muted") }}>Kurser, event, clinics, turneringar och Seriespel med egen identitet. Tillfällena syns i samma Calendar som resten av huset.</p>
           </div>
           <motion.button type="button" whileTap={{ scale: 0.95 }} onClick={() => setChoosingType((value) => !value)} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-black" style={{ background: `linear-gradient(135deg, ${ax("electric")}, ${ax("magenta")})`, color: "white" }}>
             <Plus className="h-4 w-4" /> Nytt erbjudande
@@ -186,6 +202,7 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
 
       {query.isLoading ? <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin" style={{ color: ax("muted") }} /></div> : query.isError ? <p className="rounded-2xl p-5 text-center text-sm text-destructive">Catalog kunde inte hämtas.</p> : (
         <>
+          {(leagueQuery.data?.seasons || []).length ? <section className="space-y-2"><div className="flex items-center gap-2 px-1"><p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("magenta") }}>Seriespel</p><span className="h-px flex-1" style={{ background: `linear-gradient(90deg, ${ax("border")}, transparent)` }} /></div>{leagueQuery.data!.seasons.map((season) => <LeagueOfferCard key={season.id} season={season} onEdit={() => setSelectedSeriesId(season.activity_series_id)} />)}</section> : null}
           <OfferSection {...SECTION_COPY.active} items={grouped.active} onEdit={setSelectedSeriesId} />
           <OfferSection {...SECTION_COPY.draft} items={grouped.draft} onEdit={setSelectedSeriesId} />
           {grouped.paused.length ? <OfferSection {...SECTION_COPY.paused} items={grouped.paused} onEdit={setSelectedSeriesId} /> : null}

@@ -68,6 +68,7 @@ export interface CommerceOrderLine {
   activity_series_id?: string | null;
   session_date?: string | null;
   series_commitment_id?: string | null;
+  league_team_entry_id?: string | null;
   dependent_participant_id?: string | null;
   product_snapshot?: Record<string, unknown> | null;
   resolver_snapshot?: Record<string, unknown> | null;
@@ -118,12 +119,29 @@ export interface CommerceOrderResponse {
     start_time: string;
     end_time: string;
     total_sessions: number;
-    presentation_type?: "course" | "social_event" | "clinic" | "tournament";
+    presentation_type?: "course" | "social_event" | "clinic" | "tournament" | "league";
     format_name?: string | null;
     venue_name?: string | null;
     venue_slug?: string | null;
     participant_name?: string | null;
     commitment_id?: string | null;
+  } | null;
+  league_access?: {
+    league_team_entry_id: string;
+    league_season_id: string;
+    activity_series_id: string;
+    team_name: string;
+    status: string;
+    series_name: string;
+    start_date: string;
+    end_date: string;
+    start_time: string;
+    end_time: string;
+    fixture_publication_deadline?: string | null;
+    fixtures_published_at?: string | null;
+    venue_name?: string | null;
+    venue_slug?: string | null;
+    members: Array<{ role: "captain" | "player"; name: string }>;
   } | null;
 }
 

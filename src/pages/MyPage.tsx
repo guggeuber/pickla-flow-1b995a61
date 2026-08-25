@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 
 declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut, UserCheck } from "lucide-react";
+import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut, UserCheck, Trophy } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { QRCodeSVG } from "qrcode.react";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
@@ -38,6 +38,7 @@ import {
 import { useMyCourses } from "@/hooks/useMyCourses";
 import { useMySessionRegistrations, type MySessionRegistration } from "@/hooks/useMySessionRegistrations";
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
+import { useMyLeagues } from "@/hooks/useMyLeagues";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -2420,6 +2421,8 @@ const MyPage = () => {
   const { data: sessionRegistrations } = useMySessionRegistrations();
   const { data: myCourses } = useMyCourses();
   const ownedSeries = myCourses?.items || [];
+  const { data: myLeagues } = useMyLeagues();
+  const ownedLeagues = myLeagues?.items || [];
   const ownsNonCourseSeries = ownedSeries.some((owned) => seriesPresentation(owned.series.presentation_type).type !== "course");
   const { data: eventRegistrations } = useMyEventRegistrations();
   const { data: activeMembership } = useActiveMembership();
@@ -2504,7 +2507,7 @@ const MyPage = () => {
   const bookingHistory = buildBookingHistory(bookings || [], now);
   const activeBookings = bookingHistory.filter((booking) => booking.history_status === "upcoming");
   const pastBookings = bookingHistory.filter((booking) => booking.history_status !== "upcoming");
-  const nonCourseSessionRegistrations = (sessionRegistrations || []).filter((registration) => registration.activity_sessions?.session_type !== "course");
+  const nonCourseSessionRegistrations = (sessionRegistrations || []).filter((registration) => !["course", "league"].includes(String(registration.activity_sessions?.session_type || "")));
   const activeSessionRegistrations = nonCourseSessionRegistrations.filter((registration) => {
     const sessionEnd = getSessionRegistrationDateTime(registration, true);
     return sessionEnd ? sessionEnd.getTime() >= now : true;
@@ -2671,6 +2674,25 @@ const MyPage = () => {
                       </div>
                     </Link>
                   );
+                })}
+              </div>
+            </motion.div>
+          ) : null}
+
+          {ownedLeagues.length > 0 ? (
+            <motion.div variants={item} id="leagues">
+              <div className="mb-2 flex items-center gap-2">
+                <Trophy className="h-4 w-4" style={{ color: "#ed3f8f" }} />
+                <span className="text-sm font-semibold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Mitt Seriespel</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {ownedLeagues.map((league) => {
+                  const nextDate = league.next_session
+                    ? DateTime.fromISO(league.next_session.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("ccc d MMM")
+                    : null;
+                  return <Link key={league.membership.id} to={`/seriespel/${league.series.id}?v=${encodeURIComponent(venueSlug)}`} className="rounded-xl p-4 text-left active:scale-[0.98] transition-transform" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                    <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{league.series.name}</p><p className="mt-1 text-xs font-black uppercase tracking-wide" style={{ color: "#ed3f8f" }}>Lag · {league.team.team_name}</p><p className="mt-2 text-xs" style={{ color: TEXT_MUTED }}>{nextDate ? `Nästa: ${nextDate} · ${String(league.next_session?.start_time || "18:00").slice(0, 5)}` : "Säsongen är avslutad"}</p>{league.next_fixtures.length ? <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>{league.next_fixtures.map((fixture) => { const time = DateTime.fromISO(fixture.scheduled_start_at).setZone("Europe/Stockholm").toFormat("HH:mm"); const court = fixture.court_name ? ` · ${fixture.court_name}` : ""; const opponent = fixture.opponent_team_name ? ` mot ${fixture.opponent_team_name}` : ""; return `${time}${court}${opponent}`; }).join(" · ")}</p> : null}</div>{league.standing ? <span className="shrink-0 rounded-full px-3 py-1 text-xs font-black" style={{ background: "#fff2f7", color: "#b41663" }}>#{league.standing.position}</span> : <span className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>SERIESPEL</span>}</div>
+                  </Link>;
                 })}
               </div>
             </motion.div>

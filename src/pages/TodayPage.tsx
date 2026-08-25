@@ -32,6 +32,7 @@ import { CARD_ARTWORK_SIZES, CARD_ARTWORK_WIDTHS } from "@/lib/responsiveSupabas
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
+import { fetchLeagueHome, type LeaguePublicProjection, type MyLeagueItem } from "@/lib/league";
 
 
 const PAGE_BG = "#fffaf7";
@@ -823,6 +824,11 @@ export default function TodayPage() {
     queryFn: () => fetchCourseHome(slug),
     staleTime: 30000,
   });
+  const { data: leagueHome } = useQuery({
+    queryKey: ["league-home", slug, user?.id || "guest"],
+    queryFn: () => fetchLeagueHome(slug),
+    staleTime: 30000,
+  });
   const { data: currentIdentity } = useCurrentIdentity(user?.id);
   const now = useActivityNow();
   const userName = getFirstName({
@@ -961,6 +967,17 @@ export default function TodayPage() {
                   <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
                 </button>
               ) : null}
+              {leagueHome?.mode === "registration" && leagueHome.item ? (() => {
+                const league = leagueHome.item as LeaguePublicProjection;
+                return <button type="button" onClick={() => navigate(`/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`)} className="w-full overflow-hidden rounded-[24px] bg-white text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="league-home-offer">
+                  {league.series.image_urls?.[0] ? <ResponsiveSupabaseImage src={league.series.image_urls[0]} alt={league.series.name} sizes={CARD_ARTWORK_SIZES} widths={CARD_ARTWORK_WIDTHS} width={960} height={540} className="aspect-[16/9] w-full object-cover" /> : null}
+                  <div className="p-5"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.series.name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>6 lag · 5 torsdagar · 2 matcher per kväll</p><div className="mt-4 flex items-center justify-between"><p className="font-black">{formatSek(league.current_price_minor / 100)} / lag</p><span className="rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Anmäl lag</span></div></div>
+                </button>;
+              })() : null}
+              {leagueHome?.mode === "next" && leagueHome.item ? (() => {
+                const league = leagueHome.item as MyLeagueItem;
+                return <section className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="owned-league-home-card"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.team.team_name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{league.next_session ? `Nästa: ${DateTime.fromISO(league.next_session.session_date).setLocale("sv").toFormat("cccc d LLL")} · ${String(league.next_session.start_time).slice(0, 5)}` : league.series.name}</p><p className="mt-3 flex items-center gap-1.5 text-sm font-bold"><Check className="h-4 w-4" /> Ditt lag är anmält</p><button type="button" onClick={() => navigate(`/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`)} className="mt-4 rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Visa Seriespel</button></section>;
+              })() : null}
               {courseHome?.mode === "registration" && courseHome.item ? (() => {
                 const course = courseHome.item as CourseDetail;
                 return (

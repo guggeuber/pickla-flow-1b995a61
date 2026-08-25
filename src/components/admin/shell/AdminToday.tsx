@@ -23,6 +23,7 @@ import {
 import { useEffect, useState } from "react";
 import { useAdminAgentInbox, useAdminAttention, useAdminHistory, useAdminRevenueLedger, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
 import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
+import { LeagueOperationsPanel } from "@/components/admin/LeagueOperationsPanel";
 import { AX, ax, AX_GRID_BG } from "./axTheme";
 import {
   AxCard,
@@ -581,6 +582,8 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
         )}
       </section>
 
+      {venueId ? <LeagueOperationsPanel venueId={venueId} /> : null}
+
       {/* ── Today's plan timeline ── */}
       <section className="space-y-2">
         <AxSectionLabel icon={Clock} accent={ax("electric")}>
@@ -615,7 +618,7 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
                     setOpenBooking(item as OperationsBookingDetail);
                     return;
                   }
-                  item.moduleTarget && onOpenSettings(item.moduleTarget);
+                  if (item.moduleTarget) onOpenSettings(item.moduleTarget);
                 }}
                 className="relative flex w-full items-center gap-3 px-3.5 py-3 text-left"
                 style={{

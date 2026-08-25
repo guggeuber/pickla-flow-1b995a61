@@ -399,7 +399,64 @@ async function handleCommerceOrder(
     const purchaseKind = String(participation.resolver_snapshot?.purchase_kind || (
       participation.product_key === 'day_access' ? 'day_pass' : 'activity_ticket'
     ));
-    if (purchaseKind === 'course') {
+    if (purchaseKind === 'league_team') {
+      const { data: fulfilled, error: fulfillmentError } = await serviceClient.rpc('fulfill_league_team_entry', {
+        p_team_entry_id: participation.league_team_entry_id,
+        p_commerce_order_id: orderId,
+        p_commerce_order_line_id: participation.id,
+        p_hold_id: participation.capacity_hold_id || null,
+        p_stripe_session_id: session.id,
+        p_payment_intent_id: stripeId(session.payment_intent),
+      }).maybeSingle();
+      if (fulfillmentError || !fulfilled?.ok || !fulfilled?.team_entry_id) {
+        await serviceClient.from('commerce_orders').update({
+          status: 'attention',
+          metadata: {
+            ...(order.metadata || {}),
+            attention_reason: 'paid_league_fulfillment_failed',
+            league_team_entry_id: participation.league_team_entry_id,
+          },
+        }).eq('id', orderId);
+        await serviceClient.from('commerce_order_lines').update({ fulfillment_status: 'attention' }).eq('id', participation.id);
+        await recordPaidCapacityConflict(serviceClient, {
+          venueId: order.venue_id,
+          scopeType: 'league_season',
+          scopeId: String(participation.resolver_snapshot?.league_season_id || ''),
+          sessionDate: String(participation.product_snapshot?.series_start_date || new Date().toISOString().slice(0, 10)),
+          stripeSessionId: session.id,
+          paymentIntentId: stripeId(session.payment_intent),
+          receiptId: financial.receipt_id,
+          ledgerSourceType: 'commerce_order',
+          ledgerSourceId: orderId,
+          customerId,
+          userId: order.user_id || null,
+          title: `Betald lagplats kunde inte aktiveras för ${participation.product_name}`,
+          metadata: {
+            commerce_order_id: orderId,
+            commerce_order_line_id: participation.id,
+            league_team_entry_id: participation.league_team_entry_id,
+            failure_category: fulfillmentError ? 'rpc_error' : String(fulfilled?.reason || 'league_capacity_full'),
+          },
+        });
+        throw new Error(fulfillmentError?.message || fulfilled?.reason || 'League team could not be delivered');
+      }
+      const { error: linkError } = await serviceClient.from('commerce_order_lines').update({
+        league_team_entry_id: fulfilled.team_entry_id,
+        fulfillment_status: 'not_required',
+      }).eq('id', participation.id);
+      if (linkError) throw new Error(linkError.message);
+      if (order.status === 'attention') {
+        const { error: recoveredError } = await serviceClient.from('commerce_orders').update({
+          status: 'paid',
+          metadata: {
+            ...(order.metadata || {}),
+            attention_resolved_at: new Date().toISOString(),
+            attention_resolution: 'league_fulfillment_recovered',
+          },
+        }).eq('id', orderId).eq('status', 'attention');
+        if (recoveredError) throw new Error(recoveredError.message);
+      }
+    } else if (purchaseKind === 'course') {
       const participantCustomerId = participation.beneficiary_customer_id || null;
       const dependentParticipantId = participation.dependent_participant_id || null;
       const { data: committed, error: commitmentError } = await serviceClient.rpc('commit_series_participant_capacity', {
@@ -706,7 +763,7 @@ async function handleCommerceRefund(object: StripeRefundObject, eventType: strin
   }
 
   const { data: participation, error: lineError } = await serviceClient.from('commerce_order_lines')
-    .select('session_registration_id, series_commitment_id, activity_series_id, product_key, resolver_snapshot')
+    .select('session_registration_id, series_commitment_id, activity_series_id, league_team_entry_id, product_key, resolver_snapshot')
     .eq('commerce_order_id', order.id)
     .eq('commerce_kind', 'participation')
     .maybeSingle();
@@ -752,6 +809,16 @@ async function handleCommerceRefund(object: StripeRefundObject, eventType: strin
       p_series_id: participation.activity_series_id,
     });
     if (reconcileError) throw new Error(reconcileError.message);
+  }
+  if (participation?.league_team_entry_id) {
+    const { error: leagueCancelError } = await serviceClient.rpc('cancel_league_team_entry', {
+      p_team_entry_id: participation.league_team_entry_id,
+      p_actor_user_id: null,
+      p_request_id: `stripe-refund:${String(object?.id || paymentIntentId)}`,
+      p_reason: 'Full Stripe refund',
+      p_refund_confirmed: true,
+    });
+    if (leagueCancelError) throw new Error(leagueCancelError.message);
   }
   const { error: pickupError } = await serviceClient.from('commerce_order_lines')
     .update({ fulfillment_status: 'not_collected' })

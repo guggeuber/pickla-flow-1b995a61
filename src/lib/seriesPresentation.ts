@@ -1,11 +1,11 @@
-export const SERIES_PRESENTATION_TYPES = ["course", "social_event", "clinic", "tournament"] as const;
+export const SERIES_PRESENTATION_TYPES = ["course", "social_event", "clinic", "tournament", "league"] as const;
 
 export type SeriesPresentationType = (typeof SERIES_PRESENTATION_TYPES)[number];
 
 export type SeriesPresentation = {
   type: SeriesPresentationType;
-  label: "KURS" | "EVENT" | "CLINIC" | "TURNERING";
-  bookingCta: "Boka kurs" | "Boka plats";
+  label: "KURS" | "EVENT" | "CLINIC" | "TURNERING" | "SERIESPEL";
+  bookingCta: "Boka kurs" | "Boka plats" | "Anmäl lag";
   registrationEyebrow: string;
   contentHeading: string;
   instructorLabel: string | null;
@@ -58,6 +58,18 @@ const PRESENTATIONS: Record<SeriesPresentationType, SeriesPresentation> = {
     bookingCta: "Boka plats",
     registrationEyebrow: "Turnering · anmälan öppen",
     contentHeading: "Om turneringen",
+    instructorLabel: null,
+    showInstructor: false,
+    hideSingleOccurrenceCount: false,
+    imageProminence: "prominent",
+    listedInCourses: false,
+  },
+  league: {
+    type: "league",
+    label: "SERIESPEL",
+    bookingCta: "Anmäl lag",
+    registrationEyebrow: "Seriespel · laganmälan öppen",
+    contentHeading: "Så funkar seriespelet",
     instructorLabel: null,
     showInstructor: false,
     hideSingleOccurrenceCount: false,
