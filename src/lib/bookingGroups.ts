@@ -1,6 +1,16 @@
 export const BOOKING_GROUP_PREFIX = "stripe:";
 export const DIRECT_BOOKING_GROUP_PREFIX = "direct:";
 
+export function getCanonicalBookingGroupKey(booking: any): string {
+  if (booking?.booking_group_key) return String(booking.booking_group_key);
+  if (booking?.stripe_session_id) return `${BOOKING_GROUP_PREFIX}${booking.stripe_session_id}`;
+  if (booking?.access_code && booking?.start_time && booking?.end_time) {
+    return `code:${booking.access_code}:${booking.start_time}:${booking.end_time}`;
+  }
+  const identity = booking?.id || booking?.booking_ref;
+  return identity ? `booking:${identity}` : "";
+}
+
 export function getBookingChatResourceId(booking: any): string {
   if (booking?.stripe_session_id) return `${BOOKING_GROUP_PREFIX}${booking.stripe_session_id}`;
   if (booking?.start_time && booking?.end_time && (booking?.notes || booking?.access_code)) {
@@ -44,7 +54,7 @@ export function groupBookingRows(rows: any[] = []): any[] {
   const groups = new Map<string, any>();
 
   for (const row of rows) {
-    const key = getBookingChatResourceId(row);
+    const key = getCanonicalBookingGroupKey(row);
     if (!key) continue;
 
     if (!groups.has(key)) {

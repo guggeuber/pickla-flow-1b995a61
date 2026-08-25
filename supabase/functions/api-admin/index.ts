@@ -7,6 +7,10 @@ import {
   isValidActivitySessionTimeOrder,
 } from '../_shared/activity_session_time.ts';
 import {
+  findGenericActivityResourceConflict,
+  genericActivityOccursOnDate,
+} from '../_shared/generic_activity_resource_conflicts.ts';
+import {
   buildCapacityProjection,
   buildOpeningIntervals,
   capacityDates,
@@ -319,10 +323,7 @@ function effectiveActivitySessionDraft(existing: Record<string, any> | null, nex
 }
 
 function activitySessionOccursOnDate(session: Record<string, any>, date: string) {
-  if (session.session_date) return String(session.session_date).slice(0, 10) === date;
-  const recurrenceDays = Array.isArray(session.recurrence_days) ? session.recurrence_days : [];
-  const weekday = DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7;
-  return recurrenceDays.includes(weekday);
+  return genericActivityOccursOnDate(session, date);
 }
 
 function activitySessionOccurrenceRangeUtc(session: Record<string, any>, date: string) {
@@ -372,6 +373,50 @@ async function validateActivitySessionCourtAvailability(
 
   const courtById = new Map<string, any>((courts || []).map((court: any) => [court.id, court]));
   const window = conflictSearchWindow(session);
+
+  let activitiesQuery = admin
+    .from('activity_sessions')
+    .select('id, name, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .eq('venue_id', venueId)
+    .eq('is_active', true)
+    .eq('publish_status', 'published')
+    .overlaps('court_ids', courtIds)
+    .order('start_time', { ascending: true })
+    .limit(1000);
+  if (selfSessionId) activitiesQuery = activitiesQuery.neq('id', selfSessionId);
+  const { data: activities, error: activitiesError } = await activitiesQuery;
+  if (activitiesError) return { ok: false as const, status: 400, message: activitiesError.message };
+
+  const activityConflict = findGenericActivityResourceConflict({
+    candidate: session,
+    owners: activities || [],
+    courtNames: Object.fromEntries((courts || []).map((court: any) => [court.id, court.name])),
+    fromDate: stockholmToday(),
+    selfSessionId,
+  });
+  if (activityConflict) {
+    const ownerInterval = activitySessionOccurrenceRangeUtc({
+      start_time: activityConflict.start_time,
+      end_time: activityConflict.end_time,
+    }, activityConflict.session_date);
+    return {
+      ok: false as const,
+      status: 409,
+      code: 'resource_conflict',
+      message: `${activityConflict.resource_name} används redan av ${activityConflict.owner_name} ${activityConflict.session_date} ${activityConflict.start_time}–${activityConflict.end_time}.`,
+      conflicts: [{
+        resource_type: 'venue_court',
+        resource_id: activityConflict.resource_id,
+        resource_name: activityConflict.resource_name,
+        owner_type: 'activity_session',
+        owner_id: activityConflict.owner_id,
+        owner_name: activityConflict.owner_name,
+        session_date: activityConflict.session_date,
+        starts_at: ownerInterval?.startISO || null,
+        ends_at: ownerInterval?.endISO || null,
+      }],
+    };
+  }
 
   let bookingsQuery = admin
     .from('bookings')
@@ -451,6 +496,17 @@ async function validateActivitySessionCourtAvailability(
   }
 
   return { ok: true as const };
+}
+
+function activitySessionCourtValidationResponse(validation: any) {
+  if (validation.code && Array.isArray(validation.conflicts)) {
+    return jsonResponse({
+      error: validation.message,
+      code: validation.code,
+      conflicts: validation.conflicts,
+    }, validation.status);
+  }
+  return errorResponse(validation.message, validation.status);
 }
 
 async function validateActivitySessionHostCustomers(admin: any, hostCustomerIds: string[] | null) {
@@ -6348,7 +6404,7 @@ Deno.serve(async (req) => {
         venueId,
         draft,
       );
-      if (!courtValidation.ok) return errorResponse(courtValidation.message, courtValidation.status);
+      if (!courtValidation.ok) return activitySessionCourtValidationResponse(courtValidation);
       const { data, error: e } = await admin.from('activity_sessions').insert({
         venue_id: venueId,
         series_id: normalized.series_id || null,
@@ -6428,7 +6484,7 @@ Deno.serve(async (req) => {
         draft,
         sessionId,
       );
-      if (!courtValidation.ok) return errorResponse(courtValidation.message, courtValidation.status);
+      if (!courtValidation.ok) return activitySessionCourtValidationResponse(courtValidation);
       const { data, error: e } = await admin.from('activity_sessions')
         .update(normalized).eq('id', sessionId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);

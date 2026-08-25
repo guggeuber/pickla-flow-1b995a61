@@ -3844,6 +3844,7 @@ Deno.serve(async (req) => {
         const capacity = bookingParticipantCapacity(groupRows);
         return {
           ...row,
+          booking_group_key: groupKey,
           participants,
           participant_summary: bookingGroupParticipantSummary(participants, groupRows, capacity),
         };
@@ -3886,6 +3887,7 @@ Deno.serve(async (req) => {
         for (const row of groupRows) {
           participantRowsOut.push({
             ...row,
+            booking_group_key: participant.booking_group_key,
             participants: committedGroupParticipants,
             participant_summary: participantSummary,
             participant: effectiveParticipant,
