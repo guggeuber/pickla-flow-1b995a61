@@ -139,6 +139,29 @@ export type LeagueAdminSession = {
 };
 
 export type LeagueAdminOrder = { id: string; status: string; total_inc_vat_minor: number; paid_at: string | null };
+export type LeagueAdminProduct = {
+  id: string;
+  name: string;
+  description: string | null;
+  product_kind: "league_team";
+  base_price_sek: number;
+  vat_rate: number;
+  scarcity_mode: "none" | "early_bird";
+  early_bird_price_minor: number | null;
+  early_bird_slots: number | null;
+  status: string;
+  is_active: boolean;
+};
+export type LeagueCatalogEditPolicy = {
+  lifecycle_editable: boolean;
+  registration_opens_editable: boolean;
+  registration_deadline_editable: boolean;
+  fixture_deadline_editable: boolean;
+  pricing_editable: boolean;
+  schedule_editable: false;
+  schedule_lock_reason: "league_v1_structure_locked" | "participants_matches_or_payments_exist";
+  historical_prices_frozen: boolean;
+};
 export type LeagueAdminSeries = {
   id: string;
   venue_id: string;
@@ -148,14 +171,20 @@ export type LeagueAdminSeries = {
   start_date: string;
   end_date: string;
   status: string;
+  registration_opens_at: string;
   registration_closes_at: string;
-  access_products?: { base_price_sek: number } | Array<{ base_price_sek: number }> | null;
+  start_time: string;
+  end_time: string;
+  court_ids: string[];
+  venues?: { slug: string } | Array<{ slug: string }> | null;
+  access_products?: LeagueAdminProduct | LeagueAdminProduct[] | null;
 };
 export type LeagueFixtureValidation = { valid: boolean; errors?: string[] };
 export type LeagueAdminSeason = {
   id: string;
   activity_series_id: string;
   fixtures_published_at: string | null;
+  fixture_publication_deadline: string;
   activity_series: LeagueAdminSeries | LeagueAdminSeries[];
   teams: LeagueAdminTeam[];
   members: LeagueAdminMember[];
@@ -164,6 +193,7 @@ export type LeagueAdminSeason = {
   results: LeagueFixtureResult[];
   orders: LeagueAdminOrder[];
   validation: LeagueFixtureValidation | null;
+  edit_policy: LeagueCatalogEditPolicy;
 };
 
 export type LeagueCourt = { id: string; name: string; court_number?: number };
@@ -239,6 +269,7 @@ export function previewLeagueResources(input: LeagueResourcePlanInput, signal?: 
 
 export const createLeagueSeason = (input: Record<string, unknown>) => apiPost<{ season: { id: string; activity_series_id: string } }>("api-leagues", "create", input);
 export const updateLeagueArtwork = (leagueSeasonId: string, imageUrls: string[]) => apiPatch<{ id: string; image_urls: string[] }>("api-leagues", "artwork", { league_season_id: leagueSeasonId, image_urls: imageUrls });
+export const updateLeagueCatalog = (input: Record<string, unknown>) => apiPatch<{ edit: { league_season_id: string; historical_orders_frozen: boolean; schedule_reconciled: false } }>("api-leagues", "catalog", input);
 export const publishLeagueOffer = (leagueSeasonId: string) => apiPost("api-leagues", "publish-offer", { league_season_id: leagueSeasonId });
 export const generateLeagueFixtures = (leagueSeasonId: string) => apiPost("api-leagues", "generate-fixtures", { league_season_id: leagueSeasonId });
 export const publishLeagueFixtures = (leagueSeasonId: string) => apiPost("api-leagues", "publish-fixtures", { league_season_id: leagueSeasonId });

@@ -8,15 +8,22 @@ import type { CourseDetail } from "@/lib/courses";
 
 const mocks = vi.hoisted(() => ({
   fetchCourseAdmin: vi.fn(),
+  fetchLeagueAdmin: vi.fn(),
 }));
 
 vi.mock("@/lib/courses", () => ({ fetchCourseAdmin: mocks.fetchCourseAdmin }));
+vi.mock("@/lib/league", () => ({ fetchLeagueAdmin: mocks.fetchLeagueAdmin }));
 
 vi.mock("@/components/admin/AdminCourses", () => ({
   default: (props: { initialSeriesId?: string | null; initialPresentationType?: string; catalogMode?: boolean }) => (
     <div data-testid="canonical-managed-series-editor">
       {props.catalogMode ? "catalog" : "legacy"}:{props.initialSeriesId || "new"}:{props.initialPresentationType}
     </div>
+  ),
+}));
+vi.mock("@/components/admin/AdminLeague", () => ({
+  default: (props: { leagueSeasonId?: string | null }) => (
+    <div data-testid="canonical-league-editor">league:{props.leagueSeasonId || "new"}</div>
   ),
 }));
 
@@ -108,6 +115,24 @@ beforeEach(() => {
     ],
     courts: [],
   });
+  mocks.fetchLeagueAdmin.mockResolvedValue({
+    courts: [],
+    seasons: [{
+      id: "league-season-1",
+      activity_series_id: "league-series-1",
+      fixtures_published_at: null,
+      fixture_publication_deadline: "2026-09-05T10:00:00Z",
+      activity_series: {
+        id: "league-series-1", venue_id: "venue-1", name: "Pickla Seriespel · Pilot",
+        description: "Fem torsdagar", image_urls: [], status: "active",
+        start_date: "2026-09-10", end_date: "2026-10-08",
+        registration_opens_at: "2026-08-01T10:00:00Z", registration_closes_at: "2026-09-01T10:00:00Z",
+        start_time: "18:00", end_time: "20:00", court_ids: [],
+        access_products: { base_price_sek: 1995 },
+      },
+      teams: [], members: [], sessions: [], fixtures: [], results: [], orders: [], validation: null,
+    }],
+  });
 });
 
 describe("Admin OS Catalog V1", () => {
@@ -125,6 +150,15 @@ describe("Admin OS Catalog V1", () => {
     await screen.findByText("Parker Brunch");
     fireEvent.click(screen.getByTestId("catalog-offer-parker-series").querySelector("button")!);
     expect(screen.getByTestId("canonical-managed-series-editor")).toHaveTextContent("catalog:parker-series:social_event");
+  });
+
+  it("presents League as an editable Catalog offer and opens its canonical editor", async () => {
+    renderCatalog();
+    const league = await screen.findByTestId("catalog-league-league-season-1");
+    expect(league).toHaveTextContent("Pickla Seriespel · Pilot");
+    expect(league.querySelector("button")).toHaveTextContent("Redigera");
+    fireEvent.click(league.querySelector("button")!);
+    expect(screen.getByTestId("canonical-league-editor")).toHaveTextContent("league:league-season-1");
   });
 
   it("chooses the operator offer type before opening the same create path", async () => {

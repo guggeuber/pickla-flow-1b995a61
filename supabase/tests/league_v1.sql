@@ -820,14 +820,191 @@ BEGIN
   END IF;
 END $$;
 
+-- Catalog edits are atomic and future-facing. Existing team, schedule,
+-- competition and finance truth must remain byte-for-byte unchanged.
+DO $$
+DECLARE
+  v_season_id UUID := (SELECT season_id FROM league_test_state);
+  v_series_id UUID := (SELECT series_id FROM league_test_state);
+  v_product_id UUID := (SELECT product_id FROM league_test_state);
+  v_actor UUID := (SELECT user_id FROM league_test_people WHERE n = 14);
+  v_registration_opens TIMESTAMPTZ;
+  v_fixture_deadline TIMESTAMPTZ;
+  v_sessions_before JSONB;
+  v_teams_before JSONB;
+  v_fixtures_before JSONB;
+  v_results_before JSONB;
+  v_orders_before JSONB;
+  v_lines_before JSONB;
+  v_receipts_before JSONB;
+  v_receipt_lines_before JSONB;
+  v_ledger_before JSONB;
+BEGIN
+  SELECT registration_opens_at INTO v_registration_opens
+  FROM public.activity_series WHERE id = v_series_id;
+  SELECT fixture_publication_deadline INTO v_fixture_deadline
+  FROM public.league_seasons WHERE id = v_season_id;
+  SELECT COALESCE(jsonb_agg(to_jsonb(session) ORDER BY session.id), '[]') INTO v_sessions_before
+  FROM public.activity_sessions session WHERE session.series_id = v_series_id;
+  SELECT COALESCE(jsonb_agg(to_jsonb(entry) ORDER BY entry.id), '[]') INTO v_teams_before
+  FROM public.league_team_entries entry WHERE entry.league_season_id = v_season_id;
+  SELECT COALESCE(jsonb_agg(to_jsonb(fixture) ORDER BY fixture.id), '[]') INTO v_fixtures_before
+  FROM public.league_fixtures fixture WHERE fixture.league_season_id = v_season_id;
+  SELECT COALESCE(jsonb_agg(to_jsonb(result) ORDER BY result.id), '[]') INTO v_results_before
+  FROM public.league_fixture_results result
+  JOIN public.league_fixtures fixture ON fixture.id = result.fixture_id
+  WHERE fixture.league_season_id = v_season_id;
+  SELECT COALESCE(jsonb_agg(to_jsonb(order_row) ORDER BY order_row.id), '[]') INTO v_orders_before
+  FROM public.commerce_orders order_row
+  WHERE order_row.id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id);
+  SELECT COALESCE(jsonb_agg(to_jsonb(line) ORDER BY line.id), '[]') INTO v_lines_before
+  FROM public.commerce_order_lines line WHERE line.activity_series_id = v_series_id;
+  SELECT COALESCE(jsonb_agg(to_jsonb(receipt) ORDER BY receipt.id), '[]') INTO v_receipts_before
+  FROM public.booking_receipts receipt
+  WHERE receipt.commerce_order_id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id);
+  SELECT COALESCE(jsonb_agg(to_jsonb(line) ORDER BY line.id), '[]') INTO v_receipt_lines_before
+  FROM public.commerce_receipt_lines line
+  WHERE line.commerce_order_id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id);
+  SELECT COALESCE(jsonb_agg(to_jsonb(entry) ORDER BY entry.id), '[]') INTO v_ledger_before
+  FROM public.ledger_entries entry
+  WHERE entry.commerce_order_id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id);
+
+  PERFORM public.update_league_catalog_v1(
+    v_season_id, 'Pickla Seriespel · Pilot', 'Uppdaterad kundbeskrivning',
+    v_registration_opens, now() + interval '29 days', v_fixture_deadline,
+    209500, 189500, 3, v_actor
+  );
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.activity_series
+    WHERE id = v_series_id AND name = 'Pickla Seriespel · Pilot'
+      AND description = 'Uppdaterad kundbeskrivning'
+      AND registration_closes_at > now()
+  ) OR NOT EXISTS (
+    SELECT 1 FROM public.access_products
+    WHERE id = v_product_id AND name = 'Pickla Seriespel · Pilot · Lagplats'
+      AND base_price_sek = 2095 AND scarcity_mode = 'early_bird'
+      AND early_bird_price_minor = 189500 AND early_bird_slots = 3
+  ) THEN
+    RAISE EXCEPTION 'League Catalog safe fields were not updated';
+  END IF;
+  IF v_sessions_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(session) ORDER BY session.id), '[]')
+      FROM public.activity_sessions session WHERE session.series_id = v_series_id
+    ) OR v_teams_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(entry) ORDER BY entry.id), '[]')
+      FROM public.league_team_entries entry WHERE entry.league_season_id = v_season_id
+    ) OR v_fixtures_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(fixture) ORDER BY fixture.id), '[]')
+      FROM public.league_fixtures fixture WHERE fixture.league_season_id = v_season_id
+    ) OR v_results_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(result) ORDER BY result.id), '[]')
+      FROM public.league_fixture_results result JOIN public.league_fixtures fixture ON fixture.id = result.fixture_id
+      WHERE fixture.league_season_id = v_season_id
+    ) OR v_orders_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(order_row) ORDER BY order_row.id), '[]')
+      FROM public.commerce_orders order_row
+      WHERE order_row.id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id)
+    ) OR v_lines_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(line) ORDER BY line.id), '[]')
+      FROM public.commerce_order_lines line WHERE line.activity_series_id = v_series_id
+    ) OR v_receipts_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(receipt) ORDER BY receipt.id), '[]')
+      FROM public.booking_receipts receipt
+      WHERE receipt.commerce_order_id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id)
+    ) OR v_receipt_lines_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(line) ORDER BY line.id), '[]')
+      FROM public.commerce_receipt_lines line
+      WHERE line.commerce_order_id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id)
+    ) OR v_ledger_before IS DISTINCT FROM (
+      SELECT COALESCE(jsonb_agg(to_jsonb(entry) ORDER BY entry.id), '[]')
+      FROM public.ledger_entries entry
+      WHERE entry.commerce_order_id IN (SELECT commerce_order_id FROM public.league_team_entries WHERE league_season_id = v_season_id)
+    ) THEN
+    RAISE EXCEPTION 'League Catalog edit rewrote canonical schedule, competition or finance history';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.audit_log WHERE action = 'league_catalog_updated'
+      AND entity_id = v_season_id::TEXT
+      AND metadata->>'schedule_reconciled' = 'false'
+      AND metadata->>'historical_orders_frozen' = 'true'
+      AND metadata->>'member_pricing_applied' = 'false'
+  ) THEN
+    RAISE EXCEPTION 'League Catalog edit audit is incomplete';
+  END IF;
+
+  BEGIN
+    PERFORM public.update_league_catalog_v1(
+      v_season_id, 'Must fail', NULL, v_registration_opens - interval '1 hour',
+      now() + interval '29 days', v_fixture_deadline, 209500, 189500, 3, v_actor
+    );
+    RAISE EXCEPTION 'historical registration open was edited';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'historical registration open was edited' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%league_registration_open_historical%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.update_league_catalog_v1(
+      v_season_id, 'Must fail', NULL, v_registration_opens,
+      now() + interval '29 days', v_fixture_deadline + interval '1 hour',
+      209500, 189500, 3, v_actor
+    );
+    RAISE EXCEPTION 'published fixture deadline was edited';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'published fixture deadline was edited' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%league_fixture_deadline_historical%' THEN RAISE; END IF;
+  END;
+END $$;
+
+-- An untouched draft Season proves all three future deadlines remain safely
+-- editable without rebuilding its five canonical Sessions.
+DO $$
+DECLARE
+  v_season public.league_seasons%ROWTYPE;
+  v_session_ids UUID[];
+  v_actor UUID := (SELECT user_id FROM league_test_people WHERE n = 14);
+BEGIN
+  SELECT * INTO v_season FROM public.create_league_season_v1(
+    '1ea90000-0000-4000-8000-000000000002', 'Future League', NULL, '{}',
+    ARRAY['2030-09-05','2030-09-12','2030-09-19','2030-09-26','2030-10-03']::DATE[],
+    ARRAY['1ea90000-0000-4000-8000-000000000011','1ea90000-0000-4000-8000-000000000012','1ea90000-0000-4000-8000-000000000013']::UUID[],
+    now() + interval '60 days', now() + interval '90 days', now() + interval '100 days',
+    199500, 6, NULL, NULL, false, v_actor
+  );
+  SELECT array_agg(id ORDER BY series_occurrence_index) INTO v_session_ids
+  FROM public.activity_sessions WHERE series_id = v_season.activity_series_id;
+
+  PERFORM public.update_league_catalog_v1(
+    v_season.id, 'Future League Updated', 'Safe future edit',
+    now() + interval '61 days', now() + interval '91 days', now() + interval '101 days',
+    219500, 199500, 2, v_actor
+  );
+
+  IF (SELECT registration_opens_at FROM public.activity_series WHERE id = v_season.activity_series_id)
+       <= now() + interval '60 days'
+     OR (SELECT fixture_publication_deadline FROM public.league_seasons WHERE id = v_season.id)
+       <= now() + interval '100 days'
+     OR v_session_ids IS DISTINCT FROM (
+       SELECT array_agg(id ORDER BY series_occurrence_index)
+       FROM public.activity_sessions WHERE series_id = v_season.activity_series_id
+     ) THEN
+    RAISE EXCEPTION 'future League deadline edit rebuilt or corrupted its Sessions';
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF has_function_privilege('anon', 'public.reserve_league_team_entry(uuid,uuid,uuid,uuid,text,text,uuid,boolean,integer,integer)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.reserve_league_team_entry(uuid,uuid,uuid,uuid,text,text,uuid,boolean,integer,integer)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.save_league_fixture_result_v1(uuid,text,text,jsonb,uuid,integer,text,uuid)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.update_league_catalog_v1(uuid,text,text,timestamp with time zone,timestamp with time zone,timestamp with time zone,integer,integer,integer,uuid)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.update_league_catalog_v1(uuid,text,text,timestamp with time zone,timestamp with time zone,timestamp with time zone,integer,integer,integer,uuid)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.release_capacity_hold(uuid,text)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.release_capacity_hold(uuid,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'League mutation RPC escaped the service-role boundary';
+  END IF;
+  IF NOT has_function_privilege('service_role', 'public.update_league_catalog_v1(uuid,text,text,timestamp with time zone,timestamp with time zone,timestamp with time zone,integer,integer,integer,uuid)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'League Catalog server mutation path lost service-role execution';
   END IF;
   IF EXISTS (
     SELECT 1 FROM information_schema.tables

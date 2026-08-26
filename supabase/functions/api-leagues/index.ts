@@ -156,6 +156,28 @@ function cleanLeagueImageUrls(value: unknown, seriesId: string) {
   return urls;
 }
 
+function leagueCatalogError(message: string) {
+  if (message.includes('league_catalog_not_found')) return ['Seriespelet kunde inte hittas.', 404] as const;
+  if (message.includes('league_catalog_lifecycle_locked')) return ['Avslutade eller inställda Seriespel kan inte redigeras.', 409] as const;
+  if (message.includes('league_catalog_product_invalid')) return ['League-produkten är inte i ett redigerbart läge.', 409] as const;
+  if (message.includes('league_catalog_content_invalid')) return ['Ange en titel och högst 1 000 tecken beskrivning.', 400] as const;
+  if (message.includes('league_deadlines_invalid')) return ['Datumen måste ligga i ordning före den första League-kvällen.', 400] as const;
+  if (message.includes('league_registration_open_historical')) return ['Anmälningsstarten har redan passerat och är därför låst.', 409] as const;
+  if (message.includes('league_registration_deadline_historical')) return ['Anmälningsdeadline har redan passerat och är därför låst.', 409] as const;
+  if (message.includes('league_fixture_deadline_historical')) return ['Deadline för spelschemat är redan historisk eller publicerad och är därför låst.', 409] as const;
+  if (message.includes('league_registration_open_must_be_future')
+      || message.includes('league_registration_deadline_must_be_future')
+      || message.includes('league_fixture_deadline_must_be_future')) {
+    return ['En redigerbar deadline måste ligga i framtiden.', 400] as const;
+  }
+  if (message.includes('league_price_invalid')) return ['Teampriset måste vara ett positivt helt SEK-belopp.', 400] as const;
+  if (message.includes('league_early_bird_pair_required') || message.includes('league_early_bird_invalid')) {
+    return ['Early Bird kräver ett lägre teampris och mellan 1 och 6 lag.', 400] as const;
+  }
+  if (message.includes('league_pricing_historical')) return ['Teampriset är låst eftersom anmälan har stängt.', 409] as const;
+  return [message, 400] as const;
+}
+
 function requestId(req: Request, body?: Record<string, unknown>) {
   return String(body?.request_id || req.headers.get('x-request-id') || crypto.randomUUID()).trim().slice(0, 200);
 }
@@ -518,7 +540,7 @@ async function leagueHome(admin: AdminClient, venueSlug: string, userId: string 
 
 async function adminProjection(admin: AdminClient, venueId: string) {
   const { data: seasons, error } = await admin.from('league_seasons')
-    .select('*, activity_series!inner(id, venue_id, name, description, image_urls, status, start_date, end_date, registration_opens_at, registration_closes_at, start_time, end_time, court_ids, access_product_id, access_products(id, name, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, status))')
+    .select('*, activity_series!inner(id, venue_id, name, description, image_urls, status, start_date, end_date, registration_opens_at, registration_closes_at, start_time, end_time, court_ids, access_product_id, venues(slug), access_products(id, name, description, product_kind, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, status, is_active))')
     .eq('venue_id', venueId).order('created_at', { ascending: false });
   if (error) throw new Error(error.message);
   const [{ data: courts, error: courtError }, enriched] = await Promise.all([
@@ -540,7 +562,37 @@ async function adminProjection(admin: AdminClient, venueId: string) {
       const { data: orders } = orderIds.length
         ? await admin.from('commerce_orders').select('id, status, total_inc_vat_minor, paid_at, stripe_payment_intent_id').in('id', orderIds)
         : { data: [] };
-      return { ...season, teams: teams || [], members: members || [], sessions: sessions || [], fixtures: fixtures || [], results: results || [], orders: orders || [], validation, standings: standings || [] };
+      const series = Array.isArray(season.activity_series) ? season.activity_series[0] : season.activity_series;
+      const lifecycleEditable = ['draft', 'active', 'paused'].includes(series?.status || '');
+      const hasCompetitionOrCommercialHistory = Boolean(
+        (teams || []).length || (fixtures || []).length || (results || []).length || (orders || []).length
+        || season.generated_team_fingerprint || season.fixtures_published_at
+      );
+      const now = Date.now();
+      return {
+        ...season,
+        teams: teams || [],
+        members: members || [],
+        sessions: sessions || [],
+        fixtures: fixtures || [],
+        results: results || [],
+        orders: orders || [],
+        validation,
+        standings: standings || [],
+        edit_policy: {
+          lifecycle_editable: lifecycleEditable,
+          registration_opens_editable: lifecycleEditable && new Date(series?.registration_opens_at || 0).getTime() > now,
+          registration_deadline_editable: lifecycleEditable && new Date(series?.registration_closes_at || 0).getTime() > now,
+          fixture_deadline_editable: lifecycleEditable && !season.fixtures_published_at
+            && new Date(season.fixture_publication_deadline || 0).getTime() > now,
+          pricing_editable: lifecycleEditable && new Date(series?.registration_closes_at || 0).getTime() > now,
+          schedule_editable: false,
+          schedule_lock_reason: hasCompetitionOrCommercialHistory
+            ? 'participants_matches_or_payments_exist'
+            : 'league_v1_structure_locked',
+          historical_prices_frozen: Boolean((teams || []).length || (orders || []).length),
+        },
+      };
     })),
   ]);
   if (courtError) throw new Error(courtError.message);
@@ -639,6 +691,34 @@ const handler = async (req: Request) => {
       if (error) throw new Error(error.message);
       if (!series) return errorResponse('Seriespelet kunde inte hittas.', 404);
       return jsonResponse(series, 200, 0);
+    }
+    if (req.method === 'PATCH' && path === 'catalog') {
+      const authenticatedUserId = userId || await requireUserId(req);
+      const body = await req.json();
+      const leagueSeasonId = String(body.league_season_id || '');
+      if (!UUID.test(leagueSeasonId)) return errorResponse('Seriespelet kunde inte hittas.', 404);
+      const { data: season, error: seasonError } = await admin.from('league_seasons')
+        .select('id, venue_id').eq('id', leagueSeasonId).maybeSingle();
+      if (seasonError) throw new Error(seasonError.message);
+      if (!season) return errorResponse('Seriespelet kunde inte hittas.', 404);
+      await requireVenueRole(admin, authenticatedUserId, season.venue_id, ['venue_admin']);
+      const { data, error } = await admin.rpc('update_league_catalog_v1', {
+        p_league_season_id: leagueSeasonId,
+        p_name: String(body.name || '').trim(),
+        p_description: String(body.description || '').trim() || null,
+        p_registration_opens_at: body.registration_opens_at,
+        p_registration_deadline: body.registration_deadline,
+        p_fixture_publication_deadline: body.fixture_publication_deadline,
+        p_base_price_minor: Number(body.base_price_minor),
+        p_early_bird_price_minor: body.early_bird_price_minor == null ? null : Number(body.early_bird_price_minor),
+        p_early_bird_slots: body.early_bird_slots == null ? null : Number(body.early_bird_slots),
+        p_actor_user_id: authenticatedUserId,
+      }).maybeSingle();
+      if (error) {
+        const [message, status] = leagueCatalogError(error.message);
+        return errorResponse(message, status);
+      }
+      return jsonResponse({ edit: data }, 200, 0);
     }
     if (req.method === 'POST' && path === 'create') {
       const authenticatedUserId = userId || await requireUserId(req);

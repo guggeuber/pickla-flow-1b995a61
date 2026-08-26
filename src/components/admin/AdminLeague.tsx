@@ -13,6 +13,7 @@ import {
   renameLeagueTeam,
   rescheduleLeagueNight,
   replaceLeaguePlayer,
+  updateLeagueCatalog,
   updateLeagueArtwork,
   type LeagueAdminMember,
   type LeagueAdminOrder,
@@ -39,6 +40,20 @@ function localUtc(value: string) {
 
 function activeSeries(season: LeagueAdminSeason): LeagueAdminSeries {
   return Array.isArray(season.activity_series) ? season.activity_series[0] : season.activity_series;
+}
+
+function activeProduct(series: LeagueAdminSeries) {
+  return Array.isArray(series.access_products) ? series.access_products[0] : series.access_products;
+}
+
+function activeVenueSlug(series: LeagueAdminSeries) {
+  const venue = Array.isArray(series.venues) ? series.venues[0] : series.venues;
+  return venue?.slug || "";
+}
+
+function utcToStockholmInput(value?: string | null) {
+  if (!value) return "";
+  return DateTime.fromISO(value).setZone("Europe/Stockholm").toFormat("yyyy-MM-dd'T'HH:mm");
 }
 
 function customerName(member: LeagueAdminMember) {
@@ -290,8 +305,145 @@ function LeagueArtworkEditor({ venueId, seasonId, series }: { venueId: string; s
   </div>;
 }
 
+function LeagueCatalogEditor({ venueId, season }: { venueId: string; season: LeagueAdminSeason }) {
+  const queryClient = useQueryClient();
+  const series = activeSeries(season);
+  const product = activeProduct(series);
+  const fallbackLifecycle = ["draft", "active", "paused"].includes(series.status);
+  const policy = season.edit_policy || {
+    lifecycle_editable: fallbackLifecycle,
+    registration_opens_editable: fallbackLifecycle && new Date(series.registration_opens_at || 0).getTime() > Date.now(),
+    registration_deadline_editable: fallbackLifecycle && new Date(series.registration_closes_at || 0).getTime() > Date.now(),
+    fixture_deadline_editable: fallbackLifecycle && !season.fixtures_published_at && new Date(season.fixture_publication_deadline || 0).getTime() > Date.now(),
+    pricing_editable: fallbackLifecycle && new Date(series.registration_closes_at || 0).getTime() > Date.now(),
+    schedule_editable: false as const,
+    schedule_lock_reason: ((season.teams?.length || season.fixtures?.length || season.orders?.length)
+      ? "participants_matches_or_payments_exist" : "league_v1_structure_locked") as "participants_matches_or_payments_exist" | "league_v1_structure_locked",
+    historical_prices_frozen: Boolean(season.teams?.length || season.orders?.length),
+  };
+  const [name, setName] = useState(series.name || "");
+  const [description, setDescription] = useState(series.description || "");
+  const [registrationOpens, setRegistrationOpens] = useState(utcToStockholmInput(series.registration_opens_at));
+  const [registrationDeadline, setRegistrationDeadline] = useState(utcToStockholmInput(series.registration_closes_at));
+  const [fixtureDeadline, setFixtureDeadline] = useState(utcToStockholmInput(season.fixture_publication_deadline));
+  const [basePrice, setBasePrice] = useState(String(product?.base_price_sek || ""));
+  const [earlyBird, setEarlyBird] = useState(product?.scarcity_mode === "early_bird");
+  const [earlyBirdPrice, setEarlyBirdPrice] = useState(product?.early_bird_price_minor == null ? "" : String(product.early_bird_price_minor / 100));
+  const [earlyBirdSlots, setEarlyBirdSlots] = useState(product?.early_bird_slots == null ? "" : String(product.early_bird_slots));
+
+  useEffect(() => {
+    setName(series.name || "");
+    setDescription(series.description || "");
+    setRegistrationOpens(utcToStockholmInput(series.registration_opens_at));
+    setRegistrationDeadline(utcToStockholmInput(series.registration_closes_at));
+    setFixtureDeadline(utcToStockholmInput(season.fixture_publication_deadline));
+    setBasePrice(String(product?.base_price_sek || ""));
+    setEarlyBird(product?.scarcity_mode === "early_bird");
+    setEarlyBirdPrice(product?.early_bird_price_minor == null ? "" : String(product.early_bird_price_minor / 100));
+    setEarlyBirdSlots(product?.early_bird_slots == null ? "" : String(product.early_bird_slots));
+  }, [product?.base_price_sek, product?.early_bird_price_minor, product?.early_bird_slots, product?.scarcity_mode, season.fixture_publication_deadline, series.description, series.name, series.registration_closes_at, series.registration_opens_at]);
+
+  const initialRegistrationOpens = utcToStockholmInput(series.registration_opens_at);
+  const initialRegistrationDeadline = utcToStockholmInput(series.registration_closes_at);
+  const initialFixtureDeadline = utcToStockholmInput(season.fixture_publication_deadline);
+  const initialForm = JSON.stringify({
+    name: series.name || "",
+    description: series.description || "",
+    registrationOpens: initialRegistrationOpens,
+    registrationDeadline: initialRegistrationDeadline,
+    fixtureDeadline: initialFixtureDeadline,
+    basePrice: String(product?.base_price_sek || ""),
+    earlyBird: product?.scarcity_mode === "early_bird",
+    earlyBirdPrice: product?.early_bird_price_minor == null ? "" : String(product.early_bird_price_minor / 100),
+    earlyBirdSlots: product?.early_bird_slots == null ? "" : String(product.early_bird_slots),
+  });
+  const currentForm = JSON.stringify({ name, description, registrationOpens, registrationDeadline, fixtureDeadline, basePrice, earlyBird, earlyBirdPrice, earlyBirdSlots });
+  const registrationOpensUtc = policy.registration_opens_editable && registrationOpens !== initialRegistrationOpens
+    ? localUtc(registrationOpens) : series.registration_opens_at;
+  const registrationDeadlineUtc = policy.registration_deadline_editable && registrationDeadline !== initialRegistrationDeadline
+    ? localUtc(registrationDeadline) : series.registration_closes_at;
+  const fixtureDeadlineUtc = policy.fixture_deadline_editable && fixtureDeadline !== initialFixtureDeadline
+    ? localUtc(fixtureDeadline) : season.fixture_publication_deadline;
+  const firstSession = [...(season.sessions || [])].filter((session) => session.is_active).sort((a, b) => a.series_occurrence_index - b.series_occurrence_index)[0];
+  const firstNight = firstSession
+    ? DateTime.fromISO(`${firstSession.session_date}T${firstSession.start_time}`, { zone: "Europe/Stockholm" }).toMillis()
+    : DateTime.fromISO(`${series.start_date}T${series.start_time || "18:00"}`, { zone: "Europe/Stockholm" }).toMillis();
+  const opensMillis = DateTime.fromISO(registrationOpensUtc || "").toMillis();
+  const closesMillis = DateTime.fromISO(registrationDeadlineUtc || "").toMillis();
+  const fixtureMillis = DateTime.fromISO(fixtureDeadlineUtc || "").toMillis();
+  const deadlinesValid = [opensMillis, closesMillis, fixtureMillis, firstNight].every(Number.isFinite)
+    && opensMillis < closesMillis && closesMillis <= fixtureMillis && fixtureMillis < firstNight;
+  const baseMinor = Math.round(Number(basePrice) * 100);
+  const earlyBirdMinor = earlyBird ? Math.round(Number(earlyBirdPrice) * 100) : null;
+  const earlyBirdSlotCount = earlyBird ? Number(earlyBirdSlots) : null;
+  const priceValid = Number.isInteger(baseMinor) && baseMinor > 0 && baseMinor % 100 === 0
+    && (!earlyBird || (Number.isInteger(earlyBirdMinor) && Number(earlyBirdMinor) > 0
+      && Number(earlyBirdMinor) < baseMinor && Number.isInteger(earlyBirdSlotCount) && Number(earlyBirdSlotCount) >= 1 && Number(earlyBirdSlotCount) <= 6));
+  const formValid = Boolean(policy.lifecycle_editable && product && name.trim() && name.trim().length <= 120
+    && description.length <= 1000 && deadlinesValid && priceValid);
+
+  const save = useMutation({
+    mutationFn: () => updateLeagueCatalog({
+      league_season_id: season.id,
+      name: name.trim(),
+      description: description.trim(),
+      registration_opens_at: registrationOpensUtc,
+      registration_deadline: registrationDeadlineUtc,
+      fixture_publication_deadline: fixtureDeadlineUtc,
+      base_price_minor: baseMinor,
+      early_bird_price_minor: earlyBirdMinor,
+      early_bird_slots: earlyBirdSlotCount,
+    }),
+    onSuccess: async () => {
+      toast.success("Seriespelet är uppdaterat");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-leagues", venueId] }),
+        queryClient.invalidateQueries({ queryKey: ["league-home"] }),
+        queryClient.invalidateQueries({ queryKey: ["league-public"] }),
+      ]);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const disabledClass = "disabled:cursor-not-allowed disabled:opacity-55";
+  return <div className="space-y-4" data-testid="league-catalog-edit">
+    <section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+      <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("magenta") }}>Innehåll</p>
+      <div className="mt-3 grid gap-3">
+        <label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>League-titel<input aria-label="League-titel" value={name} maxLength={120} disabled={!policy.lifecycle_editable} onChange={(event) => setName(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label>
+        <label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Beskrivning<textarea aria-label="League-beskrivning" value={description} maxLength={1000} disabled={!policy.lifecycle_editable} onChange={(event) => setDescription(event.target.value)} rows={4} className={`rounded-xl border bg-transparent p-3 text-sm text-white ${disabledClass}`} style={{ borderColor: ax("border") }} /></label>
+      </div>
+    </section>
+    <section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+      <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("electricSoft") }}>Anmälan</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Öppnar<input aria-label="Anmälan öppnar" type="datetime-local" value={registrationOpens} disabled={!policy.registration_opens_editable} onChange={(event) => setRegistrationOpens(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label>
+        <label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Anmälan stänger<input aria-label="Anmälan stänger" type="datetime-local" value={registrationDeadline} disabled={!policy.registration_deadline_editable} onChange={(event) => setRegistrationDeadline(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label>
+        <label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Schema publiceras senast<input aria-label="Schema publiceras senast" type="datetime-local" value={fixtureDeadline} disabled={!policy.fixture_deadline_editable} onChange={(event) => setFixtureDeadline(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label>
+      </div>
+      {!policy.registration_opens_editable || !policy.registration_deadline_editable || !policy.fixture_deadline_editable ? <p className="mt-3 text-[10px]" style={{ color: ax("muted") }}>Passerade deadlines och redan publicerat spelschema är historik och kan inte flyttas.</p> : null}
+      {!deadlinesValid ? <p className="mt-3 text-xs font-bold" style={{ color: ax("danger") }}>Öppning, anmälningsdeadline och schemadeadline måste ligga i ordning före första League-kvällen.</p> : null}
+    </section>
+    <section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+      <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("sun") }}>Framtida lagplatser</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Ordinarie teampris · SEK<input aria-label="Ordinarie teampris" value={basePrice} inputMode="numeric" disabled={!policy.pricing_editable} onChange={(event) => setBasePrice(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label><label className="flex items-center gap-2 self-end pb-3 text-sm font-bold text-white"><input aria-label="Early Bird på teamnivå" type="checkbox" checked={earlyBird} disabled={!policy.pricing_editable} onChange={(event) => setEarlyBird(event.target.checked)} /> Early Bird på teamnivå</label></div>
+      {earlyBird ? <div className="mt-3 grid grid-cols-2 gap-3"><label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Early Bird-teampris · SEK<input aria-label="Early Bird-teampris" value={earlyBirdPrice} inputMode="numeric" disabled={!policy.pricing_editable} onChange={(event) => setEarlyBirdPrice(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label><label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Första N lag<input aria-label="Första N lag" value={earlyBirdSlots} inputMode="numeric" disabled={!policy.pricing_editable} onChange={(event) => setEarlyBirdSlots(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label></div> : null}
+      <p className="mt-3 text-[10px]" style={{ color: ax("muted") }}>Priset gäller en hel lagplats. Medlemspris används inte för League V1.</p>
+      {policy.historical_prices_frozen ? <p className="mt-2 text-[10px] font-bold" style={{ color: ax("lime") }}>Tidigare lagköp behåller betalt pris, prisorsak, orderrad, kvitto och ledger. Ändringen gäller bara framtida lagplatser.</p> : null}
+      {!policy.pricing_editable ? <p className="mt-2 text-[10px] font-bold" style={{ color: ax("sun") }}>Prissättningen är låst eftersom anmälan har stängt.</p> : null}
+    </section>
+    <section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+      <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("lime") }}>League V1 · låst format</p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-white sm:grid-cols-4"><div className="rounded-xl p-3" style={{ background: ax("surface") }}>6 lag · 2 spelare</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>5 League-kvällar</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>3 banor · 18:00–20:00</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>30 matcher · låst scoring</div></div>
+      <p className="mt-3 text-[10px]" style={{ color: ax("muted") }}>{policy.schedule_lock_reason === "participants_matches_or_payments_exist" ? "Schema och resurser är låsta eftersom säsongen har deltagare, matcher eller betalningshistorik." : "League V1-strukturen redigeras inte i Catalog. En hel framtida kväll kan vid behov bokas om i den separata, skyddade operationsåtgärden."}</p>
+    </section>
+    <button type="button" onClick={() => save.mutate()} disabled={!formValid || initialForm === currentForm || save.isPending} className="flex h-12 w-full items-center justify-center gap-2 rounded-xl font-black disabled:opacity-40" style={{ background: ax("electric"), color: ax("ink") }}>{save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Spara ändringar</button>
+  </div>;
+}
+
 function ExistingLeague({ venueId, season, onDone }: { venueId: string; season: LeagueAdminSeason; onDone?: () => void }) {
   const series = activeSeries(season);
+  const venueSlug = activeVenueSlug(series);
   const teamById = new Map((season.teams || []).map((team) => [team.id, team]));
   const publishOffer = useLeagueAdminAction(venueId, season.id, publishLeagueOffer, "Försäljningen är öppen");
   const generate = useLeagueAdminAction(venueId, season.id, generateLeagueFixtures, "Spelschemat är genererat för granskning");
@@ -299,7 +451,8 @@ function ExistingLeague({ venueId, season, onDone }: { venueId: string; season: 
   const activeTeams = (season.teams || []).filter((team) => team.status === "active");
   const underfilled = new Date(series.registration_closes_at).getTime() < Date.now() && activeTeams.length < 6;
   const finalFixtureIds = new Set((season.results || []).filter((result) => result.state === "final").map((result) => result.fixture_id));
-  return <div className="space-y-5"><section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><div className="flex items-start justify-between"><div><p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("magenta") }}>Seriespel · Season 01</p><h3 className="mt-1 text-xl font-black text-white">{series.name}</h3><p className="mt-2 text-xs" style={{ color: ax("muted") }}>{DateTime.fromISO(series.start_date).setLocale("sv").toFormat("d LLL")}–{DateTime.fromISO(series.end_date).setLocale("sv").toFormat("d LLL")} · 18:00–20:00</p></div><AxChip tone={series.status === "active" ? "lime" : "sun"}>{series.status === "active" ? "PUBLICERAD" : "UTKAST"}</AxChip></div><LeagueArtworkEditor venueId={venueId} seasonId={season.id} series={series} /><div className="mt-4 grid grid-cols-3 gap-2"><div className="rounded-xl p-3" style={{ background: ax("surface") }}><p className="text-2xl font-black text-white">{activeTeams.length}/6</p><p className="text-[10px]" style={{ color: ax("muted") }}>lag</p></div><div className="rounded-xl p-3" style={{ background: ax("surface") }}><p className="text-2xl font-black text-white">{season.sessions?.length || 0}/5</p><p className="text-[10px]" style={{ color: ax("muted") }}>League-kvällar</p></div><div className="rounded-xl p-3" style={{ background: ax("surface") }}><p className="text-2xl font-black text-white">{season.fixtures?.length || 0}/30</p><p className="text-[10px]" style={{ color: ax("muted") }}>fixtures</p></div></div>{underfilled ? <div className="mt-4 flex gap-2 rounded-xl p-3 text-xs font-bold" style={{ background: ax("danger", 0.12), color: ax("danger") }}><AlertTriangle className="h-4 w-4 shrink-0" />Deadline har passerat med {activeTeams.length}/6 lag. Besluta om inställning och full återbetalning. Ändra inte formatet.</div> : null}{series.status !== "active" ? <button type="button" onClick={() => publishOffer.mutate()} disabled={publishOffer.isPending} className="mt-4 h-11 w-full rounded-xl font-black" style={{ background: ax("lime"), color: ax("ink") }}>Publicera och öppna försäljning</button> : null}<details className="mt-4"><summary className="cursor-pointer text-[11px] font-bold" style={{ color: ax("sun") }}>Boka om en hel League-kväll</summary><div className="mt-2 grid gap-2">{(season.sessions || []).map((session) => <NightRescheduleRow key={session.id} venueId={venueId} session={session} />)}</div><p className="mt-2 text-[10px]" style={{ color: ax("muted") }}>Endast torsdagar. Resurskonflikter kontrolleras. Ombokning blockeras när resultat eller historisk närvaro finns.</p></details></section>
+  return <div className="space-y-5"><section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><div className="flex items-start justify-between"><div><p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("magenta") }}>Seriespel · Season 01</p><h3 className="mt-1 text-xl font-black text-white">{series.name}</h3><p className="mt-2 text-xs" style={{ color: ax("muted") }}>{DateTime.fromISO(series.start_date).setLocale("sv").toFormat("d LLL")}–{DateTime.fromISO(series.end_date).setLocale("sv").toFormat("d LLL")} · 18:00–20:00</p></div><AxChip tone={series.status === "active" ? "lime" : "sun"}>{series.status === "active" ? "PUBLICERAD" : "UTKAST"}</AxChip></div>{series.status === "active" && venueSlug ? <a href={`/seriespel/${series.id}?v=${encodeURIComponent(venueSlug)}`} target="_blank" rel="noreferrer" className="mt-3 inline-flex h-9 items-center rounded-xl border px-3 text-xs font-black" style={{ borderColor: ax("electric"), color: ax("electricSoft") }}>Visa kundsida</a> : <p className="mt-3 text-[10px]" style={{ color: ax("muted") }}>Kundsidan blir tillgänglig när Seriespelet publiceras.</p>}<LeagueArtworkEditor venueId={venueId} seasonId={season.id} series={series} /><div className="mt-4 grid grid-cols-3 gap-2"><div className="rounded-xl p-3" style={{ background: ax("surface") }}><p className="text-2xl font-black text-white">{activeTeams.length}/6</p><p className="text-[10px]" style={{ color: ax("muted") }}>lag</p></div><div className="rounded-xl p-3" style={{ background: ax("surface") }}><p className="text-2xl font-black text-white">{season.sessions?.length || 0}/5</p><p className="text-[10px]" style={{ color: ax("muted") }}>League-kvällar</p></div><div className="rounded-xl p-3" style={{ background: ax("surface") }}><p className="text-2xl font-black text-white">{season.fixtures?.length || 0}/30</p><p className="text-[10px]" style={{ color: ax("muted") }}>fixtures</p></div></div>{underfilled ? <div className="mt-4 flex gap-2 rounded-xl p-3 text-xs font-bold" style={{ background: ax("danger", 0.12), color: ax("danger") }}><AlertTriangle className="h-4 w-4 shrink-0" />Deadline har passerat med {activeTeams.length}/6 lag. Besluta om inställning och full återbetalning. Ändra inte formatet.</div> : null}{series.status !== "active" ? <button type="button" onClick={() => publishOffer.mutate()} disabled={publishOffer.isPending} className="mt-4 h-11 w-full rounded-xl font-black" style={{ background: ax("lime"), color: ax("ink") }}>Publicera och öppna försäljning</button> : null}<details className="mt-4"><summary className="cursor-pointer text-[11px] font-bold" style={{ color: ax("sun") }}>Boka om en hel League-kväll</summary><div className="mt-2 grid gap-2">{(season.sessions || []).map((session) => <NightRescheduleRow key={session.id} venueId={venueId} session={session} />)}</div><p className="mt-2 text-[10px]" style={{ color: ax("muted") }}>Endast torsdagar. Resurskonflikter kontrolleras. Ombokning blockeras när resultat eller historisk närvaro finns.</p></details></section>
+    <LeagueCatalogEditor venueId={venueId} season={season} />
     <section><div className="mb-2 flex items-center gap-2"><Users className="h-4 w-4" style={{ color: ax("electricSoft") }} /><p className="text-sm font-black text-white">Lag · {activeTeams.length}/6</p></div><div className="grid gap-2">{(season.teams || []).map((team) => { const teamFixtureIds = new Set((season.fixtures || []).filter((fixture) => fixture.team_a_entry_id === team.id || fixture.team_b_entry_id === team.id).map((fixture) => fixture.id)); const competitionStarted = [...finalFixtureIds].some((fixtureId) => fixtureId && teamFixtureIds.has(fixtureId)); return <TeamRow key={team.id} venueId={venueId} team={team} members={(season.members || []).filter((member) => member.team_entry_id === team.id)} order={(season.orders || []).find((order) => order.id === team.commerce_order_id)} competitionStarted={competitionStarted} />; })}{!season.teams?.length ? <p className="rounded-xl p-4 text-center text-xs" style={{ background: ax("surfaceHi"), color: ax("muted") }}>Inga lag anmälda ännu.</p> : null}</div></section>
     <section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><div className="flex items-center gap-2"><CalendarDays className="h-4 w-4" style={{ color: ax("lime") }} /><p className="text-sm font-black text-white">Spelschema</p></div>{season.fixtures?.length ? <div className="mt-4 grid gap-4">{[1,2,3,4,5].map((round) => <div key={round}><p className="text-xs font-black" style={{ color: ax("muted") }}>Torsdag {round}</p><div className="mt-2 grid gap-1">{(season.fixtures || []).filter((fixture) => fixture.round_number === round).map((fixture) => <div key={fixture.id} className="grid grid-cols-[3.5rem_1fr] gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: ax("surface") }}><span className="font-black" style={{ color: ax("electricSoft") }}>{DateTime.fromISO(fixture.scheduled_start_at).setZone("Europe/Stockholm").toFormat("HH:mm")}</span><span className="font-bold text-white">{teamById.get(fixture.team_a_entry_id)?.team_name} – {teamById.get(fixture.team_b_entry_id)?.team_name}</span></div>)}</div></div>)}</div> : <p className="mt-3 text-xs" style={{ color: ax("muted") }}>När exakt sex betalda lag finns kan det deterministiska K6-schemat genereras.</p>}<div className="mt-4 grid grid-cols-2 gap-2"><button type="button" onClick={() => generate.mutate()} disabled={activeTeams.length !== 6 || Boolean(season.fixtures_published_at) || generate.isPending} className="h-11 rounded-xl text-xs font-black disabled:opacity-40" style={{ background: ax("electric"), color: ax("ink") }}>{season.fixtures?.length ? "Regenerera före publicering" : "Generera spelschema"}</button><button type="button" onClick={() => publishFixtures.mutate()} disabled={season.fixtures?.length !== 30 || Boolean(season.fixtures_published_at) || !season.validation?.valid || publishFixtures.isPending} className="h-11 rounded-xl text-xs font-black disabled:opacity-40" style={{ background: ax("lime"), color: ax("ink") }}>{season.fixtures_published_at ? "Publicerat" : "Publicera spelschema"}</button></div>{season.validation && season.fixtures?.length ? <p className="mt-2 text-[10px] font-bold" style={{ color: season.validation.valid ? ax("lime") : ax("danger") }}>{season.validation.valid ? "30 fixtures validerade: 10/lag, 2/par, 6/kväll, 3/block, inga returmöten samma kväll." : "Schemat klarar inte full validering och kan inte publiceras."}</p> : null}</section>
     <button type="button" onClick={onDone} className="h-11 w-full rounded-xl text-sm font-black" style={{ background: ax("surfaceHi"), color: "white" }}>Tillbaka till Catalog</button>

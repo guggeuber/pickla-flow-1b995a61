@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   createLeagueSeason: vi.fn(),
   fetchLeagueAdmin: vi.fn(),
   previewLeagueResources: vi.fn(),
+  updateLeagueCatalog: vi.fn(),
   updateLeagueArtwork: vi.fn(),
   uploadNamedEventImage: vi.fn(),
   removeNamedEventImage: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("@/lib/league", () => ({
   renameLeagueTeam: vi.fn(),
   rescheduleLeagueNight: vi.fn(),
   replaceLeaguePlayer: vi.fn(),
+  updateLeagueCatalog: mocks.updateLeagueCatalog,
   updateLeagueArtwork: mocks.updateLeagueArtwork,
 }));
 vi.mock("@/lib/eventMedia", () => ({
@@ -72,6 +74,7 @@ describe("League Admin artwork and date entry", () => {
     mocks.previewLeagueResources.mockImplementation(async (input: { night_dates: string[]; court_ids: string[] }) => previewFor(input));
     mocks.uploadNamedEventImage.mockResolvedValue("https://project.supabase.co/storage/v1/object/public/event-logos/activity-series/series-1/1.webp?v=1");
     mocks.updateLeagueArtwork.mockResolvedValue({ id: "series-1", image_urls: [] });
+    mocks.updateLeagueCatalog.mockResolvedValue({ edit: { league_season_id: "season-1", historical_orders_frozen: false, schedule_reconciled: false } });
     mocks.removeNamedEventImage.mockResolvedValue(undefined);
   });
 
@@ -253,6 +256,78 @@ describe("League Admin artwork and date entry", () => {
     fireEvent.change(input, { target: { files: [replacement] } });
     await waitFor(() => expect(mocks.uploadNamedEventImage).toHaveBeenCalledWith({ owner: "activity-series", ownerId: "series-1", slot: 1, file: replacement }));
     expect(mocks.updateLeagueArtwork).toHaveBeenCalledWith("season-1", [expect.stringContaining("event-logos/activity-series/series-1/1.webp")]);
+  });
+
+  it("edits safe League Catalog fields in one Save and links published customer truth", async () => {
+    mocks.fetchLeagueAdmin.mockResolvedValue({
+      courts,
+      seasons: [{
+        id: "season-1", activity_series_id: "series-1", fixtures_published_at: null,
+        fixture_publication_deadline: "2027-08-27T10:00:43.789Z",
+        activity_series: {
+          id: "series-1", venue_id: "venue-1", name: "Pickla Seriespel · Pilot", description: "Original beskrivning",
+          image_urls: [], status: "active", start_date: "2027-09-02", end_date: "2027-09-30",
+          registration_opens_at: "2027-08-01T10:00:37.123Z", registration_closes_at: "2027-08-20T10:00:41.456Z",
+          start_time: "18:00", end_time: "20:00", court_ids: ["court-1", "court-2", "court-3"],
+          venues: { slug: "pickla-arena-sthlm" },
+          access_products: { id: "product-1", name: "Pilot · Lagplats", description: null, product_kind: "league_team", base_price_sek: 1995, vat_rate: 6, scarcity_mode: "early_bird", early_bird_price_minor: 179500, early_bird_slots: 2, status: "active", is_active: true },
+        },
+        edit_policy: { lifecycle_editable: true, registration_opens_editable: true, registration_deadline_editable: true, fixture_deadline_editable: true, pricing_editable: true, schedule_editable: false, schedule_lock_reason: "league_v1_structure_locked", historical_prices_frozen: false },
+        teams: [], members: [], sessions: [{ id: "session-1", session_date: "2027-09-02", start_time: "18:00:00", end_time: "20:00:00", court_ids: [], capacity: 12, series_occurrence_index: 1, is_active: true }], fixtures: [], results: [], orders: [], validation: null,
+      }],
+    });
+    renderLeague("season-1");
+
+    expect(await screen.findByRole("link", { name: "Visa kundsida" })).toHaveAttribute("href", "/seriespel/series-1?v=pickla-arena-sthlm");
+    fireEvent.change(screen.getByLabelText("League-titel"), { target: { value: "Pickla Seriespel · Höst" } });
+    fireEvent.change(screen.getByLabelText("League-beskrivning"), { target: { value: "Ny kundbeskrivning" } });
+    fireEvent.change(screen.getByLabelText("Ordinarie teampris"), { target: { value: "2095" } });
+    fireEvent.change(screen.getByLabelText("Early Bird-teampris"), { target: { value: "1895" } });
+    fireEvent.change(screen.getByLabelText("Första N lag"), { target: { value: "3" } });
+    const save = screen.getByRole("button", { name: "Spara ändringar" });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+
+    await waitFor(() => expect(mocks.updateLeagueCatalog).toHaveBeenCalledTimes(1));
+    expect(mocks.updateLeagueCatalog).toHaveBeenCalledWith(expect.objectContaining({
+      league_season_id: "season-1",
+      name: "Pickla Seriespel · Höst",
+      description: "Ny kundbeskrivning",
+      base_price_minor: 209500,
+      early_bird_price_minor: 189500,
+      early_bird_slots: 3,
+      registration_opens_at: "2027-08-01T10:00:37.123Z",
+      registration_deadline: "2027-08-20T10:00:41.456Z",
+      fixture_publication_deadline: "2027-08-27T10:00:43.789Z",
+    }));
+  });
+
+  it("locks historical deadlines, pricing and V1 structure with human reasons", async () => {
+    mocks.fetchLeagueAdmin.mockResolvedValue({
+      courts,
+      seasons: [{
+        id: "season-1", activity_series_id: "series-1", fixtures_published_at: "2020-08-25T10:00:00Z",
+        fixture_publication_deadline: "2020-08-24T10:00:00Z",
+        activity_series: {
+          id: "series-1", venue_id: "venue-1", name: "Historisk League", description: null, image_urls: [], status: "active",
+          start_date: "2020-09-03", end_date: "2020-10-01", registration_opens_at: "2020-08-01T10:00:00Z", registration_closes_at: "2020-08-20T10:00:00Z",
+          start_time: "18:00", end_time: "20:00", court_ids: ["court-1", "court-2", "court-3"], venues: { slug: "pickla-arena-sthlm" },
+          access_products: { id: "product-1", name: "Historisk League · Lagplats", description: null, product_kind: "league_team", base_price_sek: 1995, vat_rate: 6, scarcity_mode: "none", early_bird_price_minor: null, early_bird_slots: null, status: "active", is_active: true },
+        },
+        edit_policy: { lifecycle_editable: true, registration_opens_editable: false, registration_deadline_editable: false, fixture_deadline_editable: false, pricing_editable: false, schedule_editable: false, schedule_lock_reason: "participants_matches_or_payments_exist", historical_prices_frozen: true },
+        teams: [{ id: "team-1", team_name: "Historiskt lag", status: "active", captain_customer_id: "customer-1", payer_customer_id: "customer-1", commerce_order_id: "order-1", commerce_order_line_id: "line-1", pricing_reason: "early_bird", final_price_minor: 179500, activated_at: "2020-08-10T00:00:00Z" }],
+        members: [], sessions: [], fixtures: [], results: [], orders: [{ id: "order-1", status: "paid", total_inc_vat_minor: 179500, paid_at: "2020-08-10T00:00:00Z" }], validation: null,
+      }],
+    });
+    renderLeague("season-1");
+
+    expect(await screen.findByLabelText("Anmälan öppnar")).toBeDisabled();
+    expect(screen.getByLabelText("Anmälan stänger")).toBeDisabled();
+    expect(screen.getByLabelText("Schema publiceras senast")).toBeDisabled();
+    expect(screen.getByLabelText("Ordinarie teampris")).toBeDisabled();
+    expect(screen.getByText(/Tidigare lagköp behåller betalt pris/)).toBeInTheDocument();
+    expect(screen.getByText(/Schema och resurser är låsta eftersom säsongen har deltagare/)).toBeInTheDocument();
+    expect(screen.queryByText(/UUID|managed_series|league_seasons/)).not.toBeInTheDocument();
   });
 
   it("keeps artwork persistence behind the admin API and the configured storage origin", () => {
