@@ -167,6 +167,36 @@ export type LeagueAdminSeason = {
 };
 
 export type LeagueCourt = { id: string; name: string; court_number?: number };
+export type LeagueResourceConflict = {
+  owner_type: "booking" | "open_play" | "course" | "league" | "activity" | "event" | "resource_block" | "venue_closure";
+  owner_label: string;
+  owner_name: string | null;
+  starts_at: string;
+  ends_at: string;
+};
+export type LeagueResourcePreview = {
+  has_conflicts: boolean;
+  nights: Array<{
+    night_index: number;
+    date: string;
+    proposed_starts_at: string;
+    proposed_ends_at: string;
+    status: "clear" | "conflict";
+    courts: Array<{
+      court_id: string;
+      court_name: string;
+      is_available: boolean;
+      conflicts: LeagueResourceConflict[];
+    }>;
+  }>;
+};
+export type LeagueResourcePlanInput = {
+  venue_id: string;
+  night_dates: string[];
+  start_time: "18:00";
+  end_time: "20:00";
+  court_ids: string[];
+};
 export type LeagueOperationsRegistration = { id: string; league_team_member_id: string; status: string };
 export type LeagueOperationsCheckin = { id: string; customer_id: string };
 export type LeagueOperationsProjection = {
@@ -201,6 +231,10 @@ export function fetchLeagueAdmin(venueId: string) {
 
 export function fetchLeagueOperations(venueId: string, date: string) {
   return apiGet<LeagueOperationsProjection>("api-leagues", "operations", { venueId, date });
+}
+
+export function previewLeagueResources(input: LeagueResourcePlanInput, signal?: AbortSignal) {
+  return apiPost<LeagueResourcePreview>("api-leagues", "resource-preview", input, { signal });
 }
 
 export const createLeagueSeason = (input: Record<string, unknown>) => apiPost<{ season: { id: string; activity_series_id: string } }>("api-leagues", "create", input);

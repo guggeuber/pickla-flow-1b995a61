@@ -13,17 +13,22 @@ const SLOW_API_MS = 700;
 
 export class ApiRequestError extends Error {
   readonly status: number;
+  readonly code?: string;
+  readonly data?: Record<string, unknown>;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, data?: Record<string, unknown>) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
+    this.code = typeof data?.code === "string" ? data.code : undefined;
+    this.data = data;
   }
 }
 
 export type ApiRequestOptions = {
   auth?: "session" | "omit";
   expectedStatuses?: number[];
+  signal?: AbortSignal;
 };
 
 type ApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -78,7 +83,12 @@ function logApiTiming(method: string, url: string, startedAt: number, status?: n
 
 async function readErrorBody(res: Response) {
   const data = await res.json().catch(() => ({}));
-  return typeof data?.error === "string" ? data.error : `API error ${res.status}`;
+  return {
+    message: typeof data?.error === "string" ? data.error : `API error ${res.status}`,
+    data: data && typeof data === "object" && Object.keys(data).some((key) => key !== "error")
+      ? data as Record<string, unknown>
+      : undefined,
+  };
 }
 
 function requestUrl(fn: string, endpoint: string, params?: Record<string, string>) {
@@ -96,6 +106,7 @@ async function apiRequest<T>({ method, fn, endpoint, params, body, options }: Ap
   const send = (accessToken: string | null) => fetch(url, {
     method,
     headers: buildHeaders(includeJsonContentType, accessToken),
+    signal: options.signal,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
@@ -122,7 +133,8 @@ async function apiRequest<T>({ method, fn, endpoint, params, body, options }: Ap
   const expected = !shouldReportApiFailure(response.status, options);
   logApiTiming(method, url, startedAt, response.status, undefined, expected);
   if (!response.ok) {
-    const message = await readErrorBody(response);
+    const errorBody = await readErrorBody(response);
+    const message = errorBody.message;
     if (!expected) {
       reportApiFailure({
         method,
@@ -133,7 +145,7 @@ async function apiRequest<T>({ method, fn, endpoint, params, body, options }: Ap
         duration_ms: Math.round(performance.now() - startedAt),
       });
     }
-    throw new ApiRequestError(message, response.status);
+    throw new ApiRequestError(message, response.status, errorBody.data);
   }
 
   return response.json();

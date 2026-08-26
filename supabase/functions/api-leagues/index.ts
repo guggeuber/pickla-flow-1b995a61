@@ -7,6 +7,11 @@ import {
   resolveOrCreateGuestCustomerByEmail,
 } from '../_shared/customers.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
+import {
+  buildLeagueResourcePreview,
+  type CanonicalResourcePreviewRow,
+  type LeagueResourcePreview,
+} from '../_shared/league_resource_preview.ts';
 
 type AdminClient = ReturnType<typeof getServiceClient>;
 type LeagueCapacityFill = {
@@ -34,6 +39,13 @@ type LeagueReservation = {
   early_bird_allocation_position?: number | null;
 };
 type LeagueStandingRow = { team_entry_id: string; [key: string]: unknown };
+type LeagueResourcePlanInput = {
+  venueId: string;
+  nightDates: string[];
+  courtIds: string[];
+  startTime: '18:00';
+  endTime: '20:00';
+};
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function optionalUserId(req: Request) {
@@ -55,6 +67,75 @@ function validEmail(value: unknown) {
 
 function normalizedName(value: unknown, max = 120) {
   return String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
+}
+
+function leagueResourcePlanInput(body: Record<string, unknown>): LeagueResourcePlanInput | null {
+  const venueId = String(body.venue_id || '');
+  const nightDates = Array.isArray(body.night_dates) ? body.night_dates.map(String) : [];
+  const courtIds = Array.isArray(body.court_ids) ? [...new Set(body.court_ids.map(String))] : [];
+  const startTime = String(body.start_time || '18:00').slice(0, 5);
+  const endTime = String(body.end_time || '20:00').slice(0, 5);
+  const validDates = nightDates.length === 5
+    && new Set(nightDates).size === 5
+    && nightDates.every((date, index) => {
+      const parsed = DateTime.fromISO(date, { zone: 'Europe/Stockholm' });
+      return /^\d{4}-\d{2}-\d{2}$/.test(date) && parsed.isValid && parsed.weekday === 4
+        && (index === 0 || date > nightDates[index - 1]);
+    });
+  if (!UUID.test(venueId) || !validDates || courtIds.length !== 3 || courtIds.some((id) => !UUID.test(id))) return null;
+  if (startTime !== '18:00' || endTime !== '20:00') return null;
+  return { venueId, nightDates, courtIds, startTime, endTime };
+}
+
+async function previewLeagueResourcePlan(admin: AdminClient, input: LeagueResourcePlanInput): Promise<LeagueResourcePreview> {
+  const { data: validCourts, error: courtError } = await admin.from('venue_courts').select('id')
+    .eq('venue_id', input.venueId).eq('sport_type', 'pickleball').eq('is_available', true).in('id', input.courtIds);
+  if (courtError) throw new Error(courtError.message);
+  if ((validCourts || []).length !== input.courtIds.length) throw new Error('League resources are unavailable');
+
+  const rowsByNight = await Promise.all(input.nightDates.map(async (date) => {
+    const { data, error } = await admin.rpc('preview_course_resource_schedule', {
+      p_venue_id: input.venueId,
+      p_start_date: date,
+      p_end_date: date,
+      p_recurrence_days: [4],
+      p_start_time: input.startTime,
+      p_end_time: input.endTime,
+      p_total_sessions: 1,
+      p_court_ids: input.courtIds,
+      p_exclude_series_id: null,
+      p_exclude_session_id: null,
+    });
+    if (error) throw new Error(error.message);
+    const rows = (data || []) as CanonicalResourcePreviewRow[];
+    if (rows.length !== input.courtIds.length || new Set(rows.map((row) => row.court_id)).size !== input.courtIds.length) {
+      throw new Error('League resources are unavailable');
+    }
+    return rows;
+  }));
+
+  const activityIds = [...new Set(rowsByNight.flatMap((rows) => rows.flatMap((row) =>
+    (row.conflicts || []).filter((conflict) => conflict.source_type === 'activity_session').map((conflict) => conflict.source_id)
+  )))];
+  const activitySessionTypes = new Map<string, string>();
+  if (activityIds.length) {
+    const { data, error } = await admin.from('activity_sessions').select('id, session_type').in('id', activityIds);
+    if (error) throw new Error(error.message);
+    for (const session of data || []) activitySessionTypes.set(session.id, session.session_type);
+  }
+  return buildLeagueResourcePreview(input.nightDates, rowsByNight, activitySessionTypes);
+}
+
+function leagueConflictResponse(preview: LeagueResourcePreview | null) {
+  const conflict = preview?.nights.flatMap((night) => night.courts).flatMap((court) =>
+    court.conflicts.map((item) => ({ courtName: court.court_name, ...item }))
+  )[0];
+  const starts = conflict?.starts_at ? DateTime.fromISO(conflict.starts_at).setZone('Europe/Stockholm') : null;
+  const ends = conflict?.ends_at ? DateTime.fromISO(conflict.ends_at).setZone('Europe/Stockholm') : null;
+  const message = conflict && starts?.isValid && ends?.isValid
+    ? `${conflict.courtName} är upptagen av ${conflict.owner_name || conflict.owner_label} ${starts.toFormat('HH:mm')}–${ends.toFormat('HH:mm')}. Ändra League-planen och kontrollera banorna igen.`
+    : 'En vald bana hann bli upptagen. Ändra League-planen och kontrollera banorna igen.';
+  return jsonResponse({ error: message, code: 'managed_series_resource_conflict', preview }, 409, 0);
 }
 
 function cleanLeagueImageUrls(value: unknown, seriesId: string) {
@@ -531,6 +612,14 @@ const handler = async (req: Request) => {
       await staff(admin, authenticatedUserId, venueId);
       return jsonResponse(await operationsProjection(admin, venueId, date), 200, 0);
     }
+    if (req.method === 'POST' && path === 'resource-preview') {
+      const authenticatedUserId = userId || await requireUserId(req);
+      const body = await req.json();
+      const resourcePlan = leagueResourcePlanInput(body);
+      if (!resourcePlan) return errorResponse('Fem League-kvällar och exakt tre banor krävs för resurskontrollen.', 400);
+      await requireVenueRole(admin, authenticatedUserId, resourcePlan.venueId, ['venue_admin']);
+      return jsonResponse(await previewLeagueResourcePlan(admin, resourcePlan), 200, 0);
+    }
     if (req.method === 'PATCH' && path === 'artwork') {
       const authenticatedUserId = userId || await requireUserId(req);
       const body = await req.json();
@@ -556,6 +645,7 @@ const handler = async (req: Request) => {
       const body = await req.json();
       const venueId = String(body.venue_id || '');
       await requireVenueRole(admin, authenticatedUserId, venueId, ['venue_admin']);
+      const resourcePlan = leagueResourcePlanInput(body);
       const { data, error } = await admin.rpc('create_league_season_v1', {
         p_venue_id: venueId,
         p_name: normalizedName(body.name),
@@ -573,7 +663,20 @@ const handler = async (req: Request) => {
         p_publish: body.publish === true,
         p_actor_user_id: authenticatedUserId,
       }).maybeSingle();
-      if (error) throw new Error(error.message);
+      if (error) {
+        if (error.message.includes('managed_series_resource_conflict')) {
+          let concurrentPreview: LeagueResourcePreview | null = null;
+          if (resourcePlan) {
+            try {
+              concurrentPreview = await previewLeagueResourcePlan(admin, resourcePlan);
+            } catch (previewError) {
+              console.error('league_resource_conflict_preview_failed', previewError);
+            }
+          }
+          return leagueConflictResponse(concurrentPreview);
+        }
+        throw new Error(error.message);
+      }
       return jsonResponse({ season: data }, 201, 0);
     }
     if (req.method === 'POST' && ['publish-offer', 'generate-fixtures', 'publish-fixtures'].includes(path)) {
