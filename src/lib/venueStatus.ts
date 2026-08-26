@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { apiGet } from "@/lib/api";
+import { rememberValidCustomerVenue } from "@/lib/customerVenue";
 
 export type OpeningHour = {
   day_of_week: number;
@@ -121,7 +122,8 @@ export function useVenueWithHours(slug: string | undefined) {
     enabled: !!slug,
     staleTime: 60_000,
     queryFn: async () => {
-      const data = await apiGet<any>("api-bookings", "public-venue", { slug });
+      const data = await apiGet<any>("api-bookings", "public-venue", { slug }, { auth: "omit" });
+      if (data?.venue?.slug) rememberValidCustomerVenue(data.venue.slug);
       return {
         ...(data?.venue || {}),
         openingHours: data?.openingHours || [],

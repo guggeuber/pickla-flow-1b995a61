@@ -14,7 +14,7 @@ import {
   groupBookingRows,
 } from "@/lib/bookingGroups";
 import { formatSek, type ActivityDiscoveryPricingResponse } from "@/lib/activityPricing";
-import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
+import { isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { SessionPeopleRow, SessionScheduleRow } from "@/components/session";
@@ -26,6 +26,9 @@ import { activitySessionToPresentation, openBookingToPresentation } from "@/lib/
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 import { fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
 import { inheritedEventImages } from "@/lib/eventMedia";
+import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
+import { resolveCustomerVenueContext } from "@/lib/customerVenue";
+import type { ActivitySessionOverride } from "@/lib/activitySessionOverrides";
 import { SeriesRegistrationCard } from "@/components/series/SeriesRegistrationCard";
 import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
 import { CARD_ARTWORK_SIZES, CARD_ARTWORK_WIDTHS } from "@/lib/responsiveSupabaseImage";
@@ -64,6 +67,7 @@ type FeedItem = {
   userIsCheckedIn?: boolean;
   userRegistrationStatus?: string | null;
   priceSek?: number | null;
+  priceResolved?: boolean;
   isSpecialPass?: boolean;
   firstVisitOffer?: {
     state: "conditional" | "eligible";
@@ -211,189 +215,131 @@ function programChatResourceId(sessionId: string, occurrenceDate: string) {
   return `activity_session:${sessionId}:${occurrenceDate}`;
 }
 
-function useTodayFeed(venueId: string | undefined, userId: string | undefined, slug: string) {
+type TodayPrimaryResponse = {
+  venue: { id: string; name: string; slug: string };
+  sessions: SessionRow[];
+  events: EventRow[];
+  overrides: ActivitySessionOverride[];
+  registrationCounts: Array<{
+    activity_session_id: string;
+    session_date: string;
+    registrations_count: number;
+  }>;
+};
+
+type TodayEnrichment = {
+  socialProofByKey: Map<string, ActivitySocialProofRow>;
+  registrationCounts: Map<string, number>;
+  userRegistrationStatusByKey: Map<string, string | null>;
+  participantUserIdsByKey: Map<string, string[]>;
+  publicProfilesByUserId: Map<string, PublicProfile | null>;
+  bookingItems: FeedItem[];
+  openBookingItems: FeedItem[];
+};
+
+function sessionOccurrencesForRange(sessions: SessionRow[], now: DateTime) {
+  const sessionOccurrences: SessionOccurrence[] = [];
+  const isPastOccurrence = (date: DateTime, startTime: string | null | undefined, endTime: string | null | undefined) => {
+    if (!date.hasSame(now, "day") || !endTime) return false;
+    const interval = activitySessionOccurrenceInterval(date.toISODate(), startTime, endTime);
+    return !interval || interval.end <= now;
+  };
+
+  for (const session of sessions) {
+    if (session.session_date) {
+      const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
+      if (date >= now.startOf("day") && date < now.plus({ days: DAYS_AHEAD }).startOf("day")) {
+        const occurrenceDate = date.toISODate();
+        if (occurrenceDate && !isPastOccurrence(date, session.start_time, session.end_time)) {
+          sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+        }
+      }
+      continue;
+    }
+    for (let offset = 0; offset < DAYS_AHEAD; offset += 1) {
+      const date = now.plus({ days: offset });
+      if ((session.recurrence_days || []).includes(date.weekday % 7)) {
+        const occurrenceDate = date.toISODate();
+        if (occurrenceDate && !isPastOccurrence(date, session.start_time, session.end_time)) {
+          sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
+        }
+      }
+    }
+  }
+  return sessionOccurrences;
+}
+
+function sessionFeedItem(session: SessionOccurrence, registrationsCount: number, slug: string): FeedItem {
+  const capacity = Number(session.capacity || 0);
+  const metadata = session.metadata || {};
+  const pricingMode = String(metadata.pricing_mode || "standard");
+  const isSpecialPass = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
+  const onlinePrice = Number(metadata.online_price_sek ?? session.price_sek ?? 0);
+  const deskPrice = Number(metadata.desk_price_sek ?? onlinePrice);
+  const spotsLeft = capacity ? Math.max(capacity - registrationsCount, 0) : null;
+  const earlyPrice = earlyBirdPriceSek(session, registrationsCount);
+  return {
+    id: `session:${session.id}:${session.occurrence_date}`,
+    kind: "session",
+    title: session.name,
+    date: session.occurrence_date,
+    startTime: String(session.start_time).slice(0, 5),
+    endTime: String(session.end_time).slice(0, 5),
+    category: session.session_type === "open_play" ? "Open Play" : session.session_type === "group_training" ? "Träning" : session.session_type || "Pass",
+    status: capacity && registrationsCount >= capacity ? "Full" : "Drop-in",
+    spotsLeft,
+    registrationsCount,
+    priceSek: earlyPrice ?? (onlinePrice || Number(session.price_sek || 0)),
+    priceResolved: false,
+    isSpecialPass,
+    imageUrls: inheritedEventImages(session),
+    onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
+    participants: [],
+    activitySession: session,
+    capacity,
+    href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
+    cta: capacity && registrationsCount >= capacity ? "Visa" : "Anmäl",
+    chatResourceId: programChatResourceId(session.id, session.occurrence_date),
+    chatTitle: session.name,
+    chatSubtitle: `${session.occurrence_date} · ${String(session.start_time).slice(0, 5)}-${String(session.end_time).slice(0, 5)}`,
+    chatEmoji: "📅",
+  };
+}
+
+function useTodayPrimaryFeed(slug: string, enabled: boolean) {
   return useQuery({
-    queryKey: ["today-feed", venueId, userId],
-    enabled: !!venueId,
+    queryKey: ["today-primary", slug],
+    enabled,
     staleTime: 30000,
     queryFn: async () => {
       const now = DateTime.now().setZone("Europe/Stockholm");
       const startDate = now.toISODate()!;
       const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
-      const startUtc = now.startOf("day").toUTC().toISO()!;
-      const endUtc = now.plus({ days: DAYS_AHEAD }).startOf("day").toUTC().toISO()!;
-      const isPastOccurrence = (date: DateTime, startTime: string | null | undefined, endTime: string | null | undefined) => {
-        if (!date.hasSame(now, "day") || !endTime) return false;
-        const interval = activitySessionOccurrenceInterval(date.toISODate(), startTime, endTime);
-        return !interval || interval.end <= now;
-      };
-
-      const [sessionsRes, eventsRes, bookingsRes, openBookingsRes] = await Promise.all([
-        supabase
-          .from("activity_sessions")
-          .select("id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, activity_series(image_urls, activity_formats(image_urls))")
-          .eq("venue_id", venueId!)
-          .eq("is_active", true)
-          .eq("publish_status", "published")
-          .eq("closed_to_public", false)
-          .order("start_time", { ascending: true }),
-        supabase
-          .from("events")
-          .select("id, name, display_name, slug, category, status, start_date, start_time, end_time, logo_url, background_url")
-          .eq("venue_id", venueId!)
-          .eq("is_public", true)
-          .in("status", ["upcoming", "active", "live"])
-          .gte("start_date", startDate)
-          .lte("start_date", endDate)
-          .order("start_date", { ascending: true }),
-        userId
-          ? supabase
-              .from("bookings")
-              .select("id, booking_ref, stripe_session_id, start_time, end_time, status, notes, access_code, venue_courts(name)")
-              .eq("user_id", userId)
-              .neq("status", "cancelled")
-              .gte("end_time", startUtc)
-              .lt("start_time", endUtc)
-              .order("start_time", { ascending: true })
-          : Promise.resolve({ data: [] as BookingRow[], error: null }),
-        apiGet<{ items: OpenBookingItem[] }>("api-bookings", "public-open-bookings", {
-          slug,
-          date: startDate,
-          days: String(DAYS_AHEAD),
-        }).catch(() => ({ items: [] })),
-      ]);
-
-      const sessionOccurrences: SessionOccurrence[] = [];
-      for (const session of (sessionsRes.data || []) as SessionRow[]) {
-        if (session.session_date) {
-          const date = DateTime.fromISO(session.session_date, { zone: "Europe/Stockholm" });
-          if (date >= now.startOf("day") && date < now.plus({ days: DAYS_AHEAD }).startOf("day")) {
-            const occurrenceDate = date.toISODate();
-            if (occurrenceDate && !isPastOccurrence(date, session.start_time, session.end_time)) {
-              sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
-            }
-          }
-          continue;
-        }
-        for (let offset = 0; offset < DAYS_AHEAD; offset++) {
-          const date = now.plus({ days: offset });
-          if ((session.recurrence_days || []).includes(date.weekday % 7)) {
-            const occurrenceDate = date.toISODate();
-            if (occurrenceDate && !isPastOccurrence(date, session.start_time, session.end_time)) {
-              sessionOccurrences.push({ ...session, occurrence_date: occurrenceDate });
-            }
-          }
-        }
-      }
-
-      const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
-      const [registrationsRes, socialProofRes, overrideMap] = await Promise.all([
-        sessionIds.length
-          ? supabase
-              .from("session_registrations")
-              .select("activity_session_id, session_date, status, user_id, customer_id")
-              .in("activity_session_id", sessionIds)
-              .gte("session_date", startDate)
-              .lte("session_date", endDate)
-          : Promise.resolve({ data: [] as RegistrationRow[] }),
-        sessionIds.length
-          ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
-              venueSlug: slug,
-              sessionIds: sessionIds.join(","),
-              startDate,
-              endDate,
-            }).catch(() => ({ occurrences: [] }))
-          : Promise.resolve({ occurrences: [] }),
-        sessionIds.length
-          ? fetchActivitySessionOverrides(venueId!, sessionIds, startDate, endDate)
-          : Promise.resolve(new Map()),
-      ]);
-
-      const registrationCounts = new Map<string, number>();
-      const registrationsByKey = new Map<string, RegistrationRow[]>();
-      const userRegistrationStatusByKey = new Map<string, string | null>();
-      for (const row of registrationsRes.data || []) {
-        if (row.status === "cancelled" || row.status === "refunded") continue;
-        const key = `${row.activity_session_id}:${row.session_date}`;
-        registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
-        if (userId && row.user_id === userId) {
-          const currentStatus = userRegistrationStatusByKey.get(key);
-          if (currentStatus !== "checked_in") {
-            userRegistrationStatusByKey.set(key, row.status || "confirmed");
-          }
-        }
-        registrationsByKey.set(key, [...(registrationsByKey.get(key) || []), row]);
-      }
-      const participantUserIdsByKey = new Map<string, string[]>();
-      for (const [key, rows] of registrationsByKey.entries()) {
-        participantUserIdsByKey.set(
-          key,
-          [...new Set(rows.map((row) => row.user_id).filter(Boolean) as string[])].slice(0, 3),
-        );
-      }
-      const participantUserIds = [...new Set([...participantUserIdsByKey.values()].flat())];
-      const publicProfilesByUserId = participantUserIds.length
-        ? await getPublicProfileMap(participantUserIds).catch(() => new Map<string, PublicProfile | null>())
-        : new Map<string, PublicProfile | null>();
-      const socialProofByKey = new Map<string, ActivitySocialProofRow>();
-      for (const row of socialProofRes.occurrences || []) {
-        socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
-      }
-
+      const response = await apiGet<TodayPrimaryResponse>("api-event-public", "today-primary", {
+        venueSlug: slug,
+        startDate,
+        endDate,
+      }, { auth: "omit" });
+      const sessionOccurrences = sessionOccurrencesForRange(response.sessions || [], now);
+      const overrideMap = new Map((response.overrides || []).map((row) => [
+        occurrenceOverrideKey(row.activity_session_id, row.session_date),
+        row,
+      ]));
+      const primaryCounts = new Map((response.registrationCounts || []).map((row) => [
+        `${row.activity_session_id}:${row.session_date}`,
+        Number(row.registrations_count || 0),
+      ]));
       const visibleSessionOccurrences = sessionOccurrences.filter((session) => {
         const occurrenceKey = occurrenceOverrideKey(session.id, session.occurrence_date);
         const override = overrideMap.get(occurrenceKey);
-        const hidden = isPublicActivityOverrideHidden(override?.status);
-        return !hidden;
+        return !isPublicActivityOverrideHidden(override?.status);
       });
-
-      const sessionItems: FeedItem[] = visibleSessionOccurrences.map((session) => {
-        const occurrenceKey = `${session.id}:${session.occurrence_date}`;
-        const socialProof = socialProofByKey.get(occurrenceKey);
-        const count = socialProof?.registrations_count ?? registrationCounts.get(occurrenceKey) ?? 0;
-        const capacity = Number(session.capacity || 0);
-        const metadata = session.metadata || {};
-        const pricingMode = String(metadata.pricing_mode || "standard");
-        const isSpecialPass = pricingMode === "fixed_ticket" || pricingMode === "member_discount";
-        const onlinePrice = Number(metadata.online_price_sek ?? session.price_sek ?? 0);
-        const deskPrice = Number(metadata.desk_price_sek ?? onlinePrice);
-        const spotsLeft = capacity ? Math.max(capacity - count, 0) : null;
-        const earlyPrice = earlyBirdPriceSek(session, count);
-        const userRegistrationStatus = userRegistrationStatusByKey.get(occurrenceKey) || null;
-        return {
-          id: `session:${session.id}:${session.occurrence_date}`,
-          kind: "session",
-          title: session.name,
-          date: session.occurrence_date,
-          startTime: String(session.start_time).slice(0, 5),
-          endTime: String(session.end_time).slice(0, 5),
-          category: session.session_type === "open_play" ? "Open Play" : session.session_type === "group_training" ? "Träning" : session.session_type || "Pass",
-          status: capacity && count >= capacity ? "Full" : "Drop-in",
-          spotsLeft,
-          registrationsCount: count,
-          userIsInterested: Boolean(socialProof?.user_is_interested),
-          userIsRegistered: Boolean(userRegistrationStatus),
-          userIsCheckedIn: userRegistrationStatus === "checked_in",
-          userRegistrationStatus,
-          priceSek: earlyPrice ?? (onlinePrice || Number(session.price_sek || 0)),
-          isSpecialPass,
-          imageUrls: inheritedEventImages(session),
-          onlineCheaper: isSpecialPass && deskPrice > onlinePrice,
-          participants: (participantUserIdsByKey.get(occurrenceKey) || [])
-            .map((participantUserId) => publicProfilesByUserId.get(participantUserId))
-            .filter(Boolean) as PublicProfile[],
-          activitySession: session,
-          capacity,
-          href: `/program/${session.id}?date=${session.occurrence_date}&v=${slug}`,
-          cta: capacity && count >= capacity ? "Visa" : "Anmäl",
-          chatResourceId: programChatResourceId(session.id, session.occurrence_date),
-          chatTitle: session.name,
-          chatSubtitle: `${session.occurrence_date} · ${String(session.start_time).slice(0, 5)}-${String(session.end_time).slice(0, 5)}`,
-          chatEmoji: "📅",
-        };
-      });
-
-      const eventItems: FeedItem[] = ((eventsRes.data || []) as EventRow[]).map((event) => ({
+      const sessionItems = visibleSessionOccurrences.map((session) => sessionFeedItem(
+        session,
+        primaryCounts.get(`${session.id}:${session.occurrence_date}`) || 0,
+        slug,
+      ));
+      const eventItems: FeedItem[] = (response.events || []).map((event) => ({
         id: `event:${event.id}`,
         kind: "event",
         title: event.display_name || event.name,
@@ -412,6 +358,94 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         chatEmoji: "🏆",
         imageUrls: [event.background_url || event.logo_url].filter(Boolean) as string[],
       }));
+
+      return {
+        venue: response.venue,
+        sessionOccurrences: visibleSessionOccurrences,
+        items: [...sessionItems, ...eventItems].sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)),
+      };
+    },
+  });
+}
+
+function useTodayEnrichment(
+  venueId: string | undefined,
+  sessionOccurrences: SessionOccurrence[],
+  userId: string | undefined,
+  slug: string,
+  enabled: boolean,
+) {
+  const sessionSignature = sessionOccurrences.map((session) => `${session.id}:${session.occurrence_date}`).join(",");
+  return useQuery({
+    queryKey: ["today-feed-enrichment", venueId, userId || "guest", sessionSignature],
+    enabled: enabled && Boolean(venueId),
+    staleTime: 30_000,
+    queryFn: async (): Promise<TodayEnrichment> => {
+      const now = DateTime.now().setZone("Europe/Stockholm");
+      const startDate = now.toISODate()!;
+      const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
+      const startUtc = now.startOf("day").toUTC().toISO()!;
+      const endUtc = now.plus({ days: DAYS_AHEAD }).startOf("day").toUTC().toISO()!;
+      const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
+      const [registrationsRes, socialProofRes, bookingsRes, openBookingsRes] = await Promise.all([
+        sessionIds.length
+          ? supabase
+              .from("session_registrations")
+              .select("activity_session_id, session_date, status, user_id")
+              .in("activity_session_id", sessionIds)
+              .gte("session_date", startDate)
+              .lte("session_date", endDate)
+          : Promise.resolve({ data: [] as RegistrationRow[] }),
+        sessionIds.length
+          ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
+              venueSlug: slug,
+              sessionIds: sessionIds.join(","),
+              startDate,
+              endDate,
+            }, userId ? {} : { auth: "omit" }).catch(() => ({ occurrences: [] }))
+          : Promise.resolve({ occurrences: [] }),
+        userId
+          ? supabase
+              .from("bookings")
+              .select("id, booking_ref, stripe_session_id, start_time, end_time, status, notes, access_code, venue_courts(name)")
+              .eq("user_id", userId)
+              .neq("status", "cancelled")
+              .gte("end_time", startUtc)
+              .lt("start_time", endUtc)
+              .order("start_time", { ascending: true })
+          : Promise.resolve({ data: [] as BookingRow[], error: null }),
+        apiGet<{ items: OpenBookingItem[] }>("api-bookings", "public-open-bookings", {
+          slug,
+          date: startDate,
+          days: String(DAYS_AHEAD),
+        }, { auth: "omit" }).catch(() => ({ items: [] })),
+      ]);
+
+      const registrationCounts = new Map<string, number>();
+      const registrationsByKey = new Map<string, RegistrationRow[]>();
+      const userRegistrationStatusByKey = new Map<string, string | null>();
+      for (const row of registrationsRes.data || []) {
+        if (row.status === "cancelled" || row.status === "refunded") continue;
+        const key = `${row.activity_session_id}:${row.session_date}`;
+        registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
+        if (userId && row.user_id === userId) {
+          const currentStatus = userRegistrationStatusByKey.get(key);
+          if (currentStatus !== "checked_in") userRegistrationStatusByKey.set(key, row.status || "confirmed");
+        }
+        registrationsByKey.set(key, [...(registrationsByKey.get(key) || []), row]);
+      }
+      const participantUserIdsByKey = new Map<string, string[]>();
+      for (const [key, rows] of registrationsByKey.entries()) {
+        participantUserIdsByKey.set(key, [...new Set(rows.map((row) => row.user_id).filter(Boolean) as string[])].slice(0, 3));
+      }
+      const participantUserIds = [...new Set([...participantUserIdsByKey.values()].flat())];
+      const publicProfilesByUserId = participantUserIds.length
+        ? await getPublicProfileMap(participantUserIds).catch(() => new Map<string, PublicProfile | null>())
+        : new Map<string, PublicProfile | null>();
+      const socialProofByKey = new Map<string, ActivitySocialProofRow>();
+      for (const row of socialProofRes.occurrences || []) {
+        socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
+      }
 
       const bookingItems: FeedItem[] = (groupBookingRows((bookingsRes.data || []) as BookingRow[]) as BookingGroup[]).map((booking) => {
         const start = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
@@ -469,59 +503,53 @@ function useTodayFeed(venueId: string | undefined, userId: string | undefined, s
         };
       });
 
-      const mergedItems = [...sessionItems, ...eventItems, ...openBookingItems, ...bookingItems].sort((a, b) =>
-        `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)
-      );
-
-      return mergedItems;
-    },
-  });
-}
-
-function useFirstVisitOffers(slug: string, userId: string | undefined) {
-  return useQuery({
-    queryKey: ["first-visit-offers", slug, userId || "guest"],
-    staleTime: userId ? 0 : 30_000,
-    queryFn: () => apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }),
-  });
-}
-
-function useCurrentIdentity(userId: string | undefined) {
-  return useQuery({
-    queryKey: ["current-identity", userId],
-    enabled: !!userId,
-    staleTime: 60_000,
-    queryFn: async () => {
-      const { data: profile } = await supabase
-        .from("player_profiles")
-        .select("display_name, first_name, last_name, customer_id")
-        .eq("auth_user_id", userId!)
-        .maybeSingle();
-
-      let customer = null;
-      if ((profile as any)?.customer_id) {
-        const { data } = await supabase
-          .from("customers")
-          .select("display_name, first_name, last_name")
-          .eq("id", (profile as any).customer_id)
-          .maybeSingle();
-        customer = data;
-      }
-
-      if (!customer) {
-        const { data } = await supabase
-          .from("customers")
-          .select("display_name, first_name, last_name")
-          .eq("auth_user_id", userId!)
-          .maybeSingle();
-        customer = data;
-      }
-
       return {
-        playerProfile: profile,
-        customer,
+        socialProofByKey,
+        registrationCounts,
+        userRegistrationStatusByKey,
+        participantUserIdsByKey,
+        publicProfilesByUserId,
+        bookingItems,
+        openBookingItems,
       };
     },
+  });
+}
+
+function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment) {
+  if (!enrichment) return primaryItems;
+  const enrichedPrimary = primaryItems.map((item) => {
+    if (item.kind !== "session" || !item.activitySession) return item;
+    const key = `${item.activitySession.id}:${item.date}`;
+    const socialProof = enrichment.socialProofByKey.get(key);
+    const count = socialProof?.registrations_count ?? enrichment.registrationCounts.get(key) ?? item.registrationsCount ?? 0;
+    const capacity = Number(item.capacity || 0);
+    const userRegistrationStatus = enrichment.userRegistrationStatusByKey.get(key) || null;
+    return {
+      ...item,
+      status: capacity && count >= capacity ? "Full" : "Drop-in",
+      spotsLeft: capacity ? Math.max(capacity - count, 0) : null,
+      registrationsCount: count,
+      userIsInterested: Boolean(socialProof?.user_is_interested),
+      userIsRegistered: Boolean(userRegistrationStatus),
+      userIsCheckedIn: userRegistrationStatus === "checked_in",
+      userRegistrationStatus,
+      participants: (enrichment.participantUserIdsByKey.get(key) || [])
+        .map((participantUserId) => enrichment.publicProfilesByUserId.get(participantUserId))
+        .filter(Boolean) as PublicProfile[],
+      cta: capacity && count >= capacity ? "Visa" : "Anmäl",
+    };
+  });
+  return [...enrichedPrimary, ...enrichment.openBookingItems, ...enrichment.bookingItems]
+    .sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`));
+}
+
+function useFirstVisitOffers(slug: string, userId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["first-visit-offers", slug, userId || "guest"],
+    enabled,
+    staleTime: userId ? 0 : 30_000,
+    queryFn: () => apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }, userId ? {} : { auth: "omit" }),
   });
 }
 
@@ -622,7 +650,9 @@ function FeedRow({
           placesLeft: item.spotsLeft,
           pricing:
             item.kind === "session"
-              ? Number(item.priceSek || 0) <= 0
+              ? !item.priceResolved
+                ? null
+                : Number(item.priceSek || 0) <= 0
                 ? { kind: "included", label: "Ingår", amountSek: 0 }
                 : { kind: "amount", amountSek: item.priceSek }
               : null,
@@ -794,12 +824,31 @@ export default function TodayPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const verifiedAccount = useVerifiedAccount();
   const [welcomeLine] = useState(() => consumeFirstRunWelcome() ? "Välkommen till Pickla" : null);
-  const slug = searchParams.get("v") || "pickla-arena-sthlm";
-  const { data: venue, isLoading: venueLoading } = useVenueWithHours(slug);
-
-  const { data: rawItems = [], isLoading } = useTodayFeed(venue?.id, user?.id, slug);
-  const { data: firstVisitOffers } = useFirstVisitOffers(slug, user?.id);
+  const venueContext = resolveCustomerVenueContext(searchParams.get("v"));
+  const slug = venueContext.slug;
+  const { data: venue, isLoading: venueLoading, isError: venueError } = useVenueWithHours(slug);
+  const primaryEnabled = venueContext.canUseBeforeRemoteValidation || venue?.slug === slug;
+  const primary = useTodayPrimaryFeed(slug, primaryEnabled);
+  const venueId = venue?.id || primary.data?.venue.id;
+  const identityReady = verifiedAccount.state === "anonymous" || verifiedAccount.state === "verified";
+  const enrichment = useTodayEnrichment(
+    venueId,
+    primary.data?.sessionOccurrences || [],
+    verifiedAccount.verifiedUserId || undefined,
+    slug,
+    Boolean(primary.data) && identityReady,
+  );
+  const rawItems = useMemo(
+    () => enrichTodayItems(primary.data?.items || [], enrichment.data),
+    [enrichment.data, primary.data?.items],
+  );
+  const { data: firstVisitOffers } = useFirstVisitOffers(
+    slug,
+    verifiedAccount.verifiedUserId || undefined,
+    Boolean(primary.data) && identityReady,
+  );
   const pricingByOccurrence = useMemo(() => new Map(
     (firstVisitOffers?.pricing || []).map((pricing) => [`${pricing.activity_session_id}:${pricing.session_date}`, pricing]),
   ), [firstVisitOffers?.pricing]);
@@ -811,6 +860,7 @@ export default function TodayPage() {
     return {
       ...item,
       priceSek: customerPrice.displayPriceSek,
+      priceResolved: true,
       firstVisitOffer: customerPrice.offerState && customerPrice.offerLabel ? {
         state: customerPrice.offerState,
         label: customerPrice.offerLabel,
@@ -820,21 +870,22 @@ export default function TodayPage() {
     };
   }), [pricingByOccurrence, rawItems]);
   const { data: courseHome } = useQuery({
-    queryKey: ["course-home", slug, user?.id || "guest"],
-    queryFn: () => fetchCourseHome(slug),
+    queryKey: ["course-home", slug, verifiedAccount.verifiedUserId || "guest"],
+    enabled: Boolean(primary.data) && identityReady,
+    queryFn: () => fetchCourseHome(slug, verifiedAccount.verifiedUserId ? undefined : { auth: "omit" }),
     staleTime: 30000,
   });
   const { data: leagueHome } = useQuery({
-    queryKey: ["league-home", slug, user?.id || "guest"],
-    queryFn: () => fetchLeagueHome(slug),
+    queryKey: ["league-home", slug, verifiedAccount.verifiedUserId || "guest"],
+    enabled: Boolean(primary.data) && identityReady,
+    queryFn: () => fetchLeagueHome(slug, verifiedAccount.verifiedUserId ? undefined : { auth: "omit" }),
     staleTime: 30000,
   });
-  const { data: currentIdentity } = useCurrentIdentity(user?.id);
   const now = useActivityNow();
   const userName = getFirstName({
-    playerProfile: currentIdentity?.playerProfile,
-    customer: currentIdentity?.customer,
-    authUser: user,
+    playerProfile: verifiedAccount.account?.profile,
+    customer: verifiedAccount.account?.customer,
+    authUser: verifiedAccount.isVerified ? user : null,
   });
   const liveHighlightId = items.find((item) => {
     const start = DateTime.fromISO(`${item.date}T${item.startTime}`, { zone: "Europe/Stockholm" });
@@ -888,27 +939,21 @@ export default function TodayPage() {
     { heading: "I helgen", items: weekendItems },
   ].filter((section) => section.items.length > 0);
   const { data: featuredPreview } = useQuery({
-    queryKey: ["today-featured-preview", user?.id || "anon", featuredItem?.id],
-    enabled: !!featuredItem?.activitySession?.id,
-    staleTime: user?.id ? 0 : 15000,
+    queryKey: ["today-featured-preview", verifiedAccount.verifiedUserId || "anon", featuredItem?.id],
+    enabled: identityReady && !!featuredItem?.activitySession?.id,
+    staleTime: verifiedAccount.verifiedUserId ? 0 : 15000,
     queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
       sessionId: featuredItem!.activitySession!.id,
       date: featuredItem!.date,
       venueSlug: slug,
-    }),
+    }, verifiedAccount.verifiedUserId ? {} : { auth: "omit" }),
   });
   const featuredPricing = featuredPreview?.activityTicketPricing || featuredPreview?.pricing || null;
   const featuredIncluded = featuredPricing?.requiresCheckout === false;
-  const featuredFallbackPrice = Number(
-    featuredItem?.activitySession?.metadata?.online_price_sek ??
-    featuredItem?.activitySession?.price_sek ??
-    0
-  );
   const featuredPriceLabel = featuredIncluded
     ? null
     : featuredPricing?.customerPresentation?.displayLabel ||
       featuredPricing?.checkoutLabel ||
-      (featuredFallbackPrice > 0 ? formatSek(featuredFallbackPrice) : null) ||
       null;
   const openFeatured = () => {
     if (!featuredItem) return;
@@ -940,7 +985,15 @@ export default function TodayPage() {
 
       <main>
         <h1 className="sr-only">Pickla Arena Stockholm — Pickleball, dart och event i Solna</h1>
-        {venueLoading || isLoading ? (
+        {primary.isError ? (
+          <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2 text-center">
+            <div><p className="text-sm font-semibold text-neutral-500">Dagens schema kunde inte hämtas.</p><button type="button" onClick={() => void primary.refetch()} className="mt-4 rounded-full border border-black/15 px-4 py-2 text-sm font-black">Försök igen</button></div>
+          </section>
+        ) : !primaryEnabled && venueError ? (
+          <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2 text-center text-sm font-semibold text-neutral-500">
+            Arenan kunde inte hittas.
+          </section>
+        ) : (!primaryEnabled && venueLoading) || primary.isLoading ? (
           <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2">
             <Loader2 className="h-6 w-6 animate-spin" style={{ color: PINK }} />
           </section>
@@ -957,7 +1010,7 @@ export default function TodayPage() {
         )}
 
         <section className="mx-auto max-w-md px-5 pt-7">
-          {venueLoading || isLoading ? (
+          {(!primaryEnabled && venueLoading) || primary.isLoading || primary.isError || (!primaryEnabled && venueError) ? (
             null
           ) : (
             <div className="space-y-8">
@@ -1020,7 +1073,7 @@ export default function TodayPage() {
                   </h2>
                   <div className="space-y-2">
                     {todayListItems.map((item) => (
-                      <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} venueId={venue?.id} slug={slug} />
+                      <FeedRow key={item.id} item={item} now={now} highlight={item.id === liveHighlightId} venueId={venueId} slug={slug} />
                     ))}
                   </div>
                 </section>
@@ -1038,7 +1091,7 @@ export default function TodayPage() {
                         item={item}
                         now={now}
                         highlight={false}
-                        venueId={venue?.id}
+                        venueId={venueId}
                         slug={slug}
                         emphasis="secondary"
                       />

@@ -13,6 +13,8 @@ import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { fetchLeaguePublic, registerLeagueTeam, type LeagueFixture, type LeagueFixtureResult } from "@/lib/league";
 import { DETAIL_ARTWORK_SIZES } from "@/lib/responsiveSupabaseImage";
 import { shareOrCopy } from "@/lib/share";
+import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
+import { resolveCustomerVenueContext } from "@/lib/customerVenue";
 
 const svDate = (value: string) => DateTime.fromISO(value, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("cccc d LLLL");
 const shortTime = (value: string) => DateTime.fromISO(value, { zone: "utc" }).setZone("Europe/Stockholm").toFormat("HH:mm");
@@ -26,20 +28,32 @@ export default function LeaguePage() {
   const { seriesId = "" } = useParams();
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
+  const verifiedAccount = useVerifiedAccount();
   const [teamName, setTeamName] = useState("");
   const [playerName, setPlayerName] = useState("");
   const [playerEmail, setPlayerEmail] = useState("");
   const [ageConfirmed, setAgeConfirmed] = useState(false);
   const requestIds = useRef({ registration: crypto.randomUUID(), line: crypto.randomUUID() });
-  const query = useQuery({
-    queryKey: ["league-public", seriesId, user?.id || "anonymous"],
-    queryFn: () => fetchLeaguePublic(seriesId),
-    enabled: Boolean(seriesId) && !authLoading,
+  const publicQuery = useQuery({
+    queryKey: ["league-public", seriesId, "anonymous"],
+    queryFn: () => fetchLeaguePublic(seriesId, { auth: "omit" }),
+    enabled: Boolean(seriesId),
+    staleTime: 30_000,
   });
-  const league = query.data;
+  const personalizedQuery = useQuery({
+    queryKey: ["league-public", seriesId, verifiedAccount.verifiedUserId],
+    queryFn: () => fetchLeaguePublic(seriesId),
+    enabled: Boolean(seriesId) && verifiedAccount.isVerified,
+  });
+  const league = personalizedQuery.data || publicQuery.data;
+  const personalizationReady = verifiedAccount.state === "anonymous" || Boolean(personalizedQuery.data);
+  const personalizationFailed = verifiedAccount.state === "validation_error"
+    || (verifiedAccount.isVerified && personalizedQuery.isError);
   const venue = league ? (Array.isArray(league.series.venues) ? league.series.venues[0] : league.series.venues) : null;
-  const venueSlug = venue?.slug || params.get("v") || "pickla-arena-sthlm";
+  const requestedVenue = params.get("v");
+  const resolvedVenue = resolveCustomerVenueContext(requestedVenue).slug;
+  const venueSlug = requestedVenue ? resolvedVenue : venue?.slug || resolvedVenue;
   const teamById = useMemo(() => new Map((league?.teams || []).map((team) => [team.id, team])), [league?.teams]);
   const courtById = useMemo(() => new Map((league?.courts || []).map((court) => [court.id, court])), [league?.courts]);
   const now = Date.now();
@@ -49,6 +63,7 @@ export default function LeaguePage() {
     : [];
   const latest = (league?.fixtures || []).filter((fixture) => fixtureResult(fixture)?.state === "final").slice(-6).reverse();
   const registrationOpen = Boolean(league)
+    && personalizationReady
     && new Date(league!.series.registration_opens_at).getTime() <= now
     && new Date(league!.series.registration_closes_at).getTime() > now
     && Number(league!.capacity.available_count || 0) > 0
@@ -57,7 +72,8 @@ export default function LeaguePage() {
   const register = useMutation({
     mutationFn: async () => {
       if (!league) throw new Error("Seriespelet kunde inte öppnas.");
-      if (!user) {
+      if (!personalizationReady) throw new Error("Kontot verifieras fortfarande.");
+      if (!verifiedAccount.isVerified || !user) {
         const intended = `/seriespel/${seriesId}?v=${encodeURIComponent(venueSlug)}`;
         preserveIntendedRoute(intended);
         navigate(`/auth?redirect=${encodeURIComponent(`/seriespel/${seriesId}`)}&v=${encodeURIComponent(venueSlug)}`);
@@ -88,8 +104,8 @@ export default function LeaguePage() {
     if (result === "copied") toast.success("Länk kopierad");
   };
 
-  if (query.isLoading || authLoading) return <div className="grid min-h-[100dvh] place-items-center bg-white"><Loader2 className="h-6 w-6 animate-spin" /></div>;
-  if (!league || query.isError) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><main className="mx-auto max-w-xl px-6 pt-32 text-center">Seriespelet kunde inte öppnas.</main></div>;
+  if (publicQuery.isLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><div className="grid min-h-[100dvh] place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
+  if (!league || publicQuery.isError) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><main className="mx-auto max-w-xl px-6 pt-32 text-center">Seriespelet kunde inte öppnas.</main></div>;
 
   const firstNight = league.sessions[0]?.session_date;
   const full = Number(league.capacity.available_count || 0) <= 0;
@@ -137,9 +153,9 @@ export default function LeaguePage() {
 
         <details className="group mt-8 rounded-2xl border border-black/10 p-5"><summary className="flex cursor-pointer list-none items-center justify-between font-black">Så funkar seriespelet <ChevronDown className="h-5 w-5 transition group-open:rotate-180" /></summary><div className="mt-4 grid gap-3 text-sm leading-relaxed text-slate-600"><p>6 lag med exakt 2 registrerade spelare, båda 18+. Fem torsdagar 18:00–20:00. Varje lag spelar två matcher per kväll och tio matcher totalt.</p><p>Tre set spelas alltid. Rallypoäng används: varje boll ger poäng. Set till 11, vinn med två, tak 13. Vid 12–12 avgör nästa boll setet 13–12. Varje vunnet set ger en League-poäng.</p><p>Matchfönstret är 50 minuter. När tiden är slut spelas pågående boll klart. Ett ofärdigt resultat påverkar inte tabellen förrän personal har slutfört det.</p><p>Systemet hanterar inga avbytare i Season 01. Rosterändringar hanteras av personal. Om sex lag inte är anmälda vid deadline ställer Pickla in och återbetalar hela lagavgiften. Kontakta Pickla om hela laget behöver avbokas; avbokning och eventuell återbetalning hanteras av personal enligt villkoren. Efter schemapublicering eller seriestart krävs manuell bedömning.</p></div></details>
 
-        {!league.customer_team_id && registrationOpen ? <section className="mt-9 rounded-3xl border border-black/10 p-5"><h2 className="text-xl font-black">Anmäl laget</h2><div className="mt-5 grid gap-4"><label className="grid gap-1.5 text-sm font-bold">Lagnamn<input value={teamName} onChange={(event) => setTeamName(event.target.value)} maxLength={40} placeholder="Dink Floyd" className="h-12 rounded-xl border border-black/15 px-3 font-normal" /></label><p className="-mt-2 text-xs text-slate-500">3–40 tecken. Lagnamnet visas publikt.</p><div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Lagkapten</p><p className="mt-1 font-bold">Du betalar hela lagavgiften och är lagets första spelare.</p></div><label className="grid gap-1.5 text-sm font-bold">Spelare 2 · namn<input value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="Anna Andersson" className="h-12 rounded-xl border border-black/15 px-3 font-normal" /></label><label className="grid gap-1.5 text-sm font-bold">Spelare 2 · e-post<input value={playerEmail} onChange={(event) => setPlayerEmail(event.target.value)} type="email" placeholder="anna@example.com" className="h-12 rounded-xl border border-black/15 px-3 font-normal" /></label><p className="-mt-2 text-xs text-slate-500">Spelare 2 behöver inget konto före köpet. E-post kopplas till samma kundprofil när personen skapar eller använder sitt konto.</p><label className="flex items-start gap-3 rounded-2xl border border-black/10 p-4 text-sm font-bold"><input type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} className="mt-0.5 h-5 w-5" /> Jag bekräftar att båda spelarna är 18+.</label></div></section> : null}
+        {personalizationReady && !league.customer_team_id && registrationOpen ? <section className="mt-9 rounded-3xl border border-black/10 p-5"><h2 className="text-xl font-black">Anmäl laget</h2><div className="mt-5 grid gap-4"><label className="grid gap-1.5 text-sm font-bold">Lagnamn<input value={teamName} onChange={(event) => setTeamName(event.target.value)} maxLength={40} placeholder="Dink Floyd" className="h-12 rounded-xl border border-black/15 px-3 font-normal" /></label><p className="-mt-2 text-xs text-slate-500">3–40 tecken. Lagnamnet visas publikt.</p><div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500">Lagkapten</p><p className="mt-1 font-bold">Du betalar hela lagavgiften och är lagets första spelare.</p></div><label className="grid gap-1.5 text-sm font-bold">Spelare 2 · namn<input value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="Anna Andersson" className="h-12 rounded-xl border border-black/15 px-3 font-normal" /></label><label className="grid gap-1.5 text-sm font-bold">Spelare 2 · e-post<input value={playerEmail} onChange={(event) => setPlayerEmail(event.target.value)} type="email" placeholder="anna@example.com" className="h-12 rounded-xl border border-black/15 px-3 font-normal" /></label><p className="-mt-2 text-xs text-slate-500">Spelare 2 behöver inget konto före köpet. E-post kopplas till samma kundprofil när personen skapar eller använder sitt konto.</p><label className="flex items-start gap-3 rounded-2xl border border-black/10 p-4 text-sm font-bold"><input type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} className="mt-0.5 h-5 w-5" /> Jag bekräftar att båda spelarna är 18+.</label></div></section> : null}
       </main>
-      <footer className="fixed inset-x-0 bottom-0 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3"><div className="mx-auto max-w-2xl">{league.customer_team_id ? <button type="button" onClick={() => navigate(`/my?v=${encodeURIComponent(venueSlug)}`)} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-50 font-black text-emerald-800"><Check className="h-5 w-5" /> Ditt lag är anmält · Visa</button> : <button type="button" onClick={() => register.mutate()} disabled={register.isPending || !registrationOpen || (Boolean(user) && !ready)} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">{register.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : user ? <ShieldCheck className="h-5 w-5" /> : null}{!registrationOpen ? full ? "Fullbokat" : "Anmälan är stängd" : `${league.pricing_reason === "early_bird" ? "Anmäl laget · Early Bird" : "Anmäl laget"} ${formatCommerceMoney(league.current_price_minor)}`}</button>}</div></footer>
+      <footer className="fixed inset-x-0 bottom-0 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3"><div className="mx-auto max-w-2xl">{personalizationFailed ? <button type="button" onClick={() => verifiedAccount.state === "validation_error" ? void verifiedAccount.retry() : void personalizedQuery.refetch()} className="h-14 w-full rounded-2xl border border-red-200 bg-red-50 text-sm font-black text-red-700">Försök hämta din lagstatus igen</button> : !personalizationReady ? <div className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-100 text-sm font-black text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Din lagstatus hämtas…</div> : league.customer_team_id ? <button type="button" onClick={() => navigate(`/my?v=${encodeURIComponent(venueSlug)}`)} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-50 font-black text-emerald-800"><Check className="h-5 w-5" /> Ditt lag är anmält · Visa</button> : <button type="button" onClick={() => register.mutate()} disabled={register.isPending || !registrationOpen || (Boolean(user) && !ready)} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">{register.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : verifiedAccount.isVerified ? <ShieldCheck className="h-5 w-5" /> : null}{!registrationOpen ? full ? "Fullbokat" : "Anmälan är stängd" : `${league.pricing_reason === "early_bird" ? "Anmäl laget · Early Bird" : "Anmäl laget"} ${formatCommerceMoney(league.current_price_minor)}`}</button>}</div></footer>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
 
 export type LeagueTeam = { id: string; team_name: string; status: string };
 export type LeagueStanding = {
@@ -239,8 +239,8 @@ export type LeagueOperationsProjection = {
   courts: LeagueCourt[];
 };
 
-export function fetchLeaguePublic(seriesId: string) {
-  return apiGet<LeaguePublicProjection>("api-leagues", "public", { seriesId });
+export function fetchLeaguePublic(seriesId: string, options?: ApiRequestOptions) {
+  return apiGet<LeaguePublicProjection>("api-leagues", "public", { seriesId }, options);
 }
 
 export function registerLeagueTeam(input: Record<string, unknown>) {
@@ -251,8 +251,8 @@ export function fetchMyLeagues() {
   return apiGet<{ items: MyLeagueItem[] }>("api-leagues", "my");
 }
 
-export function fetchLeagueHome(venueSlug: string) {
-  return apiGet<{ mode: "none" | "registration" | "next"; item: LeaguePublicProjection | MyLeagueItem | null }>("api-leagues", "home", { v: venueSlug });
+export function fetchLeagueHome(venueSlug: string, options?: ApiRequestOptions) {
+  return apiGet<{ mode: "none" | "registration" | "next"; item: LeaguePublicProjection | MyLeagueItem | null }>("api-leagues", "home", { v: venueSlug }, options);
 }
 
 export function fetchLeagueAdmin(venueId: string) {

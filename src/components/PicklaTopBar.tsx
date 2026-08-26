@@ -9,18 +9,25 @@ import { VenueStatusDrawer } from "@/components/VenueStatusDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { useCustomerUpcoming } from "@/hooks/useCustomerUpcoming";
 import { Button } from "@/components/ui/button";
+import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
+import { CANONICAL_CUSTOMER_VENUE } from "@/lib/customerVenue";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
 type PicklaTopBarProps = { slug?: string; venueName?: string; showVenue?: boolean; background?: string };
 
-export function PicklaTopBar({ slug = "pickla-arena-sthlm", venueName, showVenue = true, background = "#fffaf7" }: PicklaTopBarProps) {
+export function PicklaTopBar({ slug = CANONICAL_CUSTOMER_VENUE.slug, venueName, showVenue = true, background = "#fffaf7" }: PicklaTopBarProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const verifiedAccount = useVerifiedAccount();
+  const { isVerified } = verifiedAccount;
   const [open, setOpen] = useState(false);
   const [venueSheetOpen, setVenueSheetOpen] = useState(false);
-  const { data: upcoming = [], isLoading: upcomingLoading } = useCustomerUpcoming(slug, open && Boolean(user));
+  const accountError = verifiedAccount.state === "validation_error";
+  const accountPending = verifiedAccount.state === "session_hydrating"
+    || verifiedAccount.state === "remote_validating";
+  const { data: upcoming = [], isLoading: upcomingLoading } = useCustomerUpcoming(slug, open && isVerified);
   const upcomingPreview = upcoming.slice(0, 3);
   const { venue, status } = useVenueStatusBySlug(slug);
   const shopCart = useGlobalShopCartIndicator(venue?.id);
@@ -56,7 +63,7 @@ export function PicklaTopBar({ slug = "pickla-arena-sthlm", venueName, showVenue
           {[["Schema", `/today?v=${encodeURIComponent(slug)}`], ["Boka bana", `/book?v=${encodeURIComponent(slug)}`], ["Träna", `/courses?v=${encodeURIComponent(slug)}`], ["Tävla", `/seriespel?v=${encodeURIComponent(slug)}`], ["Event & företag", `/event-foretag?v=${encodeURIComponent(slug)}`], ["Medlemskap & priser", `/prices?v=${encodeURIComponent(slug)}`], ["Butik", `/shop?v=${encodeURIComponent(slug)}`]].map(([label, href]) => <button key={label} type="button" onClick={() => go(href)} className="flex min-h-16 w-full items-center justify-between border-b border-black/10 px-1 text-left text-[21px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}><span>{label}</span><ArrowRight className="h-4 w-4 text-neutral-400" /></button>)}
           {user ? <section className="mt-7 space-y-2 pb-5">
             <p className="px-1 text-[10px] uppercase tracking-[0.24em] text-neutral-400" style={{ fontFamily: FONT_MONO }}>Kommande</p>
-            {upcomingLoading ? <div className="flex items-center gap-2 rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-[13px] text-neutral-500"><Loader2 className="h-4 w-4 animate-spin" /> Hämtar kommande…</div> : upcomingPreview.length ? upcomingPreview.map((item) => {
+            {accountError ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-[13px] text-red-700">Kommande kunde inte hämtas innan kontot verifierats.</div> : accountPending || upcomingLoading ? <div className="flex items-center gap-2 rounded-2xl border border-neutral-200 bg-white px-4 py-4 text-[13px] text-neutral-500"><Loader2 className="h-4 w-4 animate-spin" /> Hämtar kommande…</div> : upcomingPreview.length ? upcomingPreview.map((item) => {
               return <button key={item.id} type="button" onClick={() => go(item.destinationUrl)} className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-left text-neutral-950">
                 <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f4f0ee]"><Calendar className="h-5 w-5" /></span>
                 <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-bold" style={{ fontFamily: FONT_HEADING }}>{item.title}</span><span className="block truncate text-[12px] text-neutral-500">{item.timeLabel}</span><span className="mt-0.5 block truncate text-[10px] font-bold uppercase tracking-[0.08em] text-neutral-400">{item.typeLabel} · {item.stateLabel}</span></span>
@@ -68,9 +75,9 @@ export function PicklaTopBar({ slug = "pickla-arena-sthlm", venueName, showVenue
         </nav>
         <div className="shrink-0 border-t border-black/10 bg-white">
           <div className="mx-auto w-full max-w-md px-5 pt-4">
-            <button type="button" onClick={() => go(user ? `/my?v=${encodeURIComponent(slug)}` : `/auth?v=${encodeURIComponent(slug)}`)} className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fffaf7] px-4 py-3 text-left shadow-sm">
-              {user ? <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-neutral-950 text-sm font-black text-white" style={{ fontFamily: FONT_HEADING }}>{(user.email || "P").slice(0, 1).toUpperCase()}</span> : <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-neutral-950 text-white"><LogIn className="h-5 w-5" /></span>}
-              <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>{user ? "Min sida" : "Logga in"}</span><span className="block truncate text-[12px] text-neutral-500">{user ? user.email : "Fortsätt till ditt konto"}</span></span>
+            <button type="button" disabled={accountPending} onClick={() => accountError ? void verifiedAccount.retry() : go(isVerified ? `/my?v=${encodeURIComponent(slug)}` : `/auth?v=${encodeURIComponent(slug)}`)} className="flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fffaf7] px-4 py-3 text-left shadow-sm disabled:opacity-70">
+              {isVerified ? <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-neutral-950 text-sm font-black text-white" style={{ fontFamily: FONT_HEADING }}>{(user?.email || "P").slice(0, 1).toUpperCase()}</span> : <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-neutral-950 text-white">{accountPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogIn className="h-5 w-5" />}</span>}
+              <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-bold text-neutral-950" style={{ fontFamily: FONT_HEADING }}>{accountError ? "Försök verifiera kontot" : accountPending ? "Verifierar konto…" : isVerified ? "Min sida" : "Logga in"}</span><span className="block truncate text-[12px] text-neutral-500">{isVerified ? user?.email : accountError ? "Dina privata uppgifter är dolda" : accountPending ? "Dina uppgifter visas när kontot är verifierat" : "Fortsätt till ditt konto"}</span></span>
               <ArrowRight className="h-4 w-4 text-neutral-400" />
             </button>
           </div>

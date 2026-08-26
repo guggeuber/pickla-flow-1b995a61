@@ -361,6 +361,17 @@ function activityOccurrenceDates(session: any, startDate: string, days = 7) {
   return dates;
 }
 
+function timedJsonResponse(data: unknown, timings: Record<string, number>, cacheSeconds = 5) {
+  const serializationStartedAt = performance.now();
+  const response = jsonResponse(data, 200, cacheSeconds);
+  timings.serializationMs = Math.round(performance.now() - serializationStartedAt);
+  response.headers.set('Server-Timing', Object.entries(timings)
+    .map(([name, duration]) => `${name.replace(/Ms$/, '')};dur=${duration}`)
+    .join(', '));
+  response.headers.set('Timing-Allow-Origin', '*');
+  return response;
+}
+
 function ogTitleForActivity(session: any, occurrenceDate: string) {
   const occurrence = DateTime.fromISO(occurrenceDate, { zone: 'Europe/Stockholm' });
   const startTime = session?.start_time ? String(session.start_time).slice(0, 5) : '';
@@ -1323,6 +1334,83 @@ Deno.serve(async (req) => {
         status: 200,
         headers: { 'content-type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300, s-maxage=300' },
       });
+    }
+
+    // Minimal truthful Today read model. It intentionally excludes identity,
+    // avatars, interests, bookings and personalized pricing so public first
+    // paint never waits for optional authentication or enrichment.
+    if (req.method === 'GET' && path === 'today-primary') {
+      const totalStartedAt = performance.now();
+      const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
+      const startDate = String(url.searchParams.get('startDate') || '').trim();
+      const endDate = String(url.searchParams.get('endDate') || '').trim();
+      if (!venueSlug || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < startDate) {
+        return errorResponse('Venue and valid date range are required', 400);
+      }
+
+      const primaryDbStartedAt = performance.now();
+      const [venueResult, sessionsResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
+        client.from('venues')
+          .select('id, name, slug')
+          .eq('slug', venueSlug)
+          .eq('is_public', true)
+          .maybeSingle(),
+        client.from('activity_sessions')
+          .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, activity_series(image_urls, activity_formats(image_urls)), venues!inner(slug, is_public)')
+          .eq('venues.slug', venueSlug)
+          .eq('venues.is_public', true)
+          .eq('is_active', true)
+          .eq('publish_status', 'published')
+          .eq('closed_to_public', false)
+          .order('start_time', { ascending: true }),
+        client.from('events')
+          .select('id, name, display_name, slug, category, status, start_date, start_time, end_time, logo_url, background_url, venues!inner(slug, is_public)')
+          .eq('venues.slug', venueSlug)
+          .eq('venues.is_public', true)
+          .eq('is_public', true)
+          .in('status', ['upcoming', 'active', 'live'])
+          .gte('start_date', startDate)
+          .lte('start_date', endDate)
+          .order('start_date', { ascending: true }),
+        client.from('activity_session_overrides')
+          .select('id, activity_session_id, session_date, status, reason, venues!inner(slug, is_public)')
+          .eq('venues.slug', venueSlug)
+          .eq('venues.is_public', true)
+          .gte('session_date', startDate)
+          .lte('session_date', endDate),
+        client.from('session_registrations')
+          .select('activity_session_id, session_date, status, venues!inner(slug, is_public)')
+          .eq('venues.slug', venueSlug)
+          .eq('venues.is_public', true)
+          .gte('session_date', startDate)
+          .lte('session_date', endDate),
+      ]);
+      const timings = { primaryDbMs: Math.round(performance.now() - primaryDbStartedAt) };
+      if (venueResult.error || !venueResult.data?.id) return errorResponse('Venue not found', 404);
+      const primaryError = [sessionsResult.error, eventsResult.error, overridesResult.error, registrationsResult.error].find(Boolean);
+      if (primaryError) return errorResponse(primaryError.message, 500);
+
+      const registrationCounts = new Map<string, number>();
+      for (const registration of registrationsResult.data || []) {
+        if (!COMMITTED_REGISTRATION_STATUSES.has(String(registration.status || ''))) continue;
+        const key = `${registration.activity_session_id}:${registration.session_date}`;
+        registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
+      }
+      timings.totalMs = Math.round(performance.now() - totalStartedAt);
+      return timedJsonResponse({
+        venue: venueResult.data,
+        sessions: sessionsResult.data || [],
+        events: eventsResult.data || [],
+        overrides: overridesResult.data || [],
+        registrationCounts: [...registrationCounts].map(([key, count]) => {
+          const separator = key.lastIndexOf(':');
+          return {
+            activity_session_id: key.slice(0, separator),
+            session_date: key.slice(separator + 1),
+            registrations_count: count,
+          };
+        }),
+      }, timings);
     }
 
     // Public discovery read model. Anonymous visitors are provisionally eligible;

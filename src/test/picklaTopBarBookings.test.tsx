@@ -130,6 +130,28 @@ describe("PicklaTopBar global navigation and booking ownership", () => {
     expect(screen.getByText("Inget kommande just nu")).toBeInTheDocument();
   });
 
+  it("renders the menu immediately but defers Upcoming and account identity until verification", () => {
+    useAuthMock.mockReturnValue({
+      user: { id: "user-1", email: "private@pickla.test" },
+      loading: false,
+      authStatus: "local_session",
+    });
+    renderMenu();
+
+    expect(useCustomerUpcomingMock).toHaveBeenLastCalledWith("pickla-arena-sthlm", false);
+    expect(screen.getByText("Verifierar konto…")).toBeInTheDocument();
+    expect(screen.getByText("Hämtar kommande…")).toBeInTheDocument();
+    expect(screen.queryByText("private@pickla.test")).not.toBeInTheDocument();
+  });
+
+  it("keeps an unknown hydrating session distinct from an anonymous account", () => {
+    useAuthMock.mockReturnValue({ user: null, loading: true, authStatus: "session_hydrating" });
+    renderMenu();
+
+    expect(screen.getByText("Verifierar konto…")).toBeInTheDocument();
+    expect(screen.queryByText("Logga in")).not.toBeInTheDocument();
+  });
+
   it("centers the open and close controls in the same desktop max-width rail", () => {
     render(<MemoryRouter><PicklaTopBar /></MemoryRouter>);
     const open = screen.getByRole("button", { name: "Öppna meny" });

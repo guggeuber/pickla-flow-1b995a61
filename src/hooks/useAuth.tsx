@@ -11,10 +11,13 @@ import {
 } from "@/lib/authSessionSingleFlight";
 import { clearCustomerQueryCache } from "@/lib/authQueryCache";
 
+export type LocalAuthStatus = "session_hydrating" | "local_session" | "anonymous" | "terminal_failure";
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  authStatus: LocalAuthStatus;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: Error | null }>;
   resendConfirmation: (email: string) => Promise<{ error: Error | null }>;
@@ -34,6 +37,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authStatus, setAuthStatus] = useState<LocalAuthStatus>("session_hydrating");
   const claimAttempted = useRef(false);
   const authenticatedUserId = useRef<string | null>(null);
 
@@ -68,11 +72,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
       setLoading(false);
+      setAuthStatus(nextSession ? "local_session" : "anonymous");
     };
 
     const unsubscribeTerminalFailure = subscribeToTerminalAuthFailure(() => {
       receivedAuthEvent = true;
-      applySession(null);
+      if (disposed) return;
+      const previousUserId = authenticatedUserId.current;
+      if (previousUserId) void clearCustomerQueryCache(queryClient, previousUserId);
+      authenticatedUserId.current = null;
+      setSession(null);
+      setUser(null);
+      setLoading(false);
+      setAuthStatus("terminal_failure");
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -133,6 +145,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const signingOutUserId = user?.id ?? authenticatedUserId.current;
     setSession(null);
     setUser(null);
+    setLoading(false);
+    setAuthStatus("anonymous");
     if (signingOutUserId) void clearCustomerQueryCache(queryClient, signingOutUserId);
     authenticatedUserId.current = null;
     await supabase.auth.signOut({ scope: "local" });
@@ -140,7 +154,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signIn, signUp, resendConfirmation, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, authStatus, signIn, signUp, resendConfirmation, signOut }}>
       {children}
     </AuthContext.Provider>
   );

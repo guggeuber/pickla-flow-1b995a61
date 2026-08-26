@@ -72,9 +72,16 @@ export function isCustomerSpecificQueryKey(queryKey: QueryKey, userId?: string |
  * Removes authenticated/customer data while retaining public venue, course,
  * price and storefront queries for the signed-out experience.
  */
-export function clearCustomerQueryCache(queryClient: QueryClient, userId?: string | null) {
+export function clearCustomerQueryCache(
+  queryClient: QueryClient,
+  userId?: string | null,
+  options: { preserveAccountBootstrap?: boolean } = {},
+) {
   const filters = {
-    predicate: (query: { queryKey: QueryKey }) => isCustomerSpecificQueryKey(query.queryKey, userId),
+    predicate: (query: { queryKey: QueryKey }) => {
+      if (options.preserveAccountBootstrap && query.queryKey[0] === "authenticated-account-bootstrap") return false;
+      return isCustomerSpecificQueryKey(query.queryKey, userId);
+    },
   };
   const cancellation = queryClient.cancelQueries(filters);
   queryClient.removeQueries(filters);

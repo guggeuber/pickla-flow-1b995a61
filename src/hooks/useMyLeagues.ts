@@ -1,6 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/hooks/useAuth";
 import { fetchMyLeagues } from "@/lib/league";
 
 export function useMyLeagues(enabled = true) {
-  return useQuery({ queryKey: ["my-leagues"], queryFn: fetchMyLeagues, enabled, staleTime: 15_000 });
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["my-leagues", user?.id],
+    queryFn: fetchMyLeagues,
+    enabled: enabled && Boolean(user),
+    staleTime: 15_000,
+  });
 }

@@ -15,6 +15,8 @@ import { occurrenceCountLabel, seriesCustomerTitle, seriesPresentation } from "@
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { DETAIL_ARTWORK_SIZES } from "@/lib/responsiveSupabaseImage";
+import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
+import { resolveCustomerVenueContext } from "@/lib/customerVenue";
 
 type ParticipantType = "self" | "adult" | "dependent";
 
@@ -31,7 +33,8 @@ export default function CourseSeriesPage() {
   const { seriesId = "" } = useParams();
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
+  const verifiedAccount = useVerifiedAccount();
   const [participantType, setParticipantType] = useState<ParticipantType>("self");
   const [payerName, setPayerName] = useState("");
   const [payerEmail, setPayerEmail] = useState("");
@@ -40,14 +43,25 @@ export default function CourseSeriesPage() {
   const [childName, setChildName] = useState("");
   const [childBirthYear, setChildBirthYear] = useState("");
 
-  const query = useQuery({
-    queryKey: ["course-detail", seriesId, user?.id || "guest"],
-    queryFn: () => fetchCourseDetail(seriesId),
-    enabled: Boolean(seriesId) && !authLoading,
+  const publicQuery = useQuery({
+    queryKey: ["course-detail-public", seriesId],
+    queryFn: () => fetchCourseDetail(seriesId, { auth: "omit" }),
+    enabled: Boolean(seriesId),
+    staleTime: 30_000,
   });
-  const course = query.data;
+  const personalizedQuery = useQuery({
+    queryKey: ["course-detail-personalized", seriesId, verifiedAccount.verifiedUserId],
+    queryFn: () => fetchCourseDetail(seriesId),
+    enabled: Boolean(seriesId) && verifiedAccount.isVerified,
+  });
+  const course = personalizedQuery.data || publicQuery.data;
+  const personalizationReady = verifiedAccount.state === "anonymous" || Boolean(personalizedQuery.data);
+  const personalizationFailed = verifiedAccount.state === "validation_error"
+    || (verifiedAccount.isVerified && personalizedQuery.isError);
   const presentation = seriesPresentation(course?.format?.presentation_type);
-  const venueSlug = course?.venue?.slug || params.get("v") || "pickla-arena-sthlm";
+  const requestedVenue = params.get("v");
+  const resolvedVenue = resolveCustomerVenueContext(requestedVenue).slug;
+  const venueSlug = requestedVenue ? resolvedVenue : course?.venue?.slug || resolvedVenue;
   const sessions = (course?.sessions || [])
     .filter((session) => session.is_active && (!session.publish_status || session.publish_status === "published"))
     .sort((left, right) => left.session_date.localeCompare(right.session_date)
@@ -63,7 +77,9 @@ export default function CourseSeriesPage() {
   const buy = useMutation({
     mutationFn: async () => {
       if (!course) throw new Error("Sidan kunde inte öppnas.");
-      if (participantType === "dependent" && !user) {
+      if (!personalizationReady) throw new Error("Kontot verifieras fortfarande.");
+      const verifiedUser = verifiedAccount.isVerified ? user : null;
+      if (participantType === "dependent" && !verifiedUser) {
         preserveIntendedRoute(`/course/${seriesId}?v=${encodeURIComponent(venueSlug)}`);
         navigate(`/auth?redirect=${encodeURIComponent(`/course/${seriesId}`)}&v=${encodeURIComponent(venueSlug)}`);
         throw new Error("Logga in för att anmäla ett barn.");
@@ -77,7 +93,7 @@ export default function CourseSeriesPage() {
         participant_email: participantEmail || null,
         dependent_first_name: childName || null,
         dependent_birth_year: childBirthYear || null,
-      }, user ? undefined : { auth: "omit" });
+      }, verifiedUser ? undefined : { auth: "omit" });
       const reference = response.cart_token || response.order.id;
       if (!reference) throw new Error("Bokningen kunde inte skapas.");
       return reference;
@@ -86,8 +102,8 @@ export default function CourseSeriesPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
-  if (query.isLoading || authLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><div className="grid min-h-[100dvh] place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
-  if (!course || query.isError) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><main className="mx-auto max-w-xl px-6 pt-32 text-center">Sidan kunde inte öppnas.</main></div>;
+  if (publicQuery.isLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><div className="grid min-h-[100dvh] place-items-center"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
+  if (!course || publicQuery.isError) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#fff" /><main className="mx-auto max-w-xl px-6 pt-32 text-center">Sidan kunde inte öppnas.</main></div>;
 
   const available = Number(course.capacity.available_count || 0);
   const price = seriesPricePresentation({ pricing: course.pricing, basePriceSek: course.product.base_price_sek });
@@ -99,12 +115,13 @@ export default function CourseSeriesPage() {
   const bookingCta = socialEvent
     ? seriesBookingCta(price, presentation.bookingCta)
     : `${presentation.bookingCta} · ${formatCommerceMoney(price.finalPriceMinor)}`;
-  const open = course.registration_state === "open" && available > 0 && !course.customer_has_commitment;
-  const requiresGuestDetails = !user;
+  const open = personalizationReady && course.registration_state === "open" && available > 0 && !course.customer_has_commitment;
+  const verifiedUser = verifiedAccount.isVerified ? user : null;
+  const requiresGuestDetails = personalizationReady && !verifiedUser;
   const ready = open
     && (!requiresGuestDetails || (payerName.trim() && payerEmail.includes("@")))
     && (participantType !== "adult" || (participantName.trim() && participantEmail.includes("@")))
-    && (participantType !== "dependent" || (user && childName.trim() && Number(childBirthYear) > 1900));
+    && (participantType !== "dependent" || (verifiedUser && childName.trim() && Number(childBirthYear) > 1900));
   const shareSeries = async () => {
     const path = `/course/${encodeURIComponent(course.id)}?v=${encodeURIComponent(venueSlug)}`;
     const url = canonicalAppUrl(path);
@@ -138,7 +155,7 @@ export default function CourseSeriesPage() {
         )}
 
         <section className={socialEvent ? "mt-5 border-y border-black/10 py-4" : "mt-7"} data-testid="series-price-offer">
-          {selectedParticipantPricePending ? <p className="text-sm font-semibold text-slate-600">Priset bekräftas för deltagaren i nästa steg.</p> : <><p className="text-sm font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{price.primary}</p>{price.context ? <p className="mt-1 text-sm font-semibold text-slate-600">{price.context}</p> : null}</>}
+          {personalizationFailed ? <p className="text-sm font-semibold text-red-700">Ditt pris kunde inte hämtas. Försök igen.</p> : !personalizationReady ? <p className="text-sm font-semibold text-slate-500">Ditt pris hämtas…</p> : selectedParticipantPricePending ? <p className="text-sm font-semibold text-slate-600">Priset bekräftas för deltagaren i nästa steg.</p> : <><p className="text-sm font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{price.primary}</p>{price.context ? <p className="mt-1 text-sm font-semibold text-slate-600">{price.context}</p> : null}</>}
         </section>
 
         {presentation.type === "course" && sessions.length ? <section className="mt-8" data-testid="course-occurrences">
@@ -172,7 +189,7 @@ export default function CourseSeriesPage() {
           <div className="mt-3 whitespace-pre-line text-sm leading-7 text-slate-600">{course.format.full_description}</div>
         </section> : socialEvent && (course.format?.description || course.description) ? <section className="mt-6"><h2 className="text-lg font-black">{presentation.contentHeading}</h2><p className="mt-3 text-base leading-relaxed text-slate-700">{course.format?.description || course.description}</p></section> : null}
 
-        {supportsParticipantChoice ? <section className="mt-8">
+        {personalizationReady && supportsParticipantChoice ? <section className="mt-8">
           <h2 className="text-lg font-black">Vem ska delta?</h2>
           <div className="mt-3 grid gap-2">
             {([
@@ -187,7 +204,7 @@ export default function CourseSeriesPage() {
           </div>
           {requiresGuestDetails ? <div className="mt-4 grid gap-3"><input aria-label="Betalarens namn" value={payerName} onChange={(event) => setPayerName(event.target.value)} placeholder="Ditt namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Betalarens e-post" value={payerEmail} onChange={(event) => setPayerEmail(event.target.value)} placeholder="Din e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></div> : null}
           {participantType === "adult" ? <div className="mt-4 grid gap-3"><input aria-label="Deltagarens namn" value={participantName} onChange={(event) => setParticipantName(event.target.value)} placeholder="Deltagarens namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Deltagarens e-post" value={participantEmail} onChange={(event) => setParticipantEmail(event.target.value)} placeholder="Deltagarens e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></div> : null}
-          {participantType === "dependent" ? user ? <div className="mt-4 grid gap-3"><input aria-label="Barnets förnamn" value={childName} onChange={(event) => setChildName(event.target.value)} placeholder="Barnets förnamn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Barnets födelseår" value={childBirthYear} onChange={(event) => setChildBirthYear(event.target.value)} placeholder="Födelseår" inputMode="numeric" className="h-12 rounded-xl border border-black/15 px-3" /><p className="text-xs leading-relaxed text-slate-500">Uppgifterna visas bara för dig och behörig personal.</p></div> : <button type="button" onClick={() => buy.mutate()} className="mt-4 flex items-center gap-2 text-sm font-bold underline underline-offset-4">Logga in för att anmäla barn <ChevronRight className="h-4 w-4" /></button> : null}
+          {participantType === "dependent" ? verifiedUser ? <div className="mt-4 grid gap-3"><input aria-label="Barnets förnamn" value={childName} onChange={(event) => setChildName(event.target.value)} placeholder="Barnets förnamn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Barnets födelseår" value={childBirthYear} onChange={(event) => setChildBirthYear(event.target.value)} placeholder="Födelseår" inputMode="numeric" className="h-12 rounded-xl border border-black/15 px-3" /><p className="text-xs leading-relaxed text-slate-500">Uppgifterna visas bara för dig och behörig personal.</p></div> : <button type="button" onClick={() => buy.mutate()} className="mt-4 flex items-center gap-2 text-sm font-bold underline underline-offset-4">Logga in för att anmäla barn <ChevronRight className="h-4 w-4" /></button> : null}
         </section> : requiresGuestDetails ? <section className="mt-8 grid gap-3"><h2 className="text-lg font-black">Dina uppgifter</h2><input aria-label="Betalarens namn" value={payerName} onChange={(event) => setPayerName(event.target.value)} placeholder="Ditt namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Betalarens e-post" value={payerEmail} onChange={(event) => setPayerEmail(event.target.value)} placeholder="Din e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></section> : null}
 
         {presentation.type === "course" ? <section className="mt-8 border-t border-black/10 pt-6">
@@ -197,7 +214,7 @@ export default function CourseSeriesPage() {
       </main>
       <footer className="fixed inset-x-0 bottom-0 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
         <div className="mx-auto max-w-xl">
-          {course.customer_has_commitment ? <div className="flex items-center gap-3"><p className="flex min-h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-4 text-sm font-black text-emerald-800"><Check className="h-5 w-5" /> Du har en plats</p><button type="button" onClick={() => navigate(`/my?v=${encodeURIComponent(venueSlug)}`)} className="min-h-14 rounded-2xl border border-black/15 px-5 text-sm font-black">Visa</button></div> : <button type="button" onClick={() => buy.mutate()} disabled={!ready || buy.isPending} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
+          {personalizationFailed ? <button type="button" onClick={() => verifiedAccount.state === "validation_error" ? void verifiedAccount.retry() : void personalizedQuery.refetch()} className="h-14 w-full rounded-2xl border border-red-200 bg-red-50 text-sm font-black text-red-700">Försök hämta pris och plats igen</button> : !personalizationReady ? <div className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-100 text-sm font-black text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Pris och plats hämtas…</div> : course.customer_has_commitment ? <div className="flex items-center gap-3"><p className="flex min-h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-4 text-sm font-black text-emerald-800"><Check className="h-5 w-5" /> Du har en plats</p><button type="button" onClick={() => navigate(`/my?v=${encodeURIComponent(venueSlug)}`)} className="min-h-14 rounded-2xl border border-black/15 px-5 text-sm font-black">Visa</button></div> : <button type="button" onClick={() => buy.mutate()} disabled={!ready || buy.isPending} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:bg-slate-300 disabled:text-slate-500">
             {buy.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
             {course.registration_state !== "open" ? "Anmälan är stängd" : available <= 0 ? "Fullbokad" : selectedParticipantPricePending ? "Fortsätt" : bookingCta}
           </button>}

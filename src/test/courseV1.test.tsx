@@ -83,6 +83,20 @@ function renderCourse() {
 }
 
 describe("Course V1 customer flow", () => {
+  it("renders public Course detail while signed-in pricing and ownership are still loading", async () => {
+    mocks.user = { id: "member-1" };
+    mocks.fetchCourseDetail.mockImplementation((_seriesId: string, options?: { auth?: string }) =>
+      options?.auth === "omit" ? Promise.resolve(course) : new Promise(() => undefined)
+    );
+    renderCourse();
+
+    expect(await screen.findByRole("heading", { name: "Pickla 101 · Höst 2026" })).toBeInTheDocument();
+    expect(screen.getByText("Ditt pris hämtas…")).toBeInTheDocument();
+    expect(screen.getByText("Pris och plats hämtas…")).toBeInTheDocument();
+    expect(screen.queryByText("Du har en plats")).not.toBeInTheDocument();
+    expect(mocks.fetchCourseDetail).toHaveBeenCalledWith("series-1", { auth: "omit" });
+  });
+
   it("presents one Series purchase and the non-refundable absence doctrine", async () => {
     mocks.user = null;
     mocks.fetchCourseDetail.mockResolvedValue(course);

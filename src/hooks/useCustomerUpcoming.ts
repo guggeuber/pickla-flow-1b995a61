@@ -7,7 +7,7 @@ import { useMyLeagues } from "@/hooks/useMyLeagues";
 import { buildCustomerUpcoming } from "@/lib/customerUpcoming";
 
 export function useCustomerUpcoming(venueSlug: string, enabled = true) {
-  const bookings = useMyBookings();
+  const bookings = useMyBookings(enabled);
   const registrations = useMySessionRegistrations(enabled);
   const courses = useMyCourses(enabled);
   const leagues = useMyLeagues(enabled);

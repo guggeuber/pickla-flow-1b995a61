@@ -53,7 +53,7 @@ describe("final booking UX contract", () => {
     expect(topBarSource).not.toContain("pastBookings");
     expect(topBarSource).not.toContain("showPast");
     expect(topBarSource).not.toContain('["Min sida"');
-    expect(topBarSource).toContain('user ? "Min sida" : "Logga in"');
-    expect(topBarSource).toContain('go(user ? `/my?v=${encodeURIComponent(slug)}`');
+    expect(topBarSource).toContain('isVerified ? "Min sida" : "Logga in"');
+    expect(topBarSource).toContain('go(isVerified ? `/my?v=${encodeURIComponent(slug)}`');
   });
 });

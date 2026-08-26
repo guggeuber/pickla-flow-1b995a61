@@ -213,24 +213,25 @@ export type MyCourseItem = {
   included_access?: SeriesIncludedAccess | null;
 };
 
-export function fetchCourseDetail(seriesId: string) {
-  return apiGet<CourseDetail>("api-courses", "detail", { seriesId });
+export function fetchCourseDetail(seriesId: string, options?: ApiRequestOptions) {
+  return apiGet<CourseDetail>("api-courses", "detail", { seriesId }, options);
 }
 
 export function fetchMyCourses() {
   return apiGet<{ items: MyCourseItem[] }>("api-courses", "my");
 }
 
-export function fetchCourseHome(venueSlug: string) {
+export function fetchCourseHome(venueSlug: string, options?: ApiRequestOptions) {
   return apiGet<{ mode: "none" | "registration" | "next"; item: CourseDetail | MyCourseItem | null }>(
     "api-courses",
     "home",
     { v: venueSlug },
+    options,
   );
 }
 
-export function fetchCourseCatalog(venueSlug: string) {
-  return apiGet<{ items: CourseDetail[] }>("api-courses", "catalog", { v: venueSlug });
+export function fetchCourseCatalog(venueSlug: string, options?: ApiRequestOptions) {
+  return apiGet<{ items: CourseDetail[] }>("api-courses", "catalog", { v: venueSlug }, options);
 }
 
 export function createCourseCart(input: Record<string, unknown>, options?: ApiRequestOptions) {

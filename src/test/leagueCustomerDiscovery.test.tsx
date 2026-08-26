@@ -6,13 +6,17 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import LeagueDiscoveryPage from "@/pages/LeagueDiscoveryPage";
 import LeaguePage from "@/pages/LeaguePage";
 
-const mocks = vi.hoisted(() => ({ fetchLeagueHome: vi.fn(), fetchLeaguePublic: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  fetchLeagueHome: vi.fn(),
+  fetchLeaguePublic: vi.fn(),
+  user: null as { id: string } | null,
+}));
 
 vi.mock("@/lib/league", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/league")>();
   return { ...original, fetchLeagueHome: mocks.fetchLeagueHome, fetchLeaguePublic: mocks.fetchLeaguePublic, registerLeagueTeam: vi.fn() };
 });
-vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: null, loading: false }) }));
+vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="top-bar" /> }));
 vi.mock("@/lib/share", () => ({ shareOrCopy: vi.fn() }));
 
@@ -52,6 +56,7 @@ const publicLeague = {
 
 describe("League customer discovery and canonical public results", () => {
   beforeEach(() => {
+    mocks.user = null;
     mocks.fetchLeaguePublic.mockResolvedValue(publicLeague);
   });
 
@@ -64,6 +69,14 @@ describe("League customer discovery and canonical public results", () => {
     mocks.fetchLeagueHome.mockResolvedValue({ mode: "registration", item: publicLeague });
     render(<QueryClientProvider client={queryClient()}><MemoryRouter initialEntries={["/seriespel?v=pickla-arena-sthlm"]}><Routes><Route path="/seriespel" element={<LeagueDiscoveryPage />} /><Route path="/seriespel/:seriesId" element={<LocationProbe />} /></Routes></MemoryRouter></QueryClientProvider>);
     expect(await screen.findByTestId("location-probe")).toHaveTextContent("/seriespel/series-1?v=pickla-arena-sthlm");
+    expect(mocks.fetchLeagueHome).toHaveBeenCalledWith("pickla-arena-sthlm", { auth: "omit" });
+  });
+
+  it("renders the public League discovery shell while its projection is slow", () => {
+    mocks.fetchLeagueHome.mockImplementation(() => new Promise(() => undefined));
+    render(<QueryClientProvider client={queryClient()}><MemoryRouter initialEntries={["/seriespel"]}><LeagueDiscoveryPage /></MemoryRouter></QueryClientProvider>);
+    expect(screen.getByRole("heading", { name: "Pickla Seriespel" })).toBeInTheDocument();
+    expect(screen.getByTestId("top-bar")).toBeInTheDocument();
   });
 
   it("keeps the discovery route safe when no public or owned League exists", async () => {
@@ -89,6 +102,19 @@ describe("League customer discovery and canonical public results", () => {
     expect(publicProjection).toContain("select('id, team_name, status')");
     expect(publicProjection).not.toContain("primary_email");
     expect(publicProjection).not.toContain("payer_customer_id");
+  });
+
+  it("renders public League detail while signed-in team ownership is still loading", async () => {
+    mocks.user = { id: "captain-1" };
+    mocks.fetchLeaguePublic.mockImplementation((_seriesId: string, options?: { auth?: string }) =>
+      options?.auth === "omit" ? Promise.resolve(publicLeague) : new Promise(() => undefined)
+    );
+    render(<QueryClientProvider client={queryClient()}><MemoryRouter initialEntries={["/seriespel/series-1?v=pickla-arena-sthlm"]}><Routes><Route path="/seriespel/:seriesId" element={<LeaguePage />} /></Routes></MemoryRouter></QueryClientProvider>);
+
+    expect(await screen.findByRole("heading", { name: "Pickla Seriespel · Season 01" })).toBeInTheDocument();
+    expect(screen.getByText("Din lagstatus hämtas…")).toBeInTheDocument();
+    expect(screen.queryByText("Ditt lag är anmält · Visa")).not.toBeInTheDocument();
+    expect(mocks.fetchLeaguePublic).toHaveBeenCalledWith("series-1", { auth: "omit" });
   });
 
   it("keeps concrete activity sessions authoritative after the first-date proposal", () => {
