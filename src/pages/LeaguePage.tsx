@@ -46,8 +46,10 @@ export default function LeaguePage() {
     queryFn: () => fetchLeaguePublic(seriesId),
     enabled: Boolean(seriesId) && verifiedAccount.isVerified,
   });
-  const league = personalizedQuery.data || publicQuery.data;
-  const personalizationReady = verifiedAccount.state === "anonymous" || Boolean(personalizedQuery.data);
+  const personalizedLeague = verifiedAccount.isVerified ? personalizedQuery.data : undefined;
+  const league = personalizedLeague || publicQuery.data;
+  const publicOnlyAccount = verifiedAccount.state === "anonymous" || verifiedAccount.state === "terminal_failure";
+  const personalizationReady = publicOnlyAccount || Boolean(personalizedLeague);
   const personalizationFailed = verifiedAccount.state === "validation_error"
     || (verifiedAccount.isVerified && personalizedQuery.isError);
   const venue = league ? (Array.isArray(league.series.venues) ? league.series.venues[0] : league.series.venues) : null;

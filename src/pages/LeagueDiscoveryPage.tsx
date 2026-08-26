@@ -22,7 +22,9 @@ export default function LeagueDiscoveryPage() {
     enabled: verifiedAccount.isVerified,
     staleTime: 30_000,
   });
-  const home = personalizedQuery.data || publicQuery.data;
+  const home = verifiedAccount.isVerified && personalizedQuery.data
+    ? personalizedQuery.data
+    : publicQuery.data;
 
   const seriesId = home?.item?.series.id;
   if (seriesId) return <Navigate replace to={`/seriespel/${encodeURIComponent(seriesId)}?v=${encodeURIComponent(slug)}`} />;

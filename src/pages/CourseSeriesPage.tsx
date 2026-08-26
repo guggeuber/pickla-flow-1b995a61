@@ -54,8 +54,10 @@ export default function CourseSeriesPage() {
     queryFn: () => fetchCourseDetail(seriesId),
     enabled: Boolean(seriesId) && verifiedAccount.isVerified,
   });
-  const course = personalizedQuery.data || publicQuery.data;
-  const personalizationReady = verifiedAccount.state === "anonymous" || Boolean(personalizedQuery.data);
+  const personalizedCourse = verifiedAccount.isVerified ? personalizedQuery.data : undefined;
+  const course = personalizedCourse || publicQuery.data;
+  const publicOnlyAccount = verifiedAccount.state === "anonymous" || verifiedAccount.state === "terminal_failure";
+  const personalizationReady = publicOnlyAccount || Boolean(personalizedCourse);
   const personalizationFailed = verifiedAccount.state === "validation_error"
     || (verifiedAccount.isVerified && personalizedQuery.isError);
   const presentation = seriesPresentation(course?.format?.presentation_type);
@@ -155,7 +157,8 @@ export default function CourseSeriesPage() {
         )}
 
         <section className={socialEvent ? "mt-5 border-y border-black/10 py-4" : "mt-7"} data-testid="series-price-offer">
-          {personalizationFailed ? <p className="text-sm font-semibold text-red-700">Ditt pris kunde inte hämtas. Försök igen.</p> : !personalizationReady ? <p className="text-sm font-semibold text-slate-500">Ditt pris hämtas…</p> : selectedParticipantPricePending ? <p className="text-sm font-semibold text-slate-600">Priset bekräftas för deltagaren i nästa steg.</p> : <><p className="text-sm font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{price.primary}</p>{price.context ? <p className="mt-1 text-sm font-semibold text-slate-600">{price.context}</p> : null}</>}
+          <p className="text-sm font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{price.primary}</p>
+          {personalizationFailed ? <p className="mt-1 text-sm font-semibold text-red-700">Visar offentligt pris. Ditt personliga pris kunde inte hämtas.</p> : !personalizationReady ? <p className="mt-1 text-sm font-semibold text-slate-500">Medlemspris kontrolleras efter verifiering…</p> : selectedParticipantPricePending ? <p className="mt-1 text-sm font-semibold text-slate-600">Priset bekräftas för deltagaren i nästa steg.</p> : price.context ? <p className="mt-1 text-sm font-semibold text-slate-600">{price.context}</p> : null}
         </section>
 
         {presentation.type === "course" && sessions.length ? <section className="mt-8" data-testid="course-occurrences">

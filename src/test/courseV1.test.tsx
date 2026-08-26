@@ -8,6 +8,7 @@ import { formatCommerceMoney } from "@/lib/commerce";
 
 const mocks = vi.hoisted(() => ({
   user: null as null | { id: string },
+  authStatus: "anonymous" as "session_hydrating" | "local_session" | "anonymous" | "terminal_failure",
   fetchCourseDetail: vi.fn(),
   fetchCourseAdmin: vi.fn(),
   fetchSeriesMemberPricing: vi.fn(),
@@ -27,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   shareOrCopy: vi.fn(),
 }));
 
-vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
+vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false, authStatus: mocks.authStatus }) }));
 vi.mock("@/lib/courses", () => ({
   fetchCourseDetail: mocks.fetchCourseDetail,
   fetchCourseAdmin: mocks.fetchCourseAdmin,
@@ -68,6 +69,8 @@ const course = {
 };
 
 beforeEach(() => {
+  mocks.user = null;
+  mocks.authStatus = "anonymous";
   mocks.fetchSeriesMemberPricing.mockResolvedValue({ series: [] });
   mocks.shareOrCopy.mockResolvedValue("shared");
 });
@@ -85,16 +88,91 @@ function renderCourse() {
 describe("Course V1 customer flow", () => {
   it("renders public Course detail while signed-in pricing and ownership are still loading", async () => {
     mocks.user = { id: "member-1" };
+    mocks.authStatus = "local_session";
     mocks.fetchCourseDetail.mockImplementation((_seriesId: string, options?: { auth?: string }) =>
       options?.auth === "omit" ? Promise.resolve(course) : new Promise(() => undefined)
     );
     renderCourse();
 
     expect(await screen.findByRole("heading", { name: "Pickla 101 · Höst 2026" })).toBeInTheDocument();
-    expect(screen.getByText("Ditt pris hämtas…")).toBeInTheDocument();
+    expect(screen.getByText("Pris · 1 495 kr")).toBeInTheDocument();
+    expect(screen.getByText("Medlemspris kontrolleras efter verifiering…")).toBeInTheDocument();
+    expect(screen.queryByText(/Founder|Play\+/)).not.toBeInTheDocument();
     expect(screen.getByText("Pris och plats hämtas…")).toBeInTheDocument();
     expect(screen.queryByText("Du har en plats")).not.toBeInTheDocument();
     expect(mocks.fetchCourseDetail).toHaveBeenCalledWith("series-1", { auth: "omit" });
+  });
+
+  it("moves from truthful public price to verified Founder price without enabling an unverified CTA", async () => {
+    const founderCourse = {
+      ...course,
+      pricing: {
+        scope_type: "activity_series",
+        list_price_minor: 149500,
+        final_price_minor: 119500,
+        pricing_reason: "membership_tier_pricing",
+        sales_channel: "online",
+        checkout_label: "1 195 kr",
+        membership_tier_name: "Founder",
+        early_bird: { configured: false, active: false, applied: false, price_minor: null, slots: null, remaining: null },
+      },
+    };
+    mocks.user = { id: "founder-1" };
+    mocks.authStatus = "local_session";
+    mocks.fetchCourseDetail.mockImplementation((_seriesId: string, options?: { auth?: string }) =>
+      options?.auth === "omit" ? Promise.resolve(course) : Promise.resolve(founderCourse)
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const tree = () => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/course/series-1?v=pickla-arena-sthlm"]}><Routes><Route path="/course/:seriesId" element={<CourseSeriesPage />} /></Routes></MemoryRouter></QueryClientProvider>;
+    const view = render(tree());
+
+    expect(await screen.findByText("Pris · 1 495 kr")).toBeInTheDocument();
+    expect(screen.queryByText("Medlemspris · 1 195 kr")).not.toBeInTheDocument();
+    expect(screen.getByText("Pris och plats hämtas…")).toBeInTheDocument();
+
+    mocks.authStatus = "anonymous";
+    view.rerender(tree());
+    expect(await screen.findByText("Medlemspris · 1 195 kr")).toBeInTheDocument();
+    expect(screen.getByText("Founder")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Boka kurs · 1\s195\skr/ })).toBeEnabled();
+  });
+
+  it("drops a verified member price on terminal auth failure and customer switch", async () => {
+    const founderCourse = {
+      ...course,
+      pricing: {
+        scope_type: "activity_series",
+        list_price_minor: 149500,
+        final_price_minor: 119500,
+        pricing_reason: "membership_tier_pricing",
+        sales_channel: "online",
+        checkout_label: "1 195 kr",
+        membership_tier_name: "Founder",
+        early_bird: { configured: false, active: false, applied: false, price_minor: null, slots: null, remaining: null },
+      },
+    };
+    mocks.user = { id: "founder-1" };
+    mocks.fetchCourseDetail.mockImplementation((_seriesId: string, options?: { auth?: string }) => {
+      if (options?.auth === "omit") return Promise.resolve(course);
+      return Promise.resolve(mocks.user?.id === "founder-1" ? founderCourse : course);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const tree = () => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/course/series-1?v=pickla-arena-sthlm"]}><Routes><Route path="/course/:seriesId" element={<CourseSeriesPage />} /></Routes></MemoryRouter></QueryClientProvider>;
+    const view = render(tree());
+
+    expect(await screen.findByText("Medlemspris · 1 195 kr")).toBeInTheDocument();
+    mocks.user = null;
+    mocks.authStatus = "terminal_failure";
+    view.rerender(tree());
+    expect(await screen.findByText("Pris · 1 495 kr")).toBeInTheDocument();
+    expect(screen.queryByText("Founder")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pris och plats hämtas…")).not.toBeInTheDocument();
+
+    mocks.user = { id: "non-member-2" };
+    mocks.authStatus = "anonymous";
+    view.rerender(tree());
+    expect(await screen.findByText("Pris · 1 495 kr")).toBeInTheDocument();
+    expect(screen.queryByText("Founder")).not.toBeInTheDocument();
   });
 
   it("presents one Series purchase and the non-refundable absence doctrine", async () => {

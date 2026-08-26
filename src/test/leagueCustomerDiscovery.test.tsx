@@ -10,13 +10,14 @@ const mocks = vi.hoisted(() => ({
   fetchLeagueHome: vi.fn(),
   fetchLeaguePublic: vi.fn(),
   user: null as { id: string } | null,
+  authStatus: "anonymous" as "session_hydrating" | "local_session" | "anonymous" | "terminal_failure",
 }));
 
 vi.mock("@/lib/league", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/league")>();
   return { ...original, fetchLeagueHome: mocks.fetchLeagueHome, fetchLeaguePublic: mocks.fetchLeaguePublic, registerLeagueTeam: vi.fn() };
 });
-vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false }) }));
+vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: mocks.user, loading: false, authStatus: mocks.authStatus }) }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="top-bar" /> }));
 vi.mock("@/lib/share", () => ({ shareOrCopy: vi.fn() }));
 
@@ -57,6 +58,7 @@ const publicLeague = {
 describe("League customer discovery and canonical public results", () => {
   beforeEach(() => {
     mocks.user = null;
+    mocks.authStatus = "anonymous";
     mocks.fetchLeaguePublic.mockResolvedValue(publicLeague);
   });
 
@@ -106,6 +108,7 @@ describe("League customer discovery and canonical public results", () => {
 
   it("renders public League detail while signed-in team ownership is still loading", async () => {
     mocks.user = { id: "captain-1" };
+    mocks.authStatus = "local_session";
     mocks.fetchLeaguePublic.mockImplementation((_seriesId: string, options?: { auth?: string }) =>
       options?.auth === "omit" ? Promise.resolve(publicLeague) : new Promise(() => undefined)
     );
@@ -134,6 +137,71 @@ describe("League customer discovery and canonical public results", () => {
     expect(screen.getByText("1 995 kr")).toHaveClass("line-through");
     expect(screen.getByRole("button", { name: /Anmäl laget · Medlemspris 1\s195\skr/ })).toBeInTheDocument();
     expect(screen.queryByText(/membership_id|customer_id|payer/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps public Early Bird stable while verified purchaser pricing resolves", async () => {
+    const earlyBirdLeague = {
+      ...publicLeague,
+      product: { ...publicLeague.product, scarcity_mode: "early_bird", early_bird_price_minor: 99500, early_bird_slots: 2 },
+      capacity: { ...publicLeague.capacity, early_bird_remaining: 1 },
+      current_price_minor: 99500,
+      pricing_reason: "early_bird",
+    };
+    mocks.user = { id: "founder-1" };
+    mocks.authStatus = "local_session";
+    mocks.fetchLeaguePublic.mockImplementation((_seriesId: string, options?: { auth?: string }) => Promise.resolve(
+      options?.auth === "omit" ? earlyBirdLeague : earlyBirdLeague,
+    ));
+    const client = queryClient();
+    const tree = () => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/seriespel/series-1?v=pickla-arena-sthlm"]}><Routes><Route path="/seriespel/:seriesId" element={<LeaguePage />} /></Routes></MemoryRouter></QueryClientProvider>;
+    const view = render(tree());
+
+    expect(await screen.findByText("995 kr")).toBeInTheDocument();
+    expect(screen.getByText(/Early Bird · första 2 lag/)).toBeInTheDocument();
+    expect(screen.queryByText(/Founder/)).not.toBeInTheDocument();
+
+    mocks.authStatus = "anonymous";
+    view.rerender(tree());
+    expect(await screen.findByText("995 kr")).toBeInTheDocument();
+    expect(screen.getByText(/Early Bird · första 2 lag/)).toBeInTheDocument();
+    expect(screen.queryByText(/Founder/)).not.toBeInTheDocument();
+  });
+
+  it("removes Founder pricing on terminal auth failure and before a new user resolves", async () => {
+    const founderLeague = {
+      ...publicLeague,
+      current_price_minor: 119500,
+      pricing_reason: "membership_tier_pricing",
+      membership_tier_name: "Founder",
+    };
+    mocks.user = { id: "founder-1" };
+    mocks.fetchLeaguePublic.mockImplementation((_seriesId: string, options?: { auth?: string }) => {
+      if (options?.auth === "omit") return Promise.resolve(publicLeague);
+      return Promise.resolve(mocks.user?.id === "founder-1" ? founderLeague : publicLeague);
+    });
+    const client = queryClient();
+    const tree = () => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/seriespel/series-1?v=pickla-arena-sthlm"]}><Routes><Route path="/seriespel/:seriesId" element={<LeaguePage />} /></Routes></MemoryRouter></QueryClientProvider>;
+    const view = render(tree());
+
+    expect(await screen.findByText("Medlemspris · Founder")).toBeInTheDocument();
+    mocks.user = null;
+    mocks.authStatus = "terminal_failure";
+    view.rerender(tree());
+    expect(await screen.findByText("1 995 kr")).toBeInTheDocument();
+    expect(screen.queryByText("Medlemspris · Founder")).not.toBeInTheDocument();
+    expect(screen.queryByText("Din lagstatus hämtas…")).not.toBeInTheDocument();
+
+    mocks.user = { id: "non-member-2" };
+    mocks.authStatus = "local_session";
+    view.rerender(tree());
+    expect(screen.getByText("1 995 kr")).toBeInTheDocument();
+    expect(screen.queryByText("Medlemspris · Founder")).not.toBeInTheDocument();
+    expect(screen.getByText("Din lagstatus hämtas…")).toBeInTheDocument();
+
+    mocks.authStatus = "anonymous";
+    view.rerender(tree());
+    expect(await screen.findByText("1 995 kr")).toBeInTheDocument();
+    expect(screen.queryByText("Medlemspris · Founder")).not.toBeInTheDocument();
   });
 
   it("keeps concrete activity sessions authoritative after the first-date proposal", () => {
