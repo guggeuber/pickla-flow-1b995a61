@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AdminLeague from "@/components/admin/AdminLeague";
 import { ApiRequestError } from "@/lib/api";
@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   updateLeagueArtwork: vi.fn(),
   uploadNamedEventImage: vi.fn(),
   removeNamedEventImage: vi.fn(),
+  fetchSeriesMemberPricing: vi.fn(),
+  saveSeriesMemberPricing: vi.fn(),
+  removeSeriesMemberPricing: vi.fn(),
 }));
 
 vi.mock("@/lib/league", () => ({
@@ -31,6 +34,11 @@ vi.mock("@/lib/league", () => ({
 vi.mock("@/lib/eventMedia", () => ({
   uploadNamedEventImage: mocks.uploadNamedEventImage,
   removeNamedEventImage: mocks.removeNamedEventImage,
+}));
+vi.mock("@/lib/courses", () => ({
+  fetchSeriesMemberPricing: mocks.fetchSeriesMemberPricing,
+  saveSeriesMemberPricing: mocks.saveSeriesMemberPricing,
+  removeSeriesMemberPricing: mocks.removeSeriesMemberPricing,
 }));
 
 const courts = [1, 2, 3].map((number) => ({ id: `court-${number}`, name: `Bana ${number}`, court_number: number }));
@@ -76,6 +84,9 @@ describe("League Admin artwork and date entry", () => {
     mocks.updateLeagueArtwork.mockResolvedValue({ id: "series-1", image_urls: [] });
     mocks.updateLeagueCatalog.mockResolvedValue({ edit: { league_season_id: "season-1", historical_orders_frozen: false, schedule_reconciled: false } });
     mocks.removeNamedEventImage.mockResolvedValue(undefined);
+    mocks.fetchSeriesMemberPricing.mockResolvedValue({ series: [] });
+    mocks.saveSeriesMemberPricing.mockResolvedValue({ id: "saved-rule" });
+    mocks.removeSeriesMemberPricing.mockResolvedValue({ ok: true });
   });
 
   afterEach(() => {
@@ -300,6 +311,76 @@ describe("League Admin artwork and date entry", () => {
       registration_deadline: "2027-08-20T10:00:41.456Z",
       fixture_publication_deadline: "2027-08-27T10:00:43.789Z",
     }));
+  });
+
+  it("uses the shared fixed-SEK Catalog editor for dynamic League team member prices", async () => {
+    mocks.fetchSeriesMemberPricing.mockResolvedValue({
+      series: [{
+        series_id: "series-1",
+        product: {
+          id: "product-1", venue_id: "venue-1", product_key: "league_dynamic_team",
+          product_kind: "league_team", name: "League · Lagplats", base_price_sek: 1995,
+          is_active: true, status: "active",
+        },
+        tiers: [
+          {
+            tier: { id: "tier-play", name: "Play", color: null, sort_order: 1, is_active: true, is_assignable: true },
+            rule: { id: "rule-play", tier_id: "tier-play", product_type: "league_dynamic_team", fixed_price: 1795, discount_percent: null, vat_rate: 6, label: "Play", mode: "fixed" },
+            preview: { ordinary_price_sek: 1995, resolved_price_sek: 1795, mode: "fixed", value: 1795 },
+          },
+          {
+            tier: { id: "tier-founder", name: "Founder", color: null, sort_order: 2, is_active: false, is_assignable: true },
+            rule: null, preview: null,
+          },
+          {
+            tier: { id: "tier-synthetic", name: "Synthetic eligible", color: null, sort_order: 3, is_active: false, is_assignable: true },
+            rule: null, preview: null,
+          },
+        ],
+      }],
+    });
+    mocks.fetchLeagueAdmin.mockResolvedValue({
+      courts,
+      seasons: [{
+        id: "season-1", activity_series_id: "series-1", fixtures_published_at: null,
+        fixture_publication_deadline: "2027-08-27T10:00:00Z",
+        activity_series: {
+          id: "series-1", venue_id: "venue-1", name: "Dynamic League", description: null,
+          image_urls: [], status: "active", start_date: "2027-09-02", end_date: "2027-09-30",
+          registration_opens_at: "2027-08-01T10:00:00Z", registration_closes_at: "2027-08-20T10:00:00Z",
+          start_time: "18:00", end_time: "20:00", court_ids: ["court-1", "court-2", "court-3"],
+          venues: { slug: "pickla-arena-sthlm" },
+          access_products: { id: "product-1", name: "League · Lagplats", product_key: "league_dynamic_team", product_kind: "league_team", base_price_sek: 1995, vat_rate: 6, scarcity_mode: "none", early_bird_price_minor: null, early_bird_slots: null, status: "active", is_active: true },
+        },
+        edit_policy: { lifecycle_editable: true, registration_opens_editable: true, registration_deadline_editable: true, fixture_deadline_editable: true, pricing_editable: true, schedule_editable: false, schedule_lock_reason: "league_v1_structure_locked", historical_prices_frozen: false },
+        teams: [], members: [], sessions: [], fixtures: [], results: [], orders: [], validation: null,
+      }],
+    });
+    renderLeague("season-1");
+
+    const editor = await screen.findByTestId("series-member-pricing");
+    expect(within(editor).getByText("Teampris för hela lagplatsen · båda spelarna")).toBeInTheDocument();
+    expect(within(editor).getByLabelText("Play medlemspris")).toHaveValue("1795");
+    expect(within(editor).getByLabelText("Founder medlemspris")).toHaveValue("");
+    expect(within(editor).getByLabelText("Synthetic eligible medlemspris")).toBeInTheDocument();
+    expect(within(editor).queryByText(/procent|%/i)).not.toBeInTheDocument();
+
+    const founder = within(editor).getByTestId("series-member-price-tier-founder");
+    fireEvent.change(within(founder).getByLabelText("Founder medlemspris"), { target: { value: "1595" } });
+    fireEvent.click(within(founder).getByRole("button", { name: "Spara" }));
+    await waitFor(() => expect(mocks.saveSeriesMemberPricing).toHaveBeenCalledWith({
+      ruleId: undefined,
+      tierId: "tier-founder",
+      productKey: "league_dynamic_team",
+      mode: "fixed",
+      value: 1595,
+      label: "Founder · League · Lagplats",
+    }));
+
+    const play = within(editor).getByTestId("series-member-price-tier-play");
+    fireEvent.change(within(play).getByLabelText("Play medlemspris"), { target: { value: "" } });
+    fireEvent.click(within(play).getByRole("button", { name: "Spara" }));
+    await waitFor(() => expect(mocks.removeSeriesMemberPricing).toHaveBeenCalledWith("rule-play"));
   });
 
   it("locks historical deadlines, pricing and V1 structure with human reasons", async () => {

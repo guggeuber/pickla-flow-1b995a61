@@ -64,11 +64,13 @@ async function validatedTierPricingWrite(admin: ReturnType<typeof getServiceClie
   excludeId?: string | null;
 }): Promise<{ value?: TierPricingWrite; error?: string; status?: number }> {
   const { data: tier, error: tierError } = await admin.from('membership_tiers')
-    .select('id, venue_id, is_active')
+    .select('id, venue_id, is_active, is_assignable')
     .eq('id', input.tierId)
     .maybeSingle();
   if (tierError || !tier) return { error: 'Medlemsnivån finns inte', status: 404 };
-  if (tier.is_active !== true) return { error: 'Medlemsnivån är inte aktiv', status: 409 };
+  if (tier.is_active !== true && tier.is_assignable !== true) {
+    return { error: 'Medlemsnivån är arkiverad och kan inte prissättas', status: 409 };
+  }
 
   const productType = String(input.productType || '').trim();
   if (!PRODUCT_KEY.test(productType)) return { error: 'Produkten har en ogiltig produktnyckel', status: 400 };
@@ -301,9 +303,9 @@ Deno.serve(async (req) => {
 
       const [{ data: tiers, error: tierError }, { data: seriesRows, error: seriesError }] = await Promise.all([
         admin.from('membership_tiers')
-          .select('id, name, color, sort_order')
+          .select('id, name, color, sort_order, is_active, is_assignable')
           .eq('venue_id', venueId)
-          .eq('is_active', true)
+          .or('is_active.eq.true,is_assignable.eq.true')
           .order('sort_order')
           .order('name'),
         admin.from('activity_series')

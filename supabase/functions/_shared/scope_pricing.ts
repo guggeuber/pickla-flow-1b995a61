@@ -89,6 +89,15 @@ function normalizeChannel(value: unknown) {
     : 'online';
 }
 
+function stockholmCalendarDate(value?: string | null) {
+  const date = value ? new Date(value) : new Date();
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Stockholm', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
 async function seriesFillContext(client: any, venueId: string, series: any): Promise<SeriesFillContext> {
   const { data, error } = await client.rpc('capacity_fill', {
     p_venue_id: venueId,
@@ -156,12 +165,19 @@ async function resolveSeriesPricingDecision(input: ActivitySeriesPricingInput): 
   let membershipId: string | null = null;
   let membershipTierName: string | null = null;
   if (pricingUserId) {
-    const { data: membership, error: membershipError } = await input.client
+    const pricingDate = stockholmCalendarDate(input.effectiveAt);
+    let membershipQuery = input.client
       .from('memberships')
-      .select('id, tier_id')
+      .select('id, tier_id, customer_id, starts_at, expires_at')
       .eq('user_id', pricingUserId)
       .eq('venue_id', input.venueId)
       .eq('status', 'active')
+      .lte('starts_at', pricingDate)
+      .or(`expires_at.is.null,expires_at.gte.${pricingDate}`);
+    if (input.customerId) {
+      membershipQuery = membershipQuery.or(`customer_id.is.null,customer_id.eq.${input.customerId}`);
+    }
+    const { data: membership, error: membershipError } = await membershipQuery
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -172,16 +188,20 @@ async function resolveSeriesPricingDecision(input: ActivitySeriesPricingInput): 
           .from('membership_tier_pricing')
           .select('fixed_price, discount_percent')
           .eq('tier_id', membership.tier_id)
-          .eq('product_type', product.product_key),
+          .eq('product_type', product.product_key)
+          .is('pricing_rule_id', null),
         input.client
           .from('membership_tiers')
-          .select('name')
+          .select('name, is_active, is_assignable')
           .eq('id', membership.tier_id)
           .maybeSingle(),
       ]);
       if (pricingError) throw new Error(pricingError.message);
       if (tierError) throw new Error(tierError.message);
-      const memberAmountSek = selectPositiveMembershipProductPrice(baseAmountSek, tierPricingRows || []);
+      const tierEligible = tier?.is_active === true || tier?.is_assignable === true;
+      const memberAmountSek = tierEligible
+        ? selectPositiveMembershipProductPrice(baseAmountSek, tierPricingRows || [])
+        : null;
       if (memberAmountSek != null) {
         finalAmountSek = memberAmountSek;
         pricingReason = 'membership_tier_pricing';

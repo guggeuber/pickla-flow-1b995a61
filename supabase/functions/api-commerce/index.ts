@@ -993,7 +993,7 @@ async function resolveLines(
       if (purchaseKind === 'league_team') {
         const [{ data: team, error: teamError }, { data: season, error: seasonError }] = await Promise.all([
           admin.from('league_team_entries')
-            .select('id, league_season_id, status, captain_customer_id, payer_customer_id, capacity_hold_id, commerce_order_id, commerce_order_line_id, pricing_reason, base_price_minor, final_price_minor')
+            .select('id, league_season_id, status, captain_customer_id, payer_customer_id, capacity_hold_id, commerce_order_id, commerce_order_line_id, pricing_reason, base_price_minor, final_price_minor, purchase_provenance')
             .eq('id', line.league_team_entry_id).maybeSingle(),
           admin.from('league_seasons')
             .select('id, activity_series_id, activity_series!inner(registration_closes_at)')
@@ -1022,8 +1022,13 @@ async function resolveLines(
           pricing_reason: team.pricing_reason || 'league_team_base_price',
           applied_price_type: team.pricing_reason || 'league_team_base_price',
           base_team_price_minor: Number(team.base_price_minor || unitPriceMinor),
+          regular_price_minor: Number(team.purchase_provenance?.regular_price_minor || team.base_price_minor || unitPriceMinor),
+          regular_price_type: team.purchase_provenance?.regular_price_type || 'league_team_base_price',
           final_price_minor: unitPriceMinor,
-          membership_pricing_applied: false,
+          membership_pricing_applied: team.pricing_reason === 'membership_tier_pricing',
+          membership_id: team.purchase_provenance?.membership_id || null,
+          membership_tier_id: team.purchase_provenance?.membership_tier_id || null,
+          membership_tier_name: team.purchase_provenance?.membership_tier_name || null,
           quote_changed: false,
         };
       } else if (purchaseKind === 'course') {
@@ -1240,7 +1245,7 @@ async function acquireParticipationHold(
     if (teamError || memberError || !team || !player || team.captain_customer_id !== customerId || !userId) {
       throw new Error(teamError?.message || memberError?.message || 'Lagplatsen kunde inte reserveras.');
     }
-    const { data, error } = await admin.rpc('reserve_league_team_entry', {
+    const { data, error } = await admin.rpc('reserve_league_team_entry_v2', {
       p_league_season_id: team.league_season_id,
       p_captain_user_id: userId,
       p_captain_customer_id: team.captain_customer_id,

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { AlertTriangle, CalendarDays, Check, ChevronDown, Gift, ImagePlus, Loader2, Pencil, Plus, Save, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
+import SeriesMemberPricingEditor from "@/components/admin/SeriesMemberPricingEditor";
 import {
   createCourseFormat,
   createCourseSeries,
@@ -12,15 +13,11 @@ import {
   findSeriesGrantParticipants,
   grantSeriesStaffPlace,
   previewCourseSeries,
-  removeSeriesMemberPricing,
   saveSeriesEarlyBird,
   saveSeriesIncludedAccess,
-  saveSeriesMemberPricing,
   type CourseFormat,
   type CourseResourcePreviewRow,
   type CourseSeries,
-  type SeriesMemberPricingItem,
-  type SeriesMemberPricingTier,
   type SeriesGrantParticipant,
   updateCourseFormat,
   updateCourseSeries,
@@ -61,104 +58,6 @@ function stockholmDate(value: string) {
 
 function formatSek(value: number) {
   return `${Number(value || 0).toLocaleString("sv-SE", { maximumFractionDigits: 2 })} kr`;
-}
-
-function SeriesMemberPriceRow({
-  venueId,
-  product,
-  pricing,
-}: {
-  venueId: string;
-  product: NonNullable<SeriesMemberPricingItem["product"]>;
-  pricing: SeriesMemberPricingTier;
-}) {
-  const queryClient = useQueryClient();
-  const [mode, setMode] = useState<"none" | "fixed" | "percent">(pricing.rule?.mode || "none");
-  const [value, setValue] = useState(String(pricing.rule?.fixed_price ?? pricing.rule?.discount_percent ?? ""));
-
-  useEffect(() => {
-    setMode(pricing.rule?.mode || "none");
-    setValue(String(pricing.rule?.fixed_price ?? pricing.rule?.discount_percent ?? ""));
-  }, [pricing.rule]);
-
-  const save = useMutation({
-    mutationFn: async () => {
-      if (mode === "none") {
-        return pricing.rule?.id ? removeSeriesMemberPricing(pricing.rule.id) : null;
-      }
-      return saveSeriesMemberPricing({
-        ruleId: pricing.rule?.id,
-        tierId: pricing.tier.id,
-        productKey: product.product_key,
-        mode,
-        value: Number(value),
-        label: `${pricing.tier.name} · ${product.name}`,
-      });
-    },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["series-member-pricing", venueId] }),
-        queryClient.invalidateQueries({ queryKey: ["tier-pricing", pricing.tier.id] }),
-      ]);
-      toast.success(mode === "none" ? "Medlemspriset är borttaget" : "Medlemspriset är sparat");
-    },
-    onError: (error: Error) => toast.error(error.message),
-  });
-  const numericValue = Number(value);
-  const invalidValue = mode !== "none" && (!Number.isFinite(numericValue) || numericValue <= 0);
-  const unchanged = mode === (pricing.rule?.mode || "none")
-    && (mode === "none" || numericValue === Number(pricing.rule?.fixed_price ?? pricing.rule?.discount_percent));
-
-  return <div data-testid={`series-member-price-${pricing.tier.id}`} className="grid gap-2 rounded-lg border border-border p-2 sm:grid-cols-[minmax(7rem,1fr)_9rem_7rem_auto] sm:items-center">
-    <div>
-      <p className="text-xs font-bold">{pricing.tier.name}</p>
-      {pricing.preview ? <p className="mt-0.5 text-[11px] text-muted-foreground">
-        {pricing.preview.mode === "percent" ? `${pricing.preview.value} % → ` : ""}{formatSek(pricing.preview.resolved_price_sek)}
-      </p> : <p className="mt-0.5 text-[11px] text-muted-foreground">Ordinarie pris</p>}
-    </div>
-    <select
-      aria-label={`${pricing.tier.name} prismodell`}
-      className={inputClass}
-      value={mode}
-      onChange={(event) => setMode(event.target.value as "none" | "fixed" | "percent")}
-    >
-      <option value="none">Inget medlemspris</option>
-      <option value="fixed">Fast pris</option>
-      <option value="percent">Procentrabatt</option>
-    </select>
-    {mode === "none" ? <span /> : <label className="relative">
-      <span className="sr-only">{pricing.tier.name} {mode === "fixed" ? "pris" : "rabatt"}</span>
-      <input
-        className={`${inputClass} w-full pr-8`}
-        inputMode="decimal"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-      />
-      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{mode === "fixed" ? "kr" : "%"}</span>
-    </label>}
-    <button
-      type="button"
-      onClick={() => save.mutate()}
-      disabled={save.isPending || invalidValue || unchanged}
-      className="inline-flex h-10 items-center justify-center gap-1 rounded-lg border border-border px-3 text-xs font-bold disabled:opacity-40"
-    >
-      {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Spara
-    </button>
-  </div>;
-}
-
-function SeriesMemberPricingEditor({ venueId, item }: { venueId: string; item?: SeriesMemberPricingItem }) {
-  if (!item?.product) return <p className="mt-3 text-xs text-destructive">Seriens prissättningsprodukt saknas.</p>;
-  if (!item.product.is_active || item.product.status !== "active") return <p className="mt-3 text-xs text-destructive">Seriens produkt är inte aktiv.</p>;
-  return <div className="mt-3 rounded-xl border border-border bg-background p-3" data-testid="series-member-pricing">
-    <div className="flex items-center justify-between gap-3">
-      <p className="text-xs font-black uppercase tracking-wider">Medlemspris</p>
-      <p className="text-xs text-muted-foreground">Ordinarie {formatSek(item.product.base_price_sek)}</p>
-    </div>
-    <div className="mt-2 grid gap-2">
-      {item.tiers.length ? item.tiers.map((tier) => <SeriesMemberPriceRow key={tier.tier.id} venueId={venueId} product={item.product!} pricing={tier} />) : <p className="text-xs text-muted-foreground">Inga aktiva medlemsnivåer.</p>}
-    </div>
-  </div>;
 }
 
 function SeriesEarlyBirdEditor({ venueId, series }: { venueId: string; series: CourseSeries }) {

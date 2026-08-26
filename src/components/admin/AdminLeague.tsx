@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { AlertTriangle, CalendarDays, Check, ImagePlus, Loader2, Pencil, RotateCcw, Save, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
+import SeriesMemberPricingEditor from "@/components/admin/SeriesMemberPricingEditor";
+import { fetchSeriesMemberPricing } from "@/lib/courses";
 import {
   createLeagueSeason,
   fetchLeagueAdmin,
@@ -330,6 +332,12 @@ function LeagueCatalogEditor({ venueId, season }: { venueId: string; season: Lea
   const [earlyBird, setEarlyBird] = useState(product?.scarcity_mode === "early_bird");
   const [earlyBirdPrice, setEarlyBirdPrice] = useState(product?.early_bird_price_minor == null ? "" : String(product.early_bird_price_minor / 100));
   const [earlyBirdSlots, setEarlyBirdSlots] = useState(product?.early_bird_slots == null ? "" : String(product.early_bird_slots));
+  const memberPricing = useQuery({
+    queryKey: ["series-member-pricing", venueId],
+    queryFn: () => fetchSeriesMemberPricing(venueId),
+    enabled: Boolean(venueId),
+    retry: false,
+  });
 
   useEffect(() => {
     setName(series.name || "");
@@ -428,7 +436,14 @@ function LeagueCatalogEditor({ venueId, season }: { venueId: string; season: Lea
       <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("sun") }}>Framtida lagplatser</p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Ordinarie teampris · SEK<input aria-label="Ordinarie teampris" value={basePrice} inputMode="numeric" disabled={!policy.pricing_editable} onChange={(event) => setBasePrice(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label><label className="flex items-center gap-2 self-end pb-3 text-sm font-bold text-white"><input aria-label="Early Bird på teamnivå" type="checkbox" checked={earlyBird} disabled={!policy.pricing_editable} onChange={(event) => setEarlyBird(event.target.checked)} /> Early Bird på teamnivå</label></div>
       {earlyBird ? <div className="mt-3 grid grid-cols-2 gap-3"><label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Early Bird-teampris · SEK<input aria-label="Early Bird-teampris" value={earlyBirdPrice} inputMode="numeric" disabled={!policy.pricing_editable} onChange={(event) => setEarlyBirdPrice(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label><label className="grid gap-1 text-xs font-bold" style={{ color: ax("muted") }}>Första N lag<input aria-label="Första N lag" value={earlyBirdSlots} inputMode="numeric" disabled={!policy.pricing_editable} onChange={(event) => setEarlyBirdSlots(event.target.value)} className={`${inputClass} ${disabledClass}`} style={{ borderColor: ax("border") }} /></label></div> : null}
-      <p className="mt-3 text-[10px]" style={{ color: ax("muted") }}>Priset gäller en hel lagplats. Medlemspris används inte för League V1.</p>
+      {memberPricing.isLoading ? <p className="mt-3 text-xs" style={{ color: ax("muted") }}>Hämtar medlemspriser…</p> : null}
+      {memberPricing.isError ? <p className="mt-3 text-xs" style={{ color: ax("danger") }}>Medlemspriserna kunde inte hämtas.</p> : null}
+      {!memberPricing.isLoading && !memberPricing.isError ? <SeriesMemberPricingEditor
+        venueId={venueId}
+        item={memberPricing.data?.series.find((item) => item.series_id === series.id)}
+        disabled={!policy.pricing_editable}
+        unitCopy="Teampris för hela lagplatsen · båda spelarna"
+      /> : null}
       {policy.historical_prices_frozen ? <p className="mt-2 text-[10px] font-bold" style={{ color: ax("lime") }}>Tidigare lagköp behåller betalt pris, prisorsak, orderrad, kvitto och ledger. Ändringen gäller bara framtida lagplatser.</p> : null}
       {!policy.pricing_editable ? <p className="mt-2 text-[10px] font-bold" style={{ color: ax("sun") }}>Prissättningen är låst eftersom anmälan har stängt.</p> : null}
     </section>

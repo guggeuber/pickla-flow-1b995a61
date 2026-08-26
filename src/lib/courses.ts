@@ -138,7 +138,7 @@ export type SeriesCustomerPricing = {
 };
 
 export type SeriesMemberPricingTier = {
-  tier: { id: string; name: string; color: string | null; sort_order: number | null };
+  tier: { id: string; name: string; color: string | null; sort_order: number | null; is_active?: boolean; is_assignable?: boolean };
   rule: {
     id: string;
     tier_id: string;

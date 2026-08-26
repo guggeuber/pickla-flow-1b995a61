@@ -137,6 +137,7 @@ async function registerAndPay({ seriesId, captain, teamIndex, playerEmail }) {
     source_line_id: sourceLineId,
   };
   const registration = (await league("register", { method: "POST", token: captain.token, body: registrationBody })).payload;
+  assert(!("membership_id" in registration.pricing) && !("membership_tier_id" in registration.pricing), "private membership identifiers leaked from League registration");
   const orderBefore = (await rest("commerce_orders", `id=eq.${registration.order.id}&select=id,version,status,total_inc_vat_minor,stripe_session_id`)).payload[0];
   const checkout = (await commerce("checkout", {
     method: "POST",

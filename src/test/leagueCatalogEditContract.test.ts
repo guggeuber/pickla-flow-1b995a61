@@ -60,7 +60,9 @@ describe("League Catalog edit contracts", () => {
     expect(admin).toContain("Visa kundsida");
     expect(admin).toContain("League V1 · låst format");
     expect(admin).toContain("6 lag · 2 spelare");
-    expect(admin).toContain("Medlemspris används inte för League V1");
+    expect(admin).toContain("<SeriesMemberPricingEditor");
+    expect(admin).toContain("Teampris för hela lagplatsen · båda spelarna");
+    expect(admin).not.toContain("Medlemspris används inte för League V1");
     expect(admin).not.toContain("10/30 Session");
   });
 });

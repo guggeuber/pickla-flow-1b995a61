@@ -391,16 +391,16 @@ describe("Course V1 Admin", () => {
     expect(within(section).getByText("Ordinarie 1 495 kr")).toBeInTheDocument();
     const row = within(section).getByTestId("series-member-price-tier-play");
     expect(within(row).getByText("1 295 kr")).toBeInTheDocument();
-    fireEvent.change(within(row).getByLabelText("Play prismodell"), { target: { value: "percent" } });
-    fireEvent.change(within(row).getByRole("textbox"), { target: { value: "15" } });
+    expect(within(row).queryByLabelText("Play prismodell")).not.toBeInTheDocument();
+    fireEvent.change(within(row).getByLabelText("Play medlemspris"), { target: { value: "1195" } });
     fireEvent.click(within(row).getByRole("button", { name: "Spara" }));
 
     await waitFor(() => expect(mocks.saveSeriesMemberPricing).toHaveBeenCalledWith({
       ruleId: "rule-play",
       tierId: "tier-play",
       productKey: "course_pickla_101",
-      mode: "percent",
-      value: 15,
+      mode: "fixed",
+      value: 1195,
       label: "Play · Pickla 101",
     }));
   });

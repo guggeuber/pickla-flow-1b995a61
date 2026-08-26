@@ -117,6 +117,25 @@ describe("League customer discovery and canonical public results", () => {
     expect(mocks.fetchLeaguePublic).toHaveBeenCalledWith("series-1", { auth: "omit" });
   });
 
+  it("renders one server-resolved team member price consistently without exposing membership identity", async () => {
+    mocks.user = { id: "founder-1" };
+    mocks.fetchLeaguePublic.mockImplementation((_seriesId: string, options?: { auth?: string }) => options?.auth === "omit"
+      ? Promise.resolve(publicLeague)
+      : Promise.resolve({
+        ...publicLeague,
+        current_price_minor: 119500,
+        pricing_reason: "membership_tier_pricing",
+        membership_tier_name: "Founder",
+      }));
+    render(<QueryClientProvider client={queryClient()}><MemoryRouter initialEntries={["/seriespel/series-1?v=pickla-arena-sthlm"]}><Routes><Route path="/seriespel/:seriesId" element={<LeaguePage />} /></Routes></MemoryRouter></QueryClientProvider>);
+
+    expect(await screen.findByText("Medlemspris · Founder")).toBeInTheDocument();
+    expect(screen.getByText("1 195 kr")).toBeInTheDocument();
+    expect(screen.getByText("1 995 kr")).toHaveClass("line-through");
+    expect(screen.getByRole("button", { name: /Anmäl laget · Medlemspris 1\s195\skr/ })).toBeInTheDocument();
+    expect(screen.queryByText(/membership_id|customer_id|payer/i)).not.toBeInTheDocument();
+  });
+
   it("keeps concrete activity sessions authoritative after the first-date proposal", () => {
     const playSql = readFileSync("supabase/migrations/20260827122000_league_v1_play.sql", "utf8");
     expect(playSql).toContain("FOR v_date IN SELECT day FROM unnest(p_night_dates) day ORDER BY day LOOP");

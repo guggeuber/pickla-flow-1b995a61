@@ -12,6 +12,7 @@ import {
   type CanonicalResourcePreviewRow,
   type LeagueResourcePreview,
 } from '../_shared/league_resource_preview.ts';
+import { resolveScopeAwarePricingDecision } from '../_shared/scope_pricing.ts';
 
 type AdminClient = ReturnType<typeof getServiceClient>;
 type LeagueCapacityFill = {
@@ -37,7 +38,20 @@ type LeagueReservation = {
   team_fill_before?: number;
   allocation_position?: number;
   early_bird_allocation_position?: number | null;
+  regular_price_minor?: number;
+  regular_price_type?: string;
+  membership_id?: string | null;
+  membership_tier_id?: string | null;
+  membership_tier_name?: string | null;
 };
+
+function customerReservationPricing(reservation: LeagueReservation) {
+  const pricing: Record<string, unknown> = { ...reservation };
+  delete pricing.membership_id;
+  delete pricing.membership_tier_id;
+  return pricing;
+}
+
 type LeagueStandingRow = { team_entry_id: string; [key: string]: unknown };
 type LeagueResourcePlanInput = {
   venueId: string;
@@ -208,7 +222,7 @@ async function loadSeasonBySeries(admin: AdminClient, seriesId: string, requireA
 async function loadPublicProjection(admin: AdminClient, seriesId: string, userId: string | null) {
   const { series, season } = await loadSeasonBySeries(admin, seriesId, true);
   const [{ data: product, error: productError }, { data: sessions, error: sessionsError }, capacityResult] = await Promise.all([
-    admin.from('access_products').select('id, product_key, name, description, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, status, is_active').eq('id', series.access_product_id).maybeSingle(),
+    admin.from('access_products').select('id, venue_id, product_key, product_kind, name, description, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, status, is_active').eq('id', series.access_product_id).maybeSingle(),
     admin.from('activity_sessions').select('id, session_date, start_time, end_time, court_ids, series_occurrence_index').eq('series_id', series.id).eq('session_type', 'league').eq('is_active', true).order('series_occurrence_index'),
     admin.rpc('league_team_capacity_fill', { p_league_season_id: season.id }).maybeSingle(),
   ]);
@@ -220,11 +234,31 @@ async function loadPublicProjection(admin: AdminClient, seriesId: string, userId
     .in('status', season.fixtures_published_at ? ['active', 'withdrawn'] : ['active']).order('activated_at');
   if (teamError) throw new Error(teamError.message);
   const capacity = (capacityResult.data || {}) as LeagueCapacityFill;
-  const earlyBirdWins = product.scarcity_mode === 'early_bird'
-    && Number(capacity.early_bird_remaining || 0) > 0;
+  const basePriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
+  let regularPriceMinor = basePriceMinor;
+  let regularPriceReason = 'league_team_base_price';
+  let winningMembershipTierName: string | null = null;
   let customerTeamId: string | null = null;
+  let customerId: string | null = null;
   if (userId) {
-    const customerId = await resolveCustomerIdForUser(admin, userId);
+    customerId = await resolveCustomerIdForUser(admin, userId);
+    const regularDecision = await resolveScopeAwarePricingDecision({
+      client: admin,
+      scopeType: 'activity_series',
+      scopeId: series.id,
+      venueId: series.venue_id,
+      userId,
+      customerId,
+      salesChannel: 'online',
+      accessProduct: product,
+      series,
+      applyEarlyBird: false,
+    });
+    regularPriceMinor = Math.round(Number(regularDecision.finalAmountSek || 0) * 100);
+    if (regularDecision.pricingReason === 'membership_tier_pricing') {
+      regularPriceReason = 'membership_tier_pricing';
+      winningMembershipTierName = regularDecision.membershipTierName;
+    }
     if (customerId) {
       const { data: membership } = await admin.from('league_team_members')
         .select('team_entry_id, league_team_entries!inner(status)')
@@ -232,6 +266,13 @@ async function loadPublicProjection(admin: AdminClient, seriesId: string, userId
       customerTeamId = membership?.team_entry_id || null;
     }
   }
+  const earlyBirdPriceMinor = Number(product.early_bird_price_minor || 0);
+  const earlyBirdWins = product.scarcity_mode === 'early_bird'
+    && Number(capacity.early_bird_remaining || 0) > 0
+    && earlyBirdPriceMinor > 0
+    && earlyBirdPriceMinor < regularPriceMinor;
+  const currentPriceMinor = earlyBirdWins ? earlyBirdPriceMinor : regularPriceMinor;
+  const pricingReason = earlyBirdWins ? 'early_bird' : regularPriceReason;
   let fixtures: unknown[] = [];
   let standings: unknown[] = [];
   if (season.fixtures_published_at) {
@@ -257,8 +298,9 @@ async function loadPublicProjection(admin: AdminClient, seriesId: string, userId
     sessions: sessions || [],
     courts: courts || [],
     capacity,
-    current_price_minor: earlyBirdWins ? Number(product.early_bird_price_minor) : Number(product.base_price_sek || 0) * 100,
-    pricing_reason: earlyBirdWins ? 'early_bird' : 'league_team_base_price',
+    current_price_minor: currentPriceMinor,
+    pricing_reason: pricingReason,
+    membership_tier_name: pricingReason === 'membership_tier_pricing' ? winningMembershipTierName : null,
     teams: teamRows || [],
     fixtures,
     standings,
@@ -345,7 +387,7 @@ async function createLeagueCart(admin: AdminClient, req: Request, body: Record<s
   }
   if (playerCustomerId === captainCustomerId) throw new Error('Spelare 2 måste vara en annan person.');
 
-  const { data: reservedData, error: reserveError } = await admin.rpc('reserve_league_team_entry', {
+  const { data: reservedData, error: reserveError } = await admin.rpc('reserve_league_team_entry_v2', {
     p_league_season_id: season.id,
     p_captain_user_id: userId,
     p_captain_customer_id: captainCustomerId,
@@ -365,7 +407,11 @@ async function createLeagueCart(admin: AdminClient, req: Request, body: Record<s
     .select('id, commerce_order_id').eq('id', reserved.team_entry_id).maybeSingle();
   if (existingError) throw new Error(existingError.message);
   if (existingEntry?.commerce_order_id) {
-    return { order: { id: existingEntry.commerce_order_id }, cart_token: existingEntry.commerce_order_id, pricing: reserved };
+    return {
+      order: { id: existingEntry.commerce_order_id },
+      cart_token: existingEntry.commerce_order_id,
+      pricing: customerReservationPricing(reserved),
+    };
   }
   const [{ data: venue, error: venueError }, { data: product, error: productError }] = await Promise.all([
     admin.from('venues').select('id, organization_id').eq('id', series.venue_id).maybeSingle(),
@@ -430,13 +476,18 @@ async function createLeagueCart(admin: AdminClient, req: Request, body: Record<s
       base_team_price_minor: baseMinor,
       final_price_minor: priceMinor,
       pricing_reason: reserved.applied_price_type,
+      regular_price_minor: reserved.regular_price_minor,
+      regular_price_type: reserved.regular_price_type,
       early_bird_remaining: reserved.early_bird_remaining,
       team_capacity: reserved.team_capacity,
       team_fill_before: reserved.team_fill_before,
       team_fill_at_reservation: reserved.allocation_position,
       allocation_position: reserved.allocation_position,
       early_bird_allocation_position: reserved.early_bird_allocation_position,
-      membership_pricing_applied: false,
+      membership_pricing_applied: reserved.applied_price_type === 'membership_tier_pricing',
+      membership_id: reserved.regular_price_type === 'membership_tier_pricing' ? reserved.membership_id : null,
+      membership_tier_id: reserved.regular_price_type === 'membership_tier_pricing' ? reserved.membership_tier_id : null,
+      membership_tier_name: reserved.regular_price_type === 'membership_tier_pricing' ? reserved.membership_tier_name : null,
       team_identity: { team_name: teamName, captain_customer_id: captainCustomerId, player_customer_id: playerCustomerId },
     },
     product_snapshot: {
@@ -465,7 +516,7 @@ async function createLeagueCart(admin: AdminClient, req: Request, body: Record<s
     await admin.rpc('release_capacity_hold', { p_hold_id: reserved.hold_id, p_reason: 'league_commerce_attach_failed' });
     throw new Error(attachError.message);
   }
-  return { order: { id: order.id }, cart_token: order.id, pricing: reserved };
+  return { order: { id: order.id }, cart_token: order.id, pricing: customerReservationPricing(reserved) };
 }
 
 async function myLeagues(admin: AdminClient, userId: string) {

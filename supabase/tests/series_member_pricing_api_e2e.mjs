@@ -17,7 +17,7 @@ const ids = {
   products: [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()],
   foreignProduct: crypto.randomUUID(),
   series: [crypto.randomUUID(), crypto.randomUUID()],
-  tiers: [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()],
+  tiers: [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()],
 };
 
 function assert(condition, message) {
@@ -111,19 +111,49 @@ try {
     { id: ids.series[1], venue_id: ids.venue, format_id: ids.format, access_product_id: ids.products[1], product_key: productKeys[1], name: "Four occurrences", series_type: "course", status: "active", start_date: "2027-10-05", end_date: "2027-10-26", total_sessions: 4, capacity: 8, recurrence_days: [1], start_time: "18:00", end_time: "19:00", court_ids: [] },
   ] });
   await rest("membership_tiers", "", { method: "POST", body: [
-    { id: ids.tiers[0], venue_id: ids.venue, name: "Play", is_active: true, sort_order: 1 },
-    { id: ids.tiers[1], venue_id: ids.venue, name: "Play+", is_active: true, sort_order: 2 },
-    { id: ids.tiers[2], venue_id: ids.venue, name: "Old", is_active: false, sort_order: 3 },
+    { id: ids.tiers[0], venue_id: ids.venue, name: "Play", is_active: true, is_assignable: true, sort_order: 1 },
+    { id: ids.tiers[1], venue_id: ids.venue, name: "Play+", is_active: true, is_assignable: true, sort_order: 2 },
+    { id: ids.tiers[2], venue_id: ids.venue, name: "Founder", is_active: false, is_assignable: true, sort_order: 3 },
+    { id: ids.tiers[3], venue_id: ids.venue, name: "Fully archived", is_active: false, is_assignable: false, sort_order: 4 },
+    { id: ids.tiers[4], venue_id: ids.venue, name: `Synthetic ${run}`, is_active: false, is_assignable: true, sort_order: 5 },
   ] });
 
   await memberships("tier-pricing", { method: "POST", token: null, expected: 401, body: {} });
   await memberships("tier-pricing", { method: "POST", token: outsider.token, expected: 403, body: { tierId: ids.tiers[0], product_type: productKeys[0], fixed_price: 169 } });
   pass("authorization", "anonymous 401 and non-admin 403");
 
+  const deniedLeagueRpcBody = {
+    p_league_season_id: crypto.randomUUID(),
+    p_captain_user_id: operator.id,
+    p_captain_customer_id: crypto.randomUUID(),
+    p_player_customer_id: crypto.randomUUID(),
+    p_team_name: "Browser denied",
+    p_registration_request_id: `browser-denied-${run}-000000`,
+    p_source_id: crypto.randomUUID(),
+    p_age_confirmed: true,
+    p_quoted_price_minor: 1,
+    p_ttl_seconds: 1920,
+  };
+  await request(`${apiUrl}/rest/v1/rpc/reserve_league_team_entry_v2`, {
+    method: "POST", key: anonKey, token: null, expected: [401, 403, 404], body: deniedLeagueRpcBody,
+  });
+  await request(`${apiUrl}/rest/v1/rpc/reserve_league_team_entry_v2`, {
+    method: "POST", key: anonKey, token: operator.token, expected: [401, 403, 404], body: deniedLeagueRpcBody,
+  });
+  pass("League RPC browser boundary", "actual anon and authenticated venue-admin REST execute denied");
+
+  let preview = (await memberships(`series-tier-pricing?venueId=${ids.venue}`, { token: operator.token })).payload;
+  const eligibleTierIds = preview.series[0].tiers.map((item) => item.tier.id);
+  assert(eligibleTierIds.includes(ids.tiers[0]) && eligibleTierIds.includes(ids.tiers[1]), "active Play tiers disappeared");
+  assert(eligibleTierIds.includes(ids.tiers[2]), "hidden-but-assignable Founder did not appear");
+  assert(eligibleTierIds.includes(ids.tiers[4]), "synthetic assignable tier required application branching");
+  assert(!eligibleTierIds.includes(ids.tiers[3]), "fully archived tier appeared in Catalog pricing");
+  pass("dynamic tier eligibility", "active OR assignable includes Play, Play+, Founder and synthetic; excludes fully archived");
+
   const fixed = (await memberships("tier-pricing", { method: "POST", token: operator.token, expected: 201, body: {
     tierId: ids.tiers[0], product_type: productKeys[0], fixed_price: 169, discount_percent: null, label: "Play · One-off",
   } })).payload;
-  let preview = (await memberships(`series-tier-pricing?venueId=${ids.venue}`, { token: operator.token })).payload;
+  preview = (await memberships(`series-tier-pricing?venueId=${ids.venue}`, { token: operator.token })).payload;
   const oneOff = preview.series.find((item) => item.series_id === ids.series[0]);
   const playFixed = oneOff.tiers.find((item) => item.tier.id === ids.tiers[0]);
   assert(playFixed.preview.resolved_price_sek === 169 && playFixed.preview.mode === "fixed", "fixed Series preview was not canonical");
@@ -146,7 +176,7 @@ try {
     ["unknown product", { tierId: ids.tiers[1], product_type: `missing_${run}`, fixed_price: 169, discount_percent: null }, 404],
     ["foreign product", { tierId: ids.tiers[1], product_type: `series_foreign_${run}`, fixed_price: 169, discount_percent: null }, 404],
     ["inactive product", { tierId: ids.tiers[1], product_type: productKeys[2], fixed_price: 169, discount_percent: null }, 409],
-    ["inactive tier", { tierId: ids.tiers[2], product_type: productKeys[0], fixed_price: 169, discount_percent: null }, 409],
+    ["fully archived tier", { tierId: ids.tiers[3], product_type: productKeys[0], fixed_price: 169, discount_percent: null }, 409],
   ];
   for (const [label, body, expected] of invalidCases) {
     await memberships("tier-pricing", { method: "POST", token: operator.token, expected, body });
@@ -156,6 +186,26 @@ try {
     tierId: ids.tiers[0], product_type: productKeys[0], fixed_price: 159, discount_percent: null,
   } });
   pass("duplicate rule", "second active tier/product rule rejected");
+
+  const founderEvent = (await memberships("tier-pricing", { method: "POST", token: operator.token, expected: 201, body: {
+    tierId: ids.tiers[2], product_type: productKeys[0], fixed_price: 159, discount_percent: null, label: "Founder · One-off",
+  } })).payload;
+  const founderCourse = (await memberships("tier-pricing", { method: "POST", token: operator.token, expected: 201, body: {
+    tierId: ids.tiers[2], product_type: productKeys[1], fixed_price: 1195, discount_percent: null, label: "Founder · Four occurrences",
+  } })).payload;
+  preview = (await memberships(`series-tier-pricing?venueId=${ids.venue}`, { token: operator.token })).payload;
+  const founderEventPreview = preview.series.find((item) => item.series_id === ids.series[0]).tiers.find((item) => item.tier.id === ids.tiers[2]);
+  const founderCoursePreview = preview.series.find((item) => item.series_id === ids.series[1]).tiers.find((item) => item.tier.id === ids.tiers[2]);
+  assert(founderEventPreview.preview?.resolved_price_sek === 159, "Founder Event price did not round-trip");
+  assert(founderCoursePreview.preview?.resolved_price_sek === 1195, "Founder Course price did not round-trip");
+  pass("Founder Event/Course", "same generic product rule saves and reads fixed SEK for one-off Event and multi-occurrence Course");
+
+  await memberships(`tier-pricing?id=${founderEvent.id}`, { method: "DELETE", token: operator.token });
+  preview = (await memberships(`series-tier-pricing?venueId=${ids.venue}`, { token: operator.token })).payload;
+  const removedFounderEvent = preview.series.find((item) => item.series_id === ids.series[0]).tiers.find((item) => item.tier.id === ids.tiers[2]);
+  assert(removedFounderEvent.rule === null && removedFounderEvent.preview === null, "empty/removal left a Founder Event override");
+  assert((await rest("membership_tier_pricing", `id=eq.${founderCourse.id}&select=id`)).payload.length === 1, "Event removal affected Course pricing");
+  pass("empty removes override", "Event rule removed without changing the Course rule");
 
   await rest("membership_tier_pricing", "", {
     method: "POST",

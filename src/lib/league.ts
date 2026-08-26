@@ -85,6 +85,7 @@ export type LeaguePublicProjection = {
   capacity: { team_capacity: number; active_teams: number; active_holds: number; fill_count: number; available_count: number; early_bird_allocated: number; early_bird_remaining: number | null };
   current_price_minor: number;
   pricing_reason: string;
+  membership_tier_name?: string | null;
   teams: LeagueTeam[];
   fixtures: LeagueFixture[];
   standings: LeagueStanding[];

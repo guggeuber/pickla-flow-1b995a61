@@ -9,6 +9,7 @@ CREATE TABLE public.league_concurrency_results (
   competitor INTEGER NOT NULL,
   ok BOOLEAN NOT NULL,
   reason TEXT,
+  applied_price_type TEXT,
   final_price_minor INTEGER,
   team_entry_id UUID,
   hold_id UUID,
@@ -74,6 +75,36 @@ BEGIN
   INSERT INTO league_concurrency_seasons VALUES ('capacity', v_capacity.id), ('early_bird', v_early.id);
 END $$;
 
+-- One competing captain has a verified hidden-but-assignable membership whose
+-- team price is lower than Early Bird. The other captain is a non-member. The
+-- transactional resolver must let the member price relinquish the remaining
+-- Early Bird allocation so the non-member can win it, regardless of ordering.
+INSERT INTO public.membership_tiers (
+  id, venue_id, name, is_active, is_assignable, sort_order
+) VALUES (
+  '2ea90000-0000-4000-8000-000000000020',
+  '2ea90000-0000-4000-8000-000000000002',
+  'Concurrency Founder', false, true, 10
+);
+INSERT INTO public.membership_tier_pricing (
+  tier_id, product_type, fixed_price, discount_percent, label
+)
+SELECT
+  '2ea90000-0000-4000-8000-000000000020', product.product_key,
+  1695, NULL, 'Concurrency member team price'
+FROM league_concurrency_seasons state
+JOIN public.league_seasons season ON season.id = state.season_id
+JOIN public.activity_series series ON series.id = season.activity_series_id
+JOIN public.access_products product ON product.id = series.access_product_id
+WHERE state.case_name = 'early_bird';
+INSERT INTO public.memberships (
+  user_id, customer_id, venue_id, tier_id, status, starts_at
+)
+SELECT user_id, customer_id,
+  '2ea90000-0000-4000-8000-000000000002',
+  '2ea90000-0000-4000-8000-000000000020', 'active', CURRENT_DATE
+FROM public.league_concurrency_people WHERE n = 15;
+
 -- Five committed teams leave exactly one capacity slot.
 DO $$
 DECLARE v_season UUID := (SELECT season_id FROM league_concurrency_seasons WHERE case_name = 'capacity');
@@ -121,7 +152,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE v_result RECORD;
 BEGIN
-  SELECT * INTO v_result FROM public.reserve_league_team_entry(
+  SELECT * INTO v_result FROM public.reserve_league_team_entry_v2(
     p_season,
     (SELECT user_id FROM public.league_concurrency_people WHERE n = p_captain_n),
     (SELECT customer_id FROM public.league_concurrency_people WHERE n = p_captain_n),
@@ -130,8 +161,8 @@ BEGIN
     gen_random_uuid(), true, 199500, 600
   );
   INSERT INTO public.league_concurrency_results
-    (case_name, competitor, ok, reason, final_price_minor, team_entry_id, hold_id)
-  VALUES (p_case_name, p_competitor, v_result.ok, v_result.reason,
+    (case_name, competitor, ok, reason, applied_price_type, final_price_minor, team_entry_id, hold_id)
+  VALUES (p_case_name, p_competitor, v_result.ok, v_result.reason, v_result.applied_price_type,
     v_result.final_price_minor, v_result.team_entry_id, v_result.hold_id);
   PERFORM pg_sleep(0.75);
 END;
@@ -179,14 +210,14 @@ DO $$
 DECLARE v_season UUID := (SELECT season_id FROM league_concurrency_seasons WHERE case_name = 'early_bird');
 BEGIN
   IF (SELECT COUNT(*) FROM public.league_concurrency_results WHERE case_name = 'early_bird'
-       AND ok AND final_price_minor = 179500) <> 1
+       AND ok AND final_price_minor = 169500 AND applied_price_type = 'membership_tier_pricing') <> 1
      OR (SELECT COUNT(*) FROM public.league_concurrency_results WHERE case_name = 'early_bird'
-       AND ok AND final_price_minor = 199500) <> 1
+       AND ok AND final_price_minor = 179500 AND applied_price_type = 'early_bird') <> 1
      OR (SELECT early_bird_allocated FROM public.league_team_capacity_fill(v_season)) <> 2 THEN
-    RAISE EXCEPTION 'true final-Early-Bird-slot concurrency invariant failed: %',
+    RAISE EXCEPTION 'member-price/Early-Bird concurrency invariant failed: %',
       (SELECT jsonb_agg(to_jsonb(result)) FROM public.league_concurrency_results result WHERE case_name = 'early_bird');
   END IF;
 END $$;
 
-SELECT case_name, competitor, ok, reason, final_price_minor
+SELECT case_name, competitor, ok, reason, applied_price_type, final_price_minor
 FROM public.league_concurrency_results ORDER BY case_name, competitor;
