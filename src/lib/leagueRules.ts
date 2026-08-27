@@ -10,6 +10,12 @@ export const LEAGUE_V1_FACTORS = [
 // weeks, which is maximal for the two-factor-per-night five-night shape.
 export const LEAGUE_V1_WEEK_FACTORS = [[0, 4], [1, 2], [3, 4], [0, 1], [2, 3]] as const;
 
+export const LEAGUE_V1_TRADITIONAL_SCORING_CODE = "traditional_sideout_three_games_11_cap_13";
+
+export function usesTraditionalLeagueV1Scoring(scoringCode: string | null | undefined) {
+  return scoringCode === LEAGUE_V1_TRADITIONAL_SCORING_CODE;
+}
+
 export type LeagueScheduleSlot = {
   round: number;
   block: number;
@@ -72,7 +78,7 @@ export function validateLeagueV1Schedule(slots: readonly LeagueScheduleSlot[]) {
   return { valid: errors.length === 0, errors };
 }
 
-export function isValidLeagueV1SetScore(teamA: number, teamB: number) {
+export function isValidLeagueV1GameScore(teamA: number, teamB: number) {
   if (!Number.isInteger(teamA) || !Number.isInteger(teamB) || teamA < 0 || teamB < 0 || teamA === teamB) return false;
   const winner = Math.max(teamA, teamB);
   const loser = Math.min(teamA, teamB);
@@ -80,3 +86,6 @@ export function isValidLeagueV1SetScore(teamA: number, teamB: number) {
     || (winner === 12 && loser === 10)
     || (winner === 13 && (loser === 11 || loser === 12));
 }
+
+// API/DB storage retains the legacy `sets` field and function terminology.
+export const isValidLeagueV1SetScore = isValidLeagueV1GameScore;

@@ -68,6 +68,8 @@ export type LeaguePublicProjection = {
     matches_per_team_per_night: number;
     blocks_per_night: number;
     match_duration_minutes: number;
+    scoring_code: string;
+    scoring_version: number;
     fixtures_published_at: string | null;
     fixture_publication_deadline: string;
   };
@@ -184,6 +186,8 @@ export type LeagueFixtureValidation = { valid: boolean; errors?: string[] };
 export type LeagueAdminSeason = {
   id: string;
   activity_series_id: string;
+  scoring_code: string;
+  scoring_version: number;
   fixtures_published_at: string | null;
   fixture_publication_deadline: string;
   activity_series: LeagueAdminSeries | LeagueAdminSeries[];

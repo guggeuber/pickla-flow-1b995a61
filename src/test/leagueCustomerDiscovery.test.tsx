@@ -37,7 +37,7 @@ const publicLeague = {
     registration_opens_at: "2026-08-01T00:00:00Z", registration_closes_at: "2026-09-05T00:00:00Z", metadata: {},
     venues: { name: "Pickla Stockholm", slug: "pickla-arena-sthlm", timezone: "Europe/Stockholm" },
   },
-  season: { id: "season-1", team_capacity: 6, players_per_team: 2, league_night_count: 5, matches_per_team_per_night: 2, blocks_per_night: 2, match_duration_minutes: 50, fixtures_published_at: "2026-09-01T00:00:00Z", fixture_publication_deadline: "2026-09-05T00:00:00Z" },
+  season: { id: "season-1", team_capacity: 6, players_per_team: 2, league_night_count: 5, matches_per_team_per_night: 2, blocks_per_night: 2, match_duration_minutes: 50, scoring_code: "traditional_sideout_three_games_11_cap_13", scoring_version: 2, fixtures_published_at: "2026-09-01T00:00:00Z", fixture_publication_deadline: "2026-09-05T00:00:00Z" },
   product: { id: "product-1", name: "Lagplats", base_price_sek: 1995, vat_rate: 6, scarcity_mode: "none", early_bird_price_minor: null, early_bird_slots: null },
   sessions: ["2026-09-10", "2026-09-17", "2026-09-24", "2026-10-01", "2026-10-08"].map((date, index) => ({ id: `night-${index + 1}`, session_date: date, start_time: "18:00:00", end_time: "20:00:00", court_ids: ["court-1"], series_occurrence_index: index + 1 })),
   courts: [{ id: "court-1", name: "Bana 1", court_number: 1 }],
@@ -97,6 +97,11 @@ describe("League customer discovery and canonical public results", () => {
     expect(standingsRow).not.toBeNull();
     expect(within(standingsRow!).getByText("3")).toBeInTheDocument();
     expect(screen.queryByText("captain@example.test")).not.toBeInTheDocument();
+    expect(screen.getByText(/Traditionell side-out-scoring/)).toBeInTheDocument();
+    expect(screen.getByText(/endast servande lag kan ta poäng/)).toBeInTheDocument();
+    expect(screen.getByText(/Varje vunnet game ger en tabellpoäng/)).toBeInTheDocument();
+    expect(screen.queryByText(/Rallypoäng/)).not.toBeInTheDocument();
+    expect(within(screen.getByRole("table")).getByText("Game +/-")).toBeInTheDocument();
 
     const api = readFileSync("supabase/functions/api-leagues/index.ts", "utf8");
     const publicProjection = api.slice(api.indexOf("async function loadPublicProjection"), api.indexOf("async function createLeagueCart"));

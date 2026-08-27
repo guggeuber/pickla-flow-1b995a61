@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLeagueV1Schedule,
+  isValidLeagueV1GameScore,
   isValidLeagueV1SetScore,
   validateLeagueV1Schedule,
 } from "@/lib/leagueRules";
@@ -46,8 +47,10 @@ describe("Pickla League V1 schedule", () => {
   });
 });
 
-describe("Pickla League V1 set cap", () => {
+describe("Pickla League V1 traditional side-out final game scores", () => {
   it.each([
+    [11, 0, true],
+    [10, 9, false],
     [10, 10, false],
     [11, 9, true],
     [11, 10, false],
@@ -59,7 +62,9 @@ describe("Pickla League V1 set cap", () => {
     [13, 12, true],
     [13, 13, false],
     [14, 12, false],
+    [14, 13, false],
   ])("validates boundary %i–%i as %s", (a, b, expected) => {
+    expect(isValidLeagueV1GameScore(a, b)).toBe(expected);
     expect(isValidLeagueV1SetScore(a, b)).toBe(expected);
   });
 

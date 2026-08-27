@@ -30,6 +30,7 @@ import {
 import { ApiRequestError } from "@/lib/api";
 import { removeNamedEventImage, uploadNamedEventImage } from "@/lib/eventMedia";
 import { changeLeagueNightDate, EMPTY_LEAGUE_NIGHT_DATES, resetLeagueNightDates, type LeagueNightDateState } from "@/lib/leagueAdminSchedule";
+import { usesTraditionalLeagueV1Scoring } from "@/lib/leagueRules";
 import { ax } from "@/components/admin/shell/axTheme";
 import { AxChip } from "@/components/admin/shell/axPrimitives";
 
@@ -311,6 +312,7 @@ function LeagueCatalogEditor({ venueId, season }: { venueId: string; season: Lea
   const queryClient = useQueryClient();
   const series = activeSeries(season);
   const product = activeProduct(series);
+  const traditionalSideout = usesTraditionalLeagueV1Scoring(season.scoring_code);
   const fallbackLifecycle = ["draft", "active", "paused"].includes(series.status);
   const policy = season.edit_policy || {
     lifecycle_editable: fallbackLifecycle,
@@ -449,7 +451,7 @@ function LeagueCatalogEditor({ venueId, season }: { venueId: string; season: Lea
     </section>
     <section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
       <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("lime") }}>League V1 · låst format</p>
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-white sm:grid-cols-4"><div className="rounded-xl p-3" style={{ background: ax("surface") }}>6 lag · 2 spelare</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>5 League-kvällar</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>3 banor · 18:00–20:00</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>30 matcher · låst scoring</div></div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-white sm:grid-cols-4"><div className="rounded-xl p-3" style={{ background: ax("surface") }}>6 lag · 2 spelare</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>5 League-kvällar</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>3 banor · 18:00–20:00</div><div className="rounded-xl p-3" style={{ background: ax("surface") }}>{traditionalSideout ? "3 game · traditionell side-out" : "3 game · rallypoäng"}</div></div>
       <p className="mt-3 text-[10px]" style={{ color: ax("muted") }}>{policy.schedule_lock_reason === "participants_matches_or_payments_exist" ? "Schema och resurser är låsta eftersom säsongen har deltagare, matcher eller betalningshistorik." : "League V1-strukturen redigeras inte i Catalog. En hel framtida kväll kan vid behov bokas om i den separata, skyddade operationsåtgärden."}</p>
     </section>
     <button type="button" onClick={() => save.mutate()} disabled={!formValid || initialForm === currentForm || save.isPending} className="flex h-12 w-full items-center justify-center gap-2 rounded-xl font-black disabled:opacity-40" style={{ background: ax("electric"), color: ax("ink") }}>{save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Spara ändringar</button>

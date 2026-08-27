@@ -273,7 +273,7 @@ describe("League Admin artwork and date entry", () => {
     mocks.fetchLeagueAdmin.mockResolvedValue({
       courts,
       seasons: [{
-        id: "season-1", activity_series_id: "series-1", fixtures_published_at: null,
+        id: "season-1", activity_series_id: "series-1", scoring_code: "traditional_sideout_three_games_11_cap_13", scoring_version: 2, fixtures_published_at: null,
         fixture_publication_deadline: "2027-08-27T10:00:43.789Z",
         activity_series: {
           id: "series-1", venue_id: "venue-1", name: "Pickla Seriespel · Pilot", description: "Original beskrivning",
@@ -290,6 +290,7 @@ describe("League Admin artwork and date entry", () => {
     renderLeague("season-1");
 
     expect(await screen.findByRole("link", { name: "Visa kundsida" })).toHaveAttribute("href", "/seriespel/series-1?v=pickla-arena-sthlm");
+    expect(screen.getByText("3 game · traditionell side-out")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("League-titel"), { target: { value: "Pickla Seriespel · Höst" } });
     fireEvent.change(screen.getByLabelText("League-beskrivning"), { target: { value: "Ny kundbeskrivning" } });
     fireEvent.change(screen.getByLabelText("Ordinarie teampris"), { target: { value: "2095" } });

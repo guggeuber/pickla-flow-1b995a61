@@ -77,6 +77,53 @@ BEGIN
   FROM public.activity_series series WHERE series.id = v_season.activity_series_id;
 END $$;
 
+-- Future canonical creation takes the traditional-v2 database default. The
+-- widened V1 constraint accepts only the exact legacy and current pairs.
+DO $$
+DECLARE v_season UUID := (SELECT season_id FROM league_test_state);
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.league_seasons
+    WHERE id = v_season
+      AND scoring_code = 'traditional_sideout_three_games_11_cap_13'
+      AND scoring_version = 2
+  ) THEN RAISE EXCEPTION 'future League did not use traditional-v2 scoring'; END IF;
+
+  UPDATE public.league_seasons
+  SET scoring_code = 'rally_three_sets_11_cap_13', scoring_version = 1
+  WHERE id = v_season;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.league_seasons
+    WHERE id = v_season AND scoring_code = 'rally_three_sets_11_cap_13' AND scoring_version = 1
+  ) THEN RAISE EXCEPTION 'legacy rally-v1 pair became invalid'; END IF;
+
+  BEGIN
+    UPDATE public.league_seasons
+    SET scoring_code = 'traditional_sideout_three_games_11_cap_13', scoring_version = 1
+    WHERE id = v_season;
+    RAISE EXCEPTION 'traditional code with version 1 was accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  BEGIN
+    UPDATE public.league_seasons
+    SET scoring_code = 'rally_three_sets_11_cap_13', scoring_version = 2
+    WHERE id = v_season;
+    RAISE EXCEPTION 'rally code with version 2 was accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  BEGIN
+    UPDATE public.league_seasons
+    SET scoring_code = 'unknown_scoring', scoring_version = 99
+    WHERE id = v_season;
+    RAISE EXCEPTION 'unknown scoring pair was accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  UPDATE public.league_seasons
+  SET scoring_code = 'traditional_sideout_three_games_11_cap_13', scoring_version = 2
+  WHERE id = v_season;
+END $$;
+
 -- A second pre-sale League cannot reserve the same three courts in the same
 -- five windows; canonical managed-Series conflict validation is authoritative.
 DO $$
@@ -434,8 +481,9 @@ DO $$
 DECLARE score RECORD;
 BEGIN
   FOR score IN SELECT * FROM (VALUES
-    (10,10,false),(11,9,true),(11,10,false),(11,11,false),(12,10,true),(12,11,false),
-    (12,12,false),(13,11,true),(13,12,true),(13,13,false),(14,12,false)
+    (11,0,true),(10,9,false),(10,10,false),(11,9,true),(11,10,false),(11,11,false),
+    (12,10,true),(12,11,false),(12,12,false),(13,11,true),(13,12,true),(13,13,false),
+    (14,12,false),(14,13,false)
   ) boundary(a,b,expected) LOOP
     IF public.valid_league_set_score(score.a, score.b) IS DISTINCT FROM score.expected
        OR public.valid_league_set_score(score.b, score.a) IS DISTINCT FROM score.expected THEN
@@ -546,9 +594,14 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM public.league_fixture_results result WHERE result.fixture_id = fixture.id)
   ORDER BY fixture.round_number, fixture.block_number LIMIT 1;
   SELECT * INTO v_result FROM public.save_league_fixture_result_v1(v_fixture.id, 'final', 'played',
-    '[{"team_a":13,"team_b":11},{"team_a":11,"team_b":9},{"team_a":13,"team_b":12}]',
-    NULL, 0, 'valid-13-11', (SELECT user_id FROM league_test_people WHERE n = 14));
-  IF v_result.version <> 1 THEN RAISE EXCEPTION 'valid 13-11 result was not created'; END IF;
+    '[{"team_a":11,"team_b":8},{"team_a":7,"team_b":11},{"team_a":13,"team_b":12}]',
+    NULL, 0, 'traditional-sideout-2-1', (SELECT user_id FROM league_test_people WHERE n = 14));
+  IF v_result.version <> 1
+     OR jsonb_array_length(v_result.sets) <> 3
+     OR (SELECT COUNT(*) FROM jsonb_array_elements(v_result.sets) score
+         WHERE (score->>'team_a')::INTEGER > (score->>'team_b')::INTEGER) <> 2 THEN
+    RAISE EXCEPTION 'traditional side-out 11-8, 7-11, 13-12 result was not stored as 2-1';
+  END IF;
 
   SELECT * INTO v_fixture FROM public.league_fixtures fixture
   WHERE fixture.league_season_id = (SELECT season_id FROM league_test_state)
@@ -572,6 +625,47 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM = 'result accepted non-canonical score keys' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE '%league_set_score_invalid%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.save_league_fixture_result_v1(v_fixture.id, 'final', 'played',
+      '[{"team_a":11,"team_b":8},{"team_a":7,"team_b":11}]',
+      NULL, 0, 'invalid-only-two-games', (SELECT user_id FROM league_test_people WHERE n = 14));
+    RAISE EXCEPTION 'final result accepted only two games';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'final result accepted only two games' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%league_result_sets_invalid%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.save_league_fixture_result_v1(v_fixture.id, 'final', 'played',
+      '[{"team_a":11,"team_b":10},{"team_a":11,"team_b":8},{"team_a":13,"team_b":12}]',
+      NULL, 0, 'invalid-11-10', (SELECT user_id FROM league_test_people WHERE n = 14));
+    RAISE EXCEPTION 'final result accepted 11-10';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'final result accepted 11-10' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%league_set_score_invalid%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.save_league_fixture_result_v1(v_fixture.id, 'final', 'played',
+      '[{"team_a":14,"team_b":12},{"team_a":11,"team_b":8},{"team_a":13,"team_b":12}]',
+      NULL, 0, 'invalid-14-12', (SELECT user_id FROM league_test_people WHERE n = 14));
+    RAISE EXCEPTION 'final result accepted 14-12';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'final result accepted 14-12' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%league_set_score_invalid%' THEN RAISE; END IF;
+  END;
+END $$;
+
+-- Scoring doctrine may change only before competition history exists.
+DO $$
+BEGIN
+  BEGIN
+    UPDATE public.league_seasons
+    SET scoring_code = 'rally_three_sets_11_cap_13', scoring_version = 1
+    WHERE id = (SELECT season_id FROM league_test_state);
+    RAISE EXCEPTION 'scoring changed after result history existed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'scoring changed after result history existed' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%league_scoring_history_exists%' THEN RAISE; END IF;
   END;
 END $$;
 
