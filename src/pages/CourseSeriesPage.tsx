@@ -17,8 +17,11 @@ import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { DETAIL_ARTWORK_SIZES } from "@/lib/responsiveSupabaseImage";
 import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
 import { resolveCustomerVenueContext } from "@/lib/customerVenue";
-
-type ParticipantType = "self" | "adult" | "dependent";
+import {
+  courseParticipantOptions,
+  resolveCourseParticipantPolicy,
+  type CourseParticipantType,
+} from "@/lib/courseParticipantPolicy";
 
 function swedishDate(value: string) {
   return DateTime.fromISO(value, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("d MMMM");
@@ -35,7 +38,7 @@ export default function CourseSeriesPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const verifiedAccount = useVerifiedAccount();
-  const [participantType, setParticipantType] = useState<ParticipantType>("self");
+  const [participantType, setParticipantType] = useState<CourseParticipantType>("self");
   const [payerName, setPayerName] = useState("");
   const [payerEmail, setPayerEmail] = useState("");
   const [participantName, setParticipantName] = useState("");
@@ -56,6 +59,11 @@ export default function CourseSeriesPage() {
   });
   const personalizedCourse = verifiedAccount.isVerified ? personalizedQuery.data : undefined;
   const course = personalizedCourse || publicQuery.data;
+  const participantPolicy = course?.participant_policy
+    || resolveCourseParticipantPolicy(course?.product?.resolver_rules);
+  const participantOptions = courseParticipantOptions(participantPolicy);
+  const effectiveParticipantType = participantOptions.includes(participantType) ? participantType : "self";
+  const selfOnly = participantPolicy === "self_only";
   const publicOnlyAccount = verifiedAccount.state === "anonymous" || verifiedAccount.state === "terminal_failure";
   const personalizationReady = publicOnlyAccount || Boolean(personalizedCourse);
   const personalizationFailed = verifiedAccount.state === "validation_error"
@@ -81,26 +89,35 @@ export default function CourseSeriesPage() {
       if (!course) throw new Error("Sidan kunde inte öppnas.");
       if (!personalizationReady) throw new Error("Kontot verifieras fortfarande.");
       const verifiedUser = verifiedAccount.isVerified ? user : null;
-      if (participantType === "dependent" && !verifiedUser) {
+      if (selfOnly && !verifiedUser) {
+        preserveIntendedRoute(`/course/${seriesId}?v=${encodeURIComponent(venueSlug)}`);
+        navigate(`/auth?redirect=${encodeURIComponent(`/course/${seriesId}`)}&v=${encodeURIComponent(venueSlug)}`);
+        return null;
+      }
+      if (effectiveParticipantType === "dependent" && !verifiedUser) {
         preserveIntendedRoute(`/course/${seriesId}?v=${encodeURIComponent(venueSlug)}`);
         navigate(`/auth?redirect=${encodeURIComponent(`/course/${seriesId}`)}&v=${encodeURIComponent(venueSlug)}`);
         throw new Error("Logga in för att anmäla ett barn.");
       }
       const response = await createCourseCart({
         series_id: course.id,
-        participant_type: participantType,
-        guest_name: payerName || null,
-        guest_email: payerEmail || null,
-        participant_name: participantName || null,
-        participant_email: participantEmail || null,
-        dependent_first_name: childName || null,
-        dependent_birth_year: childBirthYear || null,
+        ...(!selfOnly ? {
+          participant_type: effectiveParticipantType,
+          guest_name: payerName || null,
+          guest_email: payerEmail || null,
+          participant_name: participantName || null,
+          participant_email: participantEmail || null,
+          dependent_first_name: childName || null,
+          dependent_birth_year: childBirthYear || null,
+        } : {}),
       }, verifiedUser ? undefined : { auth: "omit" });
       const reference = response.cart_token || response.order.id;
       if (!reference) throw new Error("Bokningen kunde inte skapas.");
       return reference;
     },
-    onSuccess: (reference) => navigate(`/cart?token=${encodeURIComponent(reference)}&v=${encodeURIComponent(venueSlug)}`),
+    onSuccess: (reference) => {
+      if (reference) navigate(`/cart?token=${encodeURIComponent(reference)}&v=${encodeURIComponent(venueSlug)}`);
+    },
     onError: (error: Error) => toast.error(error.message),
   });
 
@@ -110,20 +127,26 @@ export default function CourseSeriesPage() {
   const available = Number(course.capacity.available_count || 0);
   const price = seriesPricePresentation({ pricing: course.pricing, basePriceSek: course.product.base_price_sek });
   const socialEvent = presentation.type === "social_event";
-  const supportsParticipantChoice = presentation.type === "course";
+  const supportsParticipantChoice = presentation.type === "course" && !selfOnly;
   const includesOpenPlay = course.included_access?.open_play_series_period.enabled === true;
-  const selectedParticipantPricePending = supportsParticipantChoice && participantType !== "self";
+  const selectedParticipantPricePending = supportsParticipantChoice && effectiveParticipantType !== "self";
   const title = seriesCustomerTitle({ seriesName: course.name, formatName: course.format?.name, presentationType: presentation.type });
   const bookingCta = socialEvent
     ? seriesBookingCta(price, presentation.bookingCta)
     : `${presentation.bookingCta} · ${formatCommerceMoney(price.finalPriceMinor)}`;
   const open = personalizationReady && course.registration_state === "open" && available > 0 && !course.customer_has_commitment;
   const verifiedUser = verifiedAccount.isVerified ? user : null;
-  const requiresGuestDetails = personalizationReady && !verifiedUser;
+  const requiresGuestDetails = personalizationReady && !verifiedUser && !selfOnly;
   const ready = open
     && (!requiresGuestDetails || (payerName.trim() && payerEmail.includes("@")))
-    && (participantType !== "adult" || (participantName.trim() && participantEmail.includes("@")))
-    && (participantType !== "dependent" || (verifiedUser && childName.trim() && Number(childBirthYear) > 1900));
+    && (effectiveParticipantType !== "adult" || (participantName.trim() && participantEmail.includes("@")))
+    && (effectiveParticipantType !== "dependent" || (verifiedUser && childName.trim() && Number(childBirthYear) > 1900));
+  const coachNames = course.coach?.coaches?.map((coach) => coach.display_name).filter(Boolean) || [];
+  const coachCopy = course.coach?.coverage === "complete" && course.coach.mode === "single" && coachNames[0]
+    ? `Coach: ${coachNames[0]}`
+    : course.coach?.coverage === "complete" && course.coach.mode === "multiple"
+      ? coachNames.length > 1 ? `Coacher: ${coachNames.join(" och ")}` : "Flera coacher under kursen"
+      : null;
   const shareSeries = async () => {
     const path = `/course/${encodeURIComponent(course.id)}?v=${encodeURIComponent(venueSlug)}`;
     const url = canonicalAppUrl(path);
@@ -152,7 +175,7 @@ export default function CourseSeriesPage() {
           <section className="mt-8 grid gap-4 border-y border-black/10 py-6">
             <div className="flex gap-3"><CalendarDays className="mt-0.5 h-5 w-5" /><div>{presentation.hideSingleOccurrenceCount && sessions.length === 1 ? <><p className="font-bold">{swedishDate(sessions[0].session_date)}</p><p className="mt-1 text-sm text-slate-500">{String(sessions[0].start_time).slice(0, 5)}–{String(sessions[0].end_time).slice(0, 5)}</p></> : <><p className="font-bold">{occurrenceCountLabel(sessions.length)} · {scheduleLabel}</p><p className="mt-1 text-sm text-slate-500">{swedishDate(course.start_date)}–{swedishDate(course.end_date)}</p></>}</div></div>
             <div className="flex gap-3"><Users className="mt-0.5 h-5 w-5" /><div><p className="font-bold">{available} {available === 1 ? "plats" : "platser"} kvar</p><p className="mt-1 text-sm text-slate-500">{course.venue?.name}</p></div></div>
-            {presentation.showInstructor && course.format?.requires_instructor && presentation.instructorLabel ? <div className="flex gap-3"><Check className="mt-0.5 h-5 w-5" /><p className="font-bold">{presentation.instructorLabel}</p></div> : null}
+            {presentation.showInstructor && course.format?.requires_instructor && presentation.instructorLabel && !coachCopy ? <div className="flex gap-3"><Check className="mt-0.5 h-5 w-5" /><p className="font-bold">{presentation.instructorLabel}</p></div> : null}
           </section>
         )}
 
@@ -181,7 +204,7 @@ export default function CourseSeriesPage() {
             <ul className="grid gap-2 text-sm font-semibold text-slate-700">
               <li className="flex gap-2"><Check className="h-4 w-4 shrink-0" />{course.format?.requires_instructor ? `${sessions.length} coachledda tillfällen` : `${sessions.length} tillfällen`}</li>
               <li className="flex gap-2"><Check className="h-4 w-4 shrink-0" />Max {course.capacity.capacity} spelare{course.court_ids.length ? ` · ${course.court_ids.length} ${course.court_ids.length === 1 ? "bana" : "banor"}` : ""}</li>
-              {course.format?.requires_instructor ? <li className="flex gap-2"><Check className="h-4 w-4 shrink-0" />Instruktör vid varje tillfälle</li> : null}
+              {coachCopy ? <li className="flex gap-2"><Check className="h-4 w-4 shrink-0" />{coachCopy}</li> : course.format?.requires_instructor ? <li className="flex gap-2"><Check className="h-4 w-4 shrink-0" />Instruktör vid varje tillfälle</li> : null}
             </ul>
           </div>
         </section> : null}
@@ -199,15 +222,15 @@ export default function CourseSeriesPage() {
               ["self", "Jag själv"],
               ["adult", "En annan vuxen"],
               ["dependent", "Ett barn jag ansvarar för"],
-            ] as const).map(([value, label]) => (
-              <button key={value} type="button" onClick={() => setParticipantType(value)} className={`flex h-14 items-center justify-between rounded-2xl border px-4 text-left font-bold ${participantType === value ? "border-slate-950" : "border-black/10"}`}>
-                {label}<span className={`grid h-5 w-5 place-items-center rounded-full border ${participantType === value ? "border-slate-950 bg-slate-950 text-white" : "border-black/20"}`}>{participantType === value ? <Check className="h-3 w-3" /> : null}</span>
+            ] as const).filter(([value]) => participantOptions.includes(value)).map(([value, label]) => (
+              <button key={value} type="button" onClick={() => setParticipantType(value)} className={`flex h-14 items-center justify-between rounded-2xl border px-4 text-left font-bold ${effectiveParticipantType === value ? "border-slate-950" : "border-black/10"}`}>
+                {label}<span className={`grid h-5 w-5 place-items-center rounded-full border ${effectiveParticipantType === value ? "border-slate-950 bg-slate-950 text-white" : "border-black/20"}`}>{effectiveParticipantType === value ? <Check className="h-3 w-3" /> : null}</span>
               </button>
             ))}
           </div>
           {requiresGuestDetails ? <div className="mt-4 grid gap-3"><input aria-label="Betalarens namn" value={payerName} onChange={(event) => setPayerName(event.target.value)} placeholder="Ditt namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Betalarens e-post" value={payerEmail} onChange={(event) => setPayerEmail(event.target.value)} placeholder="Din e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></div> : null}
-          {participantType === "adult" ? <div className="mt-4 grid gap-3"><input aria-label="Deltagarens namn" value={participantName} onChange={(event) => setParticipantName(event.target.value)} placeholder="Deltagarens namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Deltagarens e-post" value={participantEmail} onChange={(event) => setParticipantEmail(event.target.value)} placeholder="Deltagarens e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></div> : null}
-          {participantType === "dependent" ? verifiedUser ? <div className="mt-4 grid gap-3"><input aria-label="Barnets förnamn" value={childName} onChange={(event) => setChildName(event.target.value)} placeholder="Barnets förnamn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Barnets födelseår" value={childBirthYear} onChange={(event) => setChildBirthYear(event.target.value)} placeholder="Födelseår" inputMode="numeric" className="h-12 rounded-xl border border-black/15 px-3" /><p className="text-xs leading-relaxed text-slate-500">Uppgifterna visas bara för dig och behörig personal.</p></div> : <button type="button" onClick={() => buy.mutate()} className="mt-4 flex items-center gap-2 text-sm font-bold underline underline-offset-4">Logga in för att anmäla barn <ChevronRight className="h-4 w-4" /></button> : null}
+          {effectiveParticipantType === "adult" ? <div className="mt-4 grid gap-3"><input aria-label="Deltagarens namn" value={participantName} onChange={(event) => setParticipantName(event.target.value)} placeholder="Deltagarens namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Deltagarens e-post" value={participantEmail} onChange={(event) => setParticipantEmail(event.target.value)} placeholder="Deltagarens e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></div> : null}
+          {effectiveParticipantType === "dependent" ? verifiedUser ? <div className="mt-4 grid gap-3"><input aria-label="Barnets förnamn" value={childName} onChange={(event) => setChildName(event.target.value)} placeholder="Barnets förnamn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Barnets födelseår" value={childBirthYear} onChange={(event) => setChildBirthYear(event.target.value)} placeholder="Födelseår" inputMode="numeric" className="h-12 rounded-xl border border-black/15 px-3" /><p className="text-xs leading-relaxed text-slate-500">Uppgifterna visas bara för dig och behörig personal.</p></div> : <button type="button" onClick={() => buy.mutate()} className="mt-4 flex items-center gap-2 text-sm font-bold underline underline-offset-4">Logga in för att anmäla barn <ChevronRight className="h-4 w-4" /></button> : null}
         </section> : requiresGuestDetails ? <section className="mt-8 grid gap-3"><h2 className="text-lg font-black">Dina uppgifter</h2><input aria-label="Betalarens namn" value={payerName} onChange={(event) => setPayerName(event.target.value)} placeholder="Ditt namn" className="h-12 rounded-xl border border-black/15 px-3" /><input aria-label="Betalarens e-post" value={payerEmail} onChange={(event) => setPayerEmail(event.target.value)} placeholder="Din e-post" type="email" className="h-12 rounded-xl border border-black/15 px-3" /></section> : null}
 
         {presentation.type === "course" ? <section className="mt-8 border-t border-black/10 pt-6">

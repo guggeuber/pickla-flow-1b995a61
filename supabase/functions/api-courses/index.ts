@@ -3,6 +3,12 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { requireVenueRole } from '../_shared/authorization.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { resolveScopeAwarePricingDecision } from '../_shared/scope_pricing.ts';
+import {
+  DEFAULT_COURSE_PARTICIPANT_POLICY,
+  isCourseParticipantPolicy,
+  resolveCourseParticipantPolicy,
+} from '../_shared/course_participant_policy.ts';
+import { projectPublicCourseCoaches } from '../_shared/course_coach_projection.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 type ServiceClient = ReturnType<typeof getServiceClient>;
@@ -377,6 +383,12 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
     : null;
   const earlyBird = pricingDecision?.debug?.early_bird as Record<string, unknown> | undefined;
   const sessions = (sessionsResult.data || []) as Array<Record<string, unknown>>;
+  let coach: Awaited<ReturnType<typeof projectCourseCoach>> = { coverage: 'none', mode: 'unassigned', coaches: [] };
+  try {
+    coach = await projectCourseCoach(admin, series, sessions);
+  } catch (error) {
+    console.error('course coach projection unavailable', series.id, error instanceof Error ? error.message : error);
+  }
   return {
     ...series,
     format: formatResult.data || null,
@@ -402,11 +414,58 @@ async function projectCourse(admin: ServiceClient, series: CourseSeriesRow, user
     venue: venueResult.data || null,
     sessions,
     included_access: projectSeriesIncludedAccess(productResult.data, sessions),
+    participant_policy: resolveCourseParticipantPolicy(productResult.data?.resolver_rules),
+    coach,
     capacity,
     registration_state: registrationState(series),
     customer_has_commitment: Boolean(commitment),
     commitment,
   };
+}
+
+async function projectCourseCoach(
+  admin: ServiceClient,
+  series: CourseSeriesRow,
+  sessions: Array<Record<string, unknown>>,
+) {
+  const requiredSessions = sessions.filter((session) => session.is_active === true
+    && session.publish_status === 'published'
+    && session.requires_staffing === true
+    && session.id
+    && session.session_date);
+  const unassigned = { coverage: 'none', mode: 'unassigned', coaches: [] } as const;
+  if (!requiredSessions.length) return unassigned;
+
+  const sessionIds = requiredSessions.map((session) => String(session.id));
+  const { data: assignments, error: assignmentError } = await admin.from('operational_staff_assignments')
+    .select('source_id, occurrence_date, venue_staff_id')
+    .eq('venue_id', series.venue_id)
+    .eq('source_type', 'activity_session')
+    .eq('role', 'instructor')
+    .eq('status', 'active')
+    .in('source_id', sessionIds);
+  if (assignmentError) throw new Error(assignmentError.message);
+  const staffIds = [...new Set((assignments || []).map((assignment) => assignment.venue_staff_id).filter(Boolean))];
+  if (!staffIds.length) return unassigned;
+
+  const { data: staffRows, error: staffError } = await admin.from('venue_staff')
+    .select('id, user_id')
+    .eq('venue_id', series.venue_id)
+    .eq('is_active', true)
+    .in('id', staffIds);
+  if (staffError) throw new Error(staffError.message);
+  const userIds = [...new Set((staffRows || []).map((staff) => staff.user_id).filter(Boolean))];
+  const { data: profiles, error: profileError } = userIds.length
+    ? await admin.from('player_profiles').select('auth_user_id, display_name').in('auth_user_id', userIds)
+    : { data: [], error: null };
+  if (profileError) throw new Error(profileError.message);
+
+  return projectPublicCourseCoaches({
+    sessions: requiredSessions,
+    assignments: assignments || [],
+    staff: staffRows || [],
+    profiles: profiles || [],
+  });
 }
 
 async function listMyCourses(admin: ServiceClient, userId: string) {
@@ -942,6 +1001,58 @@ const coursesHandler = async (req: Request) => {
       return jsonResponse(data, 200, 0);
     }
 
+    if (req.method === 'PATCH' && path === 'series-participant-policy') {
+      const body = await req.json();
+      const series = await managedSellableSeries(admin, String(body.series_id || ''));
+      await requireVenueRole(admin, auth.userId, series.venue_id, ['venue_admin']);
+      if (!['draft', 'active', 'paused'].includes(String(series.status || ''))) {
+        return errorResponse('Deltagarregeln kan inte ändras för en avslutad omgång.', 409);
+      }
+      const participantPolicy = String(body.participant_policy || '');
+      if (!isCourseParticipantPolicy(participantPolicy)) return errorResponse('Ogiltig deltagarregel.', 400);
+      const [{ data: product, error: productError }, commitments, orderLines, activeHolds] = await Promise.all([
+        admin.from('access_products')
+          .select('id, resolver_rules')
+          .eq('id', series.access_product_id)
+          .eq('venue_id', series.venue_id)
+          .eq('product_kind', 'series_access')
+          .maybeSingle(),
+        admin.from('series_commitments').select('id', { count: 'exact', head: true })
+          .eq('activity_series_id', series.id),
+        admin.from('commerce_order_lines').select('id', { count: 'exact', head: true })
+          .eq('activity_series_id', series.id),
+        admin.from('capacity_holds').select('id', { count: 'exact', head: true })
+          .eq('venue_id', series.venue_id)
+          .eq('scope_type', 'activity_series')
+          .eq('scope_id', series.id)
+          .eq('status', 'active')
+          .gt('expires_at', new Date().toISOString()),
+      ]);
+      const boundaryError = productError || commitments.error || orderLines.error || activeHolds.error;
+      if (boundaryError) throw new Error(boundaryError.message);
+      if (!product) return errorResponse('Omgångens accessprodukt saknas.', 409);
+      if (Number(commitments.count || 0) > 0 || Number(orderLines.count || 0) > 0 || Number(activeHolds.count || 0) > 0) {
+        return errorResponse('Deltagarregeln är låst eftersom deltagare, köphistorik eller en pågående checkout finns.', 409);
+      }
+      const resolverRules = product.resolver_rules && typeof product.resolver_rules === 'object' && !Array.isArray(product.resolver_rules)
+        ? product.resolver_rules as Record<string, unknown>
+        : {};
+      const { data: updated, error: updateError } = await admin.from('access_products')
+        .update({ resolver_rules: { ...resolverRules, participant_policy: participantPolicy } })
+        .eq('id', product.id)
+        .eq('venue_id', series.venue_id)
+        .eq('product_kind', 'series_access')
+        .select('id, resolver_rules')
+        .maybeSingle();
+      if (updateError) throw new Error(updateError.message);
+      if (!updated) return errorResponse('Deltagarregeln kunde inte sparas.', 409);
+      return jsonResponse({
+        series_id: series.id,
+        access_product_id: updated.id,
+        participant_policy: resolveCourseParticipantPolicy(updated.resolver_rules),
+      }, 200, 0);
+    }
+
     if (req.method === 'POST' && path === 'series') {
       const body = await req.json();
       const venueId = String(body.venue_id || body.venueId || '');
@@ -954,6 +1065,10 @@ const coursesHandler = async (req: Request) => {
       if (formatError || !format) return errorResponse('Course Format not found', 404);
       const capacity = Math.floor(Number(body.capacity || 0));
       const priceSek = Math.round(Number(body.price_sek || 0));
+      const participantPolicy = body.participant_policy == null
+        ? DEFAULT_COURSE_PARTICIPANT_POLICY
+        : String(body.participant_policy);
+      if (!isCourseParticipantPolicy(participantPolicy)) return errorResponse('Ogiltig deltagarregel.', 400);
       const schedule = courseScheduleInput(body);
       if (!schedule || schedule.venueId !== venueId || capacity <= 0 || priceSek <= 0) return errorResponse('Course capacity, price, schedule and resources are required', 400);
       const totalSessions = schedule.totalSessions;
@@ -981,7 +1096,7 @@ const coursesHandler = async (req: Request) => {
         activity_addon_enabled: false,
         category: 'course',
         sport: 'pickleball',
-        resolver_rules: { purchase_kind: 'course', max_quantity: 1 },
+        resolver_rules: { purchase_kind: 'course', max_quantity: 1, participant_policy: participantPolicy },
       }).select('*').single();
       if (productError || !product) throw new Error(productError?.message || 'Course product could not be created');
       const { data: series, error: seriesError } = await admin.from('activity_series').insert({

@@ -13,6 +13,13 @@ import { evaluateCommerceAvailability, type CommerceProductLike } from '../_shar
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
 import {
+  assertCourseParticipantIdentity,
+  assertCourseParticipantRequest,
+  assertCurrentCourseParticipantIdentity,
+  resolveCourseParticipantPolicy,
+  type CourseParticipantType,
+} from '../_shared/course_participant_policy.ts';
+import {
   canonicalEntitlementFields,
   type EntitlementFunder,
   type EntitlementFundingType,
@@ -600,6 +607,18 @@ function validEmail(value: unknown) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 }
 
+function hasDelegatedCourseParticipantInput(body: Record<string, unknown>) {
+  return [
+    'participant_customer_id',
+    'beneficiary_customer_id',
+    'dependent_participant_id',
+    'participant_name',
+    'participant_email',
+    'dependent_first_name',
+    'dependent_birth_year',
+  ].some((key) => body[key] !== undefined && body[key] !== null && String(body[key]).trim() !== '');
+}
+
 async function createCourseCart(
   admin: AdminClient,
   body: Record<string, unknown>,
@@ -629,6 +648,13 @@ async function createCourseCart(
   if (productError || !product?.is_active || product.status !== 'active' || product.commerce_enabled !== true || Number(product.base_price_sek || 0) <= 0) {
     throw new Error(productError?.message || 'Kursprodukten är inte tillgänglig.');
   }
+  const participantPolicy = resolveCourseParticipantPolicy(product.resolver_rules);
+  const participantType = assertCourseParticipantRequest({
+    policy: participantPolicy,
+    participantType: String(body.participant_type || 'self'),
+    userId,
+    hasDelegatedInput: participantPolicy === 'self_only' && hasDelegatedCourseParticipantInput(body),
+  });
 
   const payerEmail = validEmail(body.guest_email);
   const payerName = String(body.guest_name || '').trim().slice(0, 120);
@@ -645,7 +671,6 @@ async function createCourseCart(
     });
   }
 
-  const participantType = String(body.participant_type || 'self');
   let participantCustomerId: string | null = null;
   let dependentParticipantId: string | null = null;
   if (participantType === 'self') {
@@ -691,6 +716,15 @@ async function createCourseCart(
   } else {
     throw new Error('Ogiltig deltagartyp.');
   }
+  assertCourseParticipantIdentity({
+    policy: participantPolicy,
+    participantType,
+    userId,
+    payerCustomerId,
+    participantCustomerId,
+    dependentParticipantId,
+    beneficiaryUserId: participantType === 'self' ? userId : null,
+  });
 
   let duplicateQuery = admin.from('series_commitments').select('id')
     .eq('activity_series_id', series.id)
@@ -724,7 +758,7 @@ async function createCourseCart(
     draft_scope: `course:${series.id}`,
     guest_name: payerName || null,
     guest_email: payerEmail || null,
-    metadata: { source: 'course_registration', participant_type: participantType },
+    metadata: { source: 'course_registration', participant_type: participantType, participant_policy: participantPolicy },
   }).select('*').single();
   if (orderError || !order) throw new Error(orderError?.message || 'Kursköpet kunde inte skapas.');
   const lineId = crypto.randomUUID();
@@ -757,7 +791,7 @@ async function createCourseCart(
       vat_rate: Number(product.vat_rate || 0),
       resolver_rules: product.resolver_rules || {},
     },
-    metadata: { participant_type: participantType },
+    metadata: { participant_type: participantType, participant_policy: participantPolicy },
   });
   if (lineError) {
     await admin.from('commerce_orders').delete().eq('id', order.id).eq('status', 'draft');
@@ -1045,6 +1079,16 @@ async function resolveLines(
           || (opens?.isValid && now < opens) || (closes?.isValid && now >= closes)) {
           throw new Error(seriesError?.message || 'Kursanmälan är stängd.');
         }
+        await assertCurrentCourseParticipantIdentity(admin, {
+          activitySeriesId: line.activity_series_id,
+          venueId: order.venue_id,
+          participantType: String(line.metadata?.participant_type || order.metadata?.participant_type || 'self') as CourseParticipantType,
+          userId: line.beneficiary_user_id || userId || null,
+          payerCustomerId: customerId || order.customer_id || null,
+          participantCustomerId: line.beneficiary_customer_id || null,
+          dependentParticipantId: line.dependent_participant_id || null,
+          beneficiaryUserId: line.beneficiary_user_id || null,
+        });
         if (Number(product.base_price_sek || 0) <= 0) throw new Error('Kursen saknar pris i Admin.');
         const decision = await resolveScopeAwarePricingDecision({
           client: admin,
@@ -2592,6 +2636,12 @@ const commerceHandler = async (req: Request) => {
     if (message.includes('not found') || message.includes('not_found')) return errorResponse(message, 404);
     if (message.includes('Platsen hann tas')) return errorResponse(message, 409);
     if (message.includes('Kursen är fullbokad')) return errorResponse(message, 409);
+    if (message === 'course_self_only_requires_verified_purchaser') {
+      return errorResponse('Logga in med ditt verifierade konto för att boka den här kursen för dig själv.', 401);
+    }
+    if (message === 'course_participant_policy_violation' || message === 'course_participant_identity_mismatch') {
+      return errorResponse('Den här kursen kan bara bokas för den verifierade köparen själv.', 409);
+    }
     return errorResponse(message, 400);
   }
 };

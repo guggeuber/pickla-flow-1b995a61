@@ -5,6 +5,11 @@ import { AlertTriangle, CalendarDays, Check, ChevronDown, Gift, ImagePlus, Loade
 import { toast } from "sonner";
 import SeriesMemberPricingEditor from "@/components/admin/SeriesMemberPricingEditor";
 import {
+  COURSE_PARTICIPANT_POLICY_OPTIONS,
+  DEFAULT_COURSE_PARTICIPANT_POLICY,
+  type CourseParticipantPolicy,
+} from "@/lib/courseParticipantPolicy";
+import {
   createCourseFormat,
   createCourseSeries,
   cancelSeriesStaffPlace,
@@ -15,6 +20,7 @@ import {
   previewCourseSeries,
   saveSeriesEarlyBird,
   saveSeriesIncludedAccess,
+  saveSeriesParticipantPolicy,
   type CourseFormat,
   type CourseResourcePreviewRow,
   type CourseSeries,
@@ -194,6 +200,51 @@ function SeriesIncludedAccessEditor({ venueId, series }: { venueId: string; seri
   </div>;
 }
 
+function SeriesParticipantPolicyEditor({ venueId, series }: { venueId: string; series: CourseSeries }) {
+  const queryClient = useQueryClient();
+  const configured = series.participant_policy || DEFAULT_COURSE_PARTICIPANT_POLICY;
+  const [participantPolicy, setParticipantPolicy] = useState<CourseParticipantPolicy>(configured);
+  const commerciallyLocked = Number(series.edit_policy?.commitment_count || 0) > 0
+    || Number(series.edit_policy?.order_history_count || 0) > 0
+    || Number(series.edit_policy?.active_holds_count || 0) > 0;
+
+  useEffect(() => setParticipantPolicy(configured), [configured, series.id]);
+
+  const save = useMutation({
+    mutationFn: () => saveSeriesParticipantPolicy({ seriesId: series.id, participantPolicy }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin-courses", venueId] });
+      toast.success("Deltagarregeln är sparad");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return <div className="mt-3 rounded-xl border border-border bg-background p-3" data-testid="series-participant-policy">
+    <div>
+      <p className="text-xs font-black uppercase tracking-wider">Vem kan bokas?</p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">Styr vem kunden får anmäla till just det här erbjudandet.</p>
+    </div>
+    <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+      <label className="grid gap-1 text-xs font-semibold">
+        Deltagare
+        <select
+          aria-label="Vem kan bokas?"
+          className={inputClass}
+          value={participantPolicy}
+          disabled={commerciallyLocked}
+          onChange={(event) => setParticipantPolicy(event.target.value as CourseParticipantPolicy)}
+        >
+          {COURSE_PARTICIPANT_POLICY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      </label>
+      <button type="button" onClick={() => save.mutate()} disabled={save.isPending || participantPolicy === configured || commerciallyLocked} className="inline-flex h-10 items-center justify-center gap-1 rounded-lg border border-border px-3 text-xs font-bold disabled:opacity-40">
+        {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}Spara
+      </button>
+    </div>
+    {commerciallyLocked ? <p className="mt-2 text-[11px] text-muted-foreground">Inställningen är låst eftersom deltagare, köphistorik eller en pågående checkout finns.</p> : null}
+  </div>;
+}
+
 type AdminCoursesProps = {
   venueId: string;
   catalogMode?: boolean;
@@ -240,6 +291,7 @@ export default function AdminCourses({
   const [courtIds, setCourtIds] = useState<string[]>([]);
   const [seriesImages, setSeriesImages] = useState<string[]>([]);
   const [seriesImageBusy, setSeriesImageBusy] = useState(false);
+  const [participantPolicy, setParticipantPolicy] = useState<CourseParticipantPolicy>(DEFAULT_COURSE_PARTICIPANT_POLICY);
 
   const [grantSeriesId, setGrantSeriesId] = useState<string | null>(null);
   const [grantSearch, setGrantSearch] = useState("");
@@ -423,6 +475,7 @@ export default function AdminCourses({
     setDays([2]);
     setCourtIds([]);
     setSeriesImages([]);
+    setParticipantPolicy(DEFAULT_COURSE_PARTICIPANT_POLICY);
   };
   const editSeries = useCallback((series: CourseSeries) => {
     setEditingSeriesId(series.id);
@@ -466,6 +519,7 @@ export default function AdminCourses({
         capacity: Number(capacity),
         price_sek: Number(price),
         total_sessions: Number(totalSessions),
+        ...(!editingSeriesId ? { participant_policy: participantPolicy } : {}),
       };
       return editingSeriesId ? updateCourseSeries(input) : createCourseSeries(input);
     },
@@ -688,7 +742,15 @@ export default function AdminCourses({
             <div><p className="text-xs font-black uppercase tracking-wider text-muted-foreground">Pris</p><label className="mt-2 grid gap-1 text-xs text-muted-foreground">Ordinarie pris SEK<input className={inputClass} inputMode="numeric" value={price} onChange={(event) => setPrice(event.target.value)} /></label>{editingSeries?.edit_policy?.historical_prices_frozen ? <p className="mt-1 text-[11px] text-muted-foreground">Ändringen gäller endast framtida köp. Tidigare order, kvitto och huvudbok förblir frusna.</p> : null}</div>
           </div>
 
+          {!editingSeriesId && editingFormat?.presentation_type === "course" ? <label className="mt-3 grid gap-1 text-xs font-semibold">
+            Vem kan bokas?
+            <select aria-label="Vem kan bokas?" className={inputClass} value={participantPolicy} onChange={(event) => setParticipantPolicy(event.target.value as CourseParticipantPolicy)}>
+              {COURSE_PARTICIPANT_POLICY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label> : null}
+
           {editingSeries?.product ? <SeriesEarlyBirdEditor venueId={venueId} series={editingSeries} /> : null}
+          {editingSeries?.product && editingSeries.format?.presentation_type === "course" ? <SeriesParticipantPolicyEditor venueId={venueId} series={editingSeries} /> : null}
           {editingSeries?.product ? <SeriesIncludedAccessEditor venueId={venueId} series={editingSeries} /> : null}
           {editingSeriesId && memberPricing.isLoading ? <p className="mt-3 text-xs text-muted-foreground">Hämtar medlemspriser…</p> : null}
           {editingSeriesId && memberPricing.isError ? <p className="mt-3 text-xs text-destructive">Medlemspriserna kunde inte hämtas.</p> : null}

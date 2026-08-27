@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   removeSeriesMemberPricing: vi.fn(),
   saveSeriesEarlyBird: vi.fn(),
   saveSeriesIncludedAccess: vi.fn(),
+  saveSeriesParticipantPolicy: vi.fn(),
   shareOrCopy: vi.fn(),
 }));
 
@@ -46,6 +47,7 @@ vi.mock("@/lib/courses", () => ({
   removeSeriesMemberPricing: mocks.removeSeriesMemberPricing,
   saveSeriesEarlyBird: mocks.saveSeriesEarlyBird,
   saveSeriesIncludedAccess: mocks.saveSeriesIncludedAccess,
+  saveSeriesParticipantPolicy: mocks.saveSeriesParticipantPolicy,
 }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="topbar" /> }));
 vi.mock("@/lib/commerce", () => ({
@@ -60,6 +62,8 @@ const course = {
   total_sessions: 6, registration_opens_at: "2026-08-01T00:00:00Z", registration_closes_at: "2026-09-08T16:00:00Z",
   recurrence_days: [2], start_time: "18:00", end_time: "19:00", court_ids: [], registration_state: "open",
   customer_has_commitment: false,
+  participant_policy: "self_adult_or_dependent" as const,
+  coach: { coverage: "none" as const, mode: "unassigned" as const, coaches: [] },
   format: { id: "format-1", name: "Pickla 101", description: "Dina första fyra veckor med pickleball.", full_description: "Introduktion\n\nTillfälle 1 · Grepp och grundslag.\nTillfälle 2 · Serve och retur.\n\nDetta ingår\nInstruktör och lånerack.", image_urls: [], age_group: "adult", level: "beginner", requires_instructor: true, presentation_type: "course" },
   product: { id: "product-1", product_key: "course_pickla_101", name: "Pickla 101", description: null, base_price_sek: 1495, vat_rate: 6 },
   venue: { id: "venue-1", name: "Pickla Stockholm", slug: "pickla-arena-sthlm" },
@@ -222,6 +226,70 @@ describe("Course V1 customer flow", () => {
     expect(screen.queryByLabelText(/Barnets e-post/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Barnets efternamn/i)).not.toBeInTheDocument();
     expect(screen.getByText("Uppgifterna visas bara för dig och behörig personal.")).toBeInTheDocument();
+  });
+
+  it("hides participant selection and maps a verified self-only purchaser automatically", async () => {
+    const selfOnlyCourse = {
+      ...course,
+      participant_policy: "self_only" as const,
+      product: { ...course.product, resolver_rules: { participant_policy: "self_only" } },
+    };
+    mocks.user = { id: "verified-purchaser" };
+    mocks.fetchCourseDetail.mockResolvedValue(selfOnlyCourse);
+    mocks.createCourseCart.mockResolvedValue({ order: { id: "order-self" }, cart_token: "x".repeat(40) });
+    renderCourse();
+
+    expect(await screen.findByRole("heading", { name: "Pickla 101 · Höst 2026" })).toBeInTheDocument();
+    expect(screen.queryByText("Vem ska delta?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Jag själv" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "En annan vuxen" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ett barn jag ansvarar för" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Boka kurs/ }));
+    await waitFor(() => expect(mocks.createCourseCart).toHaveBeenCalledWith({ series_id: "series-1" }, undefined));
+  });
+
+  it("keeps delegated adult while suppressing dependents for self-or-adult offers", async () => {
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      participant_policy: "self_or_adult",
+      product: { ...course.product, resolver_rules: { participant_policy: "self_or_adult" } },
+    });
+    renderCourse();
+    expect(await screen.findByRole("button", { name: "En annan vuxen" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ett barn jag ansvarar för" })).not.toBeInTheDocument();
+  });
+
+  it("shows one canonical named coach without redundant generic instructor copy", async () => {
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      total_sessions: 4,
+      sessions: course.sessions.slice(0, 4),
+      coach: { coverage: "complete", mode: "single", coaches: [{ display_name: "Gunnar Svalander" }] },
+    });
+    renderCourse();
+    expect(await screen.findByText("Coach: Gunnar Svalander")).toBeInTheDocument();
+    expect(screen.getAllByText("Coach: Gunnar Svalander")).toHaveLength(1);
+    expect(screen.getByText("4 coachledda tillfällen")).toBeInTheDocument();
+    expect(screen.queryByText("Instruktör vid varje tillfälle")).not.toBeInTheDocument();
+  });
+
+  it("does not invent one coach when staffing is unassigned or split across occurrences", async () => {
+    mocks.fetchCourseDetail.mockResolvedValueOnce({
+      ...course,
+      coach: { coverage: "none", mode: "unassigned", coaches: [] },
+    });
+    const first = renderCourse();
+    expect((await screen.findAllByText("Instruktör vid varje tillfälle")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Coach:/)).not.toBeInTheDocument();
+    first.unmount();
+
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...course,
+      coach: { coverage: "complete", mode: "multiple", coaches: [{ display_name: "Anna Andersson" }, { display_name: "Bertil Berg" }] },
+    });
+    renderCourse();
+    expect(await screen.findByText("Coacher: Anna Andersson och Bertil Berg")).toBeInTheDocument();
+    expect(screen.queryByText(/^Coach:/)).not.toBeInTheDocument();
   });
 
   it("projects Parker Brunch as a one-occurrence social event without Course language", async () => {
@@ -481,6 +549,28 @@ describe("Course V1 Admin", () => {
       value: 1195,
       label: "Play · Pickla 101",
     }));
+  });
+
+  it("configures the participant policy per Course offer without changing the age taxonomy", async () => {
+    mocks.fetchCourseAdmin.mockResolvedValue({ formats: [course.format], series: [course], courts: [] });
+    mocks.saveSeriesParticipantPolicy.mockResolvedValue({
+      series_id: course.id,
+      access_product_id: course.product.id,
+      participant_policy: "self_only",
+    });
+    render(<AdminCourses venueId="venue-1" />, { wrapper: wrapper("/hub/admin/schedule") });
+    fireEvent.click(screen.getByRole("button", { name: /Program/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Redigera omgång Pickla 101 · Höst 2026" }));
+
+    const section = await screen.findByTestId("series-participant-policy");
+    expect(within(section).getByLabelText("Vem kan bokas?")).toHaveValue("self_adult_or_dependent");
+    fireEvent.change(within(section).getByLabelText("Vem kan bokas?"), { target: { value: "self_only" } });
+    fireEvent.click(within(section).getByRole("button", { name: "Spara" }));
+    await waitFor(() => expect(mocks.saveSeriesParticipantPolicy).toHaveBeenCalledWith({
+      seriesId: "series-1",
+      participantPolicy: "self_only",
+    }));
+    expect(course.format.age_group).toBe("adult");
   });
 
   it("grants an identified participant a non-financial Series place with a required reason", async () => {

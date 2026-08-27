@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
+import type { CourseParticipantPolicy } from "@/lib/courseParticipantPolicy";
 import type { SeriesPresentationType } from "@/lib/seriesPresentation";
 
 export type CourseFormat = {
@@ -83,6 +84,12 @@ export type CourseSeries = {
   court_ids: string[];
   registration_state: "upcoming" | "open" | "closed";
   customer_has_commitment: boolean;
+  participant_policy: CourseParticipantPolicy;
+  coach: {
+    coverage: "complete" | "partial" | "none";
+    mode: "single" | "multiple" | "unassigned";
+    coaches: Array<{ display_name: string }>;
+  };
   format: CourseFormat;
   product: {
     id: string;
@@ -334,6 +341,20 @@ export function saveSeriesIncludedAccess(input: {
   }>("api-courses", "series-included-access", {
     series_id: input.seriesId,
     open_play_series_period_enabled: input.openPlaySeriesPeriodEnabled,
+  });
+}
+
+export function saveSeriesParticipantPolicy(input: {
+  seriesId: string;
+  participantPolicy: CourseParticipantPolicy;
+}) {
+  return apiPatch<{
+    series_id: string;
+    access_product_id: string;
+    participant_policy: CourseParticipantPolicy;
+  }>("api-courses", "series-participant-policy", {
+    series_id: input.seriesId,
+    participant_policy: input.participantPolicy,
   });
 }
 

@@ -18,6 +18,10 @@ import {
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 import { finalizeExpiredCommerceCheckout } from '../_shared/commerce_checkout_expiry.ts';
+import {
+  assertCurrentCourseParticipantIdentity,
+  type CourseParticipantType,
+} from '../_shared/course_participant_policy.ts';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
@@ -459,6 +463,28 @@ async function handleCommerceOrder(
     } else if (purchaseKind === 'course') {
       const participantCustomerId = participation.beneficiary_customer_id || null;
       const dependentParticipantId = participation.dependent_participant_id || null;
+      try {
+        await assertCurrentCourseParticipantIdentity(serviceClient, {
+          activitySeriesId: participation.activity_series_id,
+          venueId: order.venue_id,
+          participantType: String(participation.metadata?.participant_type || order.metadata?.participant_type || 'self') as CourseParticipantType,
+          userId: participation.beneficiary_user_id || order.user_id || null,
+          payerCustomerId: customerId,
+          participantCustomerId,
+          dependentParticipantId,
+          beneficiaryUserId: participation.beneficiary_user_id || null,
+        });
+      } catch (error) {
+        await serviceClient.from('commerce_orders').update({
+          status: 'attention',
+          metadata: {
+            ...(order.metadata || {}),
+            attention_reason: 'course_participant_policy_violation',
+          },
+        }).eq('id', orderId);
+        await serviceClient.from('commerce_order_lines').update({ fulfillment_status: 'attention' }).eq('id', participation.id);
+        throw error;
+      }
       const { data: committed, error: commitmentError } = await serviceClient.rpc('commit_series_participant_capacity', {
         p_venue_id: order.venue_id,
         p_activity_series_id: participation.activity_series_id,
