@@ -29,6 +29,11 @@ export type ApiRequestOptions = {
   auth?: "session" | "omit";
   expectedStatuses?: number[];
   signal?: AbortSignal;
+  publicRead?: {
+    maxRetries?: 0 | 1;
+    retryDelayMs?: number;
+    staleRetained?: boolean;
+  };
 };
 
 type ApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -91,13 +96,158 @@ async function readErrorBody(res: Response) {
   };
 }
 
+type PublicReadFailure = {
+  status?: number;
+  message: string;
+  data?: Record<string, unknown>;
+  requestId?: string;
+};
+
+function responseRequestId(response: Response, data?: Record<string, unknown>) {
+  const header = response.headers.get("x-pickla-request-id");
+  if (header) return header;
+  return typeof data?.request_id === "string" ? data.request_id : undefined;
+}
+
+export function isTransientPublicReadFailure(failure: PublicReadFailure | unknown) {
+  if (failure instanceof Error && !("status" in failure)) return failure.name !== "AbortError";
+  const shaped = failure as PublicReadFailure;
+  if (shaped.status === 502 || shaped.status === 503 || shaped.status === 504) return true;
+  if (shaped.status !== 500) return false;
+  const errorClass = typeof shaped.data?.error_class === "string" ? shaped.data.error_class : "";
+  if (["auth_jwt_validation", "transport", "upstream_postgrest", "timeout"].includes(errorClass)) return true;
+  return /jwt issued at future|failed to fetch|network|connection|timeout|timed out/i.test(shaped.message || "");
+}
+
+function publicReadDelay(delayMs: number, signal?: AbortSignal) {
+  if (delayMs <= 0) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timeout = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function requestUrl(fn: string, endpoint: string, params?: Record<string, string>) {
   const url = new URL(`${BASE_URL}/${fn}/${endpoint}`);
   if (params) Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
   return url.toString();
 }
 
+async function publicReadRequest<T>({ method, fn, endpoint, params, body, options }: ApiRequestInput): Promise<T> {
+  const startedAt = performance.now();
+  const url = requestUrl(fn, endpoint, params);
+  const includeJsonContentType = body !== undefined;
+  const accessToken = await getRequestAccessToken(options.auth);
+  const maxRetries = options.publicRead?.maxRetries ?? 1;
+  const retryDelayMs = Math.max(0, options.publicRead?.retryDelayMs ?? 250);
+  let firstFailure: PublicReadFailure | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers: buildHeaders(includeJsonContentType, accessToken),
+        signal: options.signal,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (error) {
+      if ((error as Error | null)?.name === "AbortError") throw error;
+      const failure: PublicReadFailure = {
+        status: 503,
+        message: error instanceof Error ? error.message : "Public read network failure",
+        data: { code: "public_read_network_error", error_class: "transport" },
+      };
+      firstFailure ||= failure;
+      if (attempt < maxRetries && isTransientPublicReadFailure(error)) {
+        await publicReadDelay(retryDelayMs, options.signal);
+        continue;
+      }
+      reportApiFailure({
+        method,
+        fn,
+        endpoint,
+        status: failure.status,
+        message: failure.message,
+        duration_ms: Math.round(performance.now() - startedAt),
+        request_id: failure.requestId,
+        initial_request_id: firstFailure.requestId,
+        error_class: "transport",
+        retry_count: attempt,
+        retry_outcome: "failed",
+        stale_retained: Boolean(options.publicRead?.staleRetained),
+      });
+      throw new ApiRequestError("Kunde inte hämta data just nu", 503, failure.data);
+    }
+
+    const requestId = response.headers.get("x-pickla-request-id") || undefined;
+    if (response.ok) {
+      logApiTiming(method, url, startedAt, response.status);
+      if (firstFailure) {
+        reportApiFailure({
+          method,
+          fn,
+          endpoint,
+          status: firstFailure.status,
+          message: firstFailure.message,
+          duration_ms: Math.round(performance.now() - startedAt),
+          request_id: firstFailure.requestId,
+          final_request_id: requestId,
+          error_class: typeof firstFailure.data?.error_class === "string" ? firstFailure.data.error_class : undefined,
+          retry_count: attempt,
+          retry_outcome: "recovered",
+          stale_retained: Boolean(options.publicRead?.staleRetained),
+        });
+      }
+      return response.json();
+    }
+
+    const errorBody = await readErrorBody(response);
+    const failure: PublicReadFailure = {
+      status: response.status,
+      message: errorBody.message,
+      data: errorBody.data,
+      requestId: responseRequestId(response, errorBody.data),
+    };
+    firstFailure ||= failure;
+    if (attempt < maxRetries && isTransientPublicReadFailure(failure)) {
+      await publicReadDelay(retryDelayMs, options.signal);
+      continue;
+    }
+
+    const expected = !shouldReportApiFailure(response.status, options);
+    logApiTiming(method, url, startedAt, response.status, undefined, expected);
+    if (!expected) {
+      reportApiFailure({
+        method,
+        fn,
+        endpoint,
+        status: response.status,
+        message: errorBody.message,
+        duration_ms: Math.round(performance.now() - startedAt),
+        request_id: failure.requestId,
+        initial_request_id: firstFailure.requestId,
+        error_class: typeof errorBody.data?.error_class === "string" ? errorBody.data.error_class : undefined,
+        retry_count: attempt,
+        retry_outcome: "failed",
+        stale_retained: Boolean(options.publicRead?.staleRetained),
+      });
+    }
+    throw new ApiRequestError(errorBody.message, response.status, errorBody.data);
+  }
+
+  throw new ApiRequestError("Kunde inte hämta data just nu", 503);
+}
+
 async function apiRequest<T>({ method, fn, endpoint, params, body, options }: ApiRequestInput): Promise<T> {
+  if (options.publicRead) return publicReadRequest<T>({ method, fn, endpoint, params, body, options });
   const startedAt = performance.now();
   const url = requestUrl(fn, endpoint, params);
   const includeJsonContentType = body !== undefined;

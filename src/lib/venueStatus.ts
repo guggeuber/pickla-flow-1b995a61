@@ -121,8 +121,16 @@ export function useVenueWithHours(slug: string | undefined) {
     queryKey: ["venue-with-hours", slug],
     enabled: !!slug,
     staleTime: 60_000,
-    queryFn: async () => {
-      const data = await apiGet<any>("api-bookings", "public-venue", { slug }, { auth: "omit" });
+    retry: false,
+    queryFn: async ({ client, queryKey }) => {
+      const data = await apiGet<any>("api-bookings", "public-venue", { slug }, {
+        auth: "omit",
+        publicRead: {
+          maxRetries: 1,
+          retryDelayMs: 250,
+          staleRetained: Boolean(client.getQueryData(queryKey)),
+        },
+      });
       if (data?.venue?.slug) rememberValidCustomerVenue(data.venue.slug);
       return {
         ...(data?.venue || {}),

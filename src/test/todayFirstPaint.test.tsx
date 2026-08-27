@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   fetchCourseHome: vi.fn(),
   fetchLeagueHome: vi.fn(),
   venueData: undefined as { id: string; name: string; slug: string } | undefined,
+  venueError: false,
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -24,7 +25,11 @@ vi.mock("@/hooks/useAuth", () => ({
 vi.mock("@/hooks/useVerifiedAccount", () => ({ useVerifiedAccount: () => mocks.account }));
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: () => <div data-testid="topbar" /> }));
 vi.mock("@/lib/venueStatus", () => ({
-  useVenueWithHours: () => ({ data: mocks.venueData, isLoading: !mocks.venueData, isError: false }),
+  useVenueWithHours: () => ({
+    data: mocks.venueData,
+    isLoading: !mocks.venueData && !mocks.venueError,
+    isError: mocks.venueError,
+  }),
 }));
 vi.mock("@/lib/api", () => ({ apiGet: mocks.apiGet }));
 vi.mock("@/lib/courses", async (importOriginal) => {
@@ -114,12 +119,13 @@ const primaryResponse = {
   }],
 };
 
-function renderToday(initialEntry = "/today") {
-  return render(
-    <QueryClientProvider client={client()}>
+function renderToday(initialEntry = "/today", queryClient = client()) {
+  const view = render(
+    <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialEntry]}><TodayPage /></MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 describe("Today customer first paint", () => {
@@ -133,6 +139,7 @@ describe("Today customer first paint", () => {
     mocks.account.isVerified = false;
     mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.venueData = undefined;
+    mocks.venueError = false;
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
       return never();
@@ -159,7 +166,10 @@ describe("Today customer first paint", () => {
       "api-event-public",
       "today-primary",
       expect.objectContaining({ venueSlug: "pickla-arena-sthlm" }),
-      { auth: "omit" },
+      expect.objectContaining({
+        auth: "omit",
+        publicRead: expect.objectContaining({ maxRetries: 1 }),
+      }),
     );
     expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
     expect(mocks.fetchLeagueHome).not.toHaveBeenCalled();
@@ -199,7 +209,111 @@ describe("Today customer first paint", () => {
       "api-event-public",
       "today-primary",
       expect.objectContaining({ venueSlug: "future-pickla-venue" }),
-      { auth: "omit" },
+      expect.objectContaining({
+        auth: "omit",
+        publicRead: expect.objectContaining({ maxRetries: 1 }),
+      }),
     ));
+  });
+
+  it("shows the initial error state when no successful primary result exists", async () => {
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => (
+      endpoint === "today-primary"
+        ? Promise.reject(Object.assign(new Error("Unavailable"), { status: 503 }))
+        : never()
+    ));
+    renderToday();
+
+    expect(await screen.findByText("Dagens schema kunde inte hämtas.")).toBeInTheDocument();
+    expect(screen.queryByTestId("today-refresh-warning")).not.toBeInTheDocument();
+  });
+
+  it("keeps a successful schedule visible when a transient background refresh fails", async () => {
+    const view = renderToday();
+    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => (
+      endpoint === "today-primary"
+        ? Promise.reject(Object.assign(new Error("Unavailable"), { status: 503 }))
+        : never()
+    ));
+    await act(async () => {
+      await view.queryClient.invalidateQueries({ queryKey: ["today-primary", "pickla-arena-sthlm"] });
+    });
+
+    expect(screen.getByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+    expect(await screen.findByText("Kunde inte uppdatera just nu")).toBeInTheDocument();
+    expect(screen.queryByText("Dagens schema kunde inte hämtas.")).not.toBeInTheDocument();
+  });
+
+  it("clears the stale warning after manual retry recovers", async () => {
+    const view = renderToday();
+    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => (
+      endpoint === "today-primary"
+        ? Promise.reject(Object.assign(new Error("Unavailable"), { status: 503 }))
+        : never()
+    ));
+    await act(async () => {
+      await view.queryClient.invalidateQueries({ queryKey: ["today-primary", "pickla-arena-sthlm"] });
+    });
+    expect(await screen.findByText("Kunde inte uppdatera just nu")).toBeInTheDocument();
+
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => (
+      endpoint === "today-primary" ? Promise.resolve(primaryResponse) : never()
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "Försök igen" }));
+    await waitFor(() => expect(screen.queryByTestId("today-refresh-warning")).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+  });
+
+  it("replaces cached content with a successful refreshed primary result without a warning", async () => {
+    const view = renderToday();
+    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+    const refreshedResponse = {
+      ...primaryResponse,
+      sessions: primaryResponse.sessions.map((session) => (
+        session.id === "visible-session" ? { ...session, name: "Open Play Uppdaterad" } : session
+      )),
+    };
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => (
+      endpoint === "today-primary" ? Promise.resolve(refreshedResponse) : never()
+    ));
+
+    await act(async () => {
+      await view.queryClient.invalidateQueries({ queryKey: ["today-primary", "pickla-arena-sthlm"] });
+    });
+
+    expect(await screen.findByRole("heading", { name: "Open Play Uppdaterad" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Open Play Express" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("today-refresh-warning")).not.toBeInTheDocument();
+  });
+
+  it("renders venue-not-found for an initial true 404", async () => {
+    mocks.venueData = { id: "venue-1", name: "Pickla Arena Stockholm", slug: "pickla-arena-sthlm" };
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => (
+      endpoint === "today-primary"
+        ? Promise.reject(Object.assign(new Error("Venue not found"), { status: 404 }))
+        : never()
+    ));
+    renderToday();
+
+    expect(await screen.findByText("Arenan kunde inte hittas.")).toBeInTheDocument();
+    expect(screen.queryByText("Dagens schema kunde inte hämtas.")).not.toBeInTheDocument();
+  });
+
+  it("does not reuse old venue data when navigating to a different invalid slug", async () => {
+    const queryClient = client();
+    const first = renderToday("/today", queryClient);
+    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+    first.unmount();
+
+    mocks.venueData = undefined;
+    mocks.venueError = true;
+    renderToday("/today?v=does-not-exist", queryClient);
+
+    expect(await screen.findByText("Arenan kunde inte hittas.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Open Play Express" })).not.toBeInTheDocument();
   });
 });

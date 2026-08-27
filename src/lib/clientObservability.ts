@@ -133,14 +133,26 @@ export function reportApiFailure(input: {
   status?: number;
   message: string;
   duration_ms: number;
+  request_id?: string;
+  initial_request_id?: string;
+  final_request_id?: string;
+  error_class?: string;
+  retry_count?: number;
+  retry_outcome?: "recovered" | "failed";
+  stale_retained?: boolean;
 }) {
   if (input.fn === "api-ops" && input.endpoint === "client-event") return;
-  const severity: ClientEventSeverity = !input.status || input.status >= 500 ? "error" : "warning";
+  const isPublicReadIncident = input.retry_outcome !== undefined;
+  const severity: ClientEventSeverity = input.retry_outcome === "recovered"
+    ? "warning"
+    : !input.status || input.status >= 500 ? "error" : "warning";
   reportClientEvent({
-    event_type: "client_api_error",
+    event_type: isPublicReadIncident ? "client_public_read_incident" : "client_api_error",
     severity,
     message: `${input.method} ${input.fn}/${input.endpoint} ${input.status ?? "ERR"}: ${input.message}`,
-    fingerprint: `api:${input.method}:${input.fn}:${input.endpoint}:${input.status ?? "ERR"}`,
+    fingerprint: isPublicReadIncident
+      ? `public-read:${input.method}:${input.fn}:${input.endpoint}:${input.status ?? "ERR"}:${input.retry_outcome}`
+      : `api:${input.method}:${input.fn}:${input.endpoint}:${input.status ?? "ERR"}`,
     metadata: input,
   });
 }

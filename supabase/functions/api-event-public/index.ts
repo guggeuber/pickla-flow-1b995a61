@@ -8,6 +8,16 @@ import { projectPublicActivitySessionHosts } from '../_shared/public_activity_ho
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
+import {
+  createPublicReadContext,
+  measurePublicReadStage,
+  PublicReadStageError,
+  publicReadClientErrorResponse,
+  publicReadFailureResponse,
+  publicReadJsonResponse,
+  publicReadNotFoundResponse,
+  resolvePublicVenueQuery,
+} from '../_shared/public_read_resilience.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -359,17 +369,6 @@ function activityOccurrenceDates(session: any, startDate: string, days = 7) {
     }
   }
   return dates;
-}
-
-function timedJsonResponse(data: unknown, timings: Record<string, number>, cacheSeconds = 5) {
-  const serializationStartedAt = performance.now();
-  const response = jsonResponse(data, 200, cacheSeconds);
-  timings.serializationMs = Math.round(performance.now() - serializationStartedAt);
-  response.headers.set('Server-Timing', Object.entries(timings)
-    .map(([name, duration]) => `${name.replace(/Ms$/, '')};dur=${duration}`)
-    .join(', '));
-  response.headers.set('Timing-Allow-Origin', '*');
-  return response;
 }
 
 function ogTitleForActivity(session: any, occurrenceDate: string) {
@@ -1340,77 +1339,109 @@ Deno.serve(async (req) => {
     // avatars, interests, bookings and personalized pricing so public first
     // paint never waits for optional authentication or enrichment.
     if (req.method === 'GET' && path === 'today-primary') {
-      const totalStartedAt = performance.now();
+      const readContext = createPublicReadContext('api-event-public', 'today-primary');
+      const serviceCredential = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
       const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
       const startDate = String(url.searchParams.get('startDate') || '').trim();
       const endDate = String(url.searchParams.get('endDate') || '').trim();
       if (!venueSlug || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < startDate) {
-        return errorResponse('Venue and valid date range are required', 400);
+        return publicReadClientErrorResponse('Venue and valid date range are required', 400, readContext);
       }
 
-      const primaryDbStartedAt = performance.now();
-      const [venueResult, sessionsResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
-        client.from('venues')
-          .select('id, name, slug')
-          .eq('slug', venueSlug)
-          .eq('is_public', true)
-          .maybeSingle(),
-        client.from('activity_sessions')
-          .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, activity_series(image_urls, activity_formats(image_urls)), venues!inner(slug, is_public)')
-          .eq('venues.slug', venueSlug)
-          .eq('venues.is_public', true)
-          .eq('is_active', true)
-          .eq('publish_status', 'published')
-          .eq('closed_to_public', false)
-          .order('start_time', { ascending: true }),
-        client.from('events')
-          .select('id, name, display_name, slug, category, status, start_date, start_time, end_time, logo_url, background_url, venues!inner(slug, is_public)')
-          .eq('venues.slug', venueSlug)
-          .eq('venues.is_public', true)
-          .eq('is_public', true)
-          .in('status', ['upcoming', 'active', 'live'])
-          .gte('start_date', startDate)
-          .lte('start_date', endDate)
-          .order('start_date', { ascending: true }),
-        client.from('activity_session_overrides')
-          .select('id, activity_session_id, session_date, status, reason, venues!inner(slug, is_public)')
-          .eq('venues.slug', venueSlug)
-          .eq('venues.is_public', true)
-          .gte('session_date', startDate)
-          .lte('session_date', endDate),
-        client.from('session_registrations')
-          .select('activity_session_id, session_date, status, venues!inner(slug, is_public)')
-          .eq('venues.slug', venueSlug)
-          .eq('venues.is_public', true)
-          .gte('session_date', startDate)
-          .lte('session_date', endDate),
-      ]);
-      const timings = { primaryDbMs: Math.round(performance.now() - primaryDbStartedAt) };
-      if (venueResult.error || !venueResult.data?.id) return errorResponse('Venue not found', 404);
-      const primaryError = [sessionsResult.error, eventsResult.error, overridesResult.error, registrationsResult.error].find(Boolean);
-      if (primaryError) return errorResponse(primaryError.message, 500);
+      try {
+        const [venueResolution, sessionsResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
+          resolvePublicVenueQuery(readContext, () => client.from('venues')
+            .select('id, name, slug')
+            .eq('slug', venueSlug)
+            .eq('is_public', true)
+            .maybeSingle()),
+          measurePublicReadStage(readContext, 'sessions', () => client.from('activity_sessions')
+            .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, activity_series(image_urls, activity_formats(image_urls)), venues!inner(slug, is_public)')
+            .eq('venues.slug', venueSlug)
+            .eq('venues.is_public', true)
+            .eq('is_active', true)
+            .eq('publish_status', 'published')
+            .eq('closed_to_public', false)
+            .order('start_time', { ascending: true })),
+          measurePublicReadStage(readContext, 'events', () => client.from('events')
+            .select('id, name, display_name, slug, category, status, start_date, start_time, end_time, logo_url, background_url, venues!inner(slug, is_public)')
+            .eq('venues.slug', venueSlug)
+            .eq('venues.is_public', true)
+            .eq('is_public', true)
+            .in('status', ['upcoming', 'active', 'live'])
+            .gte('start_date', startDate)
+            .lte('start_date', endDate)
+            .order('start_date', { ascending: true })),
+          measurePublicReadStage(readContext, 'overrides', () => client.from('activity_session_overrides')
+            .select('id, activity_session_id, session_date, status, reason, venues!inner(slug, is_public)')
+            .eq('venues.slug', venueSlug)
+            .eq('venues.is_public', true)
+            .gte('session_date', startDate)
+            .lte('session_date', endDate)),
+          measurePublicReadStage(readContext, 'committed_counts', () => client.from('session_registrations')
+            .select('activity_session_id, session_date, status, venues!inner(slug, is_public)')
+            .eq('venues.slug', venueSlug)
+            .eq('venues.is_public', true)
+            .gte('session_date', startDate)
+            .lte('session_date', endDate)),
+        ]);
 
-      const registrationCounts = new Map<string, number>();
-      for (const registration of registrationsResult.data || []) {
-        if (!COMMITTED_REGISTRATION_STATUSES.has(String(registration.status || ''))) continue;
-        const key = `${registration.activity_session_id}:${registration.session_date}`;
-        registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
+        if (venueResolution.kind === 'error') {
+          return await publicReadFailureResponse({
+            context: readContext,
+            stage: 'venue',
+            error: venueResolution.error,
+            serviceCredential,
+          });
+        }
+        if (venueResolution.kind === 'not_found') return publicReadNotFoundResponse('Venue not found', readContext);
+
+        const primaryResults = [
+          { stage: 'sessions', error: sessionsResult.error },
+          { stage: 'events', error: eventsResult.error },
+          { stage: 'overrides', error: overridesResult.error },
+          { stage: 'committed_counts', error: registrationsResult.error },
+        ];
+        const failedStage = primaryResults.find((result) => result.error);
+        if (failedStage) {
+          return await publicReadFailureResponse({
+            context: readContext,
+            stage: failedStage.stage,
+            error: failedStage.error,
+            serviceCredential,
+          });
+        }
+
+        const registrationCounts = new Map<string, number>();
+        for (const registration of registrationsResult.data || []) {
+          if (!COMMITTED_REGISTRATION_STATUSES.has(String(registration.status || ''))) continue;
+          const key = `${registration.activity_session_id}:${registration.session_date}`;
+          registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
+        }
+        return publicReadJsonResponse({
+          venue: venueResolution.data,
+          sessions: sessionsResult.data || [],
+          events: eventsResult.data || [],
+          overrides: overridesResult.data || [],
+          registrationCounts: [...registrationCounts].map(([key, count]) => {
+            const separator = key.lastIndexOf(':');
+            return {
+              activity_session_id: key.slice(0, separator),
+              session_date: key.slice(separator + 1),
+              registrations_count: count,
+            };
+          }),
+        }, readContext, 200, 5);
+      } catch (error) {
+        const stage = error instanceof PublicReadStageError ? error.stage : 'unknown';
+        const originalError = error instanceof PublicReadStageError ? error.originalError : error;
+        return await publicReadFailureResponse({
+          context: readContext,
+          stage,
+          error: originalError,
+          serviceCredential,
+        });
       }
-      timings.totalMs = Math.round(performance.now() - totalStartedAt);
-      return timedJsonResponse({
-        venue: venueResult.data,
-        sessions: sessionsResult.data || [],
-        events: eventsResult.data || [],
-        overrides: overridesResult.data || [],
-        registrationCounts: [...registrationCounts].map(([key, count]) => {
-          const separator = key.lastIndexOf(':');
-          return {
-            activity_session_id: key.slice(0, separator),
-            session_date: key.slice(separator + 1),
-            registrations_count: count,
-          };
-        }),
-      }, timings);
     }
 
     // Public discovery read model. Anonymous visitors are provisionally eligible;

@@ -16,6 +16,7 @@ import {
 import { formatSek, type ActivityDiscoveryPricingResponse } from "@/lib/activityPricing";
 import { isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
+import { errorStatus } from "@/lib/queryRetry";
 import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { SessionPeopleRow, SessionScheduleRow } from "@/components/session";
 import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
@@ -311,7 +312,8 @@ function useTodayPrimaryFeed(slug: string, enabled: boolean) {
     queryKey: ["today-primary", slug],
     enabled,
     staleTime: 30000,
-    queryFn: async () => {
+    retry: false,
+    queryFn: async ({ client, queryKey }) => {
       const now = DateTime.now().setZone("Europe/Stockholm");
       const startDate = now.toISODate()!;
       const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
@@ -319,7 +321,14 @@ function useTodayPrimaryFeed(slug: string, enabled: boolean) {
         venueSlug: slug,
         startDate,
         endDate,
-      }, { auth: "omit" });
+      }, {
+        auth: "omit",
+        publicRead: {
+          maxRetries: 1,
+          retryDelayMs: 250,
+          staleRetained: Boolean(client.getQueryData(queryKey)),
+        },
+      });
       const sessionOccurrences = sessionOccurrencesForRange(response.sessions || [], now);
       const overrideMap = new Map((response.overrides || []).map((row) => [
         occurrenceOverrideKey(row.activity_session_id, row.session_date),
@@ -831,6 +840,14 @@ export default function TodayPage() {
   const { data: venue, isLoading: venueLoading, isError: venueError } = useVenueWithHours(slug);
   const primaryEnabled = venueContext.canUseBeforeRemoteValidation || venue?.slug === slug;
   const primary = useTodayPrimaryFeed(slug, primaryEnabled);
+  const primaryStatus = errorStatus(primary.error);
+  const primaryVenueNotFound = primary.isError && primaryStatus === 404;
+  const primaryRefreshFailed = Boolean(primary.data) && primary.isError && (
+    primaryStatus === null
+      ? (primary.error as { name?: unknown } | null)?.name !== "AbortError"
+      : primaryStatus >= 500 && primaryStatus < 600
+  );
+  const primaryHardError = primary.isError && !primaryRefreshFailed;
   const venueId = venue?.id || primary.data?.venue.id;
   const identityReady = verifiedAccount.state === "anonymous" || verifiedAccount.state === "verified";
   const enrichment = useTodayEnrichment(
@@ -985,13 +1002,13 @@ export default function TodayPage() {
 
       <main>
         <h1 className="sr-only">Pickla Arena Stockholm — Pickleball, dart och event i Solna</h1>
-        {primary.isError ? (
-          <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2 text-center">
-            <div><p className="text-sm font-semibold text-neutral-500">Dagens schema kunde inte hämtas.</p><button type="button" onClick={() => void primary.refetch()} className="mt-4 rounded-full border border-black/15 px-4 py-2 text-sm font-black">Försök igen</button></div>
-          </section>
-        ) : !primaryEnabled && venueError ? (
+        {primaryVenueNotFound || (!primaryEnabled && venueError) ? (
           <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2 text-center text-sm font-semibold text-neutral-500">
             Arenan kunde inte hittas.
+          </section>
+        ) : primaryHardError ? (
+          <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2 text-center">
+            <div><p className="text-sm font-semibold text-neutral-500">Dagens schema kunde inte hämtas.</p><button type="button" onClick={() => void primary.refetch()} className="mt-4 rounded-full border border-black/15 px-4 py-2 text-sm font-black">Försök igen</button></div>
           </section>
         ) : (!primaryEnabled && venueLoading) || primary.isLoading ? (
           <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2">
@@ -1009,8 +1026,17 @@ export default function TodayPage() {
           />
         )}
 
+        {primaryRefreshFailed ? (
+          <section className="mx-auto max-w-md px-5 pt-3" aria-live="polite" data-testid="today-refresh-warning">
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-black/10 bg-white/70 px-4 py-3 text-sm font-semibold text-neutral-600">
+              <span>Kunde inte uppdatera just nu</span>
+              <button type="button" onClick={() => void primary.refetch()} className="shrink-0 font-black text-neutral-950">Försök igen</button>
+            </div>
+          </section>
+        ) : null}
+
         <section className="mx-auto max-w-md px-5 pt-7">
-          {(!primaryEnabled && venueLoading) || primary.isLoading || primary.isError || (!primaryEnabled && venueError) ? (
+          {(!primaryEnabled && venueLoading) || primary.isLoading || primaryHardError || primaryVenueNotFound || (!primaryEnabled && venueError) ? (
             null
           ) : (
             <div className="space-y-8">

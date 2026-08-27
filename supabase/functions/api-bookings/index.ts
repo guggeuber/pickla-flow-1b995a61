@@ -10,6 +10,16 @@ import { canonicalPublicOrigin, canonicalPublicUrl } from '../_shared/canonical_
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 import {
+  createPublicReadContext,
+  measurePublicReadStage,
+  PublicReadStageError,
+  publicReadClientErrorResponse,
+  publicReadFailureResponse,
+  publicReadJsonResponse,
+  publicReadNotFoundResponse,
+  resolvePublicVenueQuery,
+} from '../_shared/public_read_resilience.ts';
+import {
   persistCurrentBookingParticipantCoverage,
   projectBookingParticipantCoverage,
   resolveBookingParticipantCoverageForIdentity,
@@ -3050,82 +3060,141 @@ Deno.serve(async (req) => {
 
   // ── Public endpoint: venue by slug (no auth required) ──
   if (req.method === 'GET' && path === 'public-venue') {
+    const readContext = createPublicReadContext('api-bookings', 'public-venue');
     const slug = url.searchParams.get('slug');
-    if (!slug) return errorResponse('Missing slug');
+    if (!slug) return publicReadClientErrorResponse('Missing slug', 400, readContext);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(supabaseUrl, serviceKey);
 
-    let venueResult = await admin.from('venues')
-      .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status, group_booking_title, group_booking_intro, group_booking_notes, group_booking_image_url')
-      .eq('slug', slug)
-      .eq('is_public', true)
-      .single();
+    try {
+      const venueResolution = await resolvePublicVenueQuery(readContext, async () => {
+        let venueResult = await admin.from('venues')
+          .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status, group_booking_title, group_booking_intro, group_booking_notes, group_booking_image_url')
+          .eq('slug', slug)
+          .eq('is_public', true)
+          .maybeSingle();
 
-    if (venueResult.error?.message?.includes('group_booking_')) {
-      venueResult = await admin.from('venues')
-        .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status')
-        .eq('slug', slug)
+        if (venueResult.error?.message?.includes('group_booking_')) {
+          venueResult = await admin.from('venues')
+            .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status')
+            .eq('slug', slug)
+            .eq('is_public', true)
+            .maybeSingle();
+        }
+        return venueResult;
+      });
+
+      if (venueResolution.kind === 'error') {
+        return await publicReadFailureResponse({
+          context: readContext,
+          stage: 'venue',
+          error: venueResolution.error,
+          serviceCredential: serviceKey,
+        });
+      }
+      if (venueResolution.kind === 'not_found') return publicReadNotFoundResponse('Venue not found', readContext);
+      const venue = venueResolution.data;
+
+      // Get opening hours
+      const hoursResult = await measurePublicReadStage(readContext, 'opening_hours', () => admin.from('opening_hours')
+        .select('day_of_week, open_time, close_time, is_closed')
+        .eq('venue_id', venue.id)
+        .order('day_of_week'));
+      if (hoursResult.error) {
+        return await publicReadFailureResponse({
+          context: readContext,
+          stage: 'opening_hours',
+          error: hoursResult.error,
+          serviceCredential: serviceKey,
+        });
+      }
+      const hours = hoursResult.data;
+
+      const todaySthlm = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
+      const upcomingEndSthlm = DateTime.now().setZone('Europe/Stockholm').plus({ days: 14 }).toISODate()!;
+      const { start: todayStartUtc, end: todayEndUtc } = stockholmDateRangeUtc(todaySthlm);
+      const { end: upcomingEndUtc } = stockholmDateRangeUtc(upcomingEndSthlm);
+      const operationOverridesResult = await measurePublicReadStage(readContext, 'operation_overrides', () => admin
+        .from('venue_operation_overrides')
+        .select('id, title, reason, override_type, starts_at, ends_at, affects_entire_venue, status')
+        .eq('venue_id', venue.id)
+        .eq('status', 'active')
+        .eq('affects_entire_venue', true)
+        .lt('starts_at', upcomingEndUtc)
+        .gt('ends_at', todayStartUtc)
+        .order('starts_at'));
+      if (operationOverridesResult.error) {
+        return await publicReadFailureResponse({
+          context: readContext,
+          stage: 'operation_overrides',
+          error: operationOverridesResult.error,
+          serviceCredential: serviceKey,
+        });
+      }
+      const operationOverrides = operationOverridesResult.data;
+
+      const todayOperationOverrides = (operationOverrides || []).filter((override: any) =>
+        override.starts_at < todayEndUtc && override.ends_at > todayStartUtc
+      );
+      const upcomingOperationOverrides = (operationOverrides || []).filter((override: any) =>
+        override.ends_at > todayEndUtc
+      );
+
+      // Get active events
+      const eventsResult = await measurePublicReadStage(readContext, 'events', () => admin.from('events')
+        .select('id, name, display_name, event_type, format, start_date, end_date, status, logo_url, primary_color')
+        .eq('venue_id', venue.id)
         .eq('is_public', true)
-        .single();
+        .in('status', ['upcoming', 'active', 'live'])
+        .order('start_date')
+        .limit(5));
+      if (eventsResult.error) {
+        return await publicReadFailureResponse({
+          context: readContext,
+          stage: 'events',
+          error: eventsResult.error,
+          serviceCredential: serviceKey,
+        });
+      }
+      const events = eventsResult.data;
+
+      // Get community/social links
+      const linksResult = await measurePublicReadStage(readContext, 'links', () => admin.from('venue_links')
+        .select('id, title, description, url, icon, color, member_count')
+        .eq('venue_id', venue.id)
+        .eq('is_active', true)
+        .order('sort_order'));
+      if (linksResult.error) {
+        return await publicReadFailureResponse({
+          context: readContext,
+          stage: 'links',
+          error: linksResult.error,
+          serviceCredential: serviceKey,
+        });
+      }
+      const links = linksResult.data;
+
+      return publicReadJsonResponse({
+        venue,
+        openingHours: hours || [],
+        operationOverrides: operationOverrides || [],
+        todayOperationOverrides,
+        upcomingOperationOverrides,
+        events: events || [],
+        links: links || [],
+      }, readContext, 200, 30);
+    } catch (error) {
+      const stage = error instanceof PublicReadStageError ? error.stage : 'unknown';
+      const originalError = error instanceof PublicReadStageError ? error.originalError : error;
+      return await publicReadFailureResponse({
+        context: readContext,
+        stage,
+        error: originalError,
+        serviceCredential: serviceKey,
+      });
     }
-
-    const { data: venue, error: vErr } = venueResult;
-    if (vErr || !venue) return errorResponse('Venue not found', 404);
-
-    // Get opening hours
-    const { data: hours } = await admin.from('opening_hours')
-      .select('day_of_week, open_time, close_time, is_closed')
-      .eq('venue_id', venue.id)
-      .order('day_of_week');
-
-    const todaySthlm = DateTime.now().setZone('Europe/Stockholm').toISODate()!;
-    const upcomingEndSthlm = DateTime.now().setZone('Europe/Stockholm').plus({ days: 14 }).toISODate()!;
-    const { start: todayStartUtc, end: todayEndUtc } = stockholmDateRangeUtc(todaySthlm);
-    const { end: upcomingEndUtc } = stockholmDateRangeUtc(upcomingEndSthlm);
-    const { data: operationOverrides } = await admin
-      .from('venue_operation_overrides')
-      .select('id, title, reason, override_type, starts_at, ends_at, affects_entire_venue, status')
-      .eq('venue_id', venue.id)
-      .eq('status', 'active')
-      .eq('affects_entire_venue', true)
-      .lt('starts_at', upcomingEndUtc)
-      .gt('ends_at', todayStartUtc)
-      .order('starts_at');
-
-    const todayOperationOverrides = (operationOverrides || []).filter((override: any) =>
-      override.starts_at < todayEndUtc && override.ends_at > todayStartUtc
-    );
-    const upcomingOperationOverrides = (operationOverrides || []).filter((override: any) =>
-      override.ends_at > todayEndUtc
-    );
-
-    // Get active events
-    const { data: events } = await admin.from('events')
-      .select('id, name, display_name, event_type, format, start_date, end_date, status, logo_url, primary_color')
-      .eq('venue_id', venue.id)
-      .eq('is_public', true)
-      .in('status', ['upcoming', 'active', 'live'])
-      .order('start_date')
-      .limit(5);
-
-    // Get community/social links
-    const { data: links } = await admin.from('venue_links')
-      .select('id, title, description, url, icon, color, member_count')
-      .eq('venue_id', venue.id)
-      .eq('is_active', true)
-      .order('sort_order');
-
-    return jsonResponse({
-      venue,
-      openingHours: hours || [],
-      operationOverrides: operationOverrides || [],
-      todayOperationOverrides,
-      upcomingOperationOverrides,
-      events: events || [],
-      links: links || [],
-    }, 200, 30);
   }
 
   // ── Public endpoint: display device by token (no auth required) ──
