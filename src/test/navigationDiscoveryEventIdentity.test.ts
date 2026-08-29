@@ -104,7 +104,7 @@ describe("Navigation, discovery and event identity contract", () => {
     const publicApi = read("supabase/functions/api-event-public/index.ts");
     expect(publicApi).toContain("customer_presentation: decision.customerPresentation");
     expect(today).toContain("customerPrice.displayPriceSek");
-    expect(today).toContain("featuredPricing?.customerPresentation?.displayLabel");
+    expect(today).toContain("featuredPricing?.customer_presentation?.displayLabel");
     expect(schedule).toContain("resolvedPrice?.displayPriceSek");
     expect(detail).toContain("selectedCustomerPrice?.displayPriceSek");
     expect(detail).toContain("selectedCustomerPrice?.displayLabel");

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   fetchCourseHome: vi.fn(),
   fetchLeagueHome: vi.fn(),
+  supabaseFrom: vi.fn(),
   venueData: undefined as { id: string; name: string; slug: string } | undefined,
   venueError: false,
 }));
@@ -55,7 +56,8 @@ vi.mock("@/integrations/supabase/client", () => {
     builder.then = (resolve: (value: typeof result) => unknown) => Promise.resolve(result).then(resolve);
     return builder;
   };
-  return { supabase: { from: vi.fn(query), rpc: vi.fn().mockResolvedValue({ data: [], error: null }) } };
+  mocks.supabaseFrom.mockImplementation(query);
+  return { supabase: { from: mocks.supabaseFrom, rpc: vi.fn().mockResolvedValue({ data: [], error: null }) } };
 });
 
 import TodayPage from "@/pages/TodayPage";
@@ -199,6 +201,130 @@ describe("Today customer first paint", () => {
     mocks.account.state = "anonymous";
     renderToday();
     expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+  });
+
+  it("reuses existing Today projections without Activity Preview or direct registrations", async () => {
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [{
+        activity_session_id: "visible-session",
+        session_date: "2026-08-26",
+        registrations_count: 4,
+        interested_count: 0,
+        user_is_interested: false,
+        user_registration_status: null,
+      }] });
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "first-visit-offers") return Promise.resolve({
+        is_first_time: false,
+        has_configured_offer: false,
+        occurrences: [],
+        items: [],
+        pricing: [{
+          activity_session_id: "visible-session",
+          session_date: "2026-08-26",
+          effective_price_sek: 165,
+          requires_checkout: true,
+          pricing_reason: "regular_price",
+          customer_presentation: {
+            identityState: "anonymous",
+            displayPriceSek: 165,
+            displayLabel: "165 kr",
+            listPriceSek: 165,
+            offerState: null,
+            offerLabel: null,
+            offerDetail: null,
+          },
+        }],
+      });
+      return never();
+    });
+    mocks.fetchCourseHome.mockResolvedValue({ mode: "none", item: null });
+    mocks.fetchLeagueHome.mockResolvedValue({ mode: "none", item: null });
+
+    renderToday();
+
+    expect(await screen.findByText("Boka plats · 165 kr")).toBeInTheDocument();
+    expect(screen.getByText("4 spelare är med")).toBeInTheDocument();
+    expect(mocks.apiGet.mock.calls.some((call) => call[1] === "activity-preview")).toBe(false);
+    expect(mocks.supabaseFrom.mock.calls.some((call) => call[0] === "session_registrations")).toBe(false);
+  });
+
+  it("preserves verified registered state through the bounded social projection", async () => {
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [{
+        activity_session_id: "visible-session",
+        session_date: "2026-08-26",
+        registrations_count: 2,
+        interested_count: 0,
+        user_is_interested: false,
+        user_registration_status: "confirmed",
+      }] });
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "first-visit-offers") return Promise.resolve({
+        is_first_time: false,
+        has_configured_offer: false,
+        occurrences: [],
+        items: [],
+        pricing: [],
+      });
+      return never();
+    });
+    mocks.fetchCourseHome.mockResolvedValue({ mode: "none", item: null });
+    mocks.fetchLeagueHome.mockResolvedValue({ mode: "none", item: null });
+
+    renderToday();
+
+    expect(await screen.findByText("✓ Redan anmäld")).toBeInTheDocument();
+    expect(mocks.supabaseFrom.mock.calls.some((call) => call[0] === "session_registrations")).toBe(false);
+  });
+
+  it.each([
+    { label: "included", price: 0, requiresCheckout: false, displayLabel: "Ingår", expected: "Boka plats · Ingår" },
+    { label: "early bird", price: 99, requiresCheckout: true, displayLabel: "99 kr", expected: "Boka plats · 99 kr" },
+  ])("preserves $label hero pricing from the existing occurrence projection", async ({ price, requiresCheckout, displayLabel, expected }) => {
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "first-visit-offers") return Promise.resolve({
+        is_first_time: false,
+        has_configured_offer: false,
+        occurrences: [],
+        items: [],
+        pricing: [{
+          activity_session_id: "visible-session",
+          session_date: "2026-08-26",
+          effective_price_sek: price,
+          requires_checkout: requiresCheckout,
+          pricing_reason: price === 99 ? "early_bird" : "membership_open_play_unlimited",
+          customer_presentation: {
+            identityState: "anonymous",
+            displayPriceSek: price,
+            displayLabel,
+            listPriceSek: 165,
+            offerState: null,
+            offerLabel: null,
+            offerDetail: null,
+          },
+        }],
+      });
+      return never();
+    });
+    mocks.fetchCourseHome.mockResolvedValue({ mode: "none", item: null });
+    mocks.fetchLeagueHome.mockResolvedValue({ mode: "none", item: null });
+
+    renderToday();
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
   });
 
   it("keeps a future explicit venue path available after public validation", async () => {

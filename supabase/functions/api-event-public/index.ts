@@ -18,14 +18,16 @@ import {
   publicReadNotFoundResponse,
   resolvePublicVenueQuery,
 } from '../_shared/public_read_resilience.ts';
+import {
+  activitySocialProof,
+  COMMITTED_REGISTRATION_STATUSES,
+} from '../_shared/activity_social_proof.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
 const RESEND_REPLY_DOMAIN = (Deno.env.get('RESEND_INBOUND_DOMAIN') || 'playpickla.com')
   .replace(/^reply\.playpickla\.com$/i, 'playpickla.com');
-const COMMITTED_REGISTRATION_STATUSES = new Set(['confirmed', 'checked_in', 'no_show']);
-
 type PublicEventParticipantRow = {
   [key: string]: unknown;
   auth_user_id?: unknown;
@@ -678,96 +680,6 @@ async function activityInterestState(client: any, {
     interested_count: count || 0,
     user_is_interested: Boolean((ownResult as any)?.data?.id),
   };
-}
-
-async function activitySocialProof(client: any, {
-  venueSlug,
-  sessionIds,
-  startDate,
-  endDate,
-  userId,
-}: {
-  venueSlug?: string | null;
-  sessionIds: string[];
-  startDate: string;
-  endDate: string;
-  userId?: string | null;
-}) {
-  const cleanSessionIds = [...new Set(sessionIds.filter(Boolean))];
-  if (!venueSlug) throw new Error('Missing venueSlug');
-  if (!startDate || !endDate) throw new Error('Missing date range');
-  if (!cleanSessionIds.length) return { occurrences: [] };
-
-  const { data: venue, error: venueErr } = await client.from('venues')
-    .select('id, slug, is_public')
-    .eq('slug', venueSlug)
-    .maybeSingle();
-  if (venueErr || !venue?.id || venue.is_public !== true) throw new Error('Venue not public');
-
-  const { data: sessions, error: sessionsErr } = await client.from('activity_sessions')
-    .select('id')
-    .eq('venue_id', venue.id)
-    .eq('is_active', true)
-    .eq('publish_status', 'published')
-    .eq('closed_to_public', false)
-    .in('id', cleanSessionIds);
-  if (sessionsErr) throw sessionsErr;
-
-  const allowedIds = new Set((sessions || []).map((session: any) => session.id));
-  if (!allowedIds.size) return { occurrences: [] };
-  const allowedSessionIds = cleanSessionIds.filter((id) => allowedIds.has(id));
-
-  const [registrationsResult, interestsResult] = await Promise.all([
-    client.from('session_registrations')
-      .select('activity_session_id, session_date, status, user_id')
-      .in('activity_session_id', allowedSessionIds)
-      .gte('session_date', startDate)
-      .lte('session_date', endDate),
-    client.from('activity_session_interests')
-      .select('activity_session_id, session_date, status, user_id')
-      .in('activity_session_id', allowedSessionIds)
-      .gte('session_date', startDate)
-      .lte('session_date', endDate)
-      .eq('status', 'interested'),
-  ]);
-
-  if (registrationsResult.error) throw registrationsResult.error;
-  if (interestsResult.error) throw interestsResult.error;
-
-  const byKey = new Map<string, {
-    activity_session_id: string;
-    session_date: string;
-    registrations_count: number;
-    interested_count: number;
-    user_is_interested: boolean;
-  }>();
-  const getRow = (activitySessionId: string, sessionDate: string) => {
-    const key = `${activitySessionId}:${sessionDate}`;
-    const existing = byKey.get(key);
-    if (existing) return existing;
-    const row = {
-      activity_session_id: activitySessionId,
-      session_date: sessionDate,
-      registrations_count: 0,
-      interested_count: 0,
-      user_is_interested: false,
-    };
-    byKey.set(key, row);
-    return row;
-  };
-
-  for (const row of registrationsResult.data || []) {
-    if (!COMMITTED_REGISTRATION_STATUSES.has(String(row.status || ''))) continue;
-    getRow(row.activity_session_id, row.session_date).registrations_count += 1;
-  }
-
-  for (const row of interestsResult.data || []) {
-    const proof = getRow(row.activity_session_id, row.session_date);
-    proof.interested_count += 1;
-    if (userId && row.user_id === userId) proof.user_is_interested = true;
-  }
-
-  return { occurrences: Array.from(byKey.values()) };
 }
 
 async function sendGroupInquiryEmail({

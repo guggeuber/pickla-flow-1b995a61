@@ -17,7 +17,7 @@ import { formatSek, type ActivityDiscoveryPricingResponse } from "@/lib/activity
 import { isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import { apiGet } from "@/lib/api";
 import { errorStatus } from "@/lib/queryRetry";
-import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
+import type { PublicProfile } from "@/lib/publicProfiles";
 import { SessionPeopleRow, SessionScheduleRow } from "@/components/session";
 import { consumeFirstRunWelcome, preserveIntendedRoute } from "@/lib/entryResolver";
 import { getTodayHeroTiming } from "@/lib/todayHeroTiming";
@@ -145,20 +145,13 @@ type SessionOccurrence = SessionRow & {
   occurrence_date: string;
 };
 
-type RegistrationRow = {
-  activity_session_id: string;
-  session_date: string;
-  status: string | null;
-  user_id?: string | null;
-  customer_id?: string | null;
-};
-
 type ActivitySocialProofRow = {
   activity_session_id: string;
   session_date: string;
   registrations_count: number;
   interested_count: number;
   user_is_interested: boolean;
+  user_registration_status: string | null;
 };
 
 type OpenBookingItem = {
@@ -230,10 +223,6 @@ type TodayPrimaryResponse = {
 
 type TodayEnrichment = {
   socialProofByKey: Map<string, ActivitySocialProofRow>;
-  registrationCounts: Map<string, number>;
-  userRegistrationStatusByKey: Map<string, string | null>;
-  participantUserIdsByKey: Map<string, string[]>;
-  publicProfilesByUserId: Map<string, PublicProfile | null>;
   bookingItems: FeedItem[];
   openBookingItems: FeedItem[];
 };
@@ -396,15 +385,7 @@ function useTodayEnrichment(
       const startUtc = now.startOf("day").toUTC().toISO()!;
       const endUtc = now.plus({ days: DAYS_AHEAD }).startOf("day").toUTC().toISO()!;
       const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
-      const [registrationsRes, socialProofRes, bookingsRes, openBookingsRes] = await Promise.all([
-        sessionIds.length
-          ? supabase
-              .from("session_registrations")
-              .select("activity_session_id, session_date, status, user_id")
-              .in("activity_session_id", sessionIds)
-              .gte("session_date", startDate)
-              .lte("session_date", endDate)
-          : Promise.resolve({ data: [] as RegistrationRow[] }),
+      const [socialProofRes, bookingsRes, openBookingsRes] = await Promise.all([
         sessionIds.length
           ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
               venueSlug: slug,
@@ -430,27 +411,6 @@ function useTodayEnrichment(
         }, { auth: "omit" }).catch(() => ({ items: [] })),
       ]);
 
-      const registrationCounts = new Map<string, number>();
-      const registrationsByKey = new Map<string, RegistrationRow[]>();
-      const userRegistrationStatusByKey = new Map<string, string | null>();
-      for (const row of registrationsRes.data || []) {
-        if (row.status === "cancelled" || row.status === "refunded") continue;
-        const key = `${row.activity_session_id}:${row.session_date}`;
-        registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
-        if (userId && row.user_id === userId) {
-          const currentStatus = userRegistrationStatusByKey.get(key);
-          if (currentStatus !== "checked_in") userRegistrationStatusByKey.set(key, row.status || "confirmed");
-        }
-        registrationsByKey.set(key, [...(registrationsByKey.get(key) || []), row]);
-      }
-      const participantUserIdsByKey = new Map<string, string[]>();
-      for (const [key, rows] of registrationsByKey.entries()) {
-        participantUserIdsByKey.set(key, [...new Set(rows.map((row) => row.user_id).filter(Boolean) as string[])].slice(0, 3));
-      }
-      const participantUserIds = [...new Set([...participantUserIdsByKey.values()].flat())];
-      const publicProfilesByUserId = participantUserIds.length
-        ? await getPublicProfileMap(participantUserIds).catch(() => new Map<string, PublicProfile | null>())
-        : new Map<string, PublicProfile | null>();
       const socialProofByKey = new Map<string, ActivitySocialProofRow>();
       for (const row of socialProofRes.occurrences || []) {
         socialProofByKey.set(`${row.activity_session_id}:${row.session_date}`, row);
@@ -514,10 +474,6 @@ function useTodayEnrichment(
 
       return {
         socialProofByKey,
-        registrationCounts,
-        userRegistrationStatusByKey,
-        participantUserIdsByKey,
-        publicProfilesByUserId,
         bookingItems,
         openBookingItems,
       };
@@ -531,9 +487,9 @@ function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment
     if (item.kind !== "session" || !item.activitySession) return item;
     const key = `${item.activitySession.id}:${item.date}`;
     const socialProof = enrichment.socialProofByKey.get(key);
-    const count = socialProof?.registrations_count ?? enrichment.registrationCounts.get(key) ?? item.registrationsCount ?? 0;
+    const count = socialProof?.registrations_count ?? item.registrationsCount ?? 0;
     const capacity = Number(item.capacity || 0);
-    const userRegistrationStatus = enrichment.userRegistrationStatusByKey.get(key) || null;
+    const userRegistrationStatus = socialProof?.user_registration_status || null;
     return {
       ...item,
       status: capacity && count >= capacity ? "Full" : "Drop-in",
@@ -543,9 +499,6 @@ function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment
       userIsRegistered: Boolean(userRegistrationStatus),
       userIsCheckedIn: userRegistrationStatus === "checked_in",
       userRegistrationStatus,
-      participants: (enrichment.participantUserIdsByKey.get(key) || [])
-        .map((participantUserId) => enrichment.publicProfilesByUserId.get(participantUserId))
-        .filter(Boolean) as PublicProfile[],
       cta: capacity && count >= capacity ? "Visa" : "Anmäl",
     };
   });
@@ -955,23 +908,13 @@ export default function TodayPage() {
     { heading: "Imorgon", items: tomorrowItems },
     { heading: "I helgen", items: weekendItems },
   ].filter((section) => section.items.length > 0);
-  const { data: featuredPreview } = useQuery({
-    queryKey: ["today-featured-preview", verifiedAccount.verifiedUserId || "anon", featuredItem?.id],
-    enabled: identityReady && !!featuredItem?.activitySession?.id,
-    staleTime: verifiedAccount.verifiedUserId ? 0 : 15000,
-    queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
-      sessionId: featuredItem!.activitySession!.id,
-      date: featuredItem!.date,
-      venueSlug: slug,
-    }, verifiedAccount.verifiedUserId ? {} : { auth: "omit" }),
-  });
-  const featuredPricing = featuredPreview?.activityTicketPricing || featuredPreview?.pricing || null;
-  const featuredIncluded = featuredPricing?.requiresCheckout === false;
+  const featuredPricing = featuredItem?.activitySession?.id
+    ? pricingByOccurrence.get(`${featuredItem.activitySession.id}:${featuredItem.date}`) || null
+    : null;
+  const featuredIncluded = featuredPricing?.requires_checkout === false;
   const featuredPriceLabel = featuredIncluded
     ? null
-    : featuredPricing?.customerPresentation?.displayLabel ||
-      featuredPricing?.checkoutLabel ||
-      null;
+    : featuredPricing?.customer_presentation?.displayLabel || null;
   const openFeatured = () => {
     if (!featuredItem) return;
     if (featuredItem.kind === "session") {
