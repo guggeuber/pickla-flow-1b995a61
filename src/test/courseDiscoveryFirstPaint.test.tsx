@@ -33,4 +33,25 @@ describe("Course discovery first paint", () => {
     expect(screen.getByTestId("topbar")).toBeInTheDocument();
     expect(mocks.fetchCourseCatalog).toHaveBeenCalledWith("pickla-arena-sthlm", { auth: "omit" });
   });
+
+  it("renders the complete card from the bounded public contract", async () => {
+    mocks.fetchCourseCatalog.mockResolvedValue({
+      items: [{
+        id: "series-1",
+        name: "Pickla Start",
+        description: "Series fallback",
+        image_urls: [],
+        start_date: "2026-10-01",
+        registration_state: "open",
+        capacity: { available_count: 7 },
+        format: { description: "Nybörjarkurs", presentation_type: "course" },
+      }],
+    });
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Pickla Start" })).toBeInTheDocument();
+    expect(screen.getByText("Nybörjarkurs")).toBeInTheDocument();
+    expect(screen.getByText(/7 platser kvar/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Visa kurs/ })).toBeInTheDocument();
+  });
 });

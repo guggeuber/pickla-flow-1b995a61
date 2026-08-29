@@ -209,6 +209,20 @@ export type CourseDetail = Omit<CourseSeries, "capacity"> & {
   };
 };
 
+export type PublicCourseCard = {
+  id: string;
+  name: string;
+  description: string | null;
+  image_urls: string[];
+  start_date: string;
+  registration_state: "upcoming" | "open" | "closed";
+  capacity: { available_count: number };
+  format: {
+    description: string | null;
+    presentation_type: "course";
+  };
+};
+
 export type MyCourseItem = {
   commitment: { id: string; status: string; dependent_participant_id?: string | null };
   series: { id: string; venue_id: string; name: string; format_name?: string | null; start_date: string; end_date: string; total_sessions: number; presentation_type?: SeriesPresentationType };
@@ -238,7 +252,13 @@ export function fetchCourseHome(venueSlug: string, options?: ApiRequestOptions) 
 }
 
 export function fetchCourseCatalog(venueSlug: string, options?: ApiRequestOptions) {
-  return apiGet<{ items: CourseDetail[] }>("api-courses", "catalog", { v: venueSlug }, options);
+  return apiGet<{ items: PublicCourseCard[] }>("api-courses", "catalog", { v: venueSlug }, options);
+}
+
+// Temporary compatibility boundary for Prices. Phase D owns replacing its
+// full commercial projection; discovery must not carry pricing back into cards.
+export function fetchCoursePricingCatalog(venueSlug: string, options?: ApiRequestOptions) {
+  return apiGet<{ items: CourseDetail[] }>("api-courses", "catalog-prices", { v: venueSlug }, options);
 }
 
 export function createCourseCart(input: Record<string, unknown>, options?: ApiRequestOptions) {

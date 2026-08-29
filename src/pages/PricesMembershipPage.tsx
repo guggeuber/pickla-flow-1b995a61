@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { apiGet } from "@/lib/api";
 import { fetchCommerceCatalog, formatCommerceMoney } from "@/lib/commerce";
-import { fetchCourseCatalog } from "@/lib/courses";
+import { fetchCoursePricingCatalog } from "@/lib/courses";
 import { useVenueWithHours } from "@/lib/venueStatus";
 import { customerCourtPriceLabel, customerFacingDescription } from "@/lib/customerPricing";
 
@@ -23,7 +23,7 @@ export default function PricesMembershipPage() {
   const memberships = useQuery({ queryKey: ["price-memberships", venueId], enabled: !!venueId, queryFn: () => apiGet<MembershipTier[]>("api-memberships", "tiers", { venueId: venueId! }) });
   const pricing = useQuery({ queryKey: ["price-courts", venueId], enabled: !!venueId, queryFn: () => apiGet<PricingRule[]>("api-bookings", "pricing", { venueId: venueId! }) });
   const commerce = useQuery({ queryKey: ["price-commerce", venueId], enabled: !!venueId, queryFn: () => fetchCommerceCatalog(venueId!) });
-  const courses = useQuery({ queryKey: ["price-courses", slug], queryFn: () => fetchCourseCatalog(slug) });
+  const courses = useQuery({ queryKey: ["price-courses", slug], queryFn: () => fetchCoursePricingCatalog(slug) });
   const firstVisit = useQuery({ queryKey: ["price-first-visit", slug], queryFn: () => apiGet<FirstVisitOffers>("api-event-public", "first-visit-offers", { v: slug }) });
   const loading = venue.isLoading || memberships.isLoading || pricing.isLoading || commerce.isLoading || courses.isLoading;
   const products = commerce.data?.products || [];

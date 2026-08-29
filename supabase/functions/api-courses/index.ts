@@ -9,6 +9,10 @@ import {
   resolveCourseParticipantPolicy,
 } from '../_shared/course_participant_policy.ts';
 import { projectPublicCourseCoaches } from '../_shared/course_coach_projection.ts';
+import {
+  loadPublicCourseCatalog,
+  type PublicCourseCatalogRpcClient,
+} from '../_shared/public_course_catalog.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 type ServiceClient = ReturnType<typeof getServiceClient>;
@@ -704,7 +708,7 @@ const coursesHandler = async (req: Request) => {
       return jsonResponse({ mode: 'none', item: null }, 200, 5);
     }
 
-    if (req.method === 'GET' && path === 'catalog') {
+    if (req.method === 'GET' && path === 'catalog-prices') {
       const userId = await optionalUserId(req);
       const venueRow = await venue(admin, { id: url.searchParams.get('venueId'), slug: url.searchParams.get('v') || url.searchParams.get('slug') });
       const today = DateTime.now().setZone('Europe/Stockholm').toISODate();
@@ -718,6 +722,29 @@ const coursesHandler = async (req: Request) => {
         if (projected.format?.presentation_type === 'course') items.push(projected);
       }
       return jsonResponse({ items }, 200, userId ? 0 : 5);
+    }
+
+    if (req.method === 'GET' && path === 'catalog') {
+      const venueSlug = String(url.searchParams.get('v') || url.searchParams.get('slug') || '').trim();
+      if (!/^[a-z0-9][a-z0-9-]{0,119}$/.test(venueSlug)) return errorResponse('Valid venue slug is required', 400);
+      const edgeStartedAt = performance.now();
+      const rpcStartedAt = performance.now();
+      const catalog = await loadPublicCourseCatalog(
+        admin as unknown as PublicCourseCatalogRpcClient,
+        venueSlug,
+      );
+      const rpcDuration = performance.now() - rpcStartedAt;
+      if (!catalog.venue_found) return errorResponse('Venue not found', 404);
+      const serializationStartedAt = performance.now();
+      const body = JSON.stringify({ items: catalog.items });
+      const serializationDuration = performance.now() - serializationStartedAt;
+      const headers = {
+        ...corsHeaders,
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=5, s-maxage=5',
+        'Server-Timing': `course_catalog_rpc;dur=${rpcDuration.toFixed(1)}, serialize;dur=${serializationDuration.toFixed(1)}, edge;dur=${(performance.now() - edgeStartedAt).toFixed(1)}`,
+      };
+      return new Response(body, { status: 200, headers });
     }
 
     const auth = await getAuthenticatedClient(req);
