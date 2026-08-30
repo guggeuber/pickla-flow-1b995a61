@@ -13,6 +13,7 @@ const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
 export type SeriesRegistrationCardModel = {
+  id: string;
   name: string;
   image_urls: string[];
   start_date: string;
@@ -32,21 +33,27 @@ export function SeriesRegistrationCard({
   series,
   onOpen,
   imagePriority = false,
+  customerState = "available",
 }: {
   series: SeriesRegistrationCardModel;
   onOpen: () => void;
   imagePriority?: boolean;
+  customerState?: "available" | "owned";
 }) {
   const presentation = seriesPresentation(series.format?.presentation_type);
   const artwork = series.image_urls?.[0] || null;
   const price = seriesPricePresentation({ pricing: series.pricing, basePriceSek: series.product.base_price_sek });
   const title = seriesCustomerTitle({ seriesName: series.name, formatName: series.format?.name, presentationType: presentation.type });
-  const cta = seriesBookingCta(price, presentation.bookingCta);
-  const registrationLabel = series.registration_state === "open"
-    ? "Anmälan öppen"
-    : series.registration_state === "upcoming"
-      ? "Anmälan öppnar snart"
-      : "Anmälan stängd";
+  const cta = customerState === "owned"
+    ? "Visa bokning"
+    : seriesBookingCta(price, presentation.bookingCta);
+  const registrationLabel = customerState === "owned"
+    ? "Redan anmäld"
+    : series.registration_state === "open"
+      ? "Anmälan öppen"
+      : series.registration_state === "upcoming"
+        ? "Anmälan öppnar snart"
+        : "Anmälan stängd";
   const eyebrow = `${presentation.label} · ${registrationLabel}`;
   const includedOpenPlay = presentation.type === "course"
     && series.included_access?.open_play_series_period.enabled === true;
@@ -56,6 +63,8 @@ export function SeriesRegistrationCard({
       className="w-full overflow-hidden rounded-[24px] bg-white text-left"
       style={{ border: `1px solid ${BORDER}` }}
       data-testid="home-series-card"
+      data-promotion-id={series.id}
+      data-customer-state={customerState}
       data-presentation-type={presentation.type}
     >
       {artwork ? (

@@ -25,7 +25,7 @@ import { activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
 import { getFirstName } from "@/lib/displayName";
 import { activitySessionToPresentation, openBookingToPresentation } from "@/lib/sessionPresentation";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
-import { fetchCourseHome, type MyCourseItem } from "@/lib/courses";
+import { fetchCourseDetail, fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
 import { inheritedEventImages } from "@/lib/eventMedia";
 import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
 import { resolveCustomerVenueContext } from "@/lib/customerVenue";
@@ -36,11 +36,10 @@ import { CARD_ARTWORK_SIZES, CARD_ARTWORK_WIDTHS } from "@/lib/responsiveSupabas
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
-import { fetchLeagueHome, type LeaguePublicProjection, type MyLeagueItem } from "@/lib/league";
+import { fetchLeagueHome, fetchLeaguePublic, type LeaguePublicProjection, type MyLeagueItem } from "@/lib/league";
+import { useCommittedTodaySecondary } from "@/hooks/useCommittedTodaySecondary";
 import {
   fetchTodaySecondary,
-  type TodayCoursePromotion,
-  type TodayLeaguePromotion,
 } from "@/lib/todaySecondary";
 
 
@@ -56,6 +55,14 @@ const DAYS_AHEAD = 7;
 const HORIZON_SECTION_MAX_ROWS = 3;
 const WEEKEND_SECTION_TRIGGER_WEEKDAYS = [4, 5];
 const TOMORROW_SECTION_COLLAPSES_INTO_WEEKEND_WEEKDAYS = [5];
+
+type CoursePersonalization =
+  | { kind: "promotion"; detail: CourseDetail }
+  | { kind: "fallback"; home: Awaited<ReturnType<typeof fetchCourseHome>> };
+
+type LeaguePersonalization =
+  | { kind: "promotion"; detail: LeaguePublicProjection }
+  | { kind: "fallback"; home: Awaited<ReturnType<typeof fetchLeagueHome>> };
 
 type FeedItem = {
   id: string;
@@ -494,7 +501,10 @@ function useTodayEnrichment(
       openBookingItems: publicOpenBookings.data || [],
     };
   }, [publicOpenBookings.data, verifiedEnrichment.data]);
-  return { data };
+  return {
+    data,
+    publicOpenBookingsReady: publicOpenBookings.isFetched,
+  };
 }
 
 function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment) {
@@ -529,6 +539,10 @@ function useVerifiedFirstVisitOffers(slug: string, userId: string | undefined, e
     staleTime: 0,
     queryFn: () => apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }),
   });
+}
+
+function hasFirstVisitBanner(offers: ActivityDiscoveryPricingResponse | undefined) {
+  return Boolean(offers?.is_first_time && (offers.items?.length > 0 || !offers.has_configured_offer));
 }
 
 function FeedRow({
@@ -727,6 +741,8 @@ function FeaturedTonightHero({
         type="button"
         onClick={onOpen}
         disabled={!item}
+        data-testid="today-featured-hero"
+        data-featured-id={item?.id || "none"}
         className="w-full overflow-hidden rounded-[28px] px-5 pb-5 pt-5 text-left transition-transform active:scale-[0.99] disabled:opacity-70"
         style={{
           background: "#fff",
@@ -749,15 +765,19 @@ function FeaturedTonightHero({
           {item?.firstVisitOffer?.label || activityStatus?.stateLabel || timing.eyebrow}
         </p>
         <div className="mt-5">
-          {welcomeLine ? (
-            <p className="mb-2 text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING, color: MUTED }}>
-              {welcomeLine}
-            </p>
-          ) : userName && (
-            <p className="mb-2 text-[15px] font-semibold" style={{ fontFamily: FONT_HEADING, color: MUTED }}>
-              Hej {userName}.
-            </p>
-          )}
+          <div className="mb-2 h-[22px] overflow-hidden" data-testid="today-hero-greeting-slot">
+            {welcomeLine ? (
+              <p className="truncate text-[15px] font-semibold leading-[22px]" style={{ fontFamily: FONT_HEADING, color: MUTED }}>
+                {welcomeLine}
+              </p>
+            ) : userName ? (
+              <p className="truncate text-[15px] font-semibold leading-[22px]" style={{ fontFamily: FONT_HEADING, color: MUTED }}>
+                Hej {userName}.
+              </p>
+            ) : (
+              <span aria-hidden="true">&nbsp;</span>
+            )}
+          </div>
           <h2 className="break-words text-[31px] font-black leading-[0.98] tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING, color: TEXT }}>
             {item?.title || "Något händer snart"}
           </h2>
@@ -827,6 +847,13 @@ export default function TodayPage() {
       return fetchTodaySecondary(slug, now.toISODate()!, now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!);
     },
   });
+  const committedSecondary = useCommittedTodaySecondary(slug, secondary.data);
+  const publicCoursePromotion = committedSecondary?.course.mode === "registration"
+    ? committedSecondary.course.item
+    : null;
+  const publicLeaguePromotion = committedSecondary?.league.mode === "registration"
+    ? committedSecondary.league.item
+    : null;
   const enrichment = useTodayEnrichment(
     venueId,
     primary.data?.sessionOccurrences || [],
@@ -843,7 +870,9 @@ export default function TodayPage() {
     verifiedAccount.verifiedUserId || undefined,
     Boolean(primary.data) && verifiedAccount.isVerified,
   );
-  const firstVisitOffers = verifiedFirstVisitOffers || secondary.data?.first_visit;
+  const firstVisitOffers = verifiedFirstVisitOffers || committedSecondary?.first_visit;
+  const firstVisitSlotVisible = hasFirstVisitBanner(committedSecondary?.first_visit);
+  const personalizedFirstVisitEligible = hasFirstVisitBanner(firstVisitOffers);
   const pricingByOccurrence = useMemo(() => new Map(
     (firstVisitOffers?.pricing || []).map((pricing) => [`${pricing.activity_session_id}:${pricing.session_date}`, pricing]),
   ), [firstVisitOffers?.pricing]);
@@ -864,20 +893,55 @@ export default function TodayPage() {
       } : null,
     };
   }), [pricingByOccurrence, rawItems]);
-  const { data: verifiedCourseHome } = useQuery({
-    queryKey: ["course-home", slug, verifiedAccount.verifiedUserId],
-    enabled: Boolean(primary.data) && verifiedAccount.isVerified,
-    queryFn: () => fetchCourseHome(slug),
+  const { data: coursePersonalization } = useQuery<CoursePersonalization>({
+    queryKey: ["today-course-personalization", slug, publicCoursePromotion?.id || "fallback", verifiedAccount.verifiedUserId],
+    enabled: Boolean(primary.data) && Boolean(committedSecondary) && verifiedAccount.isVerified,
+    queryFn: async () => publicCoursePromotion
+      ? { kind: "promotion", detail: await fetchCourseDetail(publicCoursePromotion.id) }
+      : { kind: "fallback", home: await fetchCourseHome(slug) },
     staleTime: 30000,
   });
-  const { data: verifiedLeagueHome } = useQuery({
-    queryKey: ["league-home", slug, verifiedAccount.verifiedUserId],
-    enabled: Boolean(primary.data) && verifiedAccount.isVerified,
-    queryFn: () => fetchLeagueHome(slug),
+  const { data: leaguePersonalization } = useQuery<LeaguePersonalization>({
+    queryKey: ["today-league-personalization", slug, publicLeaguePromotion?.series.id || "fallback", verifiedAccount.verifiedUserId],
+    enabled: Boolean(primary.data) && Boolean(committedSecondary) && verifiedAccount.isVerified,
+    queryFn: async () => publicLeaguePromotion
+      ? { kind: "promotion", detail: await fetchLeaguePublic(publicLeaguePromotion.series.id) }
+      : { kind: "fallback", home: await fetchLeagueHome(slug) },
     staleTime: 30000,
   });
-  const courseHome = verifiedCourseHome || secondary.data?.course;
-  const leagueHome = verifiedLeagueHome || secondary.data?.league;
+  const verifiedCourseDetail = coursePersonalization?.kind === "promotion"
+    && coursePersonalization.detail.id === publicCoursePromotion?.id
+    ? coursePersonalization.detail
+    : null;
+  const coursePromotion = publicCoursePromotion && verifiedCourseDetail
+    ? {
+        ...publicCoursePromotion,
+        capacity: { available_count: verifiedCourseDetail.capacity.available_count },
+        pricing: verifiedCourseDetail.pricing || publicCoursePromotion.pricing,
+        included_access: {
+          open_play_series_period: {
+            enabled: verifiedCourseDetail.included_access?.open_play_series_period.enabled === true,
+          },
+        },
+      }
+    : publicCoursePromotion;
+  const coursePromotionOwned = verifiedCourseDetail?.customer_has_commitment === true;
+  const verifiedLeagueDetail = leaguePersonalization?.kind === "promotion"
+    && leaguePersonalization.detail.series.id === publicLeaguePromotion?.series.id
+    ? leaguePersonalization.detail
+    : null;
+  const leaguePromotion = publicLeaguePromotion && verifiedLeagueDetail
+    ? {
+        ...publicLeaguePromotion,
+        capacity: { available_count: verifiedLeagueDetail.capacity.available_count },
+        current_price_minor: verifiedLeagueDetail.current_price_minor,
+        pricing_reason: verifiedLeagueDetail.pricing_reason,
+      }
+    : publicLeaguePromotion;
+  const leaguePromotionOwned = Boolean(verifiedLeagueDetail?.customer_team_id);
+  const fallbackCourseHome = coursePersonalization?.kind === "fallback" ? coursePersonalization.home : null;
+  const fallbackLeagueHome = leaguePersonalization?.kind === "fallback" ? leaguePersonalization.home : null;
+  const secondaryRegionReady = secondary.isFetched && enrichment.publicOpenBookingsReady;
   const now = useActivityNow();
   const userName = getFirstName({
     playerProfile: verifiedAccount.account?.profile,
@@ -898,12 +962,17 @@ export default function TodayPage() {
   }, []);
 
   const activityItems = items.filter((item) => item.kind === "session" || item.kind === "event" || item.kind === "open_booking");
+  const primaryHeroItems = activityItems.filter((item) => item.kind !== "open_booking");
   const todayKey = now.toISODate();
   const tomorrowKey = now.plus({ days: 1 }).toISODate();
   const todayActivities = sortBySoonestThenPeople(activityItems.filter((item) => item.date === todayKey));
   const tomorrowActivities = sortBySoonestThenPeople(activityItems.filter((item) => item.date === tomorrowKey));
-  const todayJoinable = todayActivities.filter((item) => isJoinableItem(item, now));
-  const tomorrowJoinable = tomorrowActivities.filter((item) => isJoinableItem(item, now));
+  const todayJoinable = sortBySoonestThenPeople(
+    primaryHeroItems.filter((item) => item.date === todayKey && isJoinableItem(item, now)),
+  );
+  const tomorrowJoinable = sortBySoonestThenPeople(
+    primaryHeroItems.filter((item) => item.date === tomorrowKey && isJoinableItem(item, now)),
+  );
   const featuredItem = (
     todayJoinable[0] ||
     tomorrowJoinable[0] ||
@@ -1008,66 +1077,53 @@ export default function TodayPage() {
         <section className="mx-auto max-w-md px-5 pt-7">
           {(!primaryEnabled && venueLoading) || primary.isLoading || primaryHardError || primaryVenueNotFound || (!primaryEnabled && venueError) ? (
             null
+          ) : !secondaryRegionReady ? (
+            null
           ) : (
-            <div className="space-y-8">
-              {firstVisitOffers?.is_first_time && (firstVisitOffers.items?.length > 0 || !firstVisitOffers.has_configured_offer) ? (
-                <button type="button" onClick={() => navigate(firstVisitOffers.items?.[0]?.route || `/today?v=${encodeURIComponent(slug)}`)} className="flex w-full items-center justify-between gap-4 border-y border-black/10 py-4 text-left text-[14px] font-bold">
-                  <span>{firstVisitOffers.items?.length ? <><span className="block">Första gången? Spela för 99 kr.</span><span className="mt-1 block text-[12px] font-semibold text-neutral-500">Racket finns att låna.</span></> : "Första gången? 165 kr, racket ingår — kom på Open Play ikväll."}</span>
-                  <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
-                </button>
+            <div className="space-y-8" data-testid="today-secondary-region">
+              {firstVisitSlotVisible ? (
+                <section
+                  className="min-h-[72px] border-y border-black/10"
+                  data-testid="today-first-visit-slot"
+                  data-customer-state={personalizedFirstVisitEligible ? "eligible" : "ineligible"}
+                >
+                  <button
+                    type="button"
+                    onClick={() => navigate(personalizedFirstVisitEligible
+                      ? firstVisitOffers?.items?.[0]?.route || `/today?v=${encodeURIComponent(slug)}`
+                      : `/openplay?v=${encodeURIComponent(slug)}`)}
+                    className="flex min-h-[72px] w-full items-center justify-between gap-4 py-3 text-left text-[14px] font-bold"
+                  >
+                    <span>{personalizedFirstVisitEligible
+                      ? firstVisitOffers?.items?.length
+                        ? <><span className="block">Första gången? Spela för 99 kr.</span><span className="mt-1 block text-[12px] font-semibold text-neutral-500">Racket finns att låna.</span></>
+                        : "Första gången? 165 kr, racket ingår — kom på Open Play ikväll."
+                      : <><span className="block">Välkommen tillbaka till Pickla.</span><span className="mt-1 block text-[12px] font-semibold text-neutral-500">Se dagens Open Play.</span></>}</span>
+                    <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
+                  </button>
+                </section>
               ) : null}
-              {leagueHome?.mode === "registration" && leagueHome.item ? (() => {
-                const league = leagueHome.item as TodayLeaguePromotion | LeaguePublicProjection;
-                const leagueRoute = "route" in league
-                  ? league.route
-                  : `/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`;
-                return <button type="button" onClick={() => navigate(leagueRoute)} className="w-full overflow-hidden rounded-[24px] bg-white text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="league-home-offer">
-                  {league.series.image_urls?.[0] ? <ResponsiveSupabaseImage src={league.series.image_urls[0]} alt={league.series.name} sizes={CARD_ARTWORK_SIZES} widths={CARD_ARTWORK_WIDTHS} width={960} height={540} className="aspect-[16/9] w-full object-cover" /> : null}
-                  <div className="p-5"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.series.name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{league.season.team_capacity} lag · {league.season.league_night_count} kvällar · {league.season.matches_per_team_per_night} matcher per kväll</p><div className="mt-4 flex items-center justify-between"><p className="font-black">{formatSek(league.current_price_minor / 100)} / lag</p><span className="rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Anmäl lag</span></div></div>
-                </button>;
-              })() : null}
-              {leagueHome?.mode === "next" && leagueHome.item ? (() => {
-                const league = leagueHome.item as MyLeagueItem;
-                return <section className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="owned-league-home-card"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.team.team_name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{league.next_session ? `Nästa: ${DateTime.fromISO(league.next_session.session_date).setLocale("sv").toFormat("cccc d LLL")} · ${String(league.next_session.start_time).slice(0, 5)}` : league.series.name}</p><p className="mt-3 flex items-center gap-1.5 text-sm font-bold"><Check className="h-4 w-4" /> Ditt lag är anmält</p><button type="button" onClick={() => navigate(`/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`)} className="mt-4 rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Visa Seriespel</button></section>;
-              })() : null}
-              {courseHome?.mode === "registration" && courseHome.item ? (() => {
-                const course = courseHome.item as TodayCoursePromotion;
-                return (
-                  <SeriesRegistrationCard
-                    series={course}
-                    onOpen={() => navigate(`/course/${course.id}?v=${encodeURIComponent(slug)}`)}
-                    imagePriority={!featuredItem?.imageUrls?.[0]}
-                  />
-                );
-              })() : null}
-              {courseHome?.mode === "next" && courseHome.item ? (() => {
-                const item = courseHome.item as MyCourseItem;
-                const presentation = seriesPresentation(item.series.presentation_type);
-                const customerTitle = seriesCustomerTitle({
-                  seriesName: item.series.name,
-                  formatName: item.series.format_name,
-                  presentationType: presentation.type,
-                });
-                const occurrenceCopy = presentation.hideSingleOccurrenceCount && item.total_sessions === 1
-                  ? null
-                  : occurrenceProgressLabel(Math.min(item.completed_sessions + 1, item.total_sessions), item.total_sessions);
-                const destination = `/course/${item.series.id}?v=${encodeURIComponent(slug)}`;
-                return (
-                  <section className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="owned-series-home-card">
-                    <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Nästa</p>
-                    <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{customerTitle}</h2>
-                    <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{[occurrenceCopy, item.next_session ? DateTime.fromISO(item.next_session.session_date).setLocale("sv").toFormat("cccc HH:mm").replace("00:00", String(item.next_session.start_time).slice(0, 5)) : null].filter(Boolean).join(" · ")}</p>
-                    <p className="mt-3 flex items-center gap-1.5 text-sm font-bold"><Check className="h-4 w-4" /> Du har en plats</p>
-                    <div className="mt-4 flex gap-2">
-                      <button type="button" onClick={() => navigate(destination)} className="rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Visa</button>
-                      {presentation.type === "social_event" ? <button type="button" onClick={() => void shareOwnedSeries(item)} className="flex items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm font-black"><Share2 className="h-4 w-4" /> Dela</button> : null}
-                    </div>
-                  </section>
-                );
-              })() : null}
+              {leaguePromotion ? <button
+                type="button"
+                onClick={() => navigate(leaguePromotion.route)}
+                className="w-full overflow-hidden rounded-[24px] bg-white text-left"
+                style={{ border: `1px solid ${BORDER}` }}
+                data-testid="league-home-offer"
+                data-promotion-id={leaguePromotion.series.id}
+                data-customer-state={leaguePromotionOwned ? "owned" : "available"}
+              >
+                {leaguePromotion.series.image_urls?.[0] ? <ResponsiveSupabaseImage src={leaguePromotion.series.image_urls[0]} alt={leaguePromotion.series.name} sizes={CARD_ARTWORK_SIZES} widths={CARD_ARTWORK_WIDTHS} width={960} height={540} className="aspect-[16/9] w-full object-cover" /> : null}
+                <div className="p-5"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>{leaguePromotionOwned ? "Seriespel · Ditt lag är anmält" : "Seriespel"}</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{leaguePromotion.series.name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{leaguePromotion.season.team_capacity} lag · {leaguePromotion.season.league_night_count} kvällar · {leaguePromotion.season.matches_per_team_per_night} matcher per kväll</p><div className="mt-4 flex items-center justify-between"><p className="font-black">{formatSek(leaguePromotion.current_price_minor / 100)} / lag</p><span className="whitespace-nowrap rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">{leaguePromotionOwned ? "Visa laget" : "Anmäl lag"}</span></div></div>
+              </button> : null}
+              {coursePromotion ? <SeriesRegistrationCard
+                series={coursePromotion}
+                customerState={coursePromotionOwned ? "owned" : "available"}
+                onOpen={() => navigate(`/course/${coursePromotion.id}?v=${encodeURIComponent(slug)}`)}
+                imagePriority={!featuredItem?.imageUrls?.[0]}
+              /> : null}
               {todayListItems.length > 0 && (
                 <section>
-                  <h2 className="mb-4 text-[28px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING }}>
+                  <h2 className="mb-4 text-[28px] leading-none tracking-[-0.04em]" style={{ fontFamily: FONT_HEADING }} data-testid="today-more-heading">
                     Mer händer idag
                   </h2>
                   <div className="space-y-2">
@@ -1107,6 +1163,36 @@ export default function TodayPage() {
               >
                 Hela veckan →
               </button>
+
+              {fallbackLeagueHome?.mode === "next" && fallbackLeagueHome.item ? (() => {
+                const league = fallbackLeagueHome.item as MyLeagueItem;
+                return <section className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="owned-league-home-card"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Ditt Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.team.team_name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{league.next_session ? `Nästa: ${DateTime.fromISO(league.next_session.session_date).setLocale("sv").toFormat("cccc d LLL")} · ${String(league.next_session.start_time).slice(0, 5)}` : league.series.name}</p><p className="mt-3 flex items-center gap-1.5 text-sm font-bold"><Check className="h-4 w-4" /> Ditt lag är anmält</p><button type="button" onClick={() => navigate(`/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`)} className="mt-4 rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Visa Seriespel</button></section>;
+              })() : null}
+              {fallbackCourseHome?.mode === "next" && fallbackCourseHome.item ? (() => {
+                const item = fallbackCourseHome.item as MyCourseItem;
+                const presentation = seriesPresentation(item.series.presentation_type);
+                const customerTitle = seriesCustomerTitle({
+                  seriesName: item.series.name,
+                  formatName: item.series.format_name,
+                  presentationType: presentation.type,
+                });
+                const occurrenceCopy = presentation.hideSingleOccurrenceCount && item.total_sessions === 1
+                  ? null
+                  : occurrenceProgressLabel(Math.min(item.completed_sessions + 1, item.total_sessions), item.total_sessions);
+                const destination = `/course/${item.series.id}?v=${encodeURIComponent(slug)}`;
+                return (
+                  <section className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="owned-series-home-card">
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Din nästa kurs</p>
+                    <h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{customerTitle}</h2>
+                    <p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{[occurrenceCopy, item.next_session ? DateTime.fromISO(item.next_session.session_date).setLocale("sv").toFormat("cccc HH:mm").replace("00:00", String(item.next_session.start_time).slice(0, 5)) : null].filter(Boolean).join(" · ")}</p>
+                    <p className="mt-3 flex items-center gap-1.5 text-sm font-bold"><Check className="h-4 w-4" /> Du har en plats</p>
+                    <div className="mt-4 flex gap-2">
+                      <button type="button" onClick={() => navigate(destination)} className="rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Visa</button>
+                      {presentation.type === "social_event" ? <button type="button" onClick={() => void shareOwnedSeries(item)} className="flex items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm font-black"><Share2 className="h-4 w-4" /> Dela</button> : null}
+                    </div>
+                  </section>
+                );
+              })() : null}
             </div>
           )}
         </section>

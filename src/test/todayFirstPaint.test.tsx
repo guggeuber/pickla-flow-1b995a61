@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   },
   user: { id: "user-1", email: "private@example.test" } as { id: string; email: string } | null,
   apiGet: vi.fn(),
+  fetchCourseDetail: vi.fn(),
   fetchCourseHome: vi.fn(),
+  fetchLeaguePublic: vi.fn(),
   fetchLeagueHome: vi.fn(),
   supabaseFrom: vi.fn(),
   venueData: undefined as { id: string; name: string; slug: string } | undefined,
@@ -35,11 +37,11 @@ vi.mock("@/lib/venueStatus", () => ({
 vi.mock("@/lib/api", () => ({ apiGet: mocks.apiGet }));
 vi.mock("@/lib/courses", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/courses")>();
-  return { ...original, fetchCourseHome: mocks.fetchCourseHome };
+  return { ...original, fetchCourseDetail: mocks.fetchCourseDetail, fetchCourseHome: mocks.fetchCourseHome };
 });
 vi.mock("@/lib/league", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/league")>();
-  return { ...original, fetchLeagueHome: mocks.fetchLeagueHome };
+  return { ...original, fetchLeaguePublic: mocks.fetchLeaguePublic, fetchLeagueHome: mocks.fetchLeagueHome };
 });
 vi.mock("@/lib/publicProfiles", () => ({ getPublicProfileMap: vi.fn().mockResolvedValue(new Map()) }));
 vi.mock("@/lib/entryResolver", () => ({
@@ -135,6 +137,96 @@ function secondaryResponse(pricing: Array<Record<string, unknown>> = []) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function publicPromotions(courseId = "parker-brunch", courseName = "Parker Brunch") {
+  return {
+    first_visit: {
+      is_first_time: true,
+      has_configured_offer: true,
+      occurrences: [],
+      items: [{ route: "/program/first-visit?date=2026-08-26&v=pickla-arena-sthlm" }],
+      pricing: [],
+    },
+    league: {
+      mode: "registration",
+      item: {
+        series: { id: "league-1", name: "League Season 01", image_urls: [] },
+        season: { team_capacity: 6, league_night_count: 5, matches_per_team_per_night: 2 },
+        capacity: { available_count: 4 },
+        current_price_minor: 199500,
+        pricing_reason: "league_team_base_price",
+        route: "/seriespel/league-1?v=pickla-arena-sthlm",
+      },
+    },
+    course: {
+      mode: "registration",
+      item: {
+        id: courseId,
+        name: courseName,
+        image_urls: [],
+        start_date: "2026-09-20",
+        registration_state: "open",
+        capacity: { available_count: 12 },
+        format: { name: courseName, description: "Spela och umgås.", presentation_type: "social_event" },
+        product: { base_price_sek: 595 },
+        pricing: {
+          scope_type: "activity_series",
+          list_price_minor: 59500,
+          final_price_minor: 59500,
+          pricing_reason: "series_product_base_price",
+          sales_channel: "online",
+          checkout_label: "595 kr",
+          membership_tier_name: null,
+          early_bird: { configured: false, active: false, applied: false, price_minor: null, slots: null, remaining: null },
+        },
+        included_access: { open_play_series_period: { enabled: false } },
+        route: `/course/${courseId}?v=pickla-arena-sthlm`,
+      },
+    },
+  };
+}
+
+function primaryWithSecondaryRow() {
+  return {
+    ...primaryResponse,
+    sessions: [
+      ...primaryResponse.sessions,
+      {
+        ...primaryResponse.sessions[0],
+        id: "second-visible-session",
+        name: "Open Play Sen",
+        start_time: "20:00",
+        end_time: "22:00",
+      },
+    ],
+  };
+}
+
+function earlierOpenBooking() {
+  return {
+    id: "open-booking-1",
+    title: "Häng på Gunnar",
+    start_time: "2026-08-26T14:00:00Z",
+    end_time: "2026-08-26T15:00:00Z",
+    open_spots: 2,
+    public_capacity: 4,
+    pace_label: "Medel",
+    booker_first_name: "Gunnar",
+    committed_count: 2,
+    claim_url: "https://playpickla.com/booking/claim/open-booking-1",
+    courts: [{ name: "Bana 1" }],
+  };
+}
+
 function renderToday(initialEntry = "/today", queryClient = client()) {
   const view = render(
     <QueryClientProvider client={queryClient}>
@@ -161,7 +253,9 @@ describe("Today customer first paint", () => {
       return never();
     });
     mocks.fetchCourseHome.mockImplementation(() => never());
+    mocks.fetchCourseDetail.mockImplementation(() => never());
     mocks.fetchLeagueHome.mockImplementation(() => never());
+    mocks.fetchLeaguePublic.mockImplementation(() => never());
   });
 
   afterEach(() => {
@@ -191,21 +285,30 @@ describe("Today customer first paint", () => {
     expect(mocks.fetchLeagueHome).not.toHaveBeenCalled();
   });
 
-  it("keeps the primary hero stable while verified secondary projections are slow", async () => {
+  it("keeps the primary hero stable and defers private projections until public identity is known", async () => {
     const view = renderToday();
     expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+    const hero = screen.getByTestId("today-featured-hero");
+    const greetingSlot = screen.getByTestId("today-hero-greeting-slot");
+    expect(greetingSlot.textContent?.trim()).toBe("");
 
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
     view.rerender(
-      <QueryClientProvider client={client()}>
+      <QueryClientProvider client={view.queryClient}>
         <MemoryRouter initialEntries={["/today"]}><TodayPage /></MemoryRouter>
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(mocks.fetchCourseHome).toHaveBeenCalled());
-    expect(mocks.fetchLeagueHome).toHaveBeenCalled();
+    expect(await screen.findByText("Hej private.")).toBeInTheDocument();
+    expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
+    expect(mocks.fetchCourseDetail).not.toHaveBeenCalled();
+    expect(mocks.fetchLeagueHome).not.toHaveBeenCalled();
+    expect(mocks.fetchLeaguePublic).not.toHaveBeenCalled();
+    expect(screen.getByTestId("today-featured-hero")).toBe(hero);
+    expect(screen.getByTestId("today-hero-greeting-slot")).toBe(greetingSlot);
+    expect(greetingSlot).toHaveClass("h-[22px]");
     expect(screen.getByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
     expect(screen.getByText("Boka plats")).toBeInTheDocument();
   });
@@ -509,5 +612,360 @@ describe("Today customer first paint", () => {
 
     expect(await screen.findByText("Arenan kunde inte hittas.")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Open Play Express" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Parker Brunch mounted and enriches ownership in place instead of replacing it with Pickla Start", async () => {
+    const courseDetail = deferred<Record<string, unknown>>();
+    const promotions = publicPromotions();
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-secondary") return Promise.resolve(promotions);
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      return never();
+    });
+    mocks.fetchCourseDetail.mockReturnValue(courseDetail.promise);
+    mocks.fetchCourseHome.mockResolvedValue({
+      mode: "registration",
+      item: publicPromotions("pickla-start", "Pickla Start").course.item,
+    });
+    mocks.fetchLeaguePublic.mockResolvedValue({
+      series: { id: "league-1" },
+      capacity: { available_count: 4 },
+      current_price_minor: 199500,
+      pricing_reason: "league_team_base_price",
+      customer_team_id: null,
+    });
+
+    const view = renderToday();
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    const publicCard = screen.getByTestId("home-series-card");
+    expect(publicCard).toHaveAttribute("data-promotion-id", "parker-brunch");
+    expect(publicCard).toHaveAttribute("data-customer-state", "available");
+
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <MemoryRouter initialEntries={["/today"]}><TodayPage /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(mocks.fetchCourseDetail).toHaveBeenCalledWith("parker-brunch"));
+    expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
+    expect(screen.getByTestId("home-series-card")).toBe(publicCard);
+    expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+
+    await act(async () => {
+      courseDetail.resolve({
+        id: "parker-brunch",
+        customer_has_commitment: true,
+        capacity: { available_count: 11 },
+        pricing: promotions.course.item.pricing,
+        included_access: { open_play_series_period: { enabled: false } },
+      });
+    });
+
+    await waitFor(() => expect(publicCard).toHaveAttribute("data-customer-state", "owned"));
+    expect(screen.getByTestId("home-series-card")).toBe(publicCard);
+    expect(screen.getByText("EVENT · Redan anmäld")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Visa bokning" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Pickla Start" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Parker Brunch as the deterministic initial candidate when verification is already available and it is not owned", async () => {
+    const promotions = publicPromotions();
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-secondary") return Promise.resolve(promotions);
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "first-visit-offers") return Promise.resolve(promotions.first_visit);
+      return never();
+    });
+    mocks.fetchCourseDetail.mockResolvedValue({
+      id: "parker-brunch",
+      customer_has_commitment: false,
+      capacity: { available_count: 10 },
+      pricing: promotions.course.item.pricing,
+      included_access: { open_play_series_period: { enabled: false } },
+    });
+    mocks.fetchCourseHome.mockResolvedValue({
+      mode: "registration",
+      item: publicPromotions("pickla-start", "Pickla Start").course.item,
+    });
+    mocks.fetchLeaguePublic.mockImplementation(() => never());
+
+    renderToday();
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    const card = screen.getByTestId("home-series-card");
+    await waitFor(() => expect(mocks.fetchCourseDetail).toHaveBeenCalledWith("parker-brunch"));
+    expect(card).toHaveAttribute("data-promotion-id", "parker-brunch");
+    expect(card).toHaveAttribute("data-customer-state", "available");
+    expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "Pickla Start" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { label: "not owned", customerTeamId: null, expectedState: "available", expectedCta: "Anmäl lag" },
+    { label: "owned", customerTeamId: "private-team-id", expectedState: "owned", expectedCta: "Visa laget" },
+  ])("keeps the public League node stable while $label enrichment resolves", async ({ customerTeamId, expectedState, expectedCta }) => {
+    const leagueDetail = deferred<Record<string, unknown>>();
+    const promotions = publicPromotions();
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-secondary") return Promise.resolve(promotions);
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      return never();
+    });
+    mocks.fetchCourseDetail.mockImplementation(() => never());
+    mocks.fetchLeaguePublic.mockReturnValue(leagueDetail.promise);
+
+    const view = renderToday();
+    expect(await screen.findByRole("heading", { name: "League Season 01" })).toBeInTheDocument();
+    const leagueCard = screen.getByTestId("league-home-offer");
+
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <MemoryRouter initialEntries={["/today"]}><TodayPage /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(mocks.fetchLeaguePublic).toHaveBeenCalledWith("league-1"));
+    expect(screen.getByTestId("league-home-offer")).toBe(leagueCard);
+    expect(leagueCard).toHaveAttribute("data-customer-state", "available");
+
+    await act(async () => {
+      leagueDetail.resolve({
+        series: { id: "league-1" },
+        capacity: { available_count: 3 },
+        current_price_minor: 149500,
+        pricing_reason: "membership_tier_pricing",
+        customer_team_id: customerTeamId,
+      });
+    });
+
+    await waitFor(() => expect(leagueCard).toHaveAttribute("data-customer-state", expectedState));
+    expect(screen.getByTestId("league-home-offer")).toBe(leagueCard);
+    expect(screen.getByRole("heading", { name: "League Season 01" })).toBeInTheDocument();
+    expect(screen.getByText(expectedCta)).toBeInTheDocument();
+    expect(screen.queryByTestId("owned-league-home-card")).not.toBeInTheDocument();
+  });
+
+  it("keeps the First Visit slot and downstream DOM order stable when verified eligibility disappears", async () => {
+    const privateFirstVisit = deferred<Record<string, unknown>>();
+    const promotions = publicPromotions();
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-secondary") return Promise.resolve(promotions);
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "first-visit-offers") return privateFirstVisit.promise;
+      return never();
+    });
+    mocks.fetchCourseDetail.mockImplementation(() => never());
+    mocks.fetchLeaguePublic.mockImplementation(() => never());
+
+    const view = renderToday();
+    expect(await screen.findByText("Första gången? Spela för 99 kr.")).toBeInTheDocument();
+    const slot = screen.getByTestId("today-first-visit-slot");
+    const action = screen.getByRole("button", { name: /Första gången\? Spela för 99 kr/ });
+    const downstream = screen.getByTestId("today-more-heading");
+    expect(slot.compareDocumentPosition(downstream) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(slot).toHaveClass("min-h-[72px]");
+
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <MemoryRouter initialEntries={["/today"]}><TodayPage /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(mocks.apiGet.mock.calls.some((call) => call[1] === "first-visit-offers")).toBe(true));
+
+    await act(async () => {
+      privateFirstVisit.resolve({
+        is_first_time: false,
+        has_configured_offer: false,
+        occurrences: [],
+        items: [],
+        pricing: [],
+      });
+    });
+
+    expect(await screen.findByText("Välkommen tillbaka till Pickla.")).toBeInTheDocument();
+    expect(screen.getByTestId("today-first-visit-slot")).toBe(slot);
+    expect(screen.getByRole("button", { name: /Välkommen tillbaka till Pickla/ })).toBe(action);
+    expect(screen.getByTestId("today-more-heading")).toBe(downstream);
+    expect(slot).toHaveAttribute("data-customer-state", "ineligible");
+    expect(screen.queryByText("Första gången? Spela för 99 kr.")).not.toBeInTheDocument();
+  });
+
+  it("mounts promotions and the activity list once after both public presentation reads settle", async () => {
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    const secondary = deferred<Record<string, unknown>>();
+    const openBookings = deferred<Record<string, unknown>>();
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-secondary") return secondary.promise;
+      if (endpoint === "public-open-bookings") return openBookings.promise;
+      return never();
+    });
+
+    renderToday();
+    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+    expect(screen.queryByTestId("today-secondary-region")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("today-more-heading")).not.toBeInTheDocument();
+
+    await act(async () => secondary.resolve(publicPromotions()));
+    expect(screen.queryByTestId("today-secondary-region")).not.toBeInTheDocument();
+
+    await act(async () => openBookings.resolve({ items: [] }));
+    expect(await screen.findByTestId("today-secondary-region")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "League Season 01" })).toBeInTheDocument();
+    expect(screen.getByTestId("today-more-heading")).toBeInTheDocument();
+  });
+
+  it("keeps the today-primary hero identity when an earlier public open booking arrives", async () => {
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    const openBookings = deferred<Record<string, unknown>>();
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
+      if (endpoint === "public-open-bookings") return openBookings.promise;
+      return never();
+    });
+
+    renderToday();
+    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+    const hero = screen.getByTestId("today-featured-hero");
+    expect(hero).toHaveAttribute("data-featured-id", "session:visible-session:2026-08-26");
+
+    await act(async () => openBookings.resolve({ items: [earlierOpenBooking()] }));
+
+    expect(await screen.findByText("Häng på Gunnar")).toBeInTheDocument();
+    expect(screen.getByTestId("today-featured-hero")).toBe(hero);
+    expect(hero).toHaveAttribute("data-featured-id", "session:visible-session:2026-08-26");
+    expect(screen.getByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+  });
+
+  it("keeps the public Course card through an enrichment error and upgrades the same node after retry", async () => {
+    const promotions = publicPromotions();
+    const queryClient = client();
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-secondary") return Promise.resolve(promotions);
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "first-visit-offers") return Promise.resolve(promotions.first_visit);
+      return never();
+    });
+    mocks.fetchCourseDetail
+      .mockRejectedValueOnce(new Error("temporary course detail failure"))
+      .mockResolvedValueOnce({
+        id: "parker-brunch",
+        customer_has_commitment: true,
+        capacity: { available_count: 11 },
+        pricing: promotions.course.item.pricing,
+        included_access: { open_play_series_period: { enabled: false } },
+      });
+    mocks.fetchLeaguePublic.mockImplementation(() => never());
+
+    renderToday("/today", queryClient);
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    const card = screen.getByTestId("home-series-card");
+    await waitFor(() => expect(mocks.fetchCourseDetail).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(queryClient.getQueryState(["today-course-personalization", "pickla-arena-sthlm", "parker-brunch", "user-1"])?.status).toBe("error"));
+    expect(screen.getByTestId("home-series-card")).toBe(card);
+    expect(card).toHaveAttribute("data-customer-state", "available");
+
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["today-course-personalization", "pickla-arena-sthlm"] });
+    });
+
+    await waitFor(() => expect(mocks.fetchCourseDetail).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(card).toHaveAttribute("data-customer-state", "owned"));
+    expect(screen.getByTestId("home-series-card")).toBe(card);
+    expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+  });
+
+  it("freezes stale cached promotion identity for one mount and accepts a new identity after remount", async () => {
+    const queryClient = client();
+    const cached = publicPromotions();
+    const refreshed = publicPromotions("pickla-start", "Pickla Start");
+    queryClient.setQueryData(["today-secondary", "pickla-arena-sthlm"], cached, { updatedAt: 1 });
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-secondary") return Promise.resolve(refreshed);
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "first-visit-offers") return Promise.resolve(cached.first_visit);
+      return never();
+    });
+    mocks.fetchCourseDetail.mockImplementation((seriesId: string) => Promise.resolve({
+      id: seriesId,
+      customer_has_commitment: seriesId === "parker-brunch",
+      capacity: { available_count: 8 },
+      pricing: cached.course.item.pricing,
+      included_access: { open_play_series_period: { enabled: false } },
+    }));
+    mocks.fetchLeaguePublic.mockResolvedValue({
+      series: { id: "league-1" },
+      capacity: { available_count: 4 },
+      current_price_minor: 199500,
+      pricing_reason: "league_team_base_price",
+      customer_team_id: null,
+    });
+
+    const first = renderToday("/today", queryClient);
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    const firstCard = screen.getByTestId("home-series-card");
+    await waitFor(() => expect((queryClient.getQueryData(["today-secondary", "pickla-arena-sthlm"]) as typeof refreshed).course.item.id).toBe("pickla-start"));
+    expect(screen.getByTestId("home-series-card")).toBe(firstCard);
+    expect(screen.queryByRole("heading", { name: "Pickla Start" })).not.toBeInTheDocument();
+
+    first.unmount();
+    renderToday("/today", queryClient);
+    expect(await screen.findByRole("heading", { name: "Pickla Start" })).toBeInTheDocument();
+  });
+
+  it("does not fabricate a public card when the committed public candidate is absent", async () => {
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "first-visit-offers") return Promise.resolve(secondaryResponse().first_visit);
+      return never();
+    });
+    mocks.fetchCourseHome.mockResolvedValue({ mode: "registration", item: publicPromotions().course.item });
+    mocks.fetchLeagueHome.mockResolvedValue({ mode: "registration", item: publicPromotions().league.item });
+
+    renderToday();
+    await waitFor(() => expect(mocks.fetchCourseHome).toHaveBeenCalled());
+    expect(mocks.fetchLeagueHome).toHaveBeenCalled();
+    expect(screen.queryByTestId("home-series-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("league-home-offer")).not.toBeInTheDocument();
   });
 });

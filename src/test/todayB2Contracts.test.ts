@@ -41,7 +41,7 @@ describe("Today B2 secondary consolidation contracts", () => {
   it("removes anonymous Course, League, First Visit and social reconstruction", () => {
     expect(today).toContain("fetchTodaySecondary");
     expect(today).toContain("enabled: Boolean(primary.data)");
-    expect(today).toContain("enabled: Boolean(primary.data) && verifiedAccount.isVerified");
+    expect(today).toContain("Boolean(committedSecondary) && verifiedAccount.isVerified");
     expect(today).toContain("userId && sessionIds.length");
     expect(today).not.toContain('fetchCourseHome(slug, { auth: "omit" })');
     expect(today).not.toContain('fetchLeagueHome(slug, { auth: "omit" })');
