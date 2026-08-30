@@ -39,6 +39,51 @@ function product(index: number) {
   };
 }
 
+function activityFact(overrides: {
+  session?: Record<string, unknown>;
+  product?: Record<string, unknown> | null;
+  capacity_fill?: Record<string, unknown>;
+  early_bird_fill?: Record<string, unknown>;
+} = {}) {
+  return {
+    session: {
+      id: "session-1",
+      venue_id: "venue-1",
+      name: "Open Play FM",
+      session_type: "open_play",
+      session_date: null,
+      start_time: "10:00:00",
+      end_time: "12:00:00",
+      capacity: 40,
+      price_sek: 165,
+      product_key: "open_play_slot",
+      access_policy: {},
+      metadata: { online_price_sek: 165, pricing_channel_mode: "standard" },
+      early_bird_price_minor: null,
+      early_bird_slots: null,
+      scarcity_mode: "none",
+      first_visit_offer_enabled: false,
+      first_visit_price_minor: null,
+      first_visit_only: true,
+      ...overrides.session,
+    },
+    session_date: "2026-09-01",
+    resolved_product_key: "open_play_slot",
+    product: overrides.product === undefined ? {
+      id: "activity-product-1",
+      venue_id: "venue-1",
+      product_key: "open_play_slot",
+      product_kind: "session_ticket",
+      base_price_sek: 0,
+      early_bird_price_minor: null,
+      early_bird_slots: null,
+      scarcity_mode: "none",
+    } : overrides.product,
+    capacity_fill: overrides.capacity_fill || { fill_count: 0 },
+    early_bird_fill: overrides.early_bird_fill || { fill_count: 0 },
+  };
+}
+
 function facts(itemCount: number) {
   return {
     input_valid: true,
@@ -64,7 +109,7 @@ function facts(itemCount: number) {
       coach: { display_name: "Must not escape" },
     })),
     has_configured_first_visit_offer: false,
-    first_visit_fallback_price_sek: 165,
+    first_visit_fallback_occurrence: activityFact(),
     first_visit_occurrences: [],
   };
 }
@@ -144,46 +189,60 @@ describe("public Prices read model", () => {
     expect(serialized).not.toMatch(/internal_entitlements|coach|auth|customer|payer|stripe|order|membership_id/i);
   });
 
+  it("uses the standard occurrence price when the product template is zero", async () => {
+    const { client } = rpcClient(facts(1));
+
+    const result = await loadPublicPrices(client, {
+      venueSlug: "pickla-arena-sthlm",
+      startDate: "2026-08-31",
+      endDate: "2026-09-06",
+    });
+
+    expect(result).toMatchObject({
+      kind: "ok",
+      data: { first_visit: { available: true, public_price_sek: 165 } },
+    });
+  });
+
+  it("preserves an authoritative free standard occurrence as zero", async () => {
+    const payload = {
+      ...facts(1),
+      first_visit_fallback_occurrence: activityFact({
+        session: { price_sek: 0, metadata: { online_price_sek: 0, pricing_channel_mode: "standard" } },
+      }),
+    };
+    const { client } = rpcClient(payload);
+
+    const result = await loadPublicPrices(client, {
+      venueSlug: "pickla-arena-sthlm",
+      startDate: "2026-08-31",
+      endDate: "2026-09-06",
+    });
+
+    expect(result).toMatchObject({
+      kind: "ok",
+      data: {
+        first_visit: {
+          available: true,
+          title: "Första gången? 0 kr, racket ingår — kom på Open Play ikväll.",
+          public_price_sek: 0,
+        },
+      },
+    });
+  });
+
   it("uses the canonical First Visit resolver for configured public presentation", async () => {
     const payload = {
       ...facts(1),
       has_configured_first_visit_offer: true,
-      first_visit_occurrences: [{
+      first_visit_occurrences: [activityFact({
         session: {
-          id: "session-1",
-          venue_id: "venue-1",
           name: "Open Play",
-          session_type: "open_play",
-          session_date: null,
-          start_time: "18:00:00",
-          end_time: "20:00:00",
-          capacity: 40,
-          price_sek: 165,
-          product_key: "open_play_slot",
-          access_policy: {},
-          metadata: {},
-          early_bird_price_minor: null,
-          early_bird_slots: null,
-          scarcity_mode: "none",
           first_visit_offer_enabled: true,
           first_visit_price_minor: 9900,
           first_visit_only: false,
         },
-        session_date: "2026-09-01",
-        resolved_product_key: "open_play_slot",
-        product: {
-          id: "activity-product-1",
-          venue_id: "venue-1",
-          product_key: "open_play_slot",
-          product_kind: "session_ticket",
-          base_price_sek: 165,
-          early_bird_price_minor: null,
-          early_bird_slots: null,
-          scarcity_mode: "none",
-        },
-        capacity_fill: { fill_count: 0 },
-        early_bird_fill: { fill_count: 0 },
-      }],
+      })],
     };
     const { client, rpc } = rpcClient(payload);
 
@@ -209,10 +268,64 @@ describe("public Prices read model", () => {
     expect(rpc).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves Early Bird precedence over a configured First Visit offer", async () => {
+    const payload = {
+      ...facts(1),
+      has_configured_first_visit_offer: true,
+      first_visit_occurrences: [activityFact({
+        session: {
+          first_visit_offer_enabled: true,
+          first_visit_price_minor: 9900,
+          scarcity_mode: "early_bird",
+          early_bird_price_minor: 7900,
+          early_bird_slots: 2,
+        },
+      })],
+    };
+    const { client } = rpcClient(payload);
+
+    const result = await loadPublicPrices(client, {
+      venueSlug: "pickla-arena-sthlm",
+      startDate: "2026-08-31",
+      endDate: "2026-09-06",
+    });
+
+    expect(result).toMatchObject({
+      kind: "ok",
+      data: { first_visit: { available: false, public_price_sek: null } },
+    });
+  });
+
+  it("uses a session price without a product and does not invent a missing fallback", async () => {
+    const missingProduct = rpcClient({
+      ...facts(1),
+      first_visit_fallback_occurrence: activityFact({ product: null }),
+    });
+    const missingFallback = rpcClient({
+      ...facts(1),
+      first_visit_fallback_occurrence: null,
+    });
+    const input = {
+      venueSlug: "pickla-arena-sthlm",
+      startDate: "2026-08-31",
+      endDate: "2026-09-06",
+    };
+
+    await expect(loadPublicPrices(missingProduct.client, input)).resolves.toMatchObject({
+      kind: "ok",
+      data: { first_visit: { available: true, public_price_sek: 165 } },
+    });
+    await expect(loadPublicPrices(missingFallback.client, input)).resolves.toMatchObject({
+      kind: "ok",
+      data: { first_visit: { available: false, public_price_sek: null } },
+    });
+  });
+
   it("fails closed on malformed facts and distinguishes invalid input from unknown venue", async () => {
     const invalid = rpcClient({ input_valid: false });
     const missing = rpcClient({ input_valid: true, venue_found: false });
     const malformed = rpcClient({ ...facts(1), memberships: [{ id: "bad" }] });
+    const malformedFallback = rpcClient({ ...facts(1), first_visit_fallback_occurrence: {} });
 
     await expect(loadPublicPrices(invalid.client, {
       venueSlug: "bad",
@@ -229,11 +342,17 @@ describe("public Prices read model", () => {
       startDate: "2026-08-31",
       endDate: "2026-09-06",
     })).rejects.toThrow("Prices projection unavailable");
+    await expect(loadPublicPrices(malformedFallback.client, {
+      venueSlug: "pickla-arena-sthlm",
+      startDate: "2026-08-31",
+      endDate: "2026-09-06",
+    })).rejects.toThrow("Prices projection unavailable");
   });
 });
 
 describe("Prices SQL and API contracts", () => {
-  const migration = read("supabase/migrations/20260831120000_public_customer_prices_facts.sql");
+  const appliedMigration = read("supabase/migrations/20260831120000_public_customer_prices_facts.sql");
+  const migration = read("supabase/migrations/20260831130000_public_customer_prices_first_visit_parity.sql");
   const projection = read("supabase/functions/_shared/public_prices.ts");
   const endpoint = read("supabase/functions/api-event-public/index.ts");
   const browser = read("src/lib/publicPrices.ts");
@@ -252,6 +371,11 @@ describe("Prices SQL and API contracts", () => {
     expect(migration).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/i);
     expect(migration).toContain("FROM PUBLIC, anon, authenticated");
     expect(migration).toContain("TO service_role");
+    expect(migration).toContain("first_visit_fallback_occurrence");
+    expect(migration).toContain("pricing_channel_mode");
+    expect(migration).not.toMatch(/fallback[^\n]*165|165[^\n]*fallback/i);
+    expect(appliedMigration).toContain("'first_visit_fallback_price_sek'");
+    expect(appliedMigration).not.toContain("first_visit_fallback_occurrence");
   });
 
   it("performs one RPC with no remote table loop and retains canonical shared pricing", () => {
@@ -260,6 +384,7 @@ describe("Prices SQL and API contracts", () => {
     expect(projection).toContain("evaluateCommerceAvailability");
     expect(projection).not.toContain("client.from(");
     expect(projection).not.toContain("STRIPE");
+    expect(projection).not.toContain("?? 165");
   });
 
   it("keeps public first paint auth-free and private eligibility after verification", () => {

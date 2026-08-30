@@ -20,7 +20,7 @@ type PublicPricesFacts = {
   commerce_candidates?: unknown[];
   courses?: unknown[];
   has_configured_first_visit_offer?: boolean;
-  first_visit_fallback_price_sek?: number | string | null;
+  first_visit_fallback_occurrence?: ActivityFact | null;
   first_visit_occurrences?: ActivityFact[];
 };
 
@@ -260,7 +260,17 @@ export async function loadPublicPrices(
   const capacityByKey = new Map<string, Record<string, unknown>>();
   const earlyBirdByKey = new Map<string, Record<string, unknown>>();
   const productCache = new Map<string, Promise<unknown>>();
-  for (const activity of facts.first_visit_occurrences) {
+  const fallbackOccurrence = facts.first_visit_fallback_occurrence == null
+    ? null
+    : objectValue(facts.first_visit_fallback_occurrence) as ActivityFact | null;
+  if (facts.first_visit_fallback_occurrence != null && !fallbackOccurrence) {
+    throw new Error('Prices projection unavailable');
+  }
+  const pricingOccurrences = [
+    ...facts.first_visit_occurrences,
+    ...(fallbackOccurrence ? [fallbackOccurrence] : []),
+  ];
+  for (const activity of pricingOccurrences) {
     const sessionId = String(activity.session?.id || '');
     const sessionDate = String(activity.session_date || '');
     const productKey = String(activity.resolved_product_key || '');
@@ -305,7 +315,30 @@ export async function loadPublicPrices(
   }
 
   const hasConfiguredOffer = facts.has_configured_first_visit_offer === true;
-  const fallbackPrice = finiteNumber(facts.first_visit_fallback_price_sek ?? 165) as number;
+  let fallbackPrice: number | null = null;
+  if (!firstVisitItem && !hasConfiguredOffer && fallbackOccurrence) {
+    const session = fallbackOccurrence.session;
+    const sessionDate = String(fallbackOccurrence.session_date || '');
+    if (!session?.id || !sessionDate || !fallbackOccurrence.resolved_product_key) {
+      throw new Error('Prices projection unavailable');
+    }
+    const decision = await resolveActivityPricingDecision({
+      client: localClient,
+      venueId: facts.venue_id,
+      userId: null,
+      customerId: null,
+      firstVisitEligibility: ANONYMOUS_FIRST_VISIT_ELIGIBILITY,
+      activitySessionId: String(session.id),
+      sessionDate,
+      requestedProductKey: session.product_key == null ? null : String(session.product_key),
+      requestedAmountSek: session.price_sek == null ? null : Number(session.price_sek),
+      purchaseKind: 'activity_ticket',
+      session,
+      productCache,
+      applyFirstVisit: false,
+    });
+    fallbackPrice = finiteNumber(decision.customerPresentation.displayPriceSek) as number;
+  }
   const products = commerceProducts(facts.commerce_candidates, facts.commerce_enabled === true);
   return {
     kind: 'ok',
@@ -320,7 +353,7 @@ export async function loadPublicPrices(
         description: 'Racket finns att låna.',
         public_price_sek: firstVisitItem.publicPriceSek,
         route: firstVisitItem.route,
-      } : !hasConfiguredOffer ? {
+      } : !hasConfiguredOffer && fallbackPrice != null ? {
         available: true,
         title: `Första gången? ${fallbackPrice} kr, racket ingår — kom på Open Play ikväll.`,
         description: null,
