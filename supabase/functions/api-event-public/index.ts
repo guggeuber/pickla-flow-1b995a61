@@ -23,6 +23,7 @@ import {
   COMMITTED_REGISTRATION_STATUSES,
 } from '../_shared/activity_social_proof.ts';
 import { loadPublicTodaySecondary } from '../_shared/today_secondary.ts';
+import { loadPublicPrices } from '../_shared/public_prices.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -1246,6 +1247,50 @@ Deno.serve(async (req) => {
         status: 200,
         headers: { 'content-type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300, s-maxage=300' },
       });
+    }
+
+    // One bounded auth-free Prices read. The RPC batches canonical public
+    // presentation facts; checkout and personalized price truth stay separate.
+    if (req.method === 'GET' && path === 'public-prices') {
+      const readContext = createPublicReadContext('api-event-public', 'public-prices');
+      const serviceCredential = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+      const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
+      if (!venueSlug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(venueSlug)) {
+        return publicReadClientErrorResponse('Valid venue slug is required', 400, readContext);
+      }
+      const start = DateTime.now().setZone('Europe/Stockholm').startOf('day');
+      const startDate = start.toISODate()!;
+      const endDate = start.plus({ days: 6 }).toISODate()!;
+
+      try {
+        const projection = await measurePublicReadStage(readContext, 'public_prices_rpc', () =>
+          loadPublicPrices(client, { venueSlug, startDate, endDate })
+        );
+        if (projection.kind === 'invalid_input') {
+          return publicReadClientErrorResponse('Valid venue slug is required', 400, readContext);
+        }
+        if (projection.kind === 'venue_not_found') return publicReadNotFoundResponse('Venue not found', readContext);
+        return publicReadJsonResponse(projection.data, readContext, 200, 30);
+      } catch (error) {
+        const stage = error instanceof PublicReadStageError ? error.stage : 'public_prices_rpc';
+        const originalError = error instanceof PublicReadStageError ? error.originalError : error;
+        return await publicReadFailureResponse({
+          context: readContext,
+          stage,
+          error: originalError,
+          serviceCredential,
+        });
+      }
+    }
+
+    // Returning-customer eligibility is private, verified-only enrichment. It
+    // never blocks the public Prices response and intentionally does not run
+    // checkout expiry reconciliation or any other mutation.
+    if (req.method === 'GET' && path === 'prices-first-visit-eligibility') {
+      const { userId, error: authError } = await getAuthenticatedClient(req);
+      if (authError || !userId) return errorResponse(authError || 'Unauthorized', 401);
+      const eligibility = await firstVisitEligibilityForCustomer(client, null, userId);
+      return jsonResponse({ eligible: eligibility.eligible }, 200, 0);
     }
 
     // One bounded auth-free secondary Today read. The RPC batches canonical

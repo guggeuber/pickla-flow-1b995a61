@@ -22,11 +22,12 @@ describe("Navigation, discovery and event identity contract", () => {
 
   it("uses a restrained list instead of a price matrix and keeps membership purchase discoverable", () => {
     const page = read("src/pages/PricesMembershipPage.tsx");
+    const projection = read("supabase/functions/_shared/public_prices.ts");
     expect(page).toContain("Priser & medlemskap");
     expect(page).toContain("/membership?v=");
-    expect(page).toContain("Första gången? Spela för 99 kr.");
-    expect(page).toContain("Racket finns att låna.");
-    expect(page).toContain('description="Spela Open Play hela dagen."');
+    expect(projection).toContain("Första gången? Spela för");
+    expect(projection).toContain("Racket finns att låna.");
+    expect(projection).toContain("Spela Open Play hela dagen.");
     expect(page).toContain("courseItems.length ?");
     expect(page).not.toContain("product.description || \"Spela Open Play hela dagen.\"");
     expect(page).not.toMatch(/<table|line-through|överstruk/i);

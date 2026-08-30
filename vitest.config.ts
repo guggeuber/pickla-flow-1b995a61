@@ -16,6 +16,11 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: { "@": path.resolve(__dirname, "./src") },
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+      // Edge modules use URL imports in Deno; map the exact URL to the same
+      // pinned npm dependency when exercising those projectors in Vitest.
+      "https://esm.sh/luxon@3.5.0": "luxon",
+    },
   },
 });
