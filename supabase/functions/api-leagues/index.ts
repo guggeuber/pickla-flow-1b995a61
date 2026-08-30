@@ -13,6 +13,7 @@ import {
   type LeagueResourcePreview,
 } from '../_shared/league_resource_preview.ts';
 import { resolveScopeAwarePricingDecision } from '../_shared/scope_pricing.ts';
+import { resolvePublicLeagueDisplayPrice } from '../_shared/public_league_pricing.ts';
 
 type AdminClient = ReturnType<typeof getServiceClient>;
 type LeagueCapacityFill = {
@@ -266,13 +267,13 @@ async function loadPublicProjection(admin: AdminClient, seriesId: string, userId
       customerTeamId = membership?.team_entry_id || null;
     }
   }
-  const earlyBirdPriceMinor = Number(product.early_bird_price_minor || 0);
-  const earlyBirdWins = product.scarcity_mode === 'early_bird'
-    && Number(capacity.early_bird_remaining || 0) > 0
-    && earlyBirdPriceMinor > 0
-    && earlyBirdPriceMinor < regularPriceMinor;
-  const currentPriceMinor = earlyBirdWins ? earlyBirdPriceMinor : regularPriceMinor;
-  const pricingReason = earlyBirdWins ? 'early_bird' : regularPriceReason;
+  const { currentPriceMinor, pricingReason } = resolvePublicLeagueDisplayPrice({
+    regularPriceMinor,
+    regularPriceReason,
+    scarcityMode: product.scarcity_mode,
+    earlyBirdPriceMinor: Number(product.early_bird_price_minor || 0),
+    earlyBirdRemaining: Number(capacity.early_bird_remaining || 0),
+  });
   let fixtures: unknown[] = [];
   let standings: unknown[] = [];
   if (season.fixtures_published_at) {

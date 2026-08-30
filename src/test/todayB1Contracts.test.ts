@@ -18,9 +18,11 @@ describe("Today B1 duplicate-read boundary", () => {
     expect(detail).toContain('"activity-preview"');
   });
 
-  it("does not absorb Phase B2 discovery endpoints", () => {
+  it("keeps legacy discovery endpoints only for verified personal enrichment", () => {
     expect(today).toContain("fetchCourseHome");
     expect(today).toContain("fetchLeagueHome");
     expect(today).toContain('"first-visit-offers"');
+    expect(today).toContain("verifiedAccount.isVerified");
+    expect(today).toContain("fetchTodaySecondary");
   });
 });

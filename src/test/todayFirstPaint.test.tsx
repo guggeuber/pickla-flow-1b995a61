@@ -121,6 +121,20 @@ const primaryResponse = {
   }],
 };
 
+function secondaryResponse(pricing: Array<Record<string, unknown>> = []) {
+  return {
+    course: { mode: "none", item: null },
+    league: { mode: "none", item: null },
+    first_visit: {
+      is_first_time: false,
+      has_configured_offer: false,
+      occurrences: [],
+      items: [],
+      pricing,
+    },
+  };
+}
+
 function renderToday(initialEntry = "/today", queryClient = client()) {
   const view = render(
     <QueryClientProvider client={queryClient}>
@@ -203,26 +217,86 @@ describe("Today customer first paint", () => {
     expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
   });
 
+  it("inserts First Visit, League and Course promotions from one anonymous secondary completion", async () => {
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    let resolveSecondary!: (value: Record<string, unknown>) => void;
+    const secondary = new Promise<Record<string, unknown>>((resolve) => {
+      resolveSecondary = resolve;
+    });
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-secondary") return secondary;
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      return never();
+    });
+
+    renderToday();
+    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+    expect(screen.queryByTestId("league-home-offer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("home-series-card")).not.toBeInTheDocument();
+
+    resolveSecondary({
+      first_visit: {
+        is_first_time: true,
+        has_configured_offer: true,
+        occurrences: [],
+        items: [{ route: "/program/first-visit?date=2026-08-26&v=pickla-arena-sthlm" }],
+        pricing: [],
+      },
+      league: {
+        mode: "registration",
+        item: {
+          series: { id: "league-1", name: "League Season 01", image_urls: [] },
+          season: { team_capacity: 6, league_night_count: 5, matches_per_team_per_night: 2 },
+          capacity: { available_count: 4 },
+          current_price_minor: 199500,
+          pricing_reason: "league_team_base_price",
+          route: "/seriespel/league-1?v=pickla-arena-sthlm",
+        },
+      },
+      course: {
+        mode: "registration",
+        item: {
+          id: "course-1",
+          name: "Parker Brunch Series",
+          image_urls: [],
+          start_date: "2026-09-20",
+          registration_state: "open",
+          capacity: { available_count: 12 },
+          format: { name: "Parker Brunch", description: "Spela och umgås.", presentation_type: "social_event" },
+          product: { base_price_sek: 595 },
+          pricing: {
+            scope_type: "activity_series",
+            list_price_minor: 59500,
+            final_price_minor: 59500,
+            pricing_reason: "series_product_base_price",
+            sales_channel: "online",
+            checkout_label: "595 kr",
+            membership_tier_name: null,
+            early_bird: { configured: false, active: false, applied: false, price_minor: null, slots: null, remaining: null },
+          },
+          included_access: { open_play_series_period: { enabled: false } },
+          route: "/course/course-1?v=pickla-arena-sthlm",
+        },
+      },
+    });
+
+    expect(await screen.findByText("Första gången? Spela för 99 kr.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "League Season 01" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(mocks.apiGet.mock.calls.filter((call) => call[1] === "today-secondary")).toHaveLength(1);
+    expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
+    expect(mocks.fetchLeagueHome).not.toHaveBeenCalled();
+  });
+
   it("reuses existing Today projections without Activity Preview or direct registrations", async () => {
     mocks.user = null;
     mocks.account.state = "anonymous";
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
-      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [{
-        activity_session_id: "visible-session",
-        session_date: "2026-08-26",
-        registrations_count: 4,
-        interested_count: 0,
-        user_is_interested: false,
-        user_registration_status: null,
-      }] });
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
-      if (endpoint === "first-visit-offers") return Promise.resolve({
-        is_first_time: false,
-        has_configured_offer: false,
-        occurrences: [],
-        items: [],
-        pricing: [{
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse([{
           activity_session_id: "visible-session",
           session_date: "2026-08-26",
           effective_price_sek: 165,
@@ -237,8 +311,7 @@ describe("Today customer first paint", () => {
             offerLabel: null,
             offerDetail: null,
           },
-        }],
-      });
+        }]));
       return never();
     });
     mocks.fetchCourseHome.mockResolvedValue({ mode: "none", item: null });
@@ -247,7 +320,8 @@ describe("Today customer first paint", () => {
     renderToday();
 
     expect(await screen.findByText("Boka plats · 165 kr")).toBeInTheDocument();
-    expect(screen.getByText("4 spelare är med")).toBeInTheDocument();
+    expect(screen.getByText("Plats för fler — ta gärna med en vän")).toBeInTheDocument();
+    expect(mocks.apiGet.mock.calls.some((call) => call[1] === "activity-social-proof")).toBe(false);
     expect(mocks.apiGet.mock.calls.some((call) => call[1] === "activity-preview")).toBe(false);
     expect(mocks.supabaseFrom.mock.calls.some((call) => call[0] === "session_registrations")).toBe(false);
   });
@@ -267,6 +341,7 @@ describe("Today customer first paint", () => {
         user_registration_status: "confirmed",
       }] });
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
       if (endpoint === "first-visit-offers") return Promise.resolve({
         is_first_time: false,
         has_configured_offer: false,
@@ -293,14 +368,8 @@ describe("Today customer first paint", () => {
     mocks.account.state = "anonymous";
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
-      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
-      if (endpoint === "first-visit-offers") return Promise.resolve({
-        is_first_time: false,
-        has_configured_offer: false,
-        occurrences: [],
-        items: [],
-        pricing: [{
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse([{
           activity_session_id: "visible-session",
           session_date: "2026-08-26",
           effective_price_sek: price,
@@ -315,8 +384,7 @@ describe("Today customer first paint", () => {
             offerLabel: null,
             offerDetail: null,
           },
-        }],
-      });
+        }]));
       return never();
     });
     mocks.fetchCourseHome.mockResolvedValue({ mode: "none", item: null });

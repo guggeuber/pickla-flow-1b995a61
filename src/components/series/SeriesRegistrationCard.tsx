@@ -1,10 +1,10 @@
 import { ArrowRight } from "lucide-react";
 import { DateTime } from "luxon";
 import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
-import type { CourseDetail } from "@/lib/courses";
+import type { SeriesCustomerPricing } from "@/lib/courses";
 import { CARD_ARTWORK_SIZES, CARD_ARTWORK_WIDTHS } from "@/lib/responsiveSupabaseImage";
 import { seriesBookingCta, seriesPricePresentation } from "@/lib/seriesCustomerPricing";
-import { seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
+import { seriesCustomerTitle, seriesPresentation, type SeriesPresentationType } from "@/lib/seriesPresentation";
 
 const PINK = "#ed3f8f";
 const MUTED = "#76716f";
@@ -12,12 +12,28 @@ const BORDER = "rgba(17,17,17,0.07)";
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
 
+export type SeriesRegistrationCardModel = {
+  name: string;
+  image_urls: string[];
+  start_date: string;
+  registration_state: "upcoming" | "open" | "closed";
+  capacity: { available_count: number };
+  format?: {
+    name?: string | null;
+    description?: string | null;
+    presentation_type?: SeriesPresentationType | null;
+  } | null;
+  product: { base_price_sek: number };
+  pricing?: SeriesCustomerPricing | null;
+  included_access?: { open_play_series_period: { enabled: boolean } } | null;
+};
+
 export function SeriesRegistrationCard({
   series,
   onOpen,
   imagePriority = false,
 }: {
-  series: CourseDetail;
+  series: SeriesRegistrationCardModel;
   onOpen: () => void;
   imagePriority?: boolean;
 }) {

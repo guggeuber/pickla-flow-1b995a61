@@ -25,7 +25,7 @@ import { activityTimingStatus, useActivityNow } from "@/lib/activityTiming";
 import { getFirstName } from "@/lib/displayName";
 import { activitySessionToPresentation, openBookingToPresentation } from "@/lib/sessionPresentation";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
-import { fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
+import { fetchCourseHome, type MyCourseItem } from "@/lib/courses";
 import { inheritedEventImages } from "@/lib/eventMedia";
 import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
 import { resolveCustomerVenueContext } from "@/lib/customerVenue";
@@ -37,6 +37,11 @@ import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { fetchLeagueHome, type LeaguePublicProjection, type MyLeagueItem } from "@/lib/league";
+import {
+  fetchTodaySecondary,
+  type TodayCoursePromotion,
+  type TodayLeaguePromotion,
+} from "@/lib/todaySecondary";
 
 
 const PAGE_BG = "#fffaf7";
@@ -374,25 +379,73 @@ function useTodayEnrichment(
   enabled: boolean,
 ) {
   const sessionSignature = sessionOccurrences.map((session) => `${session.id}:${session.occurrence_date}`).join(",");
-  return useQuery({
-    queryKey: ["today-feed-enrichment", venueId, userId || "guest", sessionSignature],
+  const now = DateTime.now().setZone("Europe/Stockholm");
+  const startDate = now.toISODate()!;
+  const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
+  const startUtc = now.startOf("day").toUTC().toISO()!;
+  const endUtc = now.plus({ days: DAYS_AHEAD }).startOf("day").toUTC().toISO()!;
+  const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
+  const publicOpenBookings = useQuery({
+    queryKey: ["today-open-bookings", slug, startDate],
     enabled: enabled && Boolean(venueId),
     staleTime: 30_000,
-    queryFn: async (): Promise<TodayEnrichment> => {
-      const now = DateTime.now().setZone("Europe/Stockholm");
-      const startDate = now.toISODate()!;
-      const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
-      const startUtc = now.startOf("day").toUTC().toISO()!;
-      const endUtc = now.plus({ days: DAYS_AHEAD }).startOf("day").toUTC().toISO()!;
-      const sessionIds = [...new Set(sessionOccurrences.map((session) => session.id))];
-      const [socialProofRes, bookingsRes, openBookingsRes] = await Promise.all([
-        sessionIds.length
+    queryFn: async (): Promise<FeedItem[]> => {
+      const openBookingsRes = await apiGet<{ items: OpenBookingItem[] }>("api-bookings", "public-open-bookings", {
+        slug,
+        date: startDate,
+        days: String(DAYS_AHEAD),
+      }, { auth: "omit" }).catch(() => ({ items: [] }));
+      return ((openBookingsRes as { items?: OpenBookingItem[] })?.items || []).map((item) => {
+        const start = DateTime.fromISO(item.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
+        const end = DateTime.fromISO(item.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
+        const capacity = Number(item.public_capacity || item.total_players || 0);
+        const committed = Number(item.committed_count || 0);
+        const courtLabel = (item.courts || [])
+          .map((court) => court.name || (court.court_number ? `Bana ${court.court_number}` : null))
+          .filter(Boolean)
+          .join(", ");
+        let href = item.claim_url;
+        try {
+          const url = new URL(item.claim_url);
+          href = `${url.pathname}${url.search}`;
+        } catch {
+          // Keep absolute fallback from the API if URL parsing fails.
+        }
+        return {
+          id: `open-booking:${item.id}`,
+          kind: "open_booking" as const,
+          title: item.booker_first_name ? `Häng på ${item.booker_first_name}` : "Häng på en bana",
+          date: start.toISODate()!,
+          startTime: start.toFormat("HH:mm"),
+          endTime: end.toFormat("HH:mm"),
+          category: item.pace_label,
+          status: item.open_spots > 0 ? "Öppen" : "Full",
+          spotsLeft: item.open_spots,
+          registrationsCount: committed,
+          participants: [],
+          resourceNames: courtLabel ? [courtLabel] : [],
+          hostFirstName: item.booker_first_name,
+          capacity,
+          href,
+          cta: "Häng på",
+          chatSubtitle: courtLabel,
+        };
+      });
+    },
+  });
+  const verifiedEnrichment = useQuery({
+    queryKey: ["today-verified-enrichment", venueId, userId, sessionSignature],
+    enabled: enabled && Boolean(venueId) && Boolean(userId),
+    staleTime: 30_000,
+    queryFn: async (): Promise<Pick<TodayEnrichment, "socialProofByKey" | "bookingItems">> => {
+      const [socialProofRes, bookingsRes] = await Promise.all([
+        userId && sessionIds.length
           ? apiGet<{ occurrences: ActivitySocialProofRow[] }>("api-event-public", "activity-social-proof", {
               venueSlug: slug,
               sessionIds: sessionIds.join(","),
               startDate,
               endDate,
-            }, userId ? {} : { auth: "omit" }).catch(() => ({ occurrences: [] }))
+            }).catch(() => ({ occurrences: [] }))
           : Promise.resolve({ occurrences: [] }),
         userId
           ? supabase
@@ -404,11 +457,6 @@ function useTodayEnrichment(
               .lt("start_time", endUtc)
               .order("start_time", { ascending: true })
           : Promise.resolve({ data: [] as BookingRow[], error: null }),
-        apiGet<{ items: OpenBookingItem[] }>("api-bookings", "public-open-bookings", {
-          slug,
-          date: startDate,
-          days: String(DAYS_AHEAD),
-        }, { auth: "omit" }).catch(() => ({ items: [] })),
       ]);
 
       const socialProofByKey = new Map<string, ActivitySocialProofRow>();
@@ -435,50 +483,18 @@ function useTodayEnrichment(
         };
       });
 
-      const openBookingItems: FeedItem[] = ((openBookingsRes as { items?: OpenBookingItem[] })?.items || []).map((item) => {
-        const start = DateTime.fromISO(item.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
-        const end = DateTime.fromISO(item.end_time, { zone: "utc" }).setZone("Europe/Stockholm");
-        const capacity = Number(item.public_capacity || item.total_players || 0);
-        const committed = Number(item.committed_count || 0);
-        const courtLabel = (item.courts || [])
-          .map((court) => court.name || (court.court_number ? `Bana ${court.court_number}` : null))
-          .filter(Boolean)
-          .join(", ");
-        let href = item.claim_url;
-        try {
-          const url = new URL(item.claim_url);
-          href = `${url.pathname}${url.search}`;
-        } catch {
-          // Keep absolute fallback from the API if URL parsing fails.
-        }
-        return {
-          id: `open-booking:${item.id}`,
-          kind: "open_booking",
-          title: item.booker_first_name ? `Häng på ${item.booker_first_name}` : "Häng på en bana",
-          date: start.toISODate()!,
-          startTime: start.toFormat("HH:mm"),
-          endTime: end.toFormat("HH:mm"),
-          category: item.pace_label,
-          status: item.open_spots > 0 ? "Öppen" : "Full",
-          spotsLeft: item.open_spots,
-          registrationsCount: committed,
-          participants: [],
-          resourceNames: courtLabel ? [courtLabel] : [],
-          hostFirstName: item.booker_first_name,
-          capacity,
-          href,
-          cta: "Häng på",
-          chatSubtitle: courtLabel,
-        };
-      });
-
-      return {
-        socialProofByKey,
-        bookingItems,
-        openBookingItems,
-      };
+      return { socialProofByKey, bookingItems };
     },
   });
+  const data = useMemo<TodayEnrichment | undefined>(() => {
+    if (!publicOpenBookings.data && !verifiedEnrichment.data) return undefined;
+    return {
+      socialProofByKey: verifiedEnrichment.data?.socialProofByKey || new Map(),
+      bookingItems: verifiedEnrichment.data?.bookingItems || [],
+      openBookingItems: publicOpenBookings.data || [],
+    };
+  }, [publicOpenBookings.data, verifiedEnrichment.data]);
+  return { data };
 }
 
 function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment) {
@@ -506,12 +522,12 @@ function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment
     .sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`));
 }
 
-function useFirstVisitOffers(slug: string, userId: string | undefined, enabled: boolean) {
+function useVerifiedFirstVisitOffers(slug: string, userId: string | undefined, enabled: boolean) {
   return useQuery({
-    queryKey: ["first-visit-offers", slug, userId || "guest"],
-    enabled,
-    staleTime: userId ? 0 : 30_000,
-    queryFn: () => apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }, userId ? {} : { auth: "omit" }),
+    queryKey: ["first-visit-offers", slug, userId],
+    enabled: enabled && Boolean(userId),
+    staleTime: 0,
+    queryFn: () => apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }),
   });
 }
 
@@ -802,23 +818,32 @@ export default function TodayPage() {
   );
   const primaryHardError = primary.isError && !primaryRefreshFailed;
   const venueId = venue?.id || primary.data?.venue.id;
-  const identityReady = verifiedAccount.state === "anonymous" || verifiedAccount.state === "verified";
+  const secondary = useQuery({
+    queryKey: ["today-secondary", slug],
+    enabled: Boolean(primary.data),
+    staleTime: 15_000,
+    queryFn: () => {
+      const now = DateTime.now().setZone("Europe/Stockholm");
+      return fetchTodaySecondary(slug, now.toISODate()!, now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!);
+    },
+  });
   const enrichment = useTodayEnrichment(
     venueId,
     primary.data?.sessionOccurrences || [],
     verifiedAccount.verifiedUserId || undefined,
     slug,
-    Boolean(primary.data) && identityReady,
+    Boolean(primary.data),
   );
   const rawItems = useMemo(
     () => enrichTodayItems(primary.data?.items || [], enrichment.data),
     [enrichment.data, primary.data?.items],
   );
-  const { data: firstVisitOffers } = useFirstVisitOffers(
+  const { data: verifiedFirstVisitOffers } = useVerifiedFirstVisitOffers(
     slug,
     verifiedAccount.verifiedUserId || undefined,
-    Boolean(primary.data) && identityReady,
+    Boolean(primary.data) && verifiedAccount.isVerified,
   );
+  const firstVisitOffers = verifiedFirstVisitOffers || secondary.data?.first_visit;
   const pricingByOccurrence = useMemo(() => new Map(
     (firstVisitOffers?.pricing || []).map((pricing) => [`${pricing.activity_session_id}:${pricing.session_date}`, pricing]),
   ), [firstVisitOffers?.pricing]);
@@ -839,18 +864,20 @@ export default function TodayPage() {
       } : null,
     };
   }), [pricingByOccurrence, rawItems]);
-  const { data: courseHome } = useQuery({
-    queryKey: ["course-home", slug, verifiedAccount.verifiedUserId || "guest"],
-    enabled: Boolean(primary.data) && identityReady,
-    queryFn: () => fetchCourseHome(slug, verifiedAccount.verifiedUserId ? undefined : { auth: "omit" }),
+  const { data: verifiedCourseHome } = useQuery({
+    queryKey: ["course-home", slug, verifiedAccount.verifiedUserId],
+    enabled: Boolean(primary.data) && verifiedAccount.isVerified,
+    queryFn: () => fetchCourseHome(slug),
     staleTime: 30000,
   });
-  const { data: leagueHome } = useQuery({
-    queryKey: ["league-home", slug, verifiedAccount.verifiedUserId || "guest"],
-    enabled: Boolean(primary.data) && identityReady,
-    queryFn: () => fetchLeagueHome(slug, verifiedAccount.verifiedUserId ? undefined : { auth: "omit" }),
+  const { data: verifiedLeagueHome } = useQuery({
+    queryKey: ["league-home", slug, verifiedAccount.verifiedUserId],
+    enabled: Boolean(primary.data) && verifiedAccount.isVerified,
+    queryFn: () => fetchLeagueHome(slug),
     staleTime: 30000,
   });
+  const courseHome = verifiedCourseHome || secondary.data?.course;
+  const leagueHome = verifiedLeagueHome || secondary.data?.league;
   const now = useActivityNow();
   const userName = getFirstName({
     playerProfile: verifiedAccount.account?.profile,
@@ -990,10 +1017,13 @@ export default function TodayPage() {
                 </button>
               ) : null}
               {leagueHome?.mode === "registration" && leagueHome.item ? (() => {
-                const league = leagueHome.item as LeaguePublicProjection;
-                return <button type="button" onClick={() => navigate(`/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`)} className="w-full overflow-hidden rounded-[24px] bg-white text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="league-home-offer">
+                const league = leagueHome.item as TodayLeaguePromotion | LeaguePublicProjection;
+                const leagueRoute = "route" in league
+                  ? league.route
+                  : `/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`;
+                return <button type="button" onClick={() => navigate(leagueRoute)} className="w-full overflow-hidden rounded-[24px] bg-white text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="league-home-offer">
                   {league.series.image_urls?.[0] ? <ResponsiveSupabaseImage src={league.series.image_urls[0]} alt={league.series.name} sizes={CARD_ARTWORK_SIZES} widths={CARD_ARTWORK_WIDTHS} width={960} height={540} className="aspect-[16/9] w-full object-cover" /> : null}
-                  <div className="p-5"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.series.name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>6 lag · 5 torsdagar · 2 matcher per kväll</p><div className="mt-4 flex items-center justify-between"><p className="font-black">{formatSek(league.current_price_minor / 100)} / lag</p><span className="rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Anmäl lag</span></div></div>
+                  <div className="p-5"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.series.name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{league.season.team_capacity} lag · {league.season.league_night_count} kvällar · {league.season.matches_per_team_per_night} matcher per kväll</p><div className="mt-4 flex items-center justify-between"><p className="font-black">{formatSek(league.current_price_minor / 100)} / lag</p><span className="rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Anmäl lag</span></div></div>
                 </button>;
               })() : null}
               {leagueHome?.mode === "next" && leagueHome.item ? (() => {
@@ -1001,7 +1031,7 @@ export default function TodayPage() {
                 return <section className="w-full rounded-[24px] bg-white p-5 text-left" style={{ border: `1px solid ${BORDER}` }} data-testid="owned-league-home-card"><p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: PINK, fontFamily: FONT_MONO }}>Seriespel</p><h2 className="mt-2 text-xl font-black" style={{ fontFamily: FONT_HEADING }}>{league.team.team_name}</h2><p className="mt-2 text-sm font-semibold" style={{ color: MUTED }}>{league.next_session ? `Nästa: ${DateTime.fromISO(league.next_session.session_date).setLocale("sv").toFormat("cccc d LLL")} · ${String(league.next_session.start_time).slice(0, 5)}` : league.series.name}</p><p className="mt-3 flex items-center gap-1.5 text-sm font-bold"><Check className="h-4 w-4" /> Ditt lag är anmält</p><button type="button" onClick={() => navigate(`/seriespel/${league.series.id}?v=${encodeURIComponent(slug)}`)} className="mt-4 rounded-full bg-neutral-950 px-4 py-2 text-sm font-black text-white">Visa Seriespel</button></section>;
               })() : null}
               {courseHome?.mode === "registration" && courseHome.item ? (() => {
-                const course = courseHome.item as CourseDetail;
+                const course = courseHome.item as TodayCoursePromotion;
                 return (
                   <SeriesRegistrationCard
                     series={course}
