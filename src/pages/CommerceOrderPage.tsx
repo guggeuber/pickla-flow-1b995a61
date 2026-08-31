@@ -14,6 +14,7 @@ import {
   activityCommerceSelectionKey,
   checkInCommerceGuest,
   checkInCommerceRegistration,
+  cancelCommerceCheckout,
   clearActivityCommerceSelection,
   claimCommerceOrderAccount,
   commerceRacketPickupQuantity,
@@ -39,8 +40,30 @@ export default function CommerceOrderPage() {
   const { user, loading: authLoading } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const token = routeParams.token || params.get("token") || "";
+  const checkoutSessionId = params.get("session") || "";
   const venueSlug = params.get("v") || "pickla-arena-sthlm";
-  const query = useQuery({ queryKey: ["commerce-order", token, user?.id || "guest"], queryFn: () => fetchCommerceOrder(token), enabled: token.length >= 32 && !authLoading, refetchInterval: (state) => state.state.data?.order.status === "checkout_pending" ? 1200 : false });
+  const query = useQuery({
+    queryKey: ["commerce-order", token, user?.id || "guest", checkoutSessionId || "no-checkout-return"],
+    queryFn: () => fetchCommerceOrder(token, {}, checkoutSessionId),
+    enabled: token.length >= 32 && !authLoading,
+    refetchInterval: (state) => state.state.data?.order.status === "checkout_pending"
+      && state.state.data?.checkout_verification_eligible === true ? 1200 : false,
+  });
+  const reopenCheckout = useMutation({
+    mutationFn: () => cancelCommerceCheckout(token),
+    onSuccess: (response) => {
+      if (response.checkout_verification_eligible && response.checkout_session_id) {
+        navigate(`/commerce/confirmed?token=${encodeURIComponent(token)}&v=${encodeURIComponent(venueSlug)}&session=${encodeURIComponent(response.checkout_session_id)}`, { replace: true });
+        return;
+      }
+      if (["paid", "attention"].includes(response.order.status)) {
+        void query.refetch();
+        return;
+      }
+      navigate(`/cart?token=${encodeURIComponent(token)}&v=${encodeURIComponent(venueSlug)}&checkout=cancelled`, { replace: true });
+    },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte öppna köpet igen"),
+  });
   const confirmIdentity = useMutation({
     mutationFn: () => confirmCommerceGuestIdentity(token, displayName.trim()),
     onSuccess: async () => { toast.success("Din biljett är klar"); await query.refetch(); },
@@ -111,7 +134,8 @@ export default function CommerceOrderPage() {
       ? Boolean(course.commitment_id)
     : !hasParticipation || ["confirmed", "checked_in", "no_show"].includes(String(activity?.registration_status || ""));
   const purchaseConfirmed = order.status === "paid" && participantConfirmed;
-  const waiting = order.status === "checkout_pending";
+  const waiting = order.status === "checkout_pending" && query.data.checkout_verification_eligible === true;
+  const interruptedCheckout = order.status === "checkout_pending" && !waiting;
   const needsReview = order.status === "attention" || (order.status === "paid" && !participantConfirmed);
   const racketQuantity = purchaseConfirmed && !cancellationPending
     ? commerceRacketPickupQuantity(lines, { confirmed: true })
@@ -139,6 +163,8 @@ export default function CommerceOrderPage() {
   };
   const heading = waiting
     ? "Vi bekräftar ditt köp"
+    : interruptedCheckout
+      ? "Betalningen avbröts"
     : isCancelled
       ? "Köpet är avbokat"
       : purchaseConfirmed && league
@@ -152,6 +178,8 @@ export default function CommerceOrderPage() {
             : "Vi kontrollerar ditt köp";
   const supportingCopy = waiting
     ? "Det tar vanligtvis bara några sekunder."
+    : interruptedCheckout
+      ? "Din plats är inte bokad."
     : purchaseConfirmed && isDayPassPurchase
       ? `Du har heldagstillgång och en plats på ${activity?.name}.`
     : purchaseConfirmed && hasParticipation
@@ -216,6 +244,9 @@ export default function CommerceOrderPage() {
           </section>
         ) : null}
         <div className="mb-9 px-12 text-center">{waiting ? <Loader2 className="mx-auto h-7 w-7 animate-spin text-slate-600" /> : purchaseConfirmed ? <Check data-testid="commerce-success-check" className="mx-auto h-8 w-8 stroke-[1.75] text-slate-950" /> : <XCircle className="mx-auto h-7 w-7 text-slate-600" />}<h1 className="mt-5 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
+        {interruptedCheckout ? <section className="mb-6 grid gap-3 border-y border-black/10 py-5">
+          <button type="button" onClick={() => reopenCheckout.mutate()} disabled={reopenCheckout.isPending} className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{reopenCheckout.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Försök igen</button>
+        </section> : null}
         {purchaseConfirmed && activity ? (
           <section className="mb-6 px-1">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Din aktivitet</p>

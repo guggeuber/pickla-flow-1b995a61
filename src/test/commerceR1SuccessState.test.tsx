@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   fetchOrder: vi.fn(),
   checkInGuest: vi.fn(),
   checkInRegistration: vi.fn(),
+  cancelCheckout: vi.fn(),
   checkInAvailable: false,
   auth: { loading: false, user: null as { id: string } | null },
 }));
@@ -30,6 +31,7 @@ vi.mock("@/lib/commerce", async (importOriginal) => {
     checkInCommerceGuest: mocks.checkInGuest,
     checkInCommerceRegistration: mocks.checkInRegistration,
     cancelCommerceActivityOrder: vi.fn(),
+    cancelCommerceCheckout: mocks.cancelCheckout,
   };
 });
 
@@ -99,11 +101,11 @@ function orderResponse(overrides: Record<string, unknown> = {}, lines = [partici
   };
 }
 
-function renderOrder() {
+function renderOrder(path = `/commerce/confirmed?token=${"x".repeat(32)}`) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[`/commerce/confirmed?token=${"x".repeat(32)}`]}>
+      <MemoryRouter initialEntries={[path]}>
         <CommerceOrderPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -117,18 +119,48 @@ beforeEach(() => {
   mocks.fetchOrder.mockResolvedValue(orderResponse());
   mocks.checkInGuest.mockReset().mockResolvedValue({ checked_in: true, registration_id: "registration-1" });
   mocks.checkInRegistration.mockReset().mockResolvedValue({ checked_in: true });
+  mocks.cancelCheckout.mockReset();
   mocks.checkInAvailable = false;
 });
 
 afterEach(cleanup);
 
 describe("Commerce R1 confirmed purchase state", () => {
-  it("never says the place is confirmed while the webhook is still pending", async () => {
-    mocks.fetchOrder.mockResolvedValue(orderResponse({ status: "checkout_pending" }));
-    renderOrder();
+  it("allows confirmation polling only for a server-matched Stripe success return", async () => {
+    mocks.fetchOrder.mockResolvedValue({
+      ...orderResponse({ status: "checkout_pending" }),
+      checkout_verification_eligible: true,
+    });
+    renderOrder(`/commerce/confirmed?token=${"x".repeat(32)}&session=cs_test_valid`);
 
     expect(await screen.findByRole("heading", { name: "Vi bekräftar ditt köp" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Platsen är din" })).not.toBeInTheDocument();
+    expect(mocks.fetchOrder).toHaveBeenCalledWith("x".repeat(32), {}, "cs_test_valid");
+  });
+
+  it.each([
+    [`/commerce/confirmed?token=${"x".repeat(32)}`, "missing checkout session"],
+    [`/commerce/confirmed?token=${"x".repeat(32)}&session=cs_test_wrong`, "mismatched checkout session"],
+  ])("shows truthful interruption and never polls for $1", async (path) => {
+    mocks.fetchOrder.mockResolvedValue({
+      ...orderResponse({ status: "checkout_pending" }),
+      checkout_verification_eligible: false,
+    });
+    renderOrder(path);
+
+    expect(await screen.findByRole("heading", { name: "Betalningen avbröts" })).toBeInTheDocument();
+    expect(screen.getByText("Din plats är inte bokad.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Vi bekräftar ditt köp" })).not.toBeInTheDocument();
+    await new Promise((resolve) => window.setTimeout(resolve, 1300));
+    expect(mocks.fetchOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not enter confirmation or polling without an order reference", async () => {
+    renderOrder("/commerce/confirmed?v=pickla-arena-sthlm&session=cs_test_orphan");
+
+    expect(await screen.findByText("Ordern kunde inte öppnas.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Vi bekräftar ditt köp" })).not.toBeInTheDocument();
+    expect(mocks.fetchOrder).not.toHaveBeenCalled();
   });
 
   it("shows the authoritative success details and guest claim entry after confirmation", async () => {

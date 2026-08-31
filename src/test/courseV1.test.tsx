@@ -228,6 +228,38 @@ describe("Course V1 customer flow", () => {
     expect(screen.getByText("Uppgifterna visas bara för dig och behörig personal.")).toBeInTheDocument();
   });
 
+  it("renders youth child-only policy with no self or adult escape and submits only dependent identity", async () => {
+    const childOnlyCourse = {
+      ...course,
+      name: "Juniorprogram · Höst 2026",
+      participant_policy: "dependent_only" as const,
+      format: { ...course.format, name: "Juniorprogram", age_group: "youth" as const },
+      product: { ...course.product, resolver_rules: { participant_policy: "dependent_only" } },
+    };
+    mocks.user = { id: "guardian-1" };
+    mocks.fetchCourseDetail.mockResolvedValue(childOnlyCourse);
+    mocks.createCourseCart.mockResolvedValue({ order: { id: "order-child" }, cart_token: "x".repeat(40) });
+    renderCourse();
+
+    expect(await screen.findByRole("heading", { name: "Vem ska delta?" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ett barn jag ansvarar för" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Jag själv" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "En annan vuxen" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Barnets förnamn"), { target: { value: "Maja" } });
+    fireEvent.change(screen.getByLabelText("Barnets födelseår"), { target: { value: "2016" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    await waitFor(() => expect(mocks.createCourseCart).toHaveBeenCalledWith({
+      series_id: "series-1",
+      participant_type: "dependent",
+      guest_name: null,
+      guest_email: null,
+      participant_name: null,
+      participant_email: null,
+      dependent_first_name: "Maja",
+      dependent_birth_year: "2016",
+    }, undefined));
+  });
+
   it("hides participant selection and maps a verified self-only purchaser automatically", async () => {
     const selfOnlyCourse = {
       ...course,

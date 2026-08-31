@@ -2,6 +2,7 @@ export const COURSE_PARTICIPANT_POLICIES = [
   'self_only',
   'self_or_adult',
   'self_adult_or_dependent',
+  'dependent_only',
 ] as const;
 
 export type CourseParticipantPolicy = typeof COURSE_PARTICIPANT_POLICIES[number];
@@ -22,6 +23,7 @@ export function resolveCourseParticipantPolicy(resolverRules: unknown): CoursePa
 }
 
 export function courseParticipantTypeAllowed(policy: CourseParticipantPolicy, participantType: CourseParticipantType) {
+  if (policy === 'dependent_only') return participantType === 'dependent';
   if (participantType === 'self') return true;
   if (participantType === 'adult') return policy !== 'self_only';
   return policy === 'self_adult_or_dependent';
@@ -41,6 +43,9 @@ export function assertCourseParticipantRequest(input: {
   if (input.policy === 'self_only') {
     if (!input.userId) throw new Error('course_self_only_requires_verified_purchaser');
     if (input.hasDelegatedInput) throw new Error('course_participant_policy_violation');
+  }
+  if (participantType === 'dependent' && !input.userId) {
+    throw new Error('course_dependent_requires_verified_guardian');
   }
   return participantType;
 }
@@ -78,8 +83,18 @@ export function assertCourseParticipantIdentity(input: {
   }
 }
 
+type CourseParticipantPolicyQuery = {
+  select: (columns: string) => CourseParticipantPolicyQuery;
+  eq: (column: string, value: unknown) => CourseParticipantPolicyQuery;
+  is: (column: string, value: unknown) => CourseParticipantPolicyQuery;
+  maybeSingle: () => Promise<{
+    data: Record<string, unknown> | null;
+    error: { message?: string } | null;
+  }>;
+};
+
 type CourseParticipantPolicyClient = {
-  from: (table: string) => any;
+  from: (table: string) => CourseParticipantPolicyQuery;
 };
 
 export async function loadCourseParticipantPolicy(

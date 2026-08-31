@@ -1087,13 +1087,13 @@ const coursesHandler = async (req: Request) => {
       const venueRow = await venue(admin, { id: venueId });
       const formatId = String(body.format_id || '');
       const { data: format, error: formatError } = await admin.from('activity_formats')
-        .select('id, organization_id, name, description, full_description, requires_instructor')
+        .select('id, organization_id, name, description, full_description, age_group, requires_instructor')
         .eq('id', formatId).eq('organization_id', venueRow.organization_id).eq('is_active', true).maybeSingle();
       if (formatError || !format) return errorResponse('Course Format not found', 404);
       const capacity = Math.floor(Number(body.capacity || 0));
       const priceSek = Math.round(Number(body.price_sek || 0));
       const participantPolicy = body.participant_policy == null
-        ? DEFAULT_COURSE_PARTICIPANT_POLICY
+        ? format.age_group === 'youth' ? 'dependent_only' : DEFAULT_COURSE_PARTICIPANT_POLICY
         : String(body.participant_policy);
       if (!isCourseParticipantPolicy(participantPolicy)) return errorResponse('Ogiltig deltagarregel.', 400);
       const schedule = courseScheduleInput(body);

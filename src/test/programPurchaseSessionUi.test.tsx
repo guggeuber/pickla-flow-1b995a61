@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastInfo: vi.fn(),
   notifyCart: vi.fn(),
+  cancelCheckout: vi.fn(),
   auth: {
     loading: false,
     user: { id: "user-1" } as { id: string } | null,
@@ -43,6 +44,7 @@ vi.mock("@/lib/commerce", () => ({
   formatCommerceMoney: (minor: number) => `${minor / 100} kr`,
   isCommerceOrderIdReference: () => false,
   notifyStandaloneCartUpdated: mocks.notifyCart,
+  cancelCommerceCheckout: mocks.cancelCheckout,
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -53,13 +55,13 @@ vi.mock("sonner", () => ({
   toast: { error: mocks.toastError, info: mocks.toastInfo },
 }));
 
-function renderCart() {
+function renderCart(path = `/cart?token=${"x".repeat(32)}`) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/cart?token=${"x".repeat(32)}`]}>
+      <MemoryRouter initialEntries={[path]}>
         <CommerceCartPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -73,6 +75,7 @@ beforeEach(() => {
   mocks.toastError.mockReset();
   mocks.toastInfo.mockReset();
   mocks.notifyCart.mockReset();
+  mocks.cancelCheckout.mockReset();
   mocks.auth.loading = false;
   mocks.auth.user = { id: "user-1" };
   mocks.fetchOrder.mockResolvedValue({
@@ -106,6 +109,37 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("program purchase request UI guard", () => {
+  it.each([
+    [`/cart?token=${"x".repeat(32)}&checkout=cancelled`, "Stripe cancel_url"],
+    [`/cart?token=${"x".repeat(32)}`, "browser back"],
+  ])("keeps $1 out of purchase confirmation and reopens only on explicit retry", async (path) => {
+    const pendingOrder = {
+      ...(await mocks.fetchOrder()),
+      order: { ...(await mocks.fetchOrder()).order, status: "checkout_pending", version: 2 },
+      course_access: {
+        activity_series_id: "course-1",
+        name: "Pickla Juniors",
+        venue_slug: "pickla-arena-sthlm",
+      },
+    };
+    const reopenedOrder = { ...pendingOrder, order: { ...pendingOrder.order, status: "draft", version: 3 } };
+    mocks.fetchOrder.mockResolvedValue(pendingOrder);
+    mocks.cancelCheckout.mockResolvedValue(reopenedOrder);
+    mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {
+      if (endpoint === "resolve") return { order: reopenedOrder.order, lines: reopenedOrder.lines, checkout_ready: true };
+      throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+
+    renderCart(path);
+
+    expect(await screen.findByRole("heading", { name: "Betalningen avbröts" })).toBeInTheDocument();
+    expect(screen.getByText("Din plats är inte bokad.")).toBeInTheDocument();
+    expect(screen.queryByText("Vi bekräftar ditt köp")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Försök igen" }));
+    await waitFor(() => expect(mocks.cancelCheckout).toHaveBeenCalledWith("x".repeat(32), { auth: "session" }));
+    expect(await screen.findByRole("heading", { name: "Pickla Juniors" })).toBeInTheDocument();
+  });
+
   it("presents an included membership line and savings without VAT in the purchase UI", async () => {
     const includedOrder = {
       order: {

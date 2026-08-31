@@ -7,6 +7,7 @@ import SeriesMemberPricingEditor from "@/components/admin/SeriesMemberPricingEdi
 import {
   COURSE_PARTICIPANT_POLICY_OPTIONS,
   DEFAULT_COURSE_PARTICIPANT_POLICY,
+  defaultCourseParticipantPolicyForAgeGroup,
   type CourseParticipantPolicy,
 } from "@/lib/courseParticipantPolicy";
 import {
@@ -437,7 +438,10 @@ export default function AdminCourses({
     onSuccess: async (format) => {
       const savedPaths = new Set(formatImages.map(namedEventImagePath).filter(Boolean));
       const removedImages = (data?.formats.find((item) => item.id === editingFormatId)?.image_urls || []).filter((url) => !savedPaths.has(namedEventImagePath(url)));
-      if (!editingFormatId) setFormatId(format.id);
+      if (!editingFormatId) {
+        setFormatId(format.id);
+        setParticipantPolicy(defaultCourseParticipantPolicyForAgeGroup(format.age_group));
+      }
       const message = editingFormatId ? "Format uppdaterat" : "Format skapat";
       resetFormat();
       await refresh();
@@ -705,7 +709,14 @@ export default function AdminCourses({
           {editingSeries && scheduleLockCopy ? <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{scheduleLockCopy}</span></div> : null}
           <p className="mt-4 text-xs font-black uppercase tracking-wider text-muted-foreground">Innehåll</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <select aria-label={catalogMode ? "Koncept" : "Format"} className={inputClass} value={formatId} disabled={Boolean(editingSeriesId)} onChange={(event) => setFormatId(event.target.value)}><option value="">Välj koncept</option>{(data?.formats || []).filter((format) => !catalogMode || Boolean(editingSeriesId) || format.presentation_type === initialPresentationType).map((format) => <option key={format.id} value={format.id}>{format.name}</option>)}</select>
+            <select aria-label={catalogMode ? "Koncept" : "Format"} className={inputClass} value={formatId} disabled={Boolean(editingSeriesId)} onChange={(event) => {
+              const nextFormatId = event.target.value;
+              setFormatId(nextFormatId);
+              if (!editingSeriesId) {
+                const nextFormat = data?.formats.find((format) => format.id === nextFormatId);
+                setParticipantPolicy(defaultCourseParticipantPolicyForAgeGroup(nextFormat?.age_group));
+              }
+            }}><option value="">Välj koncept</option>{(data?.formats || []).filter((format) => !catalogMode || Boolean(editingSeriesId) || format.presentation_type === initialPresentationType).map((format) => <option key={format.id} value={format.id}>{format.name}</option>)}</select>
             <input aria-label="Omgångens namn" className={inputClass} value={name} onChange={(event) => setName(event.target.value)} placeholder="Pickla 101 · Höst 2026" />
           </div>
           {editingSeriesId ? <div className="mt-3"><p className="text-xs font-bold">Omgångsbild · 16:9 · max 3</p><p className="mt-0.5 text-[11px] text-muted-foreground">Valfri bild här ersätter konceptbilden för just denna omgång.</p><div className="mt-2 flex flex-wrap gap-2">{seriesImages.map((url) => <div key={url} className="relative overflow-hidden rounded-xl border border-border"><img src={url} alt="" className="aspect-video w-28 object-cover" /><button type="button" onClick={() => deleteSeriesImage(url)} className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white" aria-label="Ta bort omgångsbild"><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>{seriesImages.length < 3 ? <label className="mt-2 inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 text-xs font-bold"><ImagePlus className="h-4 w-4" />{seriesImageBusy ? "Laddar..." : "Lägg till omgångsbild"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={seriesImageBusy} onChange={(event) => void addSeriesImage(event.target.files?.[0])} /></label> : null}</div> : null}

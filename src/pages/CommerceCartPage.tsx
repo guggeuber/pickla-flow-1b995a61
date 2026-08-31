@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Minus, Plus, ShoppingBag, Ticket, Trash2 } from "lucide-react";
+import { Loader2, Minus, Plus, ShoppingBag, Ticket, Trash2, XCircle } from "lucide-react";
 import { DateTime } from "luxon";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -12,6 +12,7 @@ import {
   commerceJourneyId,
   commerceRacketOrderSummaryInstruction,
   commerceRacketPickupQuantity,
+  cancelCommerceCheckout,
   fetchCommerceOrder,
   formatCommerceMoney,
   isCommerceOrderIdReference,
@@ -258,11 +259,40 @@ export default function CommerceCartPage() {
       toast.error(purchaseErrorMessage(error, "Kassan kunde inte öppnas"));
     },
   });
+  const reopenCheckout = useMutation({
+    mutationFn: () => cancelCommerceCheckout(token, { auth: runAsGuest ? "omit" : "session" }),
+    onSuccess: (response) => {
+      if (response.checkout_verification_eligible && response.checkout_session_id) {
+        navigate(`/commerce/confirmed?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}&session=${encodeURIComponent(response.checkout_session_id)}`, { replace: true });
+        return;
+      }
+      if (["paid", "attention"].includes(response.order.status)) {
+        navigate(`/commerce/confirmed?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`, { replace: true });
+        return;
+      }
+      queryClient.setQueryData(orderQueryKey, response);
+      navigate(`/cart?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`, { replace: true });
+    },
+    onError: (error: Error) => toast.error(error.message || "Kunde inte öppna köpet igen"),
+  });
 
   const resolvedVenueSlug = activity?.venue_slug || course?.venue_slug || venueSlug;
   if (orderQuery.isLoading || authLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center pt-20"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
   if (authenticatedDraftReference && !user) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center"><div><p className="mb-4 font-bold">Logga in för att fortsätta ditt köp.</p><button type="button" onClick={() => { preserveIntendedRoute(`/cart?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`); navigate("/auth"); }} className="h-12 rounded-2xl bg-slate-950 px-6 font-black text-white">Logga in</button></div></div></div>;
   if (!token || orderQuery.error || !orderQuery.data) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center"><p>{orderQuery.error instanceof PurchaseSessionError ? PURCHASE_SESSION_ERROR_MESSAGE : "Varukorgen kunde inte öppnas."}</p></div></div>;
+  if (orderQuery.data.order.status === "checkout_pending") {
+    return <div className="min-h-[100dvh] bg-white text-slate-950">
+      <PicklaTopBar slug={resolvedVenueSlug} background="#ffffff" />
+      <main className="mx-auto grid min-h-[100dvh] w-full max-w-xl place-items-center px-6 pb-16 pt-[calc(env(safe-area-inset-top,0px)+96px)] text-center">
+        <section className="w-full">
+          <XCircle className="mx-auto h-8 w-8 text-slate-600" />
+          <h1 className="mt-5 text-3xl font-black">Betalningen avbröts</h1>
+          <p className="mt-2 text-sm text-slate-500">Din plats är inte bokad.</p>
+          <button type="button" onClick={() => reopenCheckout.mutate()} disabled={reopenCheckout.isPending} className="mt-7 flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{reopenCheckout.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}Försök igen</button>
+        </section>
+      </main>
+    </div>;
+  }
   if (orderQuery.data.order.status !== "draft") {
     navigate(`/commerce/confirmed?token=${encodeURIComponent(token)}&v=${encodeURIComponent(resolvedVenueSlug)}`, { replace: true });
     return null;

@@ -2,6 +2,7 @@ export const COURSE_PARTICIPANT_POLICIES = [
   "self_only",
   "self_or_adult",
   "self_adult_or_dependent",
+  "dependent_only",
 ] as const;
 
 export type CourseParticipantPolicy = typeof COURSE_PARTICIPANT_POLICIES[number];
@@ -13,6 +14,7 @@ export const COURSE_PARTICIPANT_POLICY_OPTIONS: Array<{ value: CourseParticipant
   { value: "self_only", label: "Endast köparen själv" },
   { value: "self_or_adult", label: "Köparen eller annan vuxen" },
   { value: "self_adult_or_dependent", label: "Köparen, annan vuxen eller barn" },
+  { value: "dependent_only", label: "Endast barn som köparen ansvarar för" },
 ];
 
 export function resolveCourseParticipantPolicy(resolverRules: unknown): CourseParticipantPolicy {
@@ -28,5 +30,10 @@ export function resolveCourseParticipantPolicy(resolverRules: unknown): CoursePa
 export function courseParticipantOptions(policy: CourseParticipantPolicy): CourseParticipantType[] {
   if (policy === "self_only") return ["self"];
   if (policy === "self_or_adult") return ["self", "adult"];
+  if (policy === "dependent_only") return ["dependent"];
   return ["self", "adult", "dependent"];
+}
+
+export function defaultCourseParticipantPolicyForAgeGroup(ageGroup: unknown): CourseParticipantPolicy {
+  return ageGroup === "youth" ? "dependent_only" : DEFAULT_COURSE_PARTICIPANT_POLICY;
 }

@@ -25,6 +25,34 @@ describe("Course participant policy", () => {
     })).toThrow("course_participant_policy_violation");
   });
 
+  it("allows only a guardian-owned dependent for dependent-only Courses", () => {
+    expect(assertCourseParticipantRequest({
+      policy: "dependent_only",
+      participantType: "dependent",
+      userId: "verified-guardian",
+    })).toBe("dependent");
+    for (const participantType of ["self", "adult"]) {
+      expect(() => assertCourseParticipantRequest({
+        policy: "dependent_only",
+        participantType,
+        userId: "verified-guardian",
+      })).toThrow("course_participant_policy_violation");
+    }
+    expect(() => assertCourseParticipantRequest({
+      policy: "dependent_only",
+      participantType: "dependent",
+      userId: null,
+    })).toThrow("course_dependent_requires_verified_guardian");
+    expect(() => assertCourseParticipantIdentity({
+      policy: "dependent_only",
+      participantType: "dependent",
+      userId: "verified-guardian",
+      payerCustomerId: "guardian-customer",
+      participantCustomerId: null,
+      dependentParticipantId: "dependent-1",
+    })).not.toThrow();
+  });
+
   it("requires a verified purchaser and rejects hidden delegated identity input", () => {
     expect(() => assertCourseParticipantRequest({
       policy: "self_only",
@@ -96,6 +124,8 @@ describe("Course participant policy", () => {
     const coursesApi = read("supabase/functions/api-courses/index.ts");
     expect(coursePage).not.toContain("Pickla Next");
     expect(coursesApi).not.toContain("Pickla Next");
+    expect(coursePage).not.toMatch(/Pickla Kids|Pickla Juniors/);
+    expect(coursesApi).not.toMatch(/Pickla Kids|Pickla Juniors/);
     expect(coursesApi).toContain("participant_policy: participantPolicy");
     expect(coursesApi).toContain("path === 'series-participant-policy'");
     expect(coursesApi).toContain("order_history_count");

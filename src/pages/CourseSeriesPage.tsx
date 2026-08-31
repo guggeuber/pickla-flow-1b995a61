@@ -62,7 +62,7 @@ export default function CourseSeriesPage() {
   const participantPolicy = course?.participant_policy
     || resolveCourseParticipantPolicy(course?.product?.resolver_rules);
   const participantOptions = courseParticipantOptions(participantPolicy);
-  const effectiveParticipantType = participantOptions.includes(participantType) ? participantType : "self";
+  const effectiveParticipantType = participantOptions.includes(participantType) ? participantType : participantOptions[0];
   const selfOnly = participantPolicy === "self_only";
   const publicOnlyAccount = verifiedAccount.state === "anonymous" || verifiedAccount.state === "terminal_failure";
   const personalizationReady = publicOnlyAccount || Boolean(personalizedCourse);

@@ -143,6 +143,9 @@ export interface CommerceOrderResponse {
     venue_slug?: string | null;
     members: Array<{ role: "captain" | "player"; name: string }>;
   } | null;
+  checkout_verification_eligible?: boolean;
+  checkout_session_id?: string;
+  checkout_cancelled?: boolean;
 }
 
 export interface DeskFulfillmentItem {
@@ -442,8 +445,15 @@ export function trackCommerceFunnelEvent(input: {
   }).catch(() => undefined);
 }
 
-export function fetchCommerceOrder(token: string, options: ApiRequestOptions = {}) {
-  return apiGet<CommerceOrderResponse>("api-commerce", "order", { token }, options);
+export function fetchCommerceOrder(token: string, options: ApiRequestOptions = {}, checkoutSessionId = "") {
+  return apiGet<CommerceOrderResponse>("api-commerce", "order", {
+    token,
+    ...(checkoutSessionId ? { session: checkoutSessionId } : {}),
+  }, options);
+}
+
+export function cancelCommerceCheckout(reference: string, options: ApiRequestOptions = {}) {
+  return apiPost<CommerceOrderResponse>("api-commerce", "cancel-checkout", { token: reference }, options);
 }
 
 export function confirmCommerceGuestIdentity(token: string, displayName: string) {

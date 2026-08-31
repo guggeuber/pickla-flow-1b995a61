@@ -13,6 +13,11 @@ import { evaluateCommerceAvailability, type CommerceProductLike } from '../_shar
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
 import {
+  checkoutReturnEligible,
+  stripeCheckoutCancellationDecision,
+  type StripeCheckoutReturnFacts,
+} from '../_shared/commerce_checkout_return.ts';
+import {
   assertCourseParticipantIdentity,
   assertCourseParticipantRequest,
   assertCurrentCourseParticipantIdentity,
@@ -42,7 +47,7 @@ function productMaxQuantity(product: CommerceProduct) {
   return Math.max(1, Math.min(MAX_QUANTITY, Number.isFinite(configured) ? Math.floor(configured) : 20));
 }
 
-type StripeCheckoutSession = { id: string; url: string | null };
+type StripeCheckoutSession = StripeCheckoutReturnFacts & { id: string; url: string | null };
 
 type CommerceProduct = CommerceProductLike & {
   id: string;
@@ -153,6 +158,15 @@ async function expireStripeCheckoutSession(stripeKey: string, sessionId: string)
   if (response.ok) return;
   const payload = await response.json().catch(() => ({}));
   throw new Error(payload?.error?.message || `Stripe session expiry failed ${response.status}`);
+}
+
+async function retrieveStripeCheckoutSession(stripeKey: string, sessionId: string) {
+  const response = await fetch(`${STRIPE_API_BASE}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: { Authorization: `Bearer ${stripeKey}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error?.message || `Stripe session lookup failed ${response.status}`);
+  return payload as StripeCheckoutSession;
 }
 
 async function createStripeRefund(stripeKey: string, paymentIntentId: string, orderId: string) {
@@ -1866,6 +1880,7 @@ const commerceHandler = async (req: Request) => {
 
     if (req.method === 'GET' && path === 'order') {
       const token = url.searchParams.get('token') || '';
+      const returnedSessionId = url.searchParams.get('session') || '';
       let order = await loadOrderByReference(admin, token, userId, true);
       if (order.status === 'checkout_pending') {
         const recovery = await reconcileExpiredFirstVisitCheckouts(admin, {
@@ -1875,7 +1890,81 @@ const commerceHandler = async (req: Request) => {
         });
         if (recovery.released > 0) order = await loadOrderByReference(admin, token, userId, true);
       }
-      return jsonResponse(await cartResponse(admin, order), 200, 0);
+      return jsonResponse({
+        ...(await cartResponse(admin, order)),
+        checkout_verification_eligible: order.status === 'checkout_pending'
+          && checkoutReturnEligible(order.stripe_session_id, returnedSessionId),
+      }, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'cancel-checkout') {
+      const body = await req.json();
+      const reference = String(body.token || body.reference || '').trim();
+      let order = await loadOrderByReference(admin, reference, userId, true);
+      if (order.status === 'draft') {
+        return jsonResponse({ ...(await cartResponse(admin, order)), checkout_cancelled: true }, 200, 0);
+      }
+      if (['paid', 'attention'].includes(order.status)) {
+        return jsonResponse({ ...(await cartResponse(admin, order)), checkout_cancelled: false }, 200, 0);
+      }
+      if (order.status !== 'checkout_pending' || !order.stripe_session_id) {
+        return errorResponse('Betalningen kan inte avbrytas här.', 409);
+      }
+      const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+      if (!stripeKey) throw new Error('Stripe not configured');
+      let stripeSession = await retrieveStripeCheckoutSession(stripeKey, order.stripe_session_id);
+      let decision = stripeCheckoutCancellationDecision(stripeSession);
+      if (decision === 'verify_payment') {
+        return jsonResponse({
+          ...(await cartResponse(admin, order)),
+          checkout_cancelled: false,
+          checkout_verification_eligible: true,
+          checkout_session_id: order.stripe_session_id,
+        }, 200, 0);
+      }
+      if (decision === 'expire_and_reopen') {
+        try {
+          await expireStripeCheckoutSession(stripeKey, order.stripe_session_id);
+          decision = 'reopen';
+        } catch (expiryError) {
+          stripeSession = await retrieveStripeCheckoutSession(stripeKey, order.stripe_session_id);
+          decision = stripeCheckoutCancellationDecision(stripeSession);
+          if (decision === 'verify_payment') {
+            return jsonResponse({
+              ...(await cartResponse(admin, order)),
+              checkout_cancelled: false,
+              checkout_verification_eligible: true,
+              checkout_session_id: order.stripe_session_id,
+            }, 200, 0);
+          }
+          if (decision !== 'reopen') throw expiryError;
+        }
+      }
+      if (decision !== 'reopen') return errorResponse('Betalningen kunde inte avbrytas säkert.', 409);
+
+      const lines = await loadOrderLines(admin, order.id);
+      const holdIds = Array.from(new Set(lines.map((line) => String(line.capacity_hold_id || '')).filter(Boolean)));
+      for (const holdId of holdIds) await releaseHold(admin, holdId, 'commerce_checkout_cancelled');
+      const { data: reopened, error: reopenError } = await admin.rpc('reopen_commerce_order_after_checkout_failure', {
+        p_order_id: order.id,
+        p_version: order.version,
+      });
+      if (reopenError) throw new Error(reopenError.message);
+      order = await loadOrderByReference(admin, reference, userId, true);
+      if (!reopened && order.status !== 'draft') {
+        if (['paid', 'attention'].includes(order.status)) {
+          return jsonResponse({ ...(await cartResponse(admin, order)), checkout_cancelled: false }, 200, 0);
+        }
+        throw new Error('Betalningen kunde inte öppnas igen.');
+      }
+      await recordCommerceEvent(admin, {
+        eventName: 'checkout_abandoned',
+        venueId: order.venue_id,
+        orderId: order.id,
+        activitySessionId: String(lines.find((line) => line.commerce_kind === 'participation')?.activity_session_id || '') || null,
+        metadata: { source: 'stripe_cancel_return', outcome: 'draft_reopened' },
+      });
+      return jsonResponse({ ...(await cartResponse(admin, order)), checkout_cancelled: true }, 200, 0);
     }
 
     if (req.method === 'POST' && path === 'claim') {
@@ -2453,7 +2542,7 @@ const commerceHandler = async (req: Request) => {
               ? { expires_at: Math.floor(Date.now() / 1000) + SERIES_EARLY_BIRD_STRIPE_EXPIRY_SECONDS }
             : {}),
           success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${origin}${cancelPath}`,
+          cancel_url: `${origin}${cancelPath}${cancelPath.includes('?') ? '&' : '?'}checkout=cancelled`,
         });
       } catch (error) {
         await releaseHold(admin, holdId, 'commerce_stripe_create_failed');
@@ -2639,8 +2728,11 @@ const commerceHandler = async (req: Request) => {
     if (message === 'course_self_only_requires_verified_purchaser') {
       return errorResponse('Logga in med ditt verifierade konto för att boka den här kursen för dig själv.', 401);
     }
+    if (message === 'course_dependent_requires_verified_guardian') {
+      return errorResponse('Logga in med ditt verifierade konto för att anmäla ett barn.', 401);
+    }
     if (message === 'course_participant_policy_violation' || message === 'course_participant_identity_mismatch') {
-      return errorResponse('Den här kursen kan bara bokas för den verifierade köparen själv.', 409);
+      return errorResponse('Vald deltagare är inte tillåten för den här kursen.', 409);
     }
     return errorResponse(message, 400);
   }
