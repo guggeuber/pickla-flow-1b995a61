@@ -1,6 +1,6 @@
 \set ON_ERROR_STOP on
 BEGIN;
-SELECT plan(1);
+SELECT plan(9);
 
 INSERT INTO public.organizations (id, name, slug)
 VALUES ('5cc00000-0000-4000-8000-000000000001', 'Social Context Test', 'social-context-test');
@@ -85,6 +85,19 @@ INSERT INTO public.activity_sessions (
   ('5cc00000-0000-4000-8000-000000000032', '5cc00000-0000-4000-8000-000000000002', 'Private Target', 'course', '2026-09-11', '18:00', '20:00', 0, 20, 'published', true, true),
   ('5cc00000-0000-4000-8000-000000000033', '5cc00000-0000-4000-8000-000000000002', 'Completed Target', 'open_play', '2026-08-20', '18:00', '20:00', 165, 20, 'published', false, true);
 
+-- One recurring template models the production Lunch Play failure shape:
+-- June Participations exist before a July administrative host assignment.
+INSERT INTO public.activity_sessions (
+  id, venue_id, name, session_type, recurrence_days, session_date,
+  start_time, end_time, price_sek, capacity, publish_status,
+  closed_to_public, is_active
+) VALUES (
+  '5cc00000-0000-4000-8000-000000000034',
+  '5cc00000-0000-4000-8000-000000000002',
+  'Host History Recurring', 'open_play', ARRAY[1, 2, 3], NULL,
+  '18:00', '20:00', 165, 20, 'published', false, true
+);
+
 INSERT INTO public.session_registrations (
   venue_id, activity_session_id, session_date, user_id, customer_id,
   dependent_participant_id, status, price_paid_sek, source_type, role
@@ -104,6 +117,89 @@ INSERT INTO public.session_registrations (
   ('5cc00000-0000-4000-8000-000000000002', '5cc00000-0000-4000-8000-000000000033', '2026-08-20', '5cc00000-0000-4000-8000-000000000010', '5cc00000-0000-4000-8000-000000000020', NULL, 'checked_in', 165, 'commerce_order', 'participant'),
   ('5cc00000-0000-4000-8000-000000000002', '5cc00000-0000-4000-8000-000000000033', '2026-08-20', '5cc00000-0000-4000-8000-000000000011', '5cc00000-0000-4000-8000-000000000021', NULL, 'attended', 165, 'commerce_order', 'participant'),
   ('5cc00000-0000-4000-8000-000000000002', '5cc00000-0000-4000-8000-000000000033', '2026-08-20', '5cc00000-0000-4000-8000-000000000012', '5cc00000-0000-4000-8000-000000000022', NULL, 'attended', 165, 'commerce_order', 'participant');
+
+-- Historical ordinary Participations and one explicitly evidenced host
+-- occurrence are present before the later template assignment.
+INSERT INTO public.session_registrations (
+  id, venue_id, activity_session_id, session_date, user_id, customer_id,
+  status, price_paid_sek, source_type, metadata, registered_at, role
+) VALUES
+  ('5cc00000-0000-4000-8000-000000000040', '5cc00000-0000-4000-8000-000000000002', '5cc00000-0000-4000-8000-000000000034', '2026-06-08', '5cc00000-0000-4000-8000-000000000010', '5cc00000-0000-4000-8000-000000000020', 'confirmed', 0, 'membership', '{}', '2026-06-08 00:45:53+00', 'participant'),
+  ('5cc00000-0000-4000-8000-000000000041', '5cc00000-0000-4000-8000-000000000002', '5cc00000-0000-4000-8000-000000000034', '2026-06-09', '5cc00000-0000-4000-8000-000000000010', '5cc00000-0000-4000-8000-000000000020', 'confirmed', 0, 'membership', '{}', '2026-06-08 15:53:39+00', 'participant'),
+  ('5cc00000-0000-4000-8000-000000000042', '5cc00000-0000-4000-8000-000000000002', '5cc00000-0000-4000-8000-000000000034', '2026-06-10', '5cc00000-0000-4000-8000-000000000010', '5cc00000-0000-4000-8000-000000000020', 'confirmed', 0, 'membership', '{"role":"playing_host"}', '2026-06-10 08:00:00+00', 'participant'),
+  -- This future Participation exists before the assignment and must be
+  -- promoted because that assignment is valid at its occurrence.
+  ('5cc00000-0000-4000-8000-000000000043', '5cc00000-0000-4000-8000-000000000002', '5cc00000-0000-4000-8000-000000000034', '2026-10-05', '5cc00000-0000-4000-8000-000000000010', '5cc00000-0000-4000-8000-000000000020', 'confirmed', 0, 'membership', '{}', '2026-07-01 08:00:00+00', 'participant');
+
+INSERT INTO public.activity_session_hosts (
+  id, venue_id, activity_session_id, customer_id, status,
+  created_at, updated_at
+) VALUES (
+  '5cc00000-0000-4000-8000-000000000044',
+  '5cc00000-0000-4000-8000-000000000002',
+  '5cc00000-0000-4000-8000-000000000034',
+  '5cc00000-0000-4000-8000-000000000020',
+  'active', '2026-07-20 10:50:57+00', '2026-07-20 10:50:57+00'
+);
+
+-- A Participation created after the valid assignment is stamped immediately.
+INSERT INTO public.session_registrations (
+  id, venue_id, activity_session_id, session_date, user_id, customer_id,
+  status, price_paid_sek, source_type, metadata, registered_at, role
+) VALUES (
+  '5cc00000-0000-4000-8000-000000000045',
+  '5cc00000-0000-4000-8000-000000000002',
+  '5cc00000-0000-4000-8000-000000000034', '2026-10-06',
+  '5cc00000-0000-4000-8000-000000000010',
+  '5cc00000-0000-4000-8000-000000000020',
+  'confirmed', 0, 'membership', '{}', '2026-09-01 08:00:00+00', 'participant'
+);
+
+SELECT is(
+  (SELECT role FROM public.session_registrations WHERE id = '5cc00000-0000-4000-8000-000000000042'),
+  'host'::TEXT,
+  'A: explicit occurrence metadata derives host'
+);
+SELECT is(
+  (SELECT role FROM public.session_registrations WHERE id = '5cc00000-0000-4000-8000-000000000043'),
+  'host'::TEXT,
+  'B: assignment valid at occurrence promotes existing Participation'
+);
+SELECT is(
+  (SELECT role FROM public.session_registrations WHERE id = '5cc00000-0000-4000-8000-000000000040'),
+  'participant'::TEXT,
+  'C: assignment created after historical occurrence does not promote it'
+);
+SELECT is(
+  (SELECT role FROM public.session_registrations WHERE id = '5cc00000-0000-4000-8000-000000000041'),
+  'participant'::TEXT,
+  'D: production-shaped June Participation stays participant after July assignment'
+);
+SELECT is(
+  (SELECT role FROM public.session_registrations WHERE id = '5cc00000-0000-4000-8000-000000000045'),
+  'host'::TEXT,
+  'E: future Participation created after valid assignment derives host'
+);
+SELECT is(
+  (SELECT role FROM public.session_registrations WHERE id = '5cc00000-0000-4000-8000-000000000040'),
+  'participant'::TEXT,
+  'F: ordinary Participation for a later host remains participant'
+);
+SELECT is(
+  (SELECT COUNT(*) FROM public.session_registrations
+   WHERE activity_session_id = '5cc00000-0000-4000-8000-000000000034'
+     AND session_date BETWEEN '2026-06-08' AND '2026-06-10'
+     AND role = 'host'),
+  1::BIGINT,
+  'G: one evidenced recurring occurrence does not rewrite all history'
+);
+SELECT is(
+  (SELECT COUNT(*) FROM public.session_registrations
+   WHERE id IN ('5cc00000-0000-4000-8000-000000000040', '5cc00000-0000-4000-8000-000000000041')
+     AND role = 'host'),
+  0::BIGINT,
+  'H: no ambiguous historical row is promoted'
+);
 
 DO $$
 BEGIN

@@ -63,9 +63,17 @@ ALTER TABLE public.session_registrations
   ADD CONSTRAINT session_registrations_status_check
   CHECK (status IN ('pending', 'confirmed', 'cancelled', 'checked_in', 'attended', 'no_show'));
 
+-- Historical host-role evidence is deliberately conservative:
+--   A/B: occurrence-specific source/metadata on Participation is accepted.
+--   C: an administrative assignment is accepted only when its creation and
+--      latest mutation both predate the concrete occurrence start.
+--   D/E: later/current-only assignments and ambiguous history are rejected.
+-- This prevents current template administration from inventing past facts.
 UPDATE public.session_registrations AS participation
 SET role = 'host'
-WHERE participation.role <> 'host'
+FROM public.activity_sessions AS session
+WHERE session.id = participation.activity_session_id
+  AND participation.role <> 'host'
   AND (
     participation.source_type IN ('playing_host', 'host_comp')
     OR participation.metadata->>'role' IN ('playing_host', 'host_comp', 'host')
@@ -78,6 +86,8 @@ WHERE participation.role <> 'host'
       WHERE host_assignment.activity_session_id = participation.activity_session_id
         AND host_assignment.customer_id = participation.customer_id
         AND host_assignment.status = 'active'
+        AND GREATEST(host_assignment.created_at, host_assignment.updated_at)
+          <= ((participation.session_date + session.start_time) AT TIME ZONE 'Europe/Stockholm')
     )
   );
 
@@ -96,9 +106,13 @@ BEGIN
     OR EXISTS (
       SELECT 1
       FROM public.activity_session_hosts AS host_assignment
+      JOIN public.activity_sessions AS session
+        ON session.id = host_assignment.activity_session_id
       WHERE host_assignment.activity_session_id = NEW.activity_session_id
         AND host_assignment.customer_id = NEW.customer_id
         AND host_assignment.status = 'active'
+        AND GREATEST(host_assignment.created_at, host_assignment.updated_at)
+          <= ((NEW.session_date + session.start_time) AT TIME ZONE 'Europe/Stockholm')
     )
   THEN
     NEW.role := 'host';
@@ -124,9 +138,13 @@ BEGIN
   IF NEW.status = 'active' THEN
     UPDATE public.session_registrations AS participation
     SET role = 'host'
-    WHERE participation.activity_session_id = NEW.activity_session_id
+    FROM public.activity_sessions AS session
+    WHERE session.id = participation.activity_session_id
+      AND participation.activity_session_id = NEW.activity_session_id
       AND participation.customer_id = NEW.customer_id
-      AND participation.role <> 'host';
+      AND participation.role <> 'host'
+      AND GREATEST(NEW.created_at, NEW.updated_at)
+        <= ((participation.session_date + session.start_time) AT TIME ZONE 'Europe/Stockholm');
   END IF;
   RETURN NEW;
 END;

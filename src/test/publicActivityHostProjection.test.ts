@@ -20,6 +20,13 @@ describe("Session host identity boundary", () => {
     expect(migrationSource).not.toContain("host_person_id");
   });
 
+  it("never lets a later template assignment rewrite historical Participation", () => {
+    expect(migrationSource).toContain("GREATEST(host_assignment.created_at, host_assignment.updated_at)");
+    expect(migrationSource).toContain("participation.session_date + session.start_time");
+    expect(migrationSource).toContain("GREATEST(NEW.created_at, NEW.updated_at)");
+    expect(migrationSource).toContain("current template administration from inventing past facts");
+  });
+
   it("loads identity only through verified server-side social context", () => {
     expect(eventApiSource).toContain("path === 'activity-social-context'");
     expect(eventApiSource).toContain("authClient.rpc('get_session_social_context'");
