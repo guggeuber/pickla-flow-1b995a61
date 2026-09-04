@@ -119,7 +119,7 @@ describe("Commerce R1 activity draft", () => {
     expect(migrationSource).not.toContain("access_entitlements");
   });
 
-  it("uses purchase-first controls without an empty or competing social container", () => {
+  it("uses purchase-first controls with one bounded Session social context", () => {
     expect(programSource).toContain('data-testid="commerce-addons"');
     expect(programSource).toContain('aria-label={`Öka ${product.name}`}');
     expect(programSource).toContain('data-testid="commerce-live-total"');
@@ -132,7 +132,8 @@ describe("Commerce R1 activity draft", () => {
     expect(programSource).toContain('headerActions={');
     expect(programSource).toContain("fixedFooter");
     expect(programSource).not.toContain('aria-label="Aktivitetsalternativ"');
-    expect(programSource).toContain('showInvitation={purchaseMode}');
+    expect(programSource).toContain("<SessionSocialContextSection");
+    expect(programSource).toContain("attendeeCount={registrationCount}");
     expect(programSource).toContain("authLoading || loading || queueLoading || checkinLoading || pricingPending");
     expect(programSource).toContain('Gäller detta pass.');
     expect(programSource).toContain('Alla Open Play-pass idag.');

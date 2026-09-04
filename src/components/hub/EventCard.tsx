@@ -146,6 +146,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
         registrations_count: number;
         interested_count: number;
         user_is_interested: boolean;
+        attendees?: Array<{ person_id: string; display_name: string; avatar_url: string | null }>;
       }> }>("api-event-public", "activity-social-proof", {
         venueSlug,
         sessionIds: eventLookupId,
@@ -429,7 +430,15 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
               <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: 12, fontFamily: "Inter, sans-serif", fontWeight: 700 }}>
                 {isRegistered ? "Du är anmäld i chatten" : isFull ? "Chatta om reservplats" : "Säkra platsen direkt i chatten"}
               </p>
-              <PeopleRow participantCount={registrationCount} style={{ marginTop: 4 }} />
+              <PeopleRow
+                participantCount={registrationCount}
+                people={(programSocialProof?.attendees || []).slice(0, 4).map((attendee) => ({
+                  id: attendee.person_id,
+                  display_name: attendee.display_name,
+                  avatar_url: attendee.avatar_url,
+                }))}
+                style={{ marginTop: 4 }}
+              />
             </div>
             <motion.button
               whileTap={{ scale: 0.97 }}
@@ -468,7 +477,14 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
               animate={{ opacity: 1, y: 0 }}
               style={{ marginTop: 12, display: "grid", gap: 8 }}
             >
-              <PeopleRow participantCount={registrationCount} />
+              <PeopleRow
+                participantCount={registrationCount}
+                people={(programSocialProof?.attendees || []).slice(0, 4).map((attendee) => ({
+                  id: attendee.person_id,
+                  display_name: attendee.display_name,
+                  avatar_url: attendee.avatar_url,
+                }))}
+              />
               <ScarcityBadge remaining={spotsLeft} capacity={capacity} />
 
               {pricingIsIncluded ? (

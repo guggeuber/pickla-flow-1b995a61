@@ -4,6 +4,8 @@ export function routeRequiresVerifiedAccount(pathname: string) {
     || pathname === "/courses"
     || pathname.startsWith("/course/")
     || pathname === "/seriespel"
-    || pathname.startsWith("/seriespel/");
+    || pathname.startsWith("/seriespel/")
+    || pathname.startsWith("/p/")
+    || pathname.startsWith("/program/");
   return !progressivePublicRoute;
 }

@@ -244,6 +244,8 @@ describe("authenticated application resilience", () => {
     expect(routeRequiresVerifiedAccount("/course/series-1")).toBe(false);
     expect(routeRequiresVerifiedAccount("/seriespel")).toBe(false);
     expect(routeRequiresVerifiedAccount("/seriespel/season-1")).toBe(false);
+    expect(routeRequiresVerifiedAccount("/p/session-1")).toBe(false);
+    expect(routeRequiresVerifiedAccount("/program/session-1")).toBe(false);
     expect(routeRequiresVerifiedAccount("/my")).toBe(true);
     expect(routeRequiresVerifiedAccount("/hub")).toBe(true);
     expect(routeRequiresVerifiedAccount("/desk")).toBe(true);

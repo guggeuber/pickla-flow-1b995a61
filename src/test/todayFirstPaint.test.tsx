@@ -423,7 +423,7 @@ describe("Today customer first paint", () => {
     renderToday();
 
     expect(await screen.findByText("Boka plats · 165 kr")).toBeInTheDocument();
-    expect(screen.getByText("Plats för fler — ta gärna med en vän")).toBeInTheDocument();
+    expect(screen.getByText("2 kommer")).toBeInTheDocument();
     expect(mocks.apiGet.mock.calls.some((call) => call[1] === "activity-social-proof")).toBe(false);
     expect(mocks.apiGet.mock.calls.some((call) => call[1] === "activity-preview")).toBe(false);
     expect(mocks.supabaseFrom.mock.calls.some((call) => call[0] === "session_registrations")).toBe(false);

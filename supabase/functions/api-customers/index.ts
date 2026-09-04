@@ -207,6 +207,77 @@ Deno.serve(async (req) => {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
+    // The social preference belongs to the canonical Person, never to a
+    // membership, payer record or browser-only profile setting.
+    if ((req.method === 'GET' || req.method === 'PATCH') && path === 'social-preferences') {
+      const admin = getServiceClient();
+      const { data: person, error: personError } = await admin
+        .from('customers')
+        .select('id, social_visibility, metadata')
+        .eq('auth_user_id', userId)
+        .eq('status', 'active')
+        .is('merged_into_id', null)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (personError) return errorResponse('Could not load social preferences', 500);
+      if (!person) return errorResponse('Person not found', 404);
+
+      if (req.method === 'PATCH') {
+        const body = await req.json();
+        const updates: Record<string, unknown> = {};
+        if (body.social_visibility !== undefined) {
+          if (!['visible', 'hidden'].includes(String(body.social_visibility))) {
+            return errorResponse('Invalid social_visibility', 400);
+          }
+          updates.social_visibility = String(body.social_visibility);
+        }
+        if (body.booking_notice_shown === true) {
+          updates.metadata = {
+            ...(person.metadata || {}),
+            session_social_context_notice_shown_at: new Date().toISOString(),
+          };
+        }
+        if (!Object.keys(updates).length) return errorResponse('No supported update', 400);
+        const { data: updated, error: updateError } = await admin
+          .from('customers')
+          .update(updates)
+          .eq('id', person.id)
+          .eq('auth_user_id', userId)
+          .select('social_visibility, metadata')
+          .single();
+        if (updateError) return errorResponse('Could not update social preferences', 500);
+        return jsonResponse({
+          social_visibility: updated.social_visibility,
+          booking_notice_shown: Boolean(updated.metadata?.session_social_context_notice_shown_at),
+        });
+      }
+
+      const [customerParticipations, userParticipations] = await Promise.all([
+        admin.from('session_registrations')
+          .select('id')
+          .eq('customer_id', person.id)
+          .in('status', ['confirmed', 'checked_in', 'attended'])
+          .limit(1),
+        admin.from('session_registrations')
+          .select('id')
+          .eq('user_id', userId)
+          .is('customer_id', null)
+          .in('status', ['confirmed', 'checked_in', 'attended'])
+          .limit(1),
+      ]);
+      if (customerParticipations.error || userParticipations.error) {
+        return errorResponse('Could not load social preferences', 500);
+      }
+      const bookingNoticeShown = Boolean(person.metadata?.session_social_context_notice_shown_at);
+      const hasPriorParticipation = Boolean(customerParticipations.data?.length || userParticipations.data?.length);
+      return jsonResponse({
+        social_visibility: person.social_visibility,
+        booking_notice_shown: bookingNoticeShown,
+        should_show_first_booking_info: !bookingNoticeShown && !hasPriorParticipation,
+      }, 200, 0);
+    }
+
     // GET /api-customers/list?venueId=X&search=X&limit=50
     if (req.method === 'GET' && path === 'list') {
       const search = cleanString(url.searchParams.get('search')) || '';

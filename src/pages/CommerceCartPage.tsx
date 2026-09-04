@@ -32,6 +32,7 @@ import {
   withPurchaseSessionRecovery,
 } from "@/lib/purchaseSessionRecovery";
 import { occurrenceCountLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
+import { fetchSocialPreferences, updateSocialPreferences } from "@/lib/sessionSocialContext";
 
 type ResolvedLine = CommerceOrderLine & { unit_price_minor: number; product_name: string };
 
@@ -83,6 +84,8 @@ export default function CommerceCartPage() {
   const [standaloneQuantities, setStandaloneQuantities] = useState<Record<string, number> | null>(null);
   const [cartUpdatesPending, setCartUpdatesPending] = useState(0);
   const cartUpdateQueue = useRef<Promise<void>>(Promise.resolve());
+  const socialNoticeRecorded = useRef(false);
+  const [showSocialNotice, setShowSocialNotice] = useState(false);
 
   const authenticatedDraftReference = isCommerceOrderIdReference(token);
   const runAsGuest = !authenticatedDraftReference && (guestSessionFallback || !user);
@@ -132,6 +135,20 @@ export default function CommerceCartPage() {
     sum + Math.max(0, originalUnitPriceMinor(line) - Number(line.unit_price_minor || 0)) * Number(line.quantity || 1)
   ), 0), [lines]);
   const hasParticipation = lines.some((line) => line.commerce_kind === "participation");
+  const hasSelfParticipation = lines.some((line) => line.commerce_kind === "participation" && !line.dependent_participant_id);
+  const socialPreferences = useQuery({
+    queryKey: ["social-preferences"],
+    enabled: Boolean(user?.id && hasSelfParticipation),
+    queryFn: fetchSocialPreferences,
+    staleTime: 30_000,
+    retry: false,
+  });
+  useEffect(() => {
+    if (!socialPreferences.data?.should_show_first_booking_info || socialNoticeRecorded.current) return;
+    socialNoticeRecorded.current = true;
+    setShowSocialNotice(true);
+    void updateSocialPreferences({ booking_notice_shown: true });
+  }, [socialPreferences.data?.should_show_first_booking_info]);
   const activity = orderQuery.data?.activity_access;
   const course = orderQuery.data?.course_access;
   const coursePresentation = seriesPresentation(course?.presentation_type);
@@ -393,6 +410,11 @@ export default function CommerceCartPage() {
       </main>
       {(!standaloneShopCart || visibleLines.length > 0) ? <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
         <div className="mx-auto max-w-xl">
+          {showSocialNotice ? (
+            <p className="mb-3 rounded-xl bg-slate-100 px-3 py-2 text-[11px] font-semibold leading-relaxed text-slate-600" data-testid="first-booking-social-notice">
+              Andra anmälda ser ditt förnamn, efternamnsinitial och din profilbild. Du kan ändra detta i Min sida.
+            </p>
+          ) : null}
           <div className="mb-1 flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><span className="text-2xl font-black">{serverPricingReady ? formatCommerceMoney(total) : "—"}</span></div>
           {totalSavings > 0 ? <p className="mb-3 text-sm font-bold text-slate-700">Du sparar {formatCommerceMoney(totalSavings)}</p> : null}
           <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || cartUpdatesPending > 0 || !serverPricingReady || needsEmail || visibleItemCount === 0} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending || cartUpdatesPending > 0 ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? standaloneShopCart ? `Till kassan · ${formatCommerceMoney(total)}` : `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>

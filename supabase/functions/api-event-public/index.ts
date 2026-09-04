@@ -4,7 +4,6 @@ import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadIn
 import { firstVisitEligibilityForCustomer, resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
-import { projectPublicActivitySessionHosts } from '../_shared/public_activity_hosts.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
 import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
@@ -34,6 +33,21 @@ type PublicEventParticipantRow = {
   [key: string]: unknown;
   auth_user_id?: unknown;
   email?: unknown;
+};
+type SessionSocialContextRow = {
+  session_id: string;
+  session_date: string;
+  hidden_count?: number;
+  first_visit_count?: number;
+  shared_history_count?: number;
+  attendees?: Array<{
+    person_id: string;
+    display_name: string;
+    avatar_url: string | null;
+    is_host: boolean;
+    is_first_visit: boolean;
+    has_shared_session_history: boolean;
+  }>;
 };
 
 function escapeHtml(value: unknown) {
@@ -390,7 +404,7 @@ function formatSek(amount: number) {
   })} kr`;
 }
 
-function ogDescriptionForActivity(registrationsCount: number, hosts: any[] = [], scarcity?: any) {
+function ogDescriptionForActivity(registrationsCount: number, scarcity?: any) {
   const earlyBird = scarcity?.early_bird || {};
   if (earlyBird.active && Number(earlyBird.remaining || 0) > 0 && Number(earlyBird.price_sek || 0) > 0) {
     return `Tidigt pris ${formatSek(Number(earlyBird.price_sek || 0))} · ${Number(earlyBird.remaining || 0)} kvar just nu — häng på!`;
@@ -398,14 +412,9 @@ function ogDescriptionForActivity(registrationsCount: number, hosts: any[] = [],
   if (scarcity?.mode === 'capacity' && scarcity?.capacity_active) {
     return `${Number(scarcity.registrations_count || registrationsCount || 0)} anmälda · ${Number(scarcity.capacity_remaining || 0)} platser kvar — häng på!`;
   }
-  const hostFirstName = String(hosts?.[0]?.first_name || '').trim();
-  if (hostFirstName) {
-    return `${hostFirstName}s pass — boka plats!`;
-  }
-  // TODO(presence-consent): named visibility pending presence settings.
-  return registrationsCount >= 3
-    ? `${registrationsCount} spelare är med. Boka plats!`
-    : 'Plats för fler — boka plats!';
+  return registrationsCount > 0
+    ? `${registrationsCount} kommer. Boka plats!`
+    : 'Bli först att anmäla dig!';
 }
 
 function activityOgHtml({
@@ -563,8 +572,6 @@ async function buildActivityPreview(client: any, {
     .filter(Boolean)
     .reverse()
     .slice(-6);
-  const hostsBySessionId = await publicActivitySessionHosts(client, [session.id]);
-
   return {
     room,
     activity_session: {
@@ -588,40 +595,23 @@ async function buildActivityPreview(client: any, {
       activity_series: session.activity_series,
       image_urls: inheritedNamedEventImages(session.activity_series),
       venue_slug: session.venues?.slug || null,
-      hosts: hostsBySessionId.get(session.id) || [],
     },
     registrations: { count: 0 },
     messages,
   };
 }
 
-async function publicActivitySessionHosts(client: any, sessionIds: string[]) {
-  const cleanIds = [...new Set(sessionIds.filter(Boolean))];
-  if (!cleanIds.length) return new Map();
-  // Host first name is public because host assignment is an explicit public-facing role.
-  const { data, error } = await client.rpc('get_public_activity_session_hosts', { session_ids: cleanIds });
-  if (error) {
-    console.error('public host lookup failed', error.message);
-    return new Map();
-  }
-  const allowedIds = new Set(cleanIds);
-  const rawHostsBySessionId = new Map<string, any[]>();
-  for (const row of data || []) {
-    const activitySessionId = typeof row?.activity_session_id === 'string' ? row.activity_session_id : '';
-    if (!allowedIds.has(activitySessionId)) continue;
-    const hosts = rawHostsBySessionId.get(activitySessionId) || [];
-    hosts.push(row);
-    rawHostsBySessionId.set(activitySessionId, hosts);
-  }
-  return new Map(
-    Array.from(rawHostsBySessionId.entries()).map(([activitySessionId, rows]) => [
-      activitySessionId,
-      projectPublicActivitySessionHosts(rows),
-    ]),
-  );
-}
-
 async function activityRegistrationCount(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
+  const { data: publicContext, error: publicContextError } = await client.rpc('get_session_public_context', {
+    p_session_id: activitySessionId,
+    p_session_date: sessionDate,
+  });
+  if (!publicContextError && publicContext) {
+    return Number(publicContext.attendee_count || 0);
+  }
+
+  // Deployment-order fallback only. Once the migration is present, customer
+  // presentation counts are owned by get_session_public_context.
   const { data: fillRows, error: fillError } = await client.rpc('capacity_fill', {
     p_venue_id: venueId,
     p_scope_type: 'activity_session',
@@ -1170,7 +1160,7 @@ Deno.serve(async (req) => {
         const imageUrl = preview.activity_session.image_urls?.[0] || `${origin}/og-pickla.jpg`;
         const html = activityOgHtml({
           title: ogTitleForActivity(preview.activity_session, preview.activity_session.occurrence_date),
-          description: ogDescriptionForActivity(registrationCount, preview.activity_session.hosts || [], scarcity),
+          description: ogDescriptionForActivity(registrationCount, scarcity),
           canonicalUrl,
           imageUrl,
         });
@@ -1633,7 +1623,11 @@ Deno.serve(async (req) => {
     // GET /api-event-public/activity-social-proof — public aggregated counts per activity occurrence
     if (req.method === 'GET' && path === 'activity-social-proof') {
       try {
-        const userId = await getOptionalUserId(req);
+        const authHeader = req.headers.get('Authorization');
+        const auth = authHeader?.startsWith('Bearer ')
+          ? await getAuthenticatedClient(req)
+          : { client: null, userId: null, error: null };
+        const userId = auth.error ? null : auth.userId;
         const sessionIds = (url.searchParams.get('sessionIds') || '')
           .split(',')
           .map((id) => id.trim())
@@ -1645,10 +1639,71 @@ Deno.serve(async (req) => {
           endDate: String(url.searchParams.get('endDate') || ''),
           userId,
         });
+        if (userId && auth.client && result.occurrences.length) {
+          const { data: socialContexts, error: socialError } = await auth.client.rpc(
+            'get_session_social_context_batch',
+            {
+              p_occurrences: result.occurrences.map((occurrence) => ({
+                session_id: occurrence.activity_session_id,
+                session_date: occurrence.session_date,
+              })),
+            },
+          );
+          if (socialError) {
+            console.error('activity social context failed', socialError.code || 'unknown');
+          } else {
+            const contexts = (Array.isArray(socialContexts) ? socialContexts : []) as SessionSocialContextRow[];
+            const byOccurrence = new Map(contexts.map((context) => [
+              `${context.session_id}:${context.session_date}`,
+              context,
+            ]));
+            result.occurrences = result.occurrences.map((occurrence) => {
+              const context = byOccurrence.get(`${occurrence.activity_session_id}:${occurrence.session_date}`);
+              return context ? {
+                ...occurrence,
+                hidden_count: Number(context.hidden_count || 0),
+                first_visit_count: Number(context.first_visit_count || 0),
+                shared_history_count: Number(context.shared_history_count || 0),
+                attendees: Array.isArray(context.attendees) ? context.attendees : [],
+              } : occurrence;
+            });
+          }
+        }
         return jsonResponse(result, 200, 5);
       } catch (err) {
         return errorResponse(err instanceof Error ? err.message : 'Could not load activity social proof', 404);
       }
+    }
+
+    // Verified-only, server-filtered identity for one concrete Session occurrence.
+    if (req.method === 'GET' && path === 'activity-social-context') {
+      const { client: authClient, userId, error: authError } = await getAuthenticatedClient(req);
+      if (authError || !userId || !authClient) return errorResponse('Unauthorized', 401);
+      const sessionId = String(url.searchParams.get('sessionId') || url.searchParams.get('id') || '').trim();
+      const sessionDate = String(url.searchParams.get('date') || '').trim();
+      if (!sessionId || !sessionDate) return errorResponse('Missing sessionId or date', 400);
+      const { data, error } = await authClient.rpc('get_session_social_context', {
+        p_session_id: sessionId,
+        p_session_date: sessionDate,
+      });
+      if (error) return errorResponse(error.code === '42501' ? 'Forbidden' : 'Could not load social context', error.code === '42501' ? 403 : 500);
+      if (!data) return errorResponse('Session not found', 404);
+      return jsonResponse(data, 200, 5);
+    }
+
+    // Interaction-only history projection for a completed Session the caller attended.
+    if (req.method === 'GET' && path === 'played-with') {
+      const { client: authClient, userId, error: authError } = await getAuthenticatedClient(req);
+      if (authError || !userId || !authClient) return errorResponse('Unauthorized', 401);
+      const sessionId = String(url.searchParams.get('sessionId') || url.searchParams.get('id') || '').trim();
+      const sessionDate = String(url.searchParams.get('date') || '').trim();
+      if (!sessionId || !sessionDate) return errorResponse('Missing sessionId or date', 400);
+      const { data, error } = await authClient.rpc('get_played_with', {
+        p_session_id: sessionId,
+        p_session_date: sessionDate,
+      });
+      if (error) return errorResponse(error.code === '42501' ? 'Forbidden' : 'Could not load session history', error.code === '42501' ? 403 : 500);
+      return jsonResponse(Array.isArray(data) ? data : [], 200, 30);
     }
 
     // POST /api-event-public/activity-interest — toggle interest for a public activity occurrence

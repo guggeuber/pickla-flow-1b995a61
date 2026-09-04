@@ -1,4 +1,4 @@
-export const COMMITTED_REGISTRATION_STATUSES = new Set(['confirmed', 'checked_in', 'no_show']);
+export const COMMITTED_REGISTRATION_STATUSES = new Set(['confirmed', 'checked_in', 'attended']);
 
 export type ActivitySocialProofRow = {
   activity_session_id: string;
@@ -7,6 +7,17 @@ export type ActivitySocialProofRow = {
   interested_count: number;
   user_is_interested: boolean;
   user_registration_status: string | null;
+  hidden_count?: number;
+  first_visit_count?: number;
+  shared_history_count?: number;
+  attendees?: Array<{
+    person_id: string;
+    display_name: string;
+    avatar_url: string | null;
+    is_host: boolean;
+    is_first_visit: boolean;
+    has_shared_session_history: boolean;
+  }>;
 };
 
 type QueryResult = { data: unknown; error: unknown };

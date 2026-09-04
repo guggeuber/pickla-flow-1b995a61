@@ -56,6 +56,7 @@ type ActivitySocialProofRow = {
   registrations_count: number;
   interested_count: number;
   user_is_interested: boolean;
+  attendees?: Array<{ person_id: string; display_name: string; avatar_url: string | null }>;
 };
 
 type OpenBookingItem = {
@@ -201,6 +202,7 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
         .map((session) => {
           const occurrenceKey = `${session.id}:${session.occurrence_date}`;
           const registered = Number(socialProofByKey.get(occurrenceKey)?.registrations_count || 0);
+          const attendees = socialProofByKey.get(occurrenceKey)?.attendees || [];
           const capacity = Number(session.capacity || 0);
           const href = occurrenceHref(session, slug);
           const resolvedPrice = pricingByKey.get(occurrenceKey)?.customer_presentation;
@@ -214,7 +216,11 @@ function useWeeklySchedule(slug: string, venueId: string | undefined, venueName:
             endTime: String(session.end_time).slice(0, 5),
             venueName,
             imageUrls: inheritedEventImages(session),
-            people: [],
+            people: attendees.slice(0, 4).map((attendee) => ({
+              id: attendee.person_id,
+              display_name: attendee.display_name,
+              avatar_url: attendee.avatar_url,
+            })),
             committedCount: registered,
             capacity: capacity || null,
             placesLeft: capacity ? Math.max(0, capacity - registered) : null,

@@ -164,6 +164,11 @@ type ActivitySocialProofRow = {
   interested_count: number;
   user_is_interested: boolean;
   user_registration_status: string | null;
+  attendees?: Array<{
+    person_id: string;
+    display_name: string;
+    avatar_url: string | null;
+  }>;
 };
 
 type OpenBookingItem = {
@@ -521,6 +526,11 @@ function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment
       status: capacity && count >= capacity ? "Full" : "Drop-in",
       spotsLeft: capacity ? Math.max(capacity - count, 0) : null,
       registrationsCount: count,
+      participants: (socialProof?.attendees || []).slice(0, 4).map((attendee) => ({
+        id: attendee.person_id,
+        display_name: attendee.display_name,
+        avatar_url: attendee.avatar_url,
+      })),
       userIsInterested: Boolean(socialProof?.user_is_interested),
       userIsRegistered: Boolean(userRegistrationStatus),
       userIsCheckedIn: userRegistrationStatus === "checked_in",

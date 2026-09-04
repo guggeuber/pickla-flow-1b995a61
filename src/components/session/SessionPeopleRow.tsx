@@ -1,5 +1,4 @@
 import { PeopleRow } from "@/components/ui/PeopleRow";
-import { PEOPLE_ROW_NAMED_THRESHOLD } from "@/components/ui/PeopleRow";
 import type { SessionPresentation } from "@/lib/sessionPresentation";
 
 type SessionPeopleRowProps = {
@@ -14,9 +13,7 @@ export function SessionPeopleRow({ presentation, variant = "row", showInvitation
   const placesLeft =
     presentation.placesLeft ?? (capacity !== null ? Math.max(0, capacity - committedCount) : null);
 
-  if (!showInvitation && committedCount < PEOPLE_ROW_NAMED_THRESHOLD) return null;
-
-  if (committedCount < PEOPLE_ROW_NAMED_THRESHOLD) {
+  if (committedCount === 0) {
     return (
       <PeopleRow
         people={presentation.people}
@@ -36,7 +33,7 @@ export function SessionPeopleRow({ presentation, variant = "row", showInvitation
         />
         {capacity !== null ? (
           <div className="text-[12px] font-semibold text-black/45">
-            {committedCount} av {capacity} spelare klara
+            {committedCount} av {capacity} anmälda
             {placesLeft !== null ? ` · ${placesLeft} platser kvar` : ""}
           </div>
         ) : null}
@@ -53,7 +50,7 @@ export function SessionPeopleRow({ presentation, variant = "row", showInvitation
       />
       {capacity !== null ? (
         <div className="text-[14px] font-semibold text-neutral-500">
-          {committedCount} av {capacity} spelare klara
+          {committedCount} av {capacity} anmälda
           {placesLeft !== null ? ` · ${placesLeft} platser kvar` : ""}
         </div>
       ) : null}

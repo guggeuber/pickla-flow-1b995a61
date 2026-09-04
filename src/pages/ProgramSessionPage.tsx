@@ -7,12 +7,12 @@ import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
 import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import picklaLogo from "@/assets/pickla-logo.svg";
-import { SessionActions, SessionDrawerShell, SessionPeopleRow, SessionPriceBlock } from "@/components/session";
+import { SessionActions, SessionDrawerShell, SessionPriceBlock, SessionSocialContextSection } from "@/components/session";
 import { formatSek } from "@/lib/activityPricing";
-import { getPublicProfileMap, type PublicProfile } from "@/lib/publicProfiles";
 import { activityCheckInAvailable, useActivityNow } from "@/lib/activityTiming";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { activitySessionToPresentation } from "@/lib/sessionPresentation";
@@ -33,6 +33,7 @@ import {
 } from "@/lib/commerce";
 import { purchaseErrorMessage, withPurchaseSessionRecovery } from "@/lib/purchaseSessionRecovery";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
+import { fetchSessionSocialContext } from "@/lib/sessionSocialContext";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -125,6 +126,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const location = useLocation();
   const queryClient = useQueryClient();
   const { user, loading: authLoading } = useAuth();
+  const verifiedAccount = useVerifiedAccount();
   const [loading, setLoading] = useState(false);
   const purchaseInFlight = useRef(false);
   const [interestLoading, setInterestLoading] = useState(false);
@@ -168,23 +170,41 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const accessSnapshot = useAccessSnapshot({ venueId: earlyVenueId, sessionDate: earlyOccurrenceDate });
   const waitForAccessSnapshot = !!user?.id && !!earlyVenueId && accessSnapshot.isLoading;
 
-  const { data, isLoading: previewLoading, error } = useQuery({
+  const publicPreview = useQuery({
+    queryKey: [
+      "program-session-public-entry",
+      sessionId,
+      earlyOccurrenceDate || requestedDate || "date-pending",
+      venueSlug,
+    ],
+    enabled: !!sessionId,
+    staleTime: 15000,
+    queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
+      sessionId: sessionId!,
+      venueSlug,
+      ...(requestedDate ? { date: requestedDate } : {}),
+    }, { auth: "omit" }),
+  });
+  const verifiedPreview = useQuery({
     queryKey: [
       "program-session-entry",
-      user?.id || "anon",
+      verifiedAccount.verifiedUserId,
       sessionId,
       earlyOccurrenceDate || requestedDate || "date-pending",
       venueSlug,
       accessSnapshot.version,
     ],
-    enabled: !!sessionId && !authLoading && !waitForAccessSnapshot,
-    staleTime: user?.id ? 0 : 15000,
+    enabled: verifiedAccount.isVerified && !!sessionId && !waitForAccessSnapshot,
+    staleTime: 0,
     queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
       sessionId: sessionId!,
       venueSlug,
       ...(requestedDate ? { date: requestedDate } : {}),
     }),
   });
+  const data = verifiedPreview.data || publicPreview.data;
+  const previewLoading = publicPreview.isLoading;
+  const error = publicPreview.error;
 
   const session = useMemo(() => {
     const baseSession = directSession || optimisticSession || null;
@@ -360,42 +380,34 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
   const { data: registrations = [], refetch: refetchRegistrations } = useQuery({
     queryKey: ["program-session-registrations", sessionId, occurrenceDate, user?.id],
-    enabled: !!sessionId && !!occurrenceDate,
+    enabled: verifiedAccount.isVerified && !!user?.id && !!sessionId && !!occurrenceDate,
     staleTime: 10000,
     queryFn: async () => {
       const { data: rows } = await supabase
         .from("session_registrations")
         .select("id, user_id, customer_id, status, source_type, source_id, metadata")
         .eq("activity_session_id", sessionId!)
-        .eq("session_date", occurrenceDate);
+        .eq("session_date", occurrenceDate)
+        .eq("user_id", user!.id);
       return (rows || []).filter((row: any) => row.status !== "cancelled");
     },
   });
 
-  const sessionHosts = useMemo(() => {
-    return Array.isArray(session?.hosts) ? session.hosts : [];
-  }, [session?.hosts]);
-  const participantUserIds = useMemo(() => {
-    const ids = registrations
-      .map((row: any) => row.user_id)
-      .filter(Boolean);
-    return [...new Set(ids)].slice(0, 3);
-  }, [registrations]);
-
-  const { data: participantProfiles = [] } = useQuery({
-    queryKey: ["program-session-participant-profiles", participantUserIds],
-    enabled: participantUserIds.length > 0,
+  const { data: socialContext } = useQuery({
+    queryKey: ["program-session-social-context", sessionId, occurrenceDate, verifiedAccount.verifiedUserId],
+    enabled: verifiedAccount.isVerified && !!sessionId && !!occurrenceDate,
     staleTime: 30000,
-    queryFn: async () => {
-      const map = await getPublicProfileMap(participantUserIds);
-      return participantUserIds
-        .map((id) => map.get(id))
-        .filter(Boolean) as PublicProfile[];
-    },
+    retry: false,
+    queryFn: () => fetchSessionSocialContext(sessionId!, occurrenceDate!),
   });
+  const participantProfiles = socialContext?.attendees || [];
+  const sessionHosts = participantProfiles.filter((participant) => participant.is_host);
 
   const capacity = Number(session?.capacity || 0);
-  const registrationCount = Math.max(Number(data?.registrations?.count ?? 0), registrations.length);
+  const registrationCount = Math.max(
+    Number(socialContext?.attendee_count ?? data?.registrations?.count ?? 0),
+    registrations.length,
+  );
   const spotsLeft = capacity ? Math.max(capacity - registrationCount, 0) : null;
   const isFull = spotsLeft === 0;
   const currentRegistration = user?.id ? registrations.find((row: any) => row.user_id === user.id) : null;
@@ -1011,7 +1023,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       </>
       )}
 
-      {session && !occurrenceHidden && sessionPresentation && !commerceCatalog.isLoading && (
+      {session && !occurrenceHidden && sessionPresentation && (
         <SessionDrawerShell
           open
           onOpenChange={closeDrawer}
@@ -1066,7 +1078,15 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
           }
         >
           {commerceStep === "product" || !purchaseMode || !commercePilotEnabled ? (
-            <SessionPeopleRow presentation={sessionPresentation} variant="drawer" showInvitation={purchaseMode} />
+            <SessionSocialContextSection
+              attendeeCount={registrationCount}
+              attendees={socialContext?.attendees || []}
+              hiddenCount={socialContext?.hidden_count || 0}
+              firstVisitCount={socialContext?.first_visit_count || 0}
+              sharedHistoryCount={socialContext?.shared_history_count || 0}
+              accountState={verifiedAccount.state}
+              loginHref={`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`}
+            />
           ) : null}
 
           {!isRegistered && commerceStep === "product" && partnerSessionLabels?.labels?.length ? (

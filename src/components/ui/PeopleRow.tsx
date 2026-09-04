@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
+import { UserRound } from "lucide-react";
 
-export const PEOPLE_ROW_NAMED_THRESHOLD = 3;
+export const PEOPLE_ROW_NAMED_THRESHOLD = 1;
 export const SCARCITY_REMAINING_RATIO = 0.2;
 
 export type PeopleRowPerson = {
@@ -24,10 +25,6 @@ type ScarcityBadgeProps = {
   style?: CSSProperties;
 };
 
-function firstName(name?: string | null) {
-  return String(name || "").trim().split(/\s+/)[0] || "";
-}
-
 function initialsFor(person: PeopleRowPerson, index: number) {
   const name = String(person.display_name || "").trim();
   if (!name) return "";
@@ -40,23 +37,9 @@ function initialsFor(person: PeopleRowPerson, index: number) {
     .toUpperCase();
 }
 
-function namesLine(names: string[], count: number) {
-  if (names.length >= 2) {
-    const visible = names.slice(0, 2);
-    const remaining = Math.max(0, count - visible.length);
-    return remaining > 0 ? `${visible.join(", ")} och ${remaining} till är med` : `${visible.join(" och ")} är med`;
-  }
-  if (names.length === 1) {
-    const remaining = Math.max(0, count - 1);
-    return remaining > 0 ? `${names[0]} och ${remaining} till är med` : `${names[0]} är med`;
-  }
-  // TODO(presence-consent): named visibility pending presence settings.
-  return `${count} spelare är med`;
-}
-
 function AvatarStack({ people, count }: { people: PeopleRowPerson[]; count: number }) {
-  const visible = people.slice(0, 3);
-  const fallbackCount = Math.min(3, count);
+  const visible = people.slice(0, 4);
+  const fallbackCount = Math.min(4, count);
   const avatarPeople = visible.length > 0
     ? visible
     : Array.from({ length: fallbackCount }, (_, index) => ({ id: `fallback-${index}` }));
@@ -75,7 +58,7 @@ function AvatarStack({ people, count }: { people: PeopleRowPerson[]; count: numb
             {person.avatar_url ? (
               <img src={person.avatar_url} alt={label} className="h-full w-full object-cover" />
             ) : !person.display_name ? (
-              <span className="h-2 w-2 rounded-full bg-white/70" aria-hidden="true" />
+              <UserRound className="h-4 w-4 text-white/75" aria-hidden="true" />
             ) : (
               initialsFor(person, index)
             )}
@@ -94,26 +77,24 @@ function AvatarStack({ people, count }: { people: PeopleRowPerson[]; count: numb
   );
 }
 
-export function PeopleRow({ people = [], participantCount, className = "", style, showInvitation = true }: PeopleRowProps) {
+export function PeopleRow({ people = [], participantCount, className = "", style }: PeopleRowProps) {
   if (participantCount == null) return null;
   const count = Math.max(0, Number(participantCount || 0));
-  if (count < PEOPLE_ROW_NAMED_THRESHOLD) {
-    if (!showInvitation) return null;
+  if (count === 0) {
     return (
       <p className={`text-[13px] font-semibold text-neutral-500 ${className}`} style={style}>
-        Plats för fler — ta gärna med en vän
+        Bli första att anmäla dig
       </p>
     );
   }
 
   const visiblePeople = (people || []).filter(Boolean);
-  const names = visiblePeople.map((person) => firstName(person.display_name)).filter(Boolean);
 
   return (
     <div className={`flex min-w-0 items-center gap-3 ${className}`} style={style}>
       <AvatarStack people={visiblePeople} count={count} />
       <p className="min-w-0 truncate text-[13px] font-semibold text-neutral-500">
-        {namesLine(names, count)}
+        {count} kommer
       </p>
     </div>
   );

@@ -39,6 +39,12 @@ import { useMyCourses } from "@/hooks/useMyCourses";
 import { useMySessionRegistrations, type MySessionRegistration } from "@/hooks/useMySessionRegistrations";
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 import { useMyLeagues } from "@/hooks/useMyLeagues";
+import { SocialVisibilityControl } from "@/components/session";
+import {
+  fetchPlayedWith,
+  fetchSocialPreferences,
+  updateSocialPreferences,
+} from "@/lib/sessionSocialContext";
 
 const DartStatsChart = lazy(() => import("@/components/my/DartStatsChart"));
 
@@ -1399,6 +1405,22 @@ function SessionRegistrationDetailsSheet({
     },
     onError: (error: any) => toast.error(error?.message || "Något gick fel — försök igen, vi håller din plats."),
   });
+  const historySessionId = registration?.activity_session_id || null;
+  const historySessionDate = registration?.session_date || registration?.activity_sessions?.session_date || null;
+  const historyEligible = Boolean(
+    open
+    && historySessionId
+    && historySessionDate
+    && ["checked_in", "attended"].includes(String(registration?.status || ""))
+    && (getSessionRegistrationDateTime(registration, true)?.getTime() || Infinity) <= Date.now()
+  );
+  const playedWithQuery = useQuery({
+    queryKey: ["played-with", historySessionId, historySessionDate],
+    enabled: historyEligible,
+    retry: false,
+    staleTime: 60_000,
+    queryFn: () => fetchPlayedWith(historySessionId!, historySessionDate!),
+  });
 
   if (!registration) return null;
 
@@ -1547,6 +1569,15 @@ function SessionRegistrationDetailsSheet({
               )}
             </div>
           </div>
+
+          {historyEligible && playedWithQuery.data?.length ? (
+            <div className="mt-3 rounded-2xl p-4" style={{ background: PAGE_BG, border: `1.5px solid ${CARD_BORDER}` }} data-testid="played-with-history">
+              <p className="text-sm font-bold leading-relaxed" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+                Du spelade med {playedWithQuery.data.slice(0, 6).map((person) => person.display_name).join(", ")}
+                {playedWithQuery.data.length > 6 ? ` · +${playedWithQuery.data.length - 6}` : ""}
+              </p>
+            </div>
+          ) : null}
 
           {!cancellationBlocksCheckIn ? <div className="mt-5">
             {isCheckedIn ? (
@@ -2377,6 +2408,34 @@ function SettingsSection() {
   );
 }
 
+function SocialPrivacySection() {
+  const queryClient = useQueryClient();
+  const preferences = useQuery({
+    queryKey: ["social-preferences"],
+    queryFn: fetchSocialPreferences,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const mutation = useMutation({
+    mutationFn: (visible: boolean) => updateSocialPreferences({
+      social_visibility: visible ? "visible" : "hidden",
+    }),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["social-preferences"], next);
+      toast.success(next.social_visibility === "visible" ? "Du visas i deltagarlistor" : "Du är dold i deltagarlistor");
+    },
+    onError: () => toast.error("Kunde inte uppdatera integritetsinställningen"),
+  });
+  if (!preferences.data) return null;
+  const visible = preferences.data.social_visibility === "visible";
+
+  return (
+    <motion.div variants={item}>
+      <SocialVisibilityControl visible={visible} pending={mutation.isPending} onChange={(next) => mutation.mutate(next)} />
+    </motion.div>
+  );
+}
+
 function LegalLinksSection() {
   return (
     <motion.div variants={item}>
@@ -2592,6 +2651,8 @@ const MyPage = () => {
             <>
               {/* Profile card with edit */}
               <ProfileCard profile={profile} user={user} displayName={displayName} />
+
+              <SocialPrivacySection />
 
               {/* Membership */}
               {activeMembership ? (

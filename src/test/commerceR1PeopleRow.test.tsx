@@ -6,23 +6,24 @@ import { PEOPLE_ROW_NAMED_THRESHOLD, PeopleRow } from "@/components/ui/PeopleRow
 
 afterEach(cleanup);
 
-describe("Commerce R1 PeopleRow threshold", () => {
-  it("uses the canonical threshold of three", () => {
-    expect(PEOPLE_ROW_NAMED_THRESHOLD).toBe(3);
+describe("Session PeopleRow social context", () => {
+  it("shows social context from the first registration", () => {
+    expect(PEOPLE_ROW_NAMED_THRESHOLD).toBe(1);
   });
 
-  it("renders no row and no wrapper gap below threshold in purchase mode", () => {
-    const { container } = render(
+  it("renders a counts-only card with privacy-safe silhouettes", () => {
+    render(
       <SessionPeopleRow
         presentation={{ people: [], committedCount: 2, capacity: 12, placesLeft: 10 }}
         variant="drawer"
         showInvitation={false}
       />,
     );
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByText("2 kommer")).toBeInTheDocument();
+    expect(screen.getByText(/2 av 12 anmälda/)).toBeInTheDocument();
   });
 
-  it("invites without quantifying an empty or below-threshold group", () => {
+  it("uses the explicit zero-registration invitation without an empty avatar box", () => {
     render(
       <SessionPeopleRow
         presentation={{ people: [], committedCount: 0, capacity: 12, placesLeft: 12 }}
@@ -30,11 +31,11 @@ describe("Commerce R1 PeopleRow threshold", () => {
         showInvitation
       />,
     );
-    expect(screen.getByText("Plats för fler — ta gärna med en vän")).toBeInTheDocument();
+    expect(screen.getByText("Bli första att anmäla dig")).toBeInTheDocument();
     expect(screen.queryByText(/0 av 12|12 platser kvar/)).not.toBeInTheDocument();
   });
 
-  it("shows names and avatars at threshold", () => {
+  it("shows approved avatars but keeps the card label counts-based", () => {
     render(
       <PeopleRow
         participantCount={3}
@@ -46,13 +47,13 @@ describe("Commerce R1 PeopleRow threshold", () => {
         ]}
       />,
     );
-    expect(screen.getByText("Ada, Grace och 1 till är med")).toBeInTheDocument();
+    expect(screen.getByText("3 kommer")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Ada Lovelace" })).toHaveAttribute("src", "https://example.test/ada.jpg");
   });
 
-  it("uses privacy-safe generic participants above threshold when no public profiles are available", () => {
+  it("uses privacy-safe generic participants when no approved profiles are available", () => {
     render(<PeopleRow participantCount={5} showInvitation={false} people={[]} />);
-    expect(screen.getByText("5 spelare är med")).toBeInTheDocument();
-    expect(screen.getByText("+2")).toBeInTheDocument();
+    expect(screen.getByText("5 kommer")).toBeInTheDocument();
+    expect(screen.getByText("+1")).toBeInTheDocument();
   });
 });

@@ -134,12 +134,15 @@ interface PublicActivityPreview {
   messages: ChatMessage[];
 }
 
+type ActivitySocialAttendee = { person_id: string; display_name: string; avatar_url: string | null };
+
 type ActivitySocialProofRow = {
   activity_session_id: string;
   session_date: string;
   registrations_count: number;
   interested_count: number;
   user_is_interested: boolean;
+  attendees?: ActivitySocialAttendee[];
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -591,6 +594,7 @@ function useWeeklyProgram(venueId: string | undefined, venueSlug: string) {
           registrations_count: proof?.registrations_count ?? 0,
           interested_count: proof?.interested_count ?? 0,
           user_is_interested: Boolean(proof?.user_is_interested),
+          attendees: proof?.attendees || [],
         };
       });
     },
@@ -3046,7 +3050,15 @@ function HubList({
                         : [timeLabel, ev.price_sek ? `${ev.price_sek} kr` : null, isProgramSession ? "Schema & anmälan" : "Öppen eventkanal"].filter(Boolean).join(" · ")}
                     </p>
                     {isProgramSession ? (
-                      <PeopleRow participantCount={Number(ev.registrations_count || 0)} style={{ marginTop: 4 }} />
+                      <PeopleRow
+                        participantCount={Number(ev.registrations_count || 0)}
+                        people={((ev.attendees || []) as ActivitySocialAttendee[]).slice(0, 4).map((attendee) => ({
+                          id: attendee.person_id,
+                          display_name: attendee.display_name,
+                          avatar_url: attendee.avatar_url,
+                        }))}
+                        style={{ marginTop: 4 }}
+                      />
                     ) : null}
                     <div style={{ display: "flex", gap: 8, marginTop: 13 }}>
                       <button
