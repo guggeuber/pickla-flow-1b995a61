@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
@@ -108,6 +108,7 @@ const primaryResponse = {
       activity_series: null,
     },
   ],
+  seriesOccurrences: [],
   events: [],
   overrides: [{
     id: "override-1",
@@ -227,6 +228,60 @@ function earlierOpenBooking() {
   };
 }
 
+function weekendDiscoveryPrimary(registrationState: "open" | "closed" = "open", overrideStatus?: "hidden" | "cancelled") {
+  const session = (id: string, name: string, date: string, startTime: string, endTime: string, sessionType: string) => ({
+    id,
+    name,
+    session_type: sessionType,
+    session_date: date,
+    recurrence_days: null,
+    start_time: startTime,
+    end_time: endTime,
+    capacity: 40,
+    price_sek: 165,
+    product_key: "open_play_slot",
+    venue_id: "venue-1",
+    access_policy: null,
+    metadata: {},
+    activity_series: null,
+  });
+  return {
+    venue: { id: "venue-1", name: "Pickla Arena Stockholm", slug: "pickla-arena-sthlm" },
+    sessions: [
+      session("friday-lunch", "Lunch Play", "2026-09-04", "12:00", "14:00", "open_play"),
+      session("saturday-morning", "Open Play FM", "2026-09-05", "10:00", "12:00", "open_play"),
+      session("saturday-open", "Pickla Open", "2026-09-05", "10:00", "12:00", "pickla_open"),
+      session("saturday-afternoon", "Open Play Eftermiddag", "2026-09-05", "14:00", "16:00", "open_play"),
+    ],
+    seriesOccurrences: [{
+      session_id: "parker-session",
+      series_id: "parker-series",
+      title: "Parker Brunch",
+      session_date: "2026-09-05",
+      start_time: "13:00",
+      end_time: "18:00",
+      capacity: 40,
+      presentation_type: "social_event",
+      registration_state: registrationState,
+      image_urls: ["https://example.test/parker.webp"],
+      route: "/course/parker-series?v=pickla-arena-sthlm",
+    }],
+    events: [],
+    overrides: overrideStatus ? [{
+      id: "parker-override",
+      activity_session_id: "parker-session",
+      session_date: "2026-09-05",
+      status: overrideStatus,
+      reason: "Not public this date",
+    }] : [],
+    registrationCounts: [{
+      activity_session_id: "parker-session",
+      session_date: "2026-09-05",
+      registrations_count: 4,
+    }],
+  };
+}
+
 function renderToday(initialEntry = "/today", queryClient = client()) {
   const view = render(
     <QueryClientProvider client={queryClient}>
@@ -318,6 +373,91 @@ describe("Today customer first paint", () => {
     mocks.account.state = "anonymous";
     renderToday();
     expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+  });
+
+  it("shows Parker as the third weekend row, preserves Open Play/Pickla Open, and removes a duplicate promotion", async () => {
+    vi.setSystemTime(new Date("2026-09-04T10:00:00Z"));
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(weekendDiscoveryPrimary());
+      if (endpoint === "today-secondary") return Promise.resolve(publicPromotions("parker-series", "Parker Brunch"));
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      return never();
+    });
+
+    renderToday();
+    const weekendHeading = await screen.findByRole("heading", { name: "I helgen" });
+    const weekend = weekendHeading.closest("section");
+    expect(weekend).not.toBeNull();
+    const rows = within(weekend as HTMLElement).getAllByRole("button");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveTextContent("Open Play FM");
+    expect(rows[1]).toHaveTextContent("Pickla Open");
+    expect(rows[2]).toHaveTextContent("Parker Brunch");
+    expect(rows[2]).toHaveTextContent("4 kommer");
+    expect(rows[2]).toHaveTextContent("36 platser kvar");
+    expect(within(weekend as HTMLElement).queryByText("Open Play Eftermiddag")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("home-series-card")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Parker Brunch")).toHaveLength(1);
+  });
+
+  it.each([
+    ["open", "Boka plats"],
+    ["closed", "Visa"],
+  ] as const)("keeps an %s social event discoverable with the correct hero CTA", async (registrationState, expectedCta) => {
+    vi.setSystemTime(new Date("2026-09-04T10:00:00Z"));
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    const primary = weekendDiscoveryPrimary(registrationState);
+    primary.sessions = [];
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primary);
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      return never();
+    });
+
+    renderToday();
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(screen.getByTestId("today-featured-hero")).toHaveTextContent(expectedCta);
+  });
+
+  it("keeps a full social event discoverable with a non-booking CTA", async () => {
+    vi.setSystemTime(new Date("2026-09-04T10:00:00Z"));
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    const primary = weekendDiscoveryPrimary();
+    primary.sessions = [];
+    primary.seriesOccurrences[0].capacity = 4;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(primary);
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      return never();
+    });
+
+    renderToday();
+    expect(await screen.findByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    expect(screen.getByTestId("today-featured-hero")).toHaveTextContent("Visa");
+  });
+
+  it.each(["hidden", "cancelled"] as const)("excludes a %s social-event occurrence", async (overrideStatus) => {
+    vi.setSystemTime(new Date("2026-09-04T10:00:00Z"));
+    mocks.user = null;
+    mocks.account.state = "anonymous";
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-primary") return Promise.resolve(weekendDiscoveryPrimary("open", overrideStatus));
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      return never();
+    });
+
+    renderToday();
+    const weekendHeading = await screen.findByRole("heading", { name: "I helgen" });
+    const weekend = weekendHeading.closest("section") as HTMLElement;
+    expect(within(weekend).queryByText("Parker Brunch")).not.toBeInTheDocument();
+    expect(within(weekend).getByText("Open Play Eftermiddag")).toBeInTheDocument();
   });
 
   it("inserts First Visit, League and Course promotions from one anonymous secondary completion", async () => {

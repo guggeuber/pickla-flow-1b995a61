@@ -23,6 +23,7 @@ import {
 } from '../_shared/activity_social_proof.ts';
 import { loadPublicTodaySecondary } from '../_shared/today_secondary.ts';
 import { loadPublicPrices } from '../_shared/public_prices.ts';
+import { projectPublicTodaySocialEventOccurrence } from '../_shared/today_primary.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -1333,7 +1334,7 @@ Deno.serve(async (req) => {
       }
 
       try {
-        const [venueResolution, sessionsResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
+        const [venueResolution, sessionsResult, seriesOccurrencesResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
           resolvePublicVenueQuery(readContext, () => client.from('venues')
             .select('id, name, slug')
             .eq('slug', venueSlug)
@@ -1346,6 +1347,19 @@ Deno.serve(async (req) => {
             .eq('is_active', true)
             .eq('publish_status', 'published')
             .eq('closed_to_public', false)
+            .order('start_time', { ascending: true })),
+          measurePublicReadStage(readContext, 'series_occurrences', () => client.from('activity_sessions')
+            .select('id, series_id, name, session_date, start_time, end_time, capacity, is_active, publish_status, activity_series!inner(id, name, series_type, status, registration_opens_at, registration_closes_at, image_urls, activity_formats!inner(name, presentation_type, image_urls)), venues!inner(slug, is_public)')
+            .eq('venues.slug', venueSlug)
+            .eq('venues.is_public', true)
+            .eq('is_active', true)
+            .eq('publish_status', 'published')
+            .gte('session_date', startDate)
+            .lte('session_date', endDate)
+            .eq('activity_series.series_type', 'course')
+            .eq('activity_series.status', 'active')
+            .eq('activity_series.activity_formats.presentation_type', 'social_event')
+            .order('session_date', { ascending: true })
             .order('start_time', { ascending: true })),
           measurePublicReadStage(readContext, 'events', () => client.from('events')
             .select('id, name, display_name, slug, category, status, start_date, start_time, end_time, logo_url, background_url, venues!inner(slug, is_public)')
@@ -1382,6 +1396,7 @@ Deno.serve(async (req) => {
 
         const primaryResults = [
           { stage: 'sessions', error: sessionsResult.error },
+          { stage: 'series_occurrences', error: seriesOccurrencesResult.error },
           { stage: 'events', error: eventsResult.error },
           { stage: 'overrides', error: overridesResult.error },
           { stage: 'committed_counts', error: registrationsResult.error },
@@ -1402,9 +1417,15 @@ Deno.serve(async (req) => {
           const key = `${registration.activity_session_id}:${registration.session_date}`;
           registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
         }
+        const seriesProjectionInput = { venueSlug, startDate, endDate, asOf: new Date() };
+        const seriesOccurrences = (seriesOccurrencesResult.data || [])
+          .map((row: unknown) => projectPublicTodaySocialEventOccurrence(row, seriesProjectionInput))
+          .filter((occurrence): occurrence is NonNullable<typeof occurrence> => occurrence !== null);
+        const seriesOccurrenceSessionIds = new Set(seriesOccurrences.map((occurrence) => occurrence.session_id));
         return publicReadJsonResponse({
           venue: venueResolution.data,
-          sessions: sessionsResult.data || [],
+          sessions: (sessionsResult.data || []).filter((session) => !seriesOccurrenceSessionIds.has(String(session.id))),
+          seriesOccurrences,
           events: eventsResult.data || [],
           overrides: overridesResult.data || [],
           registrationCounts: [...registrationCounts].map(([key, count]) => {

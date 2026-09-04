@@ -164,7 +164,7 @@ describe("critical endpoint integration contracts", () => {
     );
     expect(route).toContain("resolvePublicVenueQuery(readContext");
     expect(route).toContain(".maybeSingle()");
-    for (const stage of ["sessions", "events", "overrides", "committed_counts"]) {
+    for (const stage of ["sessions", "series_occurrences", "events", "overrides", "committed_counts"]) {
       expect(route).toContain(`'${stage}'`);
     }
     expect(route).toContain("publicReadNotFoundResponse('Venue not found', readContext)");

@@ -66,7 +66,7 @@ type LeaguePersonalization =
 
 type FeedItem = {
   id: string;
-  kind: "session" | "event" | "booking" | "open_booking";
+  kind: "session" | "series_occurrence" | "event" | "booking" | "open_booking";
   title: string;
   date: string;
   startTime: string;
@@ -125,6 +125,7 @@ type FeedItem = {
   chatEmoji?: string;
   isMine?: boolean;
   bookingRef?: string | null;
+  seriesId?: string;
 };
 
 type SessionRow = {
@@ -155,6 +156,20 @@ type SessionRow = {
 
 type SessionOccurrence = SessionRow & {
   occurrence_date: string;
+};
+
+type SeriesOccurrenceRow = {
+  session_id: string;
+  series_id: string;
+  title: string;
+  session_date: string;
+  start_time: string;
+  end_time: string;
+  capacity: number | null;
+  presentation_type: "social_event";
+  registration_state: "upcoming" | "open" | "closed";
+  image_urls: string[];
+  route: string;
 };
 
 type ActivitySocialProofRow = {
@@ -229,6 +244,7 @@ function programChatResourceId(sessionId: string, occurrenceDate: string) {
 type TodayPrimaryResponse = {
   venue: { id: string; name: string; slug: string };
   sessions: SessionRow[];
+  seriesOccurrences: SeriesOccurrenceRow[];
   events: EventRow[];
   overrides: ActivitySessionOverride[];
   registrationCounts: Array<{
@@ -313,6 +329,29 @@ function sessionFeedItem(session: SessionOccurrence, registrationsCount: number,
   };
 }
 
+function seriesOccurrenceFeedItem(occurrence: SeriesOccurrenceRow, registrationsCount: number): FeedItem {
+  const capacity = occurrence.capacity == null ? null : Number(occurrence.capacity);
+  const isFull = capacity !== null && capacity > 0 && registrationsCount >= capacity;
+  return {
+    id: `series-occurrence:${occurrence.session_id}:${occurrence.session_date}`,
+    kind: "series_occurrence",
+    title: occurrence.title,
+    date: occurrence.session_date,
+    startTime: String(occurrence.start_time).slice(0, 5),
+    endTime: String(occurrence.end_time).slice(0, 5),
+    category: "EVENT",
+    status: isFull ? "Full" : "Kommande",
+    spotsLeft: capacity === null ? null : Math.max(capacity - registrationsCount, 0),
+    registrationsCount,
+    participants: [],
+    capacity,
+    href: occurrence.route,
+    cta: occurrence.registration_state === "open" && !isFull ? "Boka plats" : "Visa",
+    imageUrls: occurrence.image_urls,
+    seriesId: occurrence.series_id,
+  };
+}
+
 function useTodayPrimaryFeed(slug: string, enabled: boolean) {
   return useQuery({
     queryKey: ["today-primary", slug],
@@ -354,6 +393,15 @@ function useTodayPrimaryFeed(slug: string, enabled: boolean) {
         primaryCounts.get(`${session.id}:${session.occurrence_date}`) || 0,
         slug,
       ));
+      const seriesItems = (response.seriesOccurrences || [])
+        .filter((occurrence) => {
+          const override = overrideMap.get(occurrenceOverrideKey(occurrence.session_id, occurrence.session_date));
+          return !isPublicActivityOverrideHidden(override?.status);
+        })
+        .map((occurrence) => seriesOccurrenceFeedItem(
+          occurrence,
+          primaryCounts.get(`${occurrence.session_id}:${occurrence.session_date}`) || 0,
+        ));
       const eventItems: FeedItem[] = (response.events || []).map((event) => ({
         id: `event:${event.id}`,
         kind: "event",
@@ -377,7 +425,7 @@ function useTodayPrimaryFeed(slug: string, enabled: boolean) {
       return {
         venue: response.venue,
         sessionOccurrences: visibleSessionOccurrences,
-        items: [...sessionItems, ...eventItems].sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)),
+        items: [...sessionItems, ...seriesItems, ...eventItems].sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)),
       };
     },
   });
@@ -684,6 +732,7 @@ function itemEndDateTime(item: FeedItem) {
 }
 
 function isJoinableItem(item: FeedItem, now: DateTime) {
+  if (item.kind === "series_occurrence") return itemEndDateTime(item) > now;
   return item.status !== "Full" && itemEndDateTime(item) > now;
 }
 
@@ -741,9 +790,11 @@ function FeaturedTonightHero({
     ? "✓ Incheckad"
     : item?.userIsRegistered
       ? "✓ Redan anmäld"
-      : included
-        ? "Boka plats · Ingår"
-        : `Boka plats${priceLabel ? ` · ${priceLabel}` : ""}`;
+      : item?.kind === "series_occurrence"
+        ? item.cta
+        : included
+          ? "Boka plats · Ingår"
+          : `Boka plats${priceLabel ? ` · ${priceLabel}` : ""}`;
 
   return (
     <section className="mx-auto max-w-md px-5 pt-2">
@@ -858,8 +909,14 @@ export default function TodayPage() {
     },
   });
   const committedSecondary = useCommittedTodaySecondary(slug, secondary.data);
-  const publicCoursePromotion = committedSecondary?.course.mode === "registration"
+  const primarySeriesIds = useMemo(() => new Set(
+    (primary.data?.items || []).map((item) => item.seriesId).filter((id): id is string => Boolean(id)),
+  ), [primary.data?.items]);
+  const secondaryCoursePromotion = committedSecondary?.course.mode === "registration"
     ? committedSecondary.course.item
+    : null;
+  const publicCoursePromotion = secondaryCoursePromotion && !primarySeriesIds.has(secondaryCoursePromotion.id)
+    ? secondaryCoursePromotion
     : null;
   const publicLeaguePromotion = committedSecondary?.league.mode === "registration"
     ? committedSecondary.league.item
@@ -949,7 +1006,12 @@ export default function TodayPage() {
       }
     : publicLeaguePromotion;
   const leaguePromotionOwned = Boolean(verifiedLeagueDetail?.customer_team_id);
-  const fallbackCourseHome = coursePersonalization?.kind === "fallback" ? coursePersonalization.home : null;
+  const fallbackCourseHomeCandidate = coursePersonalization?.kind === "fallback" ? coursePersonalization.home : null;
+  const fallbackCourseHome = fallbackCourseHomeCandidate?.mode === "next"
+    && fallbackCourseHomeCandidate.item
+    && primarySeriesIds.has((fallbackCourseHomeCandidate.item as MyCourseItem).series.id)
+    ? null
+    : fallbackCourseHomeCandidate;
   const fallbackLeagueHome = leaguePersonalization?.kind === "fallback" ? leaguePersonalization.home : null;
   const secondaryRegionReady = secondary.isFetched && enrichment.publicOpenBookingsReady;
   const now = useActivityNow();
@@ -971,7 +1033,7 @@ export default function TodayPage() {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, []);
 
-  const activityItems = items.filter((item) => item.kind === "session" || item.kind === "event" || item.kind === "open_booking");
+  const activityItems = items.filter((item) => item.kind === "session" || item.kind === "series_occurrence" || item.kind === "event" || item.kind === "open_booking");
   const primaryHeroItems = activityItems.filter((item) => item.kind !== "open_booking");
   const todayKey = now.toISODate();
   const tomorrowKey = now.plus({ days: 1 }).toISODate();
