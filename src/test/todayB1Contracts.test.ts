@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const today = readFileSync("src/pages/TodayPage.tsx", "utf8");
 const detail = readFileSync("src/pages/ProgramSessionPage.tsx", "utf8");
+const detailPricing = readFileSync("src/lib/programSessionPricing.ts", "utf8");
 
 describe("Today B1 duplicate-read boundary", () => {
   it("does not reconstruct featured activity or registrations in the browser", () => {
@@ -15,7 +16,10 @@ describe("Today B1 duplicate-read boundary", () => {
 
   it("keeps public first paint auth-free and leaves Activity Preview on detail", () => {
     expect(today).toContain('auth: "omit"');
-    expect(detail).toContain('"activity-preview"');
+    expect(detail).toContain("PROGRAM_SESSION_PUBLIC_PREVIEW_ENDPOINT");
+    expect(detail).toContain("PROGRAM_SESSION_PERSONALIZED_PREVIEW_ENDPOINT");
+    expect(detailPricing).toContain('PROGRAM_SESSION_PUBLIC_PREVIEW_ENDPOINT = "activity-preview"');
+    expect(detailPricing).toContain('PROGRAM_SESSION_PERSONALIZED_PREVIEW_ENDPOINT = "activity-preview-personalized"');
   });
 
   it("keeps legacy discovery endpoints only for verified personal enrichment", () => {

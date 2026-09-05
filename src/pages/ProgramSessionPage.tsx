@@ -34,6 +34,11 @@ import {
 import { purchaseErrorMessage, withPurchaseSessionRecovery } from "@/lib/purchaseSessionRecovery";
 import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 import { fetchSessionSocialContext } from "@/lib/sessionSocialContext";
+import {
+  PROGRAM_SESSION_PERSONALIZED_PREVIEW_ENDPOINT,
+  PROGRAM_SESSION_PUBLIC_PREVIEW_ENDPOINT,
+  resolveProgramSessionPricingView,
+} from "@/lib/programSessionPricing";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -179,7 +184,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     ],
     enabled: !!sessionId,
     staleTime: 15000,
-    queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
+    queryFn: () => apiGet<any>("api-event-public", PROGRAM_SESSION_PUBLIC_PREVIEW_ENDPOINT, {
       sessionId: sessionId!,
       venueSlug,
       ...(requestedDate ? { date: requestedDate } : {}),
@@ -196,13 +201,47 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     ],
     enabled: verifiedAccount.isVerified && !!sessionId && !waitForAccessSnapshot,
     staleTime: 0,
-    queryFn: () => apiGet<any>("api-event-public", "activity-preview", {
+    queryFn: () => apiGet<any>("api-event-public", PROGRAM_SESSION_PERSONALIZED_PREVIEW_ENDPOINT, {
       sessionId: sessionId!,
       venueSlug,
       ...(requestedDate ? { date: requestedDate } : {}),
     }),
   });
-  const data = verifiedPreview.data || publicPreview.data;
+  const personalizedPreviewIdentity = [
+    verifiedAccount.verifiedUserId || "unverified",
+    sessionId || "no-session",
+    earlyOccurrenceDate || requestedDate || "date-pending",
+    venueSlug,
+    accessSnapshot.version,
+  ].join(":");
+  const committedPersonalizedPreviewRef = useRef<{
+    identity: string;
+    data: typeof verifiedPreview.data;
+  } | null>(null);
+  useEffect(() => {
+    if (!verifiedAccount.isVerified || !verifiedPreview.data) return;
+    committedPersonalizedPreviewRef.current = {
+      identity: personalizedPreviewIdentity,
+      data: verifiedPreview.data,
+    };
+  }, [personalizedPreviewIdentity, verifiedAccount.isVerified, verifiedPreview.data]);
+  const committedPersonalizedPreview = verifiedPreview.data || (
+    committedPersonalizedPreviewRef.current?.identity === personalizedPreviewIdentity
+      ? committedPersonalizedPreviewRef.current.data
+      : null
+  );
+  const pricingView = resolveProgramSessionPricingView({
+    accountState: verifiedAccount.state,
+    publicPreview: publicPreview.data,
+    personalizedPreview: committedPersonalizedPreview,
+    publicError: publicPreview.isError,
+    personalizedError: verifiedPreview.isError,
+    accessPending: waitForAccessSnapshot,
+  });
+  const pricingData = pricingView.preview;
+  const data = verifiedAccount.isVerified && committedPersonalizedPreview
+    ? committedPersonalizedPreview
+    : publicPreview.data;
   const previewLoading = publicPreview.isLoading;
   const error = publicPreview.error;
 
@@ -434,12 +473,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [checkinLoading, setCheckinLoading] = useState(false);
   const isCheckedIn = localCheckedIn || currentRegistration?.status === "checked_in";
   const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
-  const backendPricing = data?.activityTicketPricing || data?.pricing || null;
-  const dayPassPricing = data?.dayPassPricing || null;
+  const backendPricing = pricingData?.activityTicketPricing || pricingData?.pricing || null;
+  const dayPassPricing = pricingData?.dayPassPricing || null;
   const selectedPricing = commercePurchaseKind === "day_pass" ? dayPassPricing : backendPricing;
   const selectedCustomerPrice = selectedPricing?.customerPresentation || null;
   const pricingDebug = backendPricing?.debug || {};
-  const pricingScarcity = (pricingDebug.scarcity || data?.scarcity || {}) as any;
+  const pricingScarcity = (pricingDebug.scarcity || pricingData?.scarcity || {}) as any;
   const earlyBird = (pricingScarcity.early_bird || {}) as any;
   const firstVisitOffer = (pricingDebug.first_visit_offer || {}) as any;
   const firstVisitLine = commercePurchaseKind === "activity_ticket" && firstVisitOffer.applied
@@ -459,22 +498,27 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const specialMemberPrice = pricingMode === "member_discount"
     ? Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100)
     : onlinePrice;
-  const pricingPending = !!user?.id && (
-    waitForAccessSnapshot ||
-    accessSnapshotForResolvedSession.isLoading ||
-    previewLoading ||
-    !selectedPricing
-  );
+  const pricingError = pricingView.phase === "error";
+  const pricingPending = pricingView.phase === "pending"
+    || (pricingView.phase === "resolved" && (
+      accessSnapshotForResolvedSession.isLoading
+      || !selectedPricing
+    ));
+  const pricingPendingLabel = verifiedAccount.state === "anonymous"
+    ? "Hämtar pris…"
+    : "Kontrollerar ditt pris…";
   const basePrice = Number(selectedPricing?.baseAmountSek ?? (
     commercePurchaseKind === "day_pass" ? commerceDayPassProduct?.base_price_sek : session?.price_sek
   ) ?? 0);
   const effectivePrice = Number(selectedPricing?.effectivePriceSek ?? selectedPricing?.finalAmountSek ?? basePrice);
   const customerDisplayPrice = Number(selectedCustomerPrice?.displayPriceSek ?? effectivePrice);
-  const displayedPrice = pricingPending ? "Hämtar pris..." : customerDisplayPrice <= 0 ? 0 : customerDisplayPrice;
+  const displayedPrice = pricingPending || pricingError ? pricingPendingLabel : customerDisplayPrice <= 0 ? 0 : customerDisplayPrice;
   const checkoutLabel = pricingPending
-    ? "Hämtar ditt pris..."
+    ? pricingPendingLabel
+    : pricingError
+      ? "Priset kunde inte kontrolleras"
     : selectedCustomerPrice?.displayLabel || selectedPricing?.checkoutLabel || formatSek(customerDisplayPrice);
-  const pricingIsIncluded = !pricingPending && selectedPricing?.requiresCheckout === false;
+  const pricingIsIncluded = !pricingPending && !pricingError && selectedPricing?.requiresCheckout === false;
   const userHasMembership = Boolean(accessSnapshotForResolvedSession.data?.hasActiveMembership);
   const membershipName = String(
     selectedPricing?.membershipTierName ||
@@ -526,7 +570,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   );
   const checkinOpensLabel = checkinWindow?.opens?.isValid ? checkinWindow.opens.toFormat("HH:mm") : null;
   const ctaLabel = authLoading
-    ? "Hämtar..."
+    ? "Kontrollerar ditt pris…"
     : isRegistered
     ? isCheckedIn
       ? "✓ Incheckad"
@@ -535,12 +579,26 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         : "Biljett klar"
     : isFull
       ? userIsInterested ? "I kö ✓" : "Ställ mig i kö"
+      : pricingError
+        ? "Priset kunde inte kontrolleras"
       : pricingPending
-        ? "Hämtar ditt pris..."
+        ? pricingPendingLabel
         : commercePilotEnabled
           ? `Fortsätt · ${formatCommerceMoney(commerceStep === "product" ? commerceProductTotalMinor : commerceTotalMinor)}`
           : `${user?.id ? (pricingIsIncluded ? "Boka plats" : "Betala och boka plats") : "Logga in och boka plats"} · ${checkoutLabel}`;
   const purchaseMode = !isRegistered && !isFull;
+
+  const retryPricing = () => {
+    if (verifiedAccount.state === "validation_error" || verifiedAccount.state === "terminal_failure") {
+      void verifiedAccount.retry();
+      return;
+    }
+    if (verifiedAccount.isVerified) {
+      void verifiedPreview.refetch();
+      return;
+    }
+    void publicPreview.refetch();
+  };
 
   const buildActivityCartItems = useCallback((quantities: Record<string, number>): CommerceCartItemInput[] => {
     const selectedProduct = selectedCommerceProduct;
@@ -650,8 +708,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         placesLeft: spotsLeft,
         pricing: pricingIsIncluded
           ? { kind: "included", label: includedLabel, amountSek: effectivePrice }
+          : pricingError
+            ? { kind: "status", label: "Priset kunde inte kontrolleras", contextLabel: "Försök igen för att se ditt pris." }
           : pricingPending
-            ? { kind: "pending", label: "Hämtar pris...", contextLabel: "Vi kontrollerar medlemskap och dagsaccess." }
+            ? { kind: "pending", label: pricingPendingLabel, contextLabel: "Vi kontrollerar medlemskap och dagsaccess." }
             : { kind: "amount", amountSek: displayedPrice },
         entitlementLabel: includedLabel,
         primaryAction: { key: "primary", label: ctaLabel },
@@ -777,8 +837,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (isRegistered || !session || !occurrenceDate) return;
+    if (pricingError) {
+      toast.error("Kunde inte kontrollera ditt pris");
+      return;
+    }
     if (!selectedPricing || pricingPending) {
-      toast.info("Hämtar ditt pris...");
+      toast.info(pricingPendingLabel);
       return;
     }
     if (loading) return;
@@ -1067,7 +1131,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                 key: "primary",
                 label: ctaLabel,
                 onClick: handleSessionPrimaryAction,
-                disabled: authLoading || loading || queueLoading || checkinLoading || pricingPending || (isRegistered && !canCheckInNow),
+                disabled: authLoading || loading || queueLoading || checkinLoading || pricingPending || pricingError || (isRegistered && !canCheckInNow),
                 icon: loading || queueLoading || checkinLoading ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
                 ) : isRegistered ? (
@@ -1141,7 +1205,24 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             <p className="px-2 text-center text-[12px] font-semibold text-slate-500">Racket finns att låna.</p>
           ) : null}
 
-          {!isRegistered && commerceStep === "product" && commercePilotEnabled ? (
+          {!isRegistered && commercePilotEnabled && pricingPending ? (
+            <section className="rounded-[22px] border border-black/10 bg-slate-50 px-4 py-5 text-center" data-testid="commerce-pricing-pending" aria-live="polite">
+              <p className="text-[15px] font-black text-slate-950">{pricingPendingLabel}</p>
+              <p className="mt-1 text-[12px] font-semibold text-slate-500">Vi kontrollerar medlemskap och dagsaccess.</p>
+            </section>
+          ) : null}
+
+          {!isRegistered && pricingError ? (
+            <section className="rounded-[22px] border border-black/10 bg-slate-50 px-4 py-5 text-center" data-testid="commerce-pricing-error" role="status">
+              <p className="text-[15px] font-black text-slate-950">Kunde inte kontrollera ditt pris.</p>
+              <p className="mt-1 text-[12px] font-semibold text-slate-500">Aktiviteten är kvar, men vi visar inget köppris innan kontrollen lyckas.</p>
+              <button type="button" onClick={retryPricing} className="mt-3 rounded-full border border-black/15 bg-white px-4 py-2 text-[12px] font-black text-slate-950">
+                Försök igen
+              </button>
+            </section>
+          ) : null}
+
+          {!isRegistered && commerceStep === "product" && commercePilotEnabled && !pricingPending && !pricingError ? (
             <section data-testid="commerce-purchase-options" className="border-y border-black/10 py-1">
               <button
                 type="button"
@@ -1184,7 +1265,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             <SessionPriceBlock presentation={sessionPresentation} variant="drawer" contextLine={commercePurchaseKind === "activity_ticket" ? priceContextLine : undefined} neutral={commercePilotEnabled} />
           ) : null}
 
-          {!isRegistered && commercePilotEnabled && commerceStep === "addons" ? (
+          {!isRegistered && commercePilotEnabled && commerceStep === "addons" && !pricingPending && !pricingError ? (
             <section data-testid="commerce-selected-product" className="border-b border-black/10 pb-4">
               <p className="text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400">Ditt val</p>
               <div className="mt-2 flex items-center justify-between gap-4">
@@ -1194,7 +1275,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </section>
           ) : null}
 
-          {!isRegistered && commerceStep === "addons" && commercePilotEnabled && commerceCatalog.isSuccess && commerceExtrasForPurchase.length > 0 ? (
+          {!isRegistered && commerceStep === "addons" && commercePilotEnabled && !pricingPending && !pricingError && commerceCatalog.isSuccess && commerceExtrasForPurchase.length > 0 ? (
             <section data-testid="commerce-addons" className="rounded-[22px] bg-[#f8fafc] px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }}>
               <div className="mb-3 flex items-center gap-2"><ShoppingBag className="h-4 w-4 shrink-0" /><h3 className="text-[13px] font-black">Tillval</h3></div>
               <div className="grid gap-3">
@@ -1225,7 +1306,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
             </section>
           ) : null}
 
-          {!isRegistered && commerceStep === "addons" && commercePilotEnabled && !pricingPending ? (
+          {!isRegistered && commerceStep === "addons" && commercePilotEnabled && !pricingPending && !pricingError ? (
             <section data-testid="commerce-live-total" className="rounded-[22px] bg-white px-4 py-4" style={{ border: `1px solid ${MENU_BORDER}` }} aria-live="polite">
               <div className="flex items-end justify-between gap-4">
                 <div className="min-w-0">

@@ -15,6 +15,22 @@ export function jsonResponse(data: unknown, status = 200, cacheSeconds = 0) {
   return new Response(JSON.stringify(data), { status, headers });
 }
 
+export function privateJsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'private, no-store',
+      'Vary': 'Authorization',
+    },
+  });
+}
+
 export function errorResponse(message: string, status = 400) {
   return jsonResponse({ error: message }, status);
+}
+
+export function privateErrorResponse(message: string, status = 400) {
+  return privateJsonResponse({ error: message }, status);
 }

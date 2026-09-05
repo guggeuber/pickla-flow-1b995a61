@@ -1,4 +1,4 @@
-import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
+import { corsHeaders, jsonResponse, errorResponse, privateErrorResponse, privateJsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
 import { firstVisitEligibilityForCustomer, resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
@@ -1531,13 +1531,20 @@ Deno.serve(async (req) => {
       }, 200, userId ? 0 : 30);
     }
 
-    // GET /api-event-public/activity-preview?id=X — public activity info
-    if (req.method === 'GET' && path === 'activity-preview') {
+    // Public and personalized previews deliberately have different URLs. The
+    // public route ignores Authorization; the personalized route requires it.
+    const isPersonalizedActivityPreview = path === 'activity-preview-personalized';
+    if (req.method === 'GET' && (path === 'activity-preview' || isPersonalizedActivityPreview)) {
       try {
         const totalStartedAt = performance.now();
         const timings: Record<string, number> = {};
         const userStartedAt = performance.now();
-        const userId = await getOptionalUserId(req);
+        let userId: string | null = null;
+        if (isPersonalizedActivityPreview) {
+          const auth = await getAuthenticatedClient(req);
+          if (auth.error || !auth.userId) return privateErrorResponse('Unauthorized', 401);
+          userId = auth.userId;
+        }
         timings.authMs = Math.round(performance.now() - userStartedAt);
         const customerId = userId ? await resolveCustomerIdForUser(client, userId) : null;
         if (customerId) {
@@ -1635,9 +1642,14 @@ Deno.serve(async (req) => {
         preview.recommendedOption = recommendedOption;
         preview.upgradeDeltaSek = upgradeDeltaSek;
         preview.pricing = activityTicketPricing;
-        return jsonResponse(preview, 200, userId ? 0 : 5);
+        return isPersonalizedActivityPreview
+          ? privateJsonResponse(preview)
+          : jsonResponse(preview, 200, 5);
       } catch (err) {
-        return errorResponse(err instanceof Error ? err.message : 'Activity preview not found', 404);
+        const message = err instanceof Error ? err.message : 'Activity preview not found';
+        return isPersonalizedActivityPreview
+          ? privateErrorResponse(message, 404)
+          : errorResponse(message, 404);
       }
     }
 
