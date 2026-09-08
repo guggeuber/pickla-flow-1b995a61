@@ -29,6 +29,7 @@ import {
   type EntitlementFunder,
   type EntitlementFundingType,
 } from '../_shared/entitlements.ts';
+import { isUpstreamTransportError } from '../_shared/upstream_transport.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const CART_TOKEN_BYTES = 32;
@@ -85,6 +86,10 @@ type DeskFulfillmentLineRow = {
   fulfillment_status: string;
   fulfilled_at: string | null;
   activity_session_id: string | null;
+};
+
+type DeskFulfillmentLineWithOrderRow = DeskFulfillmentLineRow & {
+  commerce_orders: DeskFulfillmentOrderRow | DeskFulfillmentOrderRow[] | null;
 };
 
 type DeskFulfillmentCustomerRow = {
@@ -1533,27 +1538,23 @@ async function loadDeskFulfillmentItems(
   venueId: string,
   filter: { status?: string; lineId?: string } = {},
 ): Promise<DeskFulfillmentItem[]> {
-  const { data: orderData, error: orderError } = await admin
-    .from('commerce_orders')
-    .select('id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number)')
-    .eq('venue_id', venueId)
-    .in('status', ['paid', 'attention']);
-  if (orderError) throw new Error(orderError.message);
-  const orders = (orderData || []) as DeskFulfillmentOrderRow[];
-  const orderIds = orders.map((order) => order.id);
-  if (orderIds.length === 0) return [];
-
   let lineQuery = admin.from('commerce_order_lines')
-    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id')
-    .in('commerce_order_id', orderIds)
+    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id, commerce_orders!inner(id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
+    .eq('commerce_orders.venue_id', venueId)
+    .in('commerce_orders.status', ['paid', 'attention'])
     .eq('fulfillment_type', 'desk_pickup')
     .order('created_at');
   if (filter.status) lineQuery = lineQuery.eq('fulfillment_status', filter.status);
   if (filter.lineId) lineQuery = lineQuery.eq('id', filter.lineId);
   const { data: lineData, error: lineError } = await lineQuery;
   if (lineError) throw new Error(lineError.message);
-  const lines = (lineData || []) as DeskFulfillmentLineRow[];
+  const lines = (lineData || []) as DeskFulfillmentLineWithOrderRow[];
   if (lines.length === 0) return [];
+
+  const orders = Array.from(new Map(lines.flatMap((line) => {
+    const order = Array.isArray(line.commerce_orders) ? line.commerce_orders[0] : line.commerce_orders;
+    return order ? [[order.id, order] as const] : [];
+  })).values());
 
   const customerIds = Array.from(new Set(orders.map((order) => order.customer_id).filter((id): id is string => Boolean(id))));
   const { data: customerData, error: customerError } = customerIds.length
@@ -2734,6 +2735,7 @@ const commerceHandler = async (req: Request) => {
     if (message === 'course_participant_policy_violation' || message === 'course_participant_identity_mismatch') {
       return errorResponse('Vald deltagare är inte tillåten för den här kursen.', 409);
     }
+    if (isUpstreamTransportError(error)) return errorResponse('Commerce service temporarily unavailable', 503);
     return errorResponse(message, 400);
   }
 };

@@ -99,6 +99,23 @@ async function fn(path, { method = "GET", body, token, expected } = {}) {
   });
 }
 
+async function canonicalFulfillmentLineIds(venueId, status) {
+  const orders = (await rest(
+    "commerce_orders",
+    `venue_id=eq.${venueId}&status=in.(paid,attention)&select=id`,
+  )).payload;
+  if (!orders.length) return [];
+  const orderIds = orders.map((order) => order.id);
+  const chunks = Array.from({ length: Math.ceil(orderIds.length / 100) }, (_, index) =>
+    orderIds.slice(index * 100, (index + 1) * 100));
+  const lineChunks = await Promise.all(chunks.map(async (chunk) => (await rest(
+    "commerce_order_lines",
+    `commerce_order_id=in.(${chunk.join(",")})&fulfillment_type=eq.desk_pickup&fulfillment_status=eq.${status}&select=id&order=created_at.asc`,
+  )).payload));
+  const lines = lineChunks.flat();
+  return lines.map((line) => line.id).sort();
+}
+
 async function createUser(email) {
   const password = "Commerce-R1-local-42!";
   const created = await request(`${apiUrl}/auth/v1/admin/users`, {
@@ -401,13 +418,86 @@ assert(guestHold.status === "committed" && guestHold.customer_id === guestOrder.
 pass("R1B purchase", "one order, hold, participant and receipt after duplicate webhook");
 
 const deskUser = await createUser("desk@commerce-r1.local");
+const deskAdmin = await createUser("desk-admin@commerce-r1.local");
 await rest("venue_staff", "", { method: "POST", body: [
   { venue_id: ids.venue, user_id: deskUser.id, role: "desk_staff", is_active: true },
   { venue_id: ids.capacityVenue, user_id: deskUser.id, role: "desk_staff", is_active: true },
+  { venue_id: ids.venue, user_id: deskAdmin.id, role: "venue_admin", is_active: true },
 ] });
+
+await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { expected: 401 });
+const deniedDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { token: attacker.token, expected: [400, 403] })).payload;
+assert(String(deniedDeskPayload?.error || "").startsWith("Forbidden") && !deniedDeskPayload?.items, "unauthorized venue user received Desk data");
+const emptyDeskPayload = (await fn(`fulfillment?venueId=${ids.capacityVenue}&status=pending_pickup`, { token: deskUser.token })).payload;
+assert(Array.isArray(emptyDeskPayload.items) && emptyDeskPayload.items.length === 0, "zero-match Desk queue was not cleanly empty");
+
+const fulfillmentOrganizationId = (await rest("venues", `id=eq.${ids.venue}&select=organization_id`)).payload[0].organization_id;
+const historicalOrders = Array.from({ length: 605 }, (_, index) => ({
+  id: `c2bf0000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+  organization_id: fulfillmentOrganizationId,
+  venue_id: ids.venue,
+  status: "paid",
+  guest_token_hash: `desk-scale-${index + 1}`,
+  guest_name: `Scale Customer ${index + 1}`,
+}));
+const parityOrders = [
+  { id: "c2bf0100-0000-4000-8000-000000000001", venue_id: ids.venue, status: "attention", label: "attention" },
+  { id: "c2bf0100-0000-4000-8000-000000000002", venue_id: ids.venue, status: "draft", label: "draft" },
+  { id: "c2bf0100-0000-4000-8000-000000000003", venue_id: ids.venue, status: "checkout_pending", label: "checkout" },
+  { id: "c2bf0100-0000-4000-8000-000000000004", venue_id: ids.venue, status: "cancelled", label: "cancelled" },
+  { id: "c2bf0100-0000-4000-8000-000000000005", venue_id: ids.venue, status: "expired", label: "expired" },
+  { id: "c2bf0100-0000-4000-8000-000000000006", venue_id: ids.capacityVenue, status: "paid", label: "other-venue" },
+  { id: "c2bf0100-0000-4000-8000-000000000007", venue_id: ids.venue, status: "paid", label: "collected" },
+];
+await rest("commerce_orders", "", { method: "POST", body: [
+  ...historicalOrders,
+  ...parityOrders.map((order) => ({
+    id: order.id,
+    organization_id: fulfillmentOrganizationId,
+    venue_id: order.venue_id,
+    status: "draft",
+    guest_token_hash: `desk-parity-${order.label}`,
+    guest_name: `Parity ${order.label}`,
+  })),
+] });
+const parityLines = parityOrders.map((order, index) => ({
+  id: `c2bf1000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+  commerce_order_id: order.id,
+  product_key: `desk_parity_${order.label}`,
+  product_name: `Desk parity ${order.label}`,
+  commerce_kind: "merchandise",
+  quantity: 1,
+  unit_price_minor: 0,
+  discount_minor: 0,
+  line_total_inc_vat_minor: 0,
+  vat_rate: 25,
+  vat_amount_minor: 0,
+  line_total_ex_vat_minor: 0,
+  source_type: "catalog",
+  fulfillment_type: "desk_pickup",
+  fulfillment_status: order.label === "collected" ? "collected" : "pending_pickup",
+}));
+await rest("commerce_order_lines", "", { method: "POST", body: parityLines });
+for (const order of parityOrders) {
+  if (order.status !== "draft") {
+    await rest("commerce_orders", `id=eq.${order.id}`, { method: "PATCH", body: { status: order.status } });
+  }
+}
+
 const pendingDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { token: deskUser.token })).payload;
 assertDeskPayloadPrivate(pendingDeskPayload);
+const expectedPendingLineIds = await canonicalFulfillmentLineIds(ids.venue, "pending_pickup");
+const actualPendingLineIds = pendingDeskPayload.items.map((item) => item.line_id).sort();
+assert(JSON.stringify(actualPendingLineIds) === JSON.stringify(expectedPendingLineIds), "set-based pending queue differs from canonical semantics");
 const pendingDeskItem = pendingDeskPayload.items.find((item) => item.line_id === guestRacketLine.id);
+const attentionLineId = parityLines.find((line) => line.product_key === "desk_parity_attention").id;
+const excludedLineIds = parityLines
+  .filter((line) => !["desk_parity_attention", "desk_parity_collected"].includes(line.product_key))
+  .map((line) => line.id);
+assert(actualPendingLineIds.includes(attentionLineId), "attention order pickup was excluded from Desk queue");
+assert(excludedLineIds.every((lineId) => !actualPendingLineIds.includes(lineId)), "ineligible status or other-venue line entered Desk queue");
+const adminDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { token: deskAdmin.token })).payload;
+assert(JSON.stringify(adminDeskPayload.items.map((item) => item.line_id).sort()) === JSON.stringify(expectedPendingLineIds), "venue admin did not receive the canonical Desk queue");
 const publicReceipt = (await rest("booking_receipts", `id=eq.${guestOrder.booking_receipt_id}&select=receipt_number`)).payload[0];
 const deskAllowlist = [
   "activity_title", "customer_name", "fulfilled_at", "fulfillment_status", "line_id",
@@ -432,9 +522,11 @@ assert(collectedOnce.fulfilled_at === collectedTwice.fulfilled_at, "fulfillment 
 assert(collectedOnce.fulfilled_by === collectedTwice.fulfilled_by && fulfillmentAudits.length === 1, "fulfillment retry changed actor or duplicated audit");
 const collectedDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=collected`, { token: deskUser.token })).payload;
 assertDeskPayloadPrivate(collectedDeskPayload);
+const expectedCollectedLineIds = await canonicalFulfillmentLineIds(ids.venue, "collected");
+assert(JSON.stringify(collectedDeskPayload.items.map((item) => item.line_id).sort()) === JSON.stringify(expectedCollectedLineIds), "set-based collected queue differs from canonical semantics");
 assert(collectedDeskPayload.items.some((item) => item.line_id === guestRacketLine.id && item.fulfillment_status === "collected"), "collected Desk state did not persist after reload");
 await fn("fulfillment", { method: "PATCH", token: deskUser.token, expected: 403, body: { venue_id: ids.capacityVenue, line_id: guestRacketLine.id, status: "collected" } });
-pass("R1B fulfillment", "strict recursive privacy contract, reload, collected retry, audit-once and cross-venue denial");
+pass("R1B fulfillment", "600+ historical orders, exact queue parity, empty state, staff/admin auth, privacy, reload, collected retry, audit-once and venue isolation");
 
 const claimed = (await fn("claim", { method: "POST", body: { token: guestCart.cart_token, display_name: "Ada R1" } })).payload;
 assert(claimed.order.guest_claimed === true, "display name claim did not issue ticket");
