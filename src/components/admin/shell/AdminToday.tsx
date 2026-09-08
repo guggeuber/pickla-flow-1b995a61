@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAdminAgentInbox, useAdminAttention, useAdminHistory, useAdminRevenueLedger, useAdminStats, useAdminTodaysPlan } from "@/hooks/useAdmin";
-import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
+import { AdminBookingDetailDrawer } from "@/components/operations/AdminBookingDetailDrawer";
 import { LeagueOperationsPanel } from "@/components/admin/LeagueOperationsPanel";
 import { AX, ax, AX_GRID_BG } from "./axTheme";
 import {
@@ -228,7 +228,7 @@ function QuickAction({
 /* ───────────── Main ───────────── */
 
 export default function AdminToday({ venueId, venueName, onOpenSettings }: Props) {
-  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
+  const [openBookingId, setOpenBookingId] = useState<string | null>(null);
   const statsQ = useAdminStats(venueId);
   const histQ = useAdminHistory(venueId);
   const [now, setNow] = useState(new Date());
@@ -614,8 +614,8 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
                 type="button"
                 whileTap={{ scale: 0.99 }}
                 onClick={() => {
-                  if (item.booking_group_key) {
-                    setOpenBooking(item as OperationsBookingDetail);
+                  if (item.detail_target?.kind === "booking_detail" && item.detail_target.source_id) {
+                    setOpenBookingId(item.detail_target.source_id);
                     return;
                   }
                   if (item.moduleTarget) onOpenSettings(item.moduleTarget);
@@ -695,10 +695,11 @@ export default function AdminToday({ venueId, venueName, onOpenSettings }: Props
       >
         ⌁ PICKLA ADMIN OS · v0.1 · BUILT FOR SPEED ⌁
       </p>
-      <OperationsBookingDrawer
-        open={!!openBooking}
-        booking={openBooking}
-        onClose={() => setOpenBooking(null)}
+      <AdminBookingDetailDrawer
+        open={!!openBookingId}
+        venueId={venueId}
+        bookingId={openBookingId}
+        onClose={() => setOpenBookingId(null)}
       />
     </div>
   );

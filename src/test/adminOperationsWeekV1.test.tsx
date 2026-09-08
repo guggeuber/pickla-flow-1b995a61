@@ -21,10 +21,10 @@ vi.mock("@/components/admin/shell/AdminCapacity", () => ({
   ),
 }));
 
-vi.mock("@/components/operations/OperationsBookingDrawer", () => ({
-  OperationsBookingDrawer: (props: { open: boolean; booking: { title?: string } | null }) => {
+vi.mock("@/components/operations/AdminBookingDetailDrawer", () => ({
+  AdminBookingDetailDrawer: (props: { open: boolean; bookingId?: string | null }) => {
     mocks.bookingDrawer(props);
-    return props.open ? <div data-testid="booking-drawer">{props.booking?.title}</div> : null;
+    return props.open ? <div data-testid="booking-drawer">{props.bookingId}</div> : null;
   },
 }));
 
@@ -74,7 +74,6 @@ function weekData() {
           id: "booking:booking-1:2026-08-10",
           source_type: "booking",
           source_id: "booking-1",
-          source_ids: ["booking-1", "booking-2"],
           origin: "private_booking",
           classification: "booking",
           title: "Privat bokning",
@@ -82,7 +81,7 @@ function weekData() {
           warnings: [],
           booked_count: 2,
           checked_in_count: 0,
-          detail_target: { kind: "booking_drawer", booking: { title: "Privat bokning · Bana 1" } },
+          detail_target: { kind: "booking_detail", source_id: "booking-1" },
         }),
         occurrence({
           id: "event:event-1:2026-08-11",
@@ -167,7 +166,7 @@ describe("Operations Week V1", () => {
 
     const privateBookingTitle = screen.getAllByText("Privat bokning").find((node) => node.tagName === "P")!;
     fireEvent.click(privateBookingTitle.closest("button")!);
-    expect(screen.getByTestId("booking-drawer")).toHaveTextContent("Privat bokning · Bana 1");
+    expect(screen.getByTestId("booking-drawer")).toHaveTextContent("booking-1");
 
     const openPlayCard = screen.getByText("Open Play").closest("div.rounded-2xl")!;
     fireEvent.click(within(openPlayCard).getByRole("button", { name: "Bemanna" }));

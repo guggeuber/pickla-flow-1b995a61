@@ -21,7 +21,7 @@ import {
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAdminCalendar, type AdminCalendarItem } from "@/hooks/useAdmin";
-import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
+import { AdminBookingDetailDrawer } from "@/components/operations/AdminBookingDetailDrawer";
 import { ax, AX_GRID_BG } from "./axTheme";
 import { AX_TYPE, AxCard, AxChip, AxSectionLabel } from "./axPrimitives";
 import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
@@ -271,7 +271,6 @@ function TimelineItem({
   const reg = item.registrations_count ?? null;
   const checkedIn = item.checked_in_count ?? null;
   const pct = cap && reg != null ? Math.min(100, Math.round((reg / cap) * 100)) : null;
-  const paymentStatus = item.payment_status === "paid" ? "Betald" : item.payment_status === "free" ? "Gratis" : item.payment_status === "pending" ? "Väntar" : "Okänd";
 
   return (
     <motion.button
@@ -313,7 +312,6 @@ function TimelineItem({
           {item.kind === "activity" && item.override_status === "hidden" && <AxChip tone="neutral">DOLD IDAG</AxChip>}
           {item.kind === "activity" && item.override_status === "cancelled" && <AxChip tone="danger">AVBOKAD</AxChip>}
           {item.kind === "event" && item.visibility && <AxChip tone="neutral">{String(item.visibility).toUpperCase()}</AxChip>}
-          {item.kind === "court_booking" && <AxChip tone={item.payment_status === "paid" || item.payment_status === "free" ? "lime" : "sun"}>{paymentStatus}</AxChip>}
           {item.kind === "court_booking" && <AxChip tone={item.checked_in ? "lime" : "sun"}>{item.checked_in ? "Incheckad" : "Ej incheckad"}</AxChip>}
         </div>
         <p className="mt-1 truncate text-[15px] font-black leading-tight" style={{ color: "white" }}>
@@ -324,9 +322,6 @@ function TimelineItem({
             <span className="inline-flex items-center gap-1 truncate">
               {item.court_name || item.courts?.map((court) => court.name).filter(Boolean).join(", ")}
             </span>
-          )}
-          {item.kind === "court_booking" && item.amount_sek != null && (
-            <span>{Math.round(Number(item.amount_sek || 0)).toLocaleString("sv-SE")} kr</span>
           )}
           {reg != null && (
             <span className="inline-flex items-center gap-1">
@@ -453,7 +448,7 @@ function AdminCalendarDay({ venueId, onOpenModule, onOpenCatalog }: Props) {
   const qc = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(todayStockholm());
   const [openItem, setOpenItem] = useState<AdminCalendarItem | null>(null);
-  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
+  const [openBookingId, setOpenBookingId] = useState<string | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
   const [openDrift, setOpenDrift] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState<AdminCalendarItem | null>(null);
@@ -931,7 +926,7 @@ function AdminCalendarDay({ venueId, onOpenModule, onOpenCatalog }: Props) {
               item={item}
               onTap={() => {
                 if (item.kind === "court_booking") {
-                  setOpenBooking(item as OperationsBookingDetail);
+                  setOpenBookingId(item.detail_target?.source_id || item.source_id);
                   return;
                 }
                 setOpenItem(item);
@@ -941,10 +936,11 @@ function AdminCalendarDay({ venueId, onOpenModule, onOpenCatalog }: Props) {
         )}
       </div>
 
-      <OperationsBookingDrawer
-        open={!!openBooking}
-        booking={openBooking}
-        onClose={() => setOpenBooking(null)}
+      <AdminBookingDetailDrawer
+        open={!!openBookingId}
+        venueId={venueId}
+        bookingId={openBookingId}
+        onClose={() => setOpenBookingId(null)}
       />
 
       {/* ── ITEM ACTION SHEET ── */}

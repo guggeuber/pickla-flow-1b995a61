@@ -20,7 +20,7 @@ import {
   type AdminCapacityOpeningInterval,
   type AdminCapacityResource,
 } from "@/hooks/useAdmin";
-import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
+import { AdminBookingDetailDrawer } from "@/components/operations/AdminBookingDetailDrawer";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AX_GRID_BG, ax } from "./axTheme";
 import { AX_TYPE, AxCard, AxChip, AxEmpty, AxSectionLabel, AxSkeleton } from "./axPrimitives";
@@ -295,7 +295,7 @@ export default function AdminCapacity({ venueId, onOpenModule }: { venueId: stri
   const [group, setGroup] = useState("all");
   const [resourceId, setResourceId] = useState("all");
   const [openInterval, setOpenInterval] = useState<AdminCapacityInterval | null>(null);
-  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
+  const [openBookingId, setOpenBookingId] = useState<string | null>(null);
   const anchorBounds = useMemo(() => capacityAnchorBounds(today, view), [today, view]);
   const range = useMemo(() => stockholmCapacityRange(anchorDate, view), [anchorDate, view]);
   const capacityQ = useAdminCapacity(venueId, range.from, range.to, view);
@@ -323,8 +323,8 @@ export default function AdminCapacity({ venueId, onOpenModule }: { venueId: stri
     setAnchorDate((current) => clampCapacityAnchor(current, today, nextView));
   };
   const openDetails = (interval: AdminCapacityInterval) => {
-    if (interval.detail_target?.kind === "booking_drawer" && interval.detail_target.booking) {
-      setOpenBooking(interval.detail_target.booking as unknown as OperationsBookingDetail);
+    if (interval.detail_target?.kind === "booking_detail" && interval.detail_target.source_id) {
+      setOpenBookingId(interval.detail_target.source_id);
       return;
     }
     setOpenInterval(interval);
@@ -457,7 +457,7 @@ export default function AdminCapacity({ venueId, onOpenModule }: { venueId: stri
         </>
       ) : null}
 
-      <OperationsBookingDrawer readOnly open={!!openBooking} booking={openBooking} onClose={() => setOpenBooking(null)} />
+      <AdminBookingDetailDrawer readOnly open={!!openBookingId} venueId={venueId} bookingId={openBookingId} onClose={() => setOpenBookingId(null)} />
       <Dialog open={!!openInterval} onOpenChange={(open) => !open && setOpenInterval(null)}>
         <DialogContent className="border-white/10 bg-[hsl(220_25%_8%)] text-white sm:max-w-md">
           <DialogHeader>

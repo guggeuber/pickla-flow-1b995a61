@@ -368,28 +368,15 @@ export type AdminCalendarItem = {
   visibility?: string | null;
   status?: string | null;
   resource_name?: string | null;
-  booking_group_key?: string;
-  venue_id?: string | null;
-  customer_id?: string | null;
-  user_id?: string | null;
-  customer_user_id?: string | null;
-  booking_refs?: string[];
-  customer_name?: string | null;
-  customer_phone?: string | null;
-  customer_email?: string | null;
   courts?: Array<{ id?: string | null; name?: string | null; court_number?: number | null; sport_type?: string | null }>;
   court_name?: string | null;
-  amount_sek?: number | null;
-  payment_status?: string | null;
-  payment_method?: string | null;
-  receipt_number?: string | null;
-  booking_receipt_id?: string | null;
   checked_in?: boolean | null;
-  checked_in_at?: string | null;
   checked_in_count?: number | null;
-  notes?: string | null;
-  access_code?: string | null;
-  stripe_session_id?: string | null;
+  detail_target?: {
+    kind: "booking_detail" | "module";
+    source_id?: string;
+    module_id?: string;
+  } | null;
 };
 
 export type AdminCalendarResponse = {
@@ -437,8 +424,7 @@ export type AdminCapacityInterval = {
   classification: "booking" | "activity" | "resource_block" | "closure" | "event" | "free";
   title: string;
   detail_target?: {
-    kind: "booking_drawer" | "module";
-    booking?: Record<string, unknown>;
+    kind: "booking_detail" | "module";
     module_id?: string;
     source_id?: string;
     session_date?: string;
@@ -511,7 +497,6 @@ export type AdminOperationsOccurrence = {
   id: string;
   source_type: "activity_session" | "booking" | "event" | "resource_block" | "operation_override";
   source_id: string;
-  source_ids?: string[];
   occurrence_date: string;
   starts_at: string;
   ends_at: string;
@@ -647,7 +632,6 @@ export function useAdminAgentInbox(venueId: string | undefined) {
 export type AdminTodaysPlanItem = {
   id: string;
   source_id?: string;
-  source_ids?: string[];
   time: string;
   end_time?: string | null;
   title: string;
@@ -655,28 +639,11 @@ export type AdminTodaysPlanItem = {
   tone: "electric" | "lime" | "magenta" | "sun" | "danger";
   href?: string | null;
   moduleTarget?: string | null;
-  booking_group_key?: string;
-  venue_id?: string | null;
-  customer_id?: string | null;
-  user_id?: string | null;
-  customer_user_id?: string | null;
-  booking_refs?: string[];
-  customer_name?: string | null;
-  customer_phone?: string | null;
-  customer_email?: string | null;
   courts?: Array<{ id?: string | null; name?: string | null; court_number?: number | null; sport_type?: string | null }>;
   court_name?: string | null;
-  amount_sek?: number | null;
-  payment_status?: string | null;
-  payment_method?: string | null;
-  receipt_number?: string | null;
-  booking_receipt_id?: string | null;
   checked_in?: boolean | null;
-  checked_in_at?: string | null;
   checked_in_count?: number | null;
-  notes?: string | null;
-  access_code?: string | null;
-  stripe_session_id?: string | null;
+  detail_target?: AdminCalendarItem["detail_target"];
 };
 
 export function useAdminTodaysPlan(venueId: string | undefined, date: string | undefined) {

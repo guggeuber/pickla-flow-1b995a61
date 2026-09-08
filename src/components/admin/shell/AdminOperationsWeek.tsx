@@ -22,7 +22,7 @@ import {
   type AdminOperationsOccurrence,
   type AdminOperationsStaffRole,
 } from "@/hooks/useAdmin";
-import { OperationsBookingDrawer, type OperationsBookingDetail } from "@/components/operations/OperationsBookingDrawer";
+import { AdminBookingDetailDrawer } from "@/components/operations/AdminBookingDetailDrawer";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { TimelineDay } from "./AdminCapacity";
 import { AX_GRID_BG, ax } from "./axTheme";
@@ -232,7 +232,7 @@ export default function AdminOperationsWeek({
   const today = DateTime.now().setZone(ZONE).toISODate()!;
   const currentMonday = mondayFor(today);
   const [monday, setMonday] = useState(currentMonday);
-  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
+  const [openBookingId, setOpenBookingId] = useState<string | null>(null);
   const [staffingOccurrenceId, setStaffingOccurrenceId] = useState<string | null>(null);
   const range = useMemo(() => weekRange(monday), [monday]);
   const weekQ = useAdminOperationsWeek(venueId, range.from, range.to);
@@ -241,8 +241,8 @@ export default function AdminOperationsWeek({
   const staffingOccurrence = occurrences.find((occurrence) => occurrence.id === staffingOccurrenceId) || null;
 
   const openCanonical = (occurrence: AdminOperationsOccurrence) => {
-    if (occurrence.detail_target?.kind === "booking_drawer" && occurrence.detail_target.booking) {
-      setOpenBooking(occurrence.detail_target.booking as unknown as OperationsBookingDetail);
+    if (occurrence.detail_target?.kind === "booking_detail" && occurrence.detail_target.source_id) {
+      setOpenBookingId(occurrence.detail_target.source_id);
       return;
     }
     if (occurrence.detail_target?.kind === "module" && occurrence.detail_target.module_id) {
@@ -252,8 +252,8 @@ export default function AdminOperationsWeek({
 
   const openCapacity = (interval: AdminCapacityInterval) => {
     if (interval.classification === "free") return;
-    if (interval.detail_target?.kind === "booking_drawer" && interval.detail_target.booking) {
-      setOpenBooking(interval.detail_target.booking as unknown as OperationsBookingDetail);
+    if (interval.detail_target?.kind === "booking_detail" && interval.detail_target.source_id) {
+      setOpenBookingId(interval.detail_target.source_id);
       return;
     }
     if (interval.detail_target?.kind === "module" && interval.detail_target.module_id) {
@@ -352,7 +352,7 @@ export default function AdminOperationsWeek({
         </>
       ) : null}
 
-      <OperationsBookingDrawer readOnly open={!!openBooking} booking={openBooking} onClose={() => setOpenBooking(null)} />
+      <AdminBookingDetailDrawer readOnly open={!!openBookingId} venueId={venueId} bookingId={openBookingId} onClose={() => setOpenBookingId(null)} />
       <StaffingDialog occurrence={staffingOccurrence} staffOptions={data?.operations.staff_options || []} open={!!staffingOccurrenceId} onClose={() => setStaffingOccurrenceId(null)} venueId={venueId} />
     </div>
   );

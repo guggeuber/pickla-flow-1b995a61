@@ -9,10 +9,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/useAdmin", () => ({ useAdminCapacity: mocks.useAdminCapacity }));
 
-vi.mock("@/components/operations/OperationsBookingDrawer", () => ({
-  OperationsBookingDrawer: (props: { open: boolean; booking: { title?: string } | null }) => {
+vi.mock("@/components/operations/AdminBookingDetailDrawer", () => ({
+  AdminBookingDetailDrawer: (props: { open: boolean; bookingId?: string | null; readOnly?: boolean }) => {
     mocks.bookingDrawer(props);
-    return props.open ? <div data-testid="booking-drawer">{props.booking?.title}</div> : null;
+    return props.open ? <div data-testid="booking-drawer">{props.bookingId}</div> : null;
   },
 }));
 
@@ -38,7 +38,7 @@ const interval = (overrides: Record<string, unknown> = {}) => ({
   status: "confirmed",
   classification: "booking",
   title: "Privat bokning",
-  detail_target: { kind: "booking_drawer", booking: { title: "Privat bokning · Bana 1", source_ids: ["booking-1"] } },
+  detail_target: { kind: "booking_detail", source_id: "booking-1" },
   outside_opening_hours: false,
   conflict: { is_conflict: false, with: [] },
   ...overrides,
@@ -158,7 +158,7 @@ describe("Capacity V1", () => {
   it("opens the existing booking drawer for booking intervals", () => {
     render(<AdminCapacity venueId="venue-1" onOpenModule={vi.fn()} />);
     fireEvent.click(screen.getByTitle("Bokning: Privat bokning 12:00–13:00"));
-    expect(screen.getByTestId("booking-drawer")).toHaveTextContent("Privat bokning · Bana 1");
+    expect(screen.getByTestId("booking-drawer")).toHaveTextContent("booking-1");
     expect(mocks.bookingDrawer).toHaveBeenLastCalledWith(expect.objectContaining({ readOnly: true }));
   });
 
@@ -217,13 +217,16 @@ describe("Capacity V1 endpoint contract", () => {
   const apiAdmin = readFileSync("supabase/functions/api-admin/index.ts", "utf8");
   const component = readFileSync("src/components/admin/shell/AdminCapacity.tsx", "utf8");
 
-  it("is a GET-only endpoint with explicit venue-role authorization", () => {
+  it("is a GET-only endpoint covered by the centralized venue-role authorization", () => {
     const pathIndex = apiAdmin.indexOf("path === 'capacity'");
     const routeStart = apiAdmin.lastIndexOf("if (req.method", pathIndex);
     const routeEnd = apiAdmin.indexOf("OPERATIONS WEEK", routeStart);
     const route = apiAdmin.slice(routeStart, routeEnd);
     expect(route).toContain("req.method === 'GET'");
-    expect(route).toContain("requireVenueRole(admin, userId, scopedVenueId");
+    const guardIndex = apiAdmin.indexOf("await authorizeVenueScopedAdminRead({");
+    expect(guardIndex).toBeGreaterThan(-1);
+    expect(guardIndex).toBeLessThan(routeStart);
+    expect(apiAdmin).toContain("authorizeVenue: (requestedVenueId) => requireVenueRole(admin, userId, requestedVenueId, ['venue_admin'])");
     expect(route).not.toContain("req.method === 'POST'");
     expect(route).not.toContain("insert(");
     expect(route).not.toContain("update(");
@@ -245,7 +248,8 @@ describe("Capacity V1 endpoint contract", () => {
     expect(aggregator).not.toContain("customer_email");
     expect(aggregator).not.toContain("customer_phone");
     expect(aggregator).not.toContain("customer_id");
-    expect(aggregator).toContain(".select('id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, booked_by, start_time, end_time, status'");
+    expect(aggregator).toContain(".select('id, stripe_session_id, access_code, venue_id, venue_court_id, start_time, end_time, status'");
+    expect(aggregator).not.toContain("booked_by");
     expect(aggregator).not.toContain("customer_email");
     expect(aggregator).not.toContain("customer_phone");
     expect(aggregator).toContain("capacityDatesWithinOperationalWindow");
@@ -259,7 +263,7 @@ describe("Capacity V1 endpoint contract", () => {
   it("contains no client mutation path or duplicated editor", () => {
     expect(component).not.toMatch(/apiPost|apiPatch|apiDelete|useMutation/);
     expect(component).not.toMatch(/drag|drop/i);
-    expect(component).toContain("OperationsBookingDrawer");
-    expect(component).toContain("OperationsBookingDrawer readOnly");
+    expect(component).toContain("AdminBookingDetailDrawer");
+    expect(component).toContain("<AdminBookingDetailDrawer readOnly");
   });
 });
