@@ -16,6 +16,7 @@ export interface CommerceProduct {
   vat_rate: number;
   sort_order: number;
   status: "draft" | "active" | "archived";
+  is_active?: boolean;
   standalone_enabled: boolean;
   activity_addon_enabled: boolean;
   category: string | null;
@@ -37,6 +38,36 @@ export interface CommerceRelationship {
   target_product_id: string;
   relationship_type: "offered_with";
   sort_order: number;
+  is_active?: boolean;
+  created_at?: string | null;
+}
+
+export function commerceOfferedWithProducts(
+  products: CommerceProduct[],
+  relationships: CommerceRelationship[],
+  sourceProductIds: string | string[],
+) {
+  const sources = new Set(Array.isArray(sourceProductIds) ? sourceProductIds.filter(Boolean) : [sourceProductIds].filter(Boolean));
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  const seenTargets = new Set<string>();
+
+  return [...relationships]
+    .filter((relationship) => (
+      relationship.relationship_type === "offered_with"
+      && relationship.is_active !== false
+      && sources.has(relationship.source_product_id)
+    ))
+    .sort((left, right) => Number(left.sort_order || 0) - Number(right.sort_order || 0)
+      || String(left.created_at || "").localeCompare(String(right.created_at || ""))
+      || left.id.localeCompare(right.id))
+    .flatMap((relationship) => {
+      if (seenTargets.has(relationship.target_product_id)) return [];
+      const product = productsById.get(relationship.target_product_id);
+      if (!product || product.status !== "active" || product.is_active === false) return [];
+      if (product.commerce_kind === "participation" || product.activity_addon_enabled !== true) return [];
+      seenTargets.add(product.id);
+      return [product];
+    });
 }
 
 export interface CommerceCartItemInput {
@@ -166,43 +197,21 @@ export interface DeskFulfillmentResponse {
   items: DeskFulfillmentItem[];
 }
 
-export const RACKET_PICKUP_INSTRUCTION_CODE = "desk_pickup_racket_by_name";
 export const COMMERCE_PICKUP_COPY = "Hämtas vid disken.";
 
-function isRacketPickupLine(line: CommerceOrderLine) {
-  const snapshot = line.product_snapshot && typeof line.product_snapshot === "object"
-    ? line.product_snapshot
-    : {};
-  const instructionCode = String(snapshot.customer_instruction_code || "");
-  if (instructionCode === RACKET_PICKUP_INSTRUCTION_CODE) return true;
-  const identity = `${line.product_key} ${line.product_name}`.toLowerCase();
-  return line.commerce_kind === "rental"
-    && line.fulfillment_type === "desk_pickup"
-    && /racket|hyrrack/.test(identity);
-}
-
-export function commerceRacketPickupQuantity(
+export function commercePendingPickupItems(
   lines: CommerceOrderLine[],
   options: { confirmed?: boolean } = {},
 ) {
-  return lines.reduce((sum, line) => {
-    if (!isRacketPickupLine(line)) return sum;
-    if (options.confirmed && line.fulfillment_status !== "pending_pickup") return sum;
-    return sum + Math.max(0, Number(line.quantity || 0));
-  }, 0);
-}
-
-export function commerceRacketOrderSummaryInstruction(quantity: number) {
-  if (quantity <= 0) return null;
-  return COMMERCE_PICKUP_COPY;
-}
-
-export function commerceRacketSuccessInstruction(quantity: number) {
-  if (quantity <= 0) return null;
-  return {
-    summary: `Du har hyrt ${quantity} rack.`,
-    pickup: COMMERCE_PICKUP_COPY,
-  };
+  return lines.filter((line) => (
+    line.fulfillment_type === "desk_pickup"
+    && Number(line.quantity || 0) > 0
+    && (!options.confirmed || line.fulfillment_status === "pending_pickup")
+  )).map((line) => ({
+    lineId: line.id,
+    productName: line.product_name,
+    quantity: Math.max(0, Number(line.quantity || 0)),
+  }));
 }
 
 export function formatCommerceMoney(minor: number, currency = "SEK") {

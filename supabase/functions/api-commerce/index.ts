@@ -30,6 +30,10 @@ import {
   type EntitlementFundingType,
 } from '../_shared/entitlements.ts';
 import { isUpstreamTransportError } from '../_shared/upstream_transport.ts';
+import {
+  visibleOfferedWithRelationships,
+  type OfferedWithRelationship,
+} from '../_shared/product_relationships.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const CART_TOKEN_BYTES = 32;
@@ -959,13 +963,7 @@ async function validateCartItems(
       base_price_sek: Number(item.product.base_price_sek || 0),
       vat_rate: Number(item.product.vat_rate || 0),
       resolver_rules: item.product.resolver_rules || {},
-      customer_instruction_code: String(item.product.resolver_rules?.customer_instruction_code || (
-        item.product.commerce_kind === 'rental'
-        && item.product.fulfillment_type === 'desk_pickup'
-        && /racket|hyrrack/i.test(`${item.product.product_key} ${item.product.name}`)
-          ? 'desk_pickup_racket_by_name'
-          : ''
-      )) || null,
+      customer_instruction_code: String(item.product.resolver_rules?.customer_instruction_code || '') || null,
     },
     metadata: item.input.metadata || {},
     sort_order: item.index * 10,
@@ -1601,12 +1599,25 @@ const commerceHandler = async (req: Request) => {
           .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, is_active, standalone_enabled, activity_addon_enabled, category, sport, image_url')
           .eq('venue_id', venueId).eq('status', 'active').eq('is_active', true).order('sort_order'),
         admin.from('product_relationships')
-          .select('id, source_product_id, target_product_id, relationship_type, sort_order')
-          .eq('venue_id', venueId).eq('is_active', true).order('sort_order'),
+          .select('id, venue_id, source_product_id, target_product_id, relationship_type, is_active, sort_order, created_at')
+          .eq('venue_id', venueId)
+          .eq('relationship_type', 'offered_with')
+          .eq('is_active', true)
+          .order('source_product_id')
+          .order('sort_order')
+          .order('created_at')
+          .order('id'),
       ]);
       if (productError || relationshipError) throw new Error(productError?.message || relationshipError?.message);
-      const relatedProductIds = new Set((relationships || []).map((relationship: any) => relationship.target_product_id));
-      const availableProducts = (products || []).filter((product) => {
+      const productRows = (products || []) as CommerceProduct[];
+      const visibleRelationships = visibleOfferedWithRelationships({
+        products: productRows,
+        relationships: (relationships || []) as OfferedWithRelationship[],
+        venueId,
+        venueCommerceEnabled: venue.commerce_enabled === true,
+      });
+      const relatedProductIds = new Set(visibleRelationships.map((relationship) => relationship.target_product_id));
+      const availableProducts = productRows.filter((product) => {
         if (product.commerce_kind === 'participation') {
           if ((product.product_key === 'day_access' || product.product_kind === 'day_access') && Number(product.base_price_sek || 0) <= 0) {
             return false;
@@ -1634,11 +1645,15 @@ const commerceHandler = async (req: Request) => {
           venueCommerceEnabled: venue.commerce_enabled === true,
         }).eligible,
       }));
+      const availableProductIds = new Set(availableProducts.map((product) => product.id));
       return jsonResponse({
         commerce_available: venue.commerce_enabled === true,
         message: venue.commerce_enabled === true ? null : 'Pickla Store är inte aktiverad för denna anläggning.',
         products: availableProducts,
-        relationships: relationships || [],
+        relationships: visibleRelationships.filter((relationship) => (
+          availableProductIds.has(relationship.source_product_id)
+          && availableProductIds.has(relationship.target_product_id)
+        )),
       }, 200, 0);
     }
 

@@ -12,6 +12,7 @@ import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { SessionActions, SessionDrawerShell, SessionPriceBlock, SessionSocialContextSection } from "@/components/session";
+import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
 import { formatSek } from "@/lib/activityPricing";
 import { activityCheckInAvailable, useActivityNow } from "@/lib/activityTiming";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
@@ -20,6 +21,7 @@ import {
   activityCommerceDraftScope,
   activityCommerceSelectionKey,
   COMMERCE_PICKUP_COPY,
+  commerceOfferedWithProducts,
   commerceProductMaxQuantity,
   commerceJourneyId,
   createCommerceCart,
@@ -298,34 +300,21 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     && session?.session_type === "open_play"
     && session?.access_policy?.allows_day_access !== false
   ));
-  const offeredRentalIds = useMemo(() => new Set(
-    (commerceCatalog.data?.relationships || [])
-      .filter((relationship) => (
-        relationship.source_product_id === commerceParticipationProduct?.id
-        || relationship.source_product_id === commerceDayPassProduct?.id
-      ))
-      .map((relationship) => relationship.target_product_id),
-  ), [commerceCatalog.data?.relationships, commerceDayPassProduct?.id, commerceParticipationProduct?.id]);
   const commerceExtras = useMemo(() => (
-    (commerceCatalog.data?.products || []).filter((product) => (
-      product.commerce_kind !== "participation"
-      && product.activity_addon_enabled
-      && offeredRentalIds.has(product.id)
-    ))
-  ), [commerceCatalog.data?.products, offeredRentalIds]);
+    commerceOfferedWithProducts(
+      commerceCatalog.data?.products || [],
+      commerceCatalog.data?.relationships || [],
+      [commerceParticipationProduct?.id || "", commerceDayPassProduct?.id || ""],
+    )
+  ), [commerceCatalog.data?.products, commerceCatalog.data?.relationships, commerceDayPassProduct?.id, commerceParticipationProduct?.id]);
   const selectedCommerceProduct = commercePurchaseKind === "day_pass" ? commerceDayPassProduct : commerceParticipationProduct;
-  const selectedOfferedProductIds = useMemo(() => new Set(
-    (commerceCatalog.data?.relationships || [])
-      .filter((relationship) => relationship.source_product_id === selectedCommerceProduct?.id)
-      .map((relationship) => relationship.target_product_id),
-  ), [commerceCatalog.data?.relationships, selectedCommerceProduct?.id]);
   const commerceExtrasForPurchase = useMemo(() => (
-    (commerceCatalog.data?.products || []).filter((product) => (
-      product.commerce_kind !== "participation"
-      && product.activity_addon_enabled
-      && selectedOfferedProductIds.has(product.id)
-    ))
-  ), [commerceCatalog.data?.products, selectedOfferedProductIds]);
+    commerceOfferedWithProducts(
+      commerceCatalog.data?.products || [],
+      commerceCatalog.data?.relationships || [],
+      selectedCommerceProduct?.id || "",
+    )
+  ), [commerceCatalog.data?.products, commerceCatalog.data?.relationships, selectedCommerceProduct?.id]);
   const commercePilotEnabled = Boolean(commerceParticipationProduct);
   useEffect(() => {
     if (!commercePilotEnabled || !venueId || !sessionId) return;
@@ -1285,9 +1274,21 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
                   return (
                     <article key={product.id} className="rounded-2xl bg-white px-3 py-3 text-[13px]">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <h4 className="break-words font-black">{product.name}</h4>
-                          <p className="mt-0.5 text-[11px] font-semibold text-neutral-500">{COMMERCE_PICKUP_COPY}</p>
+                        <div className="flex min-w-0 items-start gap-3">
+                          {product.image_url ? <ResponsiveSupabaseImage
+                            src={product.image_url}
+                            alt={product.name}
+                            sizes="56px"
+                            widths={[64, 128]}
+                            width={56}
+                            height={56}
+                            className="h-14 w-14 shrink-0 rounded-xl object-cover"
+                            data-testid={`commerce-addon-image-${product.id}`}
+                          /> : null}
+                          <div className="min-w-0">
+                            <h4 className="break-words font-black">{product.name}</h4>
+                            <p className="mt-0.5 text-[11px] font-semibold text-neutral-500">{COMMERCE_PICKUP_COPY}</p>
+                          </div>
                         </div>
                         <p className="shrink-0 font-black">{formatCommerceMoney(product.base_price_sek * 100)}</p>
                       </div>

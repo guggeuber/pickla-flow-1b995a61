@@ -249,16 +249,23 @@ const addon = (await call(adminUrl, "products", {
     status: "active",
   },
 })).payload;
-await call(adminUrl, "product-relationships", {
+const managedRelationship = (await call(adminUrl, "product-relationships", {
   method: "POST",
   token: operator.token,
-  expected: 409,
   body: {
     venueId,
     source_product_id: managed.series.access_product_id,
     target_product_id: addon.id,
+    sort_order: 30,
   },
+})).payload;
+assert(managedRelationship.source_product_id === managed.series.access_product_id && managedRelationship.target_product_id === addon.id, "managed Series relationship was not created");
+await call(adminUrl, "product-relationships", {
+  method: "DELETE",
+  token: operator.token,
+  query: { venueId, relationshipId: managedRelationship.id },
 });
+pass("Managed product relationships", "canonical offered_with configuration remains available without opening Series product mutation side doors");
 
 await call(courseUrl, "series", {
   method: "PATCH",
@@ -271,7 +278,7 @@ await call(adminUrl, "activity-series", {
   expected: 409,
   query: { venueId, seriesId: managed.series.id },
 });
-pass("Managed lifecycle", "draft, published, generated Session and product side doors return 409");
+pass("Managed lifecycle", "draft, published, generated Session and product mutation side doors return 409");
 
 const directWrite = await request(`${apiUrl}/rest/v1/activity_sessions?id=eq.${managed.sessions[0].id}`, {
   method: "PATCH",

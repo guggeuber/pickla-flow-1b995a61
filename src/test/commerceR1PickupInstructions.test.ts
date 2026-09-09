@@ -1,19 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  commerceRacketOrderSummaryInstruction,
-  commerceRacketPickupQuantity,
-  commerceRacketSuccessInstruction,
+  commercePendingPickupItems,
   type CommerceOrderLine,
 } from "@/lib/commerce";
 
-function racketLine(quantity: number, fulfillmentStatus = "pending_pickup"): CommerceOrderLine {
+function pickupLine(quantity: number, fulfillmentStatus = "pending_pickup"): CommerceOrderLine {
   return {
-    id: "line-racket",
-    product_id: "product-racket",
-    product_key: "rental_racket",
-    product_name: "Hyrrack",
-    commerce_kind: "rental",
+    id: "line-product",
+    product_id: "product-addon",
+    product_key: "generic_addon",
+    product_name: "Handduk",
+    commerce_kind: "merchandise",
     quantity,
     unit_price_minor: 5000,
     line_total_inc_vat_minor: 5000 * quantity,
@@ -21,41 +19,25 @@ function racketLine(quantity: number, fulfillmentStatus = "pending_pickup"): Com
     vat_amount_minor: Math.round(5000 * quantity * 6 / 106),
     fulfillment_type: "desk_pickup",
     fulfillment_status: fulfillmentStatus,
-    product_snapshot: { customer_instruction_code: "desk_pickup_racket_by_name" },
+    product_snapshot: {},
   };
 }
 
 describe("Commerce R1 pickup instructions", () => {
-  it("omits pickup copy when the quantity is zero", () => {
-    expect(commerceRacketPickupQuantity([])).toBe(0);
-    expect(commerceRacketOrderSummaryInstruction(0)).toBeNull();
-    expect(commerceRacketSuccessInstruction(0)).toBeNull();
+  it("omits pickup items when none exist", () => {
+    expect(commercePendingPickupItems([])).toEqual([]);
   });
 
-  it("uses singular order-summary and success copy for one racket", () => {
-    expect(commerceRacketPickupQuantity([racketLine(1)])).toBe(1);
-    expect(commerceRacketOrderSummaryInstruction(1)).toBe(
-      "Hämtas vid disken.",
-    );
-    expect(commerceRacketSuccessInstruction(1)).toEqual({
-      summary: "Du har hyrt 1 rack.",
-      pickup: "Hämtas vid disken.",
-    });
+  it("projects any desk-pickup product without product-name special cases", () => {
+    expect(commercePendingPickupItems([pickupLine(2)])).toEqual([{
+      lineId: "line-product",
+      productName: "Handduk",
+      quantity: 2,
+    }]);
   });
 
-  it("uses plural order-summary and success copy for multiple rackets", () => {
-    expect(commerceRacketPickupQuantity([racketLine(2)])).toBe(2);
-    expect(commerceRacketOrderSummaryInstruction(2)).toBe(
-      "Hämtas vid disken.",
-    );
-    expect(commerceRacketSuccessInstruction(2)).toEqual({
-      summary: "Du har hyrt 2 rack.",
-      pickup: "Hämtas vid disken.",
-    });
-  });
-
-  it("does not present refunded or cancelled rackets as collectable", () => {
-    expect(commerceRacketPickupQuantity([racketLine(1, "not_collected")], { confirmed: true })).toBe(0);
-    expect(commerceRacketPickupQuantity([racketLine(1, "collected")], { confirmed: true })).toBe(0);
+  it("does not present refunded or collected products as collectable", () => {
+    expect(commercePendingPickupItems([pickupLine(1, "not_collected")], { confirmed: true })).toEqual([]);
+    expect(commercePendingPickupItems([pickupLine(1, "collected")], { confirmed: true })).toEqual([]);
   });
 });

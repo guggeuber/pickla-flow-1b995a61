@@ -15,7 +15,8 @@ describe("Commerce Heldagspass purchase", () => {
     expect(programPage).toContain('data-testid="commerce-option-activity-ticket"');
     expect(programPage).toContain('data-testid="commerce-option-day-pass"');
     expect(programPage).toContain('aria-pressed={commercePurchaseKind === "day_pass"}');
-    expect(programPage).toContain("relationship.source_product_id === selectedCommerceProduct?.id");
+    expect(programPage).toContain("commerceOfferedWithProducts(");
+    expect(programPage).toContain("selectedCommerceProduct?.id || \"\"");
     expect(programPage).toContain("commerceExtrasForPurchase.flatMap");
     expect(programPage).toContain('commerceStep === "addons"');
   });

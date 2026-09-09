@@ -174,17 +174,15 @@ describe("Commerce R1 confirmed purchase state", () => {
     expect(screen.queryByText(/Du har hyrt/)).not.toBeInTheDocument();
   });
 
-  it.each([
-    [1, "Du har hyrt 1 rack. Hämtas vid disken."],
-    [2, "Du har hyrt 2 rack. Hämtas vid disken."],
-  ])("shows confirmed pickup copy for Hyrrack quantity %s", async (quantity, pickupCopy) => {
+  it.each([1, 2])("shows generic confirmed pickup copy for quantity %s", async (quantity) => {
     const lines = [participationLine, racketLine(Number(quantity))];
     mocks.fetchOrder.mockResolvedValue(orderResponse({}, lines));
     renderOrder();
 
     expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Hyrrack" })).toBeInTheDocument();
-    expect(screen.getByText(pickupCopy)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hämtas vid disken" })).toBeInTheDocument();
+    expect(screen.getByText(`${quantity} × Hyrrack`)).toBeInTheDocument();
+    expect(screen.getByText("Hämtas vid disken.")).toBeInTheDocument();
   });
 
   it("does not instruct collection after a full refund", async () => {
@@ -194,7 +192,7 @@ describe("Commerce R1 confirmed purchase state", () => {
 
     expect(await screen.findByRole("heading", { name: "Platsen är din" })).toBeInTheDocument();
     expect(screen.queryByText("Ej längre tillgänglig för uthämtning")).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Hyrrack" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Hämtas vid disken" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Hämtas vid disken/)).not.toBeInTheDocument();
   });
 

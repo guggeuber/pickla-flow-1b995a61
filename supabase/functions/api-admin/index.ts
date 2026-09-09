@@ -6288,7 +6288,13 @@ Deno.serve(async (req) => {
 
     if (req.method === 'GET' && path === 'product-relationships') {
       const { data, error: e } = await admin.from('product_relationships')
-        .select('*').eq('venue_id', venueId).order('sort_order').order('created_at');
+        .select('id, venue_id, source_product_id, target_product_id, relationship_type, is_active, sort_order, metadata, created_at, updated_at')
+        .eq('venue_id', venueId)
+        .eq('relationship_type', 'offered_with')
+        .order('source_product_id')
+        .order('sort_order')
+        .order('created_at')
+        .order('id');
       if (e) return errorResponse(e.message);
       return jsonResponse(data, 200, 15);
     }
@@ -6298,22 +6304,33 @@ Deno.serve(async (req) => {
       const sourceProductId = String(body.source_product_id || '');
       const targetProductId = String(body.target_product_id || '');
       if (!sourceProductId || !targetProductId) return errorResponse('Missing product relationship');
+      if (sourceProductId === targetProductId) return errorResponse('A product cannot be offered with itself', 400);
+      if (body.relationship_type !== undefined && body.relationship_type !== 'offered_with') {
+        return errorResponse('Unsupported product relationship type', 400);
+      }
+      const sortOrder = Number(body.sort_order ?? 0);
+      if (!Number.isSafeInteger(sortOrder)) return errorResponse('Invalid relationship sort order', 400);
       const { data: ownedProducts, error: ownedError } = await admin.from('access_products')
-        .select('id').eq('venue_id', venueId).in('id', [sourceProductId, targetProductId]);
+        .select('id, commerce_kind').eq('venue_id', venueId).in('id', [sourceProductId, targetProductId]);
       if (ownedError) return errorResponse(ownedError.message);
       if ((ownedProducts || []).length !== 2) return errorResponse('Products must belong to the selected venue', 403);
-      const { data: managedSeries, error: managedSeriesError } = await loadManagedSeriesForProduct(admin, venueId, sourceProductId);
-      if (managedSeriesError) return errorResponse(managedSeriesError.message);
-      if (managedSeries) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
+      const productsById = new Map((ownedProducts || []).map((product: { id: string; commerce_kind: string | null }) => [product.id, product]));
+      if (productsById.get(sourceProductId)?.commerce_kind !== 'participation') {
+        return errorResponse('Source product must be a participation product', 400);
+      }
+      if (!['rental', 'merchandise'].includes(String(productsById.get(targetProductId)?.commerce_kind || ''))) {
+        return errorResponse('Target product must be eligible for Commerce add-ons', 400);
+      }
       const { data, error: e } = await admin.from('product_relationships').upsert({
         venue_id: venueId,
         source_product_id: sourceProductId,
         target_product_id: targetProductId,
         relationship_type: 'offered_with',
-        is_active: body.is_active ?? true,
-        sort_order: Number(body.sort_order || 0),
-        metadata: body.metadata || {},
-        image_urls: [],
+        is_active: body.is_active !== false,
+        sort_order: sortOrder,
+        ...(body.metadata !== undefined ? {
+          metadata: body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata) ? body.metadata : {},
+        } : {}),
       }, { onConflict: 'venue_id,source_product_id,target_product_id,relationship_type' }).select().single();
       if (e) return errorResponse(e.message);
       return jsonResponse(data, 201);
@@ -6326,9 +6343,6 @@ Deno.serve(async (req) => {
         .select('id, source_product_id').eq('id', relationshipId).eq('venue_id', venueId).maybeSingle();
       if (relationshipError) return errorResponse(relationshipError.message);
       if (!relationship) return errorResponse('Product relationship not found', 404);
-      const { data: managedSeries, error: managedSeriesError } = await loadManagedSeriesForProduct(admin, venueId, relationship.source_product_id);
-      if (managedSeriesError) return errorResponse(managedSeriesError.message);
-      if (managedSeries) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const { error: e } = await admin.from('product_relationships')
         .delete().eq('id', relationshipId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);

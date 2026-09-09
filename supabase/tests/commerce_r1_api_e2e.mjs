@@ -412,7 +412,7 @@ assert(guestRegistrations.filter((row) => row.customer_id === guestOrder.custome
 const guestParticipationLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${guestCheckout.order_id}&commerce_kind=eq.participation&select=capacity_hold_id`)).payload[0];
 const guestRacketLine = (await rest("commerce_order_lines", `commerce_order_id=eq.${guestCheckout.order_id}&commerce_kind=eq.rental&select=id,quantity,fulfillment_status,product_snapshot`)).payload[0];
 assert(guestRacketLine.quantity === 1 && guestRacketLine.fulfillment_status === "pending_pickup", "Hyrrack quantity or pickup state missing");
-assert(guestRacketLine.product_snapshot?.customer_instruction_code === "desk_pickup_racket_by_name", "Hyrrack instruction was not retained");
+assert(guestRacketLine.product_snapshot?.resolver_rules?.max_quantity === 3, "generic product resolver rules were not retained");
 const guestHold = (await rest("capacity_holds", `id=eq.${guestParticipationLine.capacity_hold_id}&select=status,customer_id`)).payload[0];
 assert(guestHold.status === "committed" && guestHold.customer_id === guestOrder.customer_id, "guest hold did not share canonical customer");
 pass("R1B purchase", "one order, hold, participant and receipt after duplicate webhook");

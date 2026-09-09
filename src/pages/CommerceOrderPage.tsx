@@ -17,8 +17,7 @@ import {
   cancelCommerceCheckout,
   clearActivityCommerceSelection,
   claimCommerceOrderAccount,
-  commerceRacketPickupQuantity,
-  commerceRacketSuccessInstruction,
+  commercePendingPickupItems,
   confirmCommerceGuestIdentity,
   fetchCommerceOrder,
   formatCommerceMoney,
@@ -137,10 +136,9 @@ export default function CommerceOrderPage() {
   const waiting = order.status === "checkout_pending" && query.data.checkout_verification_eligible === true;
   const interruptedCheckout = order.status === "checkout_pending" && !waiting;
   const needsReview = order.status === "attention" || (order.status === "paid" && !participantConfirmed);
-  const racketQuantity = purchaseConfirmed && !cancellationPending
-    ? commerceRacketPickupQuantity(lines, { confirmed: true })
-    : 0;
-  const racketInstruction = commerceRacketSuccessInstruction(racketQuantity);
+  const pendingPickupItems = purchaseConfirmed && !cancellationPending
+    ? commercePendingPickupItems(lines, { confirmed: true })
+    : [];
   const receiptNumber = String((receipt as { receipt_number?: string } | null)?.receipt_number || "");
   const purchaseReference = receiptNumber || order.id.slice(0, 8).toUpperCase();
   const activityPath = activity?.venue_slug
@@ -257,7 +255,7 @@ export default function CommerceOrderPage() {
             <p className="mt-1 text-xs text-slate-500">Referens {purchaseReference}</p>
           </section>
         ) : null}
-        {racketInstruction ? <section className="mb-6 border-t border-black/10 px-1 pt-5"><h2 className="font-black">Hyrrack</h2><p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{racketInstruction.summary} {racketInstruction.pickup}</p></section> : null}
+        {pendingPickupItems.length > 0 ? <section className="mb-6 border-t border-black/10 px-1 pt-5"><h2 className="font-black">Hämtas vid disken</h2><ul className="mt-2 grid gap-1 text-sm font-medium text-slate-700">{pendingPickupItems.map((item) => <li key={item.lineId}>{item.quantity} × {item.productName}</li>)}</ul><p className="mt-2 text-sm text-slate-600">{COMMERCE_PICKUP_COPY}</p></section> : null}
         {purchaseConfirmed && activity && requiresGuestClaim && !isCancelled ? (
           <section className="mb-6 border-y border-black/10 py-5">
             <div><h2 className="font-black">Vem ska spela?</h2><p className="text-sm text-slate-500">Namnet visas på din biljett.</p></div>

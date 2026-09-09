@@ -10,8 +10,6 @@ import { apiPost } from "@/lib/api";
 import {
   COMMERCE_PICKUP_COPY,
   commerceJourneyId,
-  commerceRacketOrderSummaryInstruction,
-  commerceRacketPickupQuantity,
   cancelCommerceCheckout,
   fetchCommerceOrder,
   formatCommerceMoney,
@@ -161,8 +159,6 @@ export default function CommerceCartPage() {
   const activityDate = activity
     ? DateTime.fromISO(activity.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("cccc d MMMM")
     : "";
-  const racketQuantity = commerceRacketPickupQuantity(lines);
-  const racketInstruction = commerceRacketOrderSummaryInstruction(racketQuantity);
   const serverPricingReady = resolveQuery.isSuccess && !resolveQuery.isError;
 
   useEffect(() => {
@@ -346,16 +342,13 @@ export default function CommerceCartPage() {
         ) : null}
         <section className={activity || course ? "border-t border-black/10" : ""}>
           {visibleLines.map((line) => {
-            const isRacketLine = commerceRacketPickupQuantity([line]) > 0;
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
             const isCourseLine = Boolean(course) && line.resolver_snapshot?.purchase_kind === "course";
             const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
             const frozenSeriesPriceLabel = isCourseLine ? frozenSeriesLinePriceLabel(line.resolver_snapshot) : null;
             const lineName = isCourseLine ? coursePresentation.type === "course" ? "Kursplats" : "Plats" : isDayPassLine ? line.product_name : isActivityParticipationLine ? "Personlig plats" : line.product_name;
             const LineIcon = line.commerce_kind === "participation" ? Ticket : ShoppingBag;
-            const lineMetadata = isRacketLine && racketInstruction
-              ? `Antal ${line.quantity} · ${racketInstruction}`
-              : line.fulfillment_type === "desk_pickup"
+            const lineMetadata = line.fulfillment_type === "desk_pickup"
                 ? `Antal ${line.quantity} · ${COMMERCE_PICKUP_COPY}`
                 : isDayPassLine
                   ? "Alla Open Play-pass idag."

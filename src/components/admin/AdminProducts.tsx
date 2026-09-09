@@ -47,6 +47,8 @@ interface ProductRelationship {
   source_product_id: string;
   target_product_id: string;
   is_active: boolean;
+  relationship_type: "offered_with";
+  sort_order: number;
 }
 
 interface ProductDraft {
@@ -107,12 +109,14 @@ function RelationshipSelector({
   products,
   relationships,
   onToggle,
+  onSortOrder,
   pending,
 }: {
   product: AccessProduct;
   products: AccessProduct[];
   relationships: ProductRelationship[];
   onToggle: (sourceId: string, targetId: string, relationshipId?: string) => void;
+  onSortOrder: (sourceId: string, targetId: string, sortOrder: number) => void;
   pending: boolean;
 }) {
   const [search, setSearch] = useState("");
@@ -126,7 +130,10 @@ function RelationshipSelector({
     const relationship = relationships.find((item) => item.source_product_id === sourceId && item.target_product_id === targetId && item.is_active);
     return { candidate, sourceId, targetId, relationship };
   }).filter(({ candidate }) => !search.trim() || candidate.name.toLocaleLowerCase("sv-SE").includes(search.trim().toLocaleLowerCase("sv-SE")))
-    .sort((left, right) => Number(Boolean(right.relationship)) - Number(Boolean(left.relationship)) || left.candidate.name.localeCompare(right.candidate.name, "sv-SE"));
+    .sort((left, right) => Number(Boolean(right.relationship)) - Number(Boolean(left.relationship))
+      || Number(left.relationship?.sort_order || 0) - Number(right.relationship?.sort_order || 0)
+      || left.candidate.name.localeCompare(right.candidate.name, "sv-SE")
+      || left.candidate.id.localeCompare(right.candidate.id));
 
   if (!productIsParticipation && !product.activity_addon_enabled) return null;
 
@@ -144,19 +151,38 @@ function RelationshipSelector({
         {rows.length === 0 ? (
           <p className="px-3 py-4 text-sm text-muted-foreground">Inga matchande produkter.</p>
         ) : rows.map(({ candidate, sourceId, targetId, relationship }) => (
-          <label key={candidate.id} className="flex cursor-pointer items-center justify-between gap-3 border-b border-border px-3 py-3 last:border-0">
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold">{candidate.name}</span>
-              <span className="text-xs text-muted-foreground">{formatPrice(candidate.base_price_sek)}</span>
-            </span>
-            <input
-              type="checkbox"
-              checked={Boolean(relationship)}
-              disabled={pending}
-              onChange={() => onToggle(sourceId, targetId, relationship?.id)}
-              className="h-5 w-5 accent-primary"
-            />
-          </label>
+          <div key={candidate.id} className="flex items-center justify-between gap-3 border-b border-border px-3 py-3 last:border-0">
+            <label className="flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-3">
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold">{candidate.name}</span>
+                <span className="text-xs text-muted-foreground">{formatPrice(candidate.base_price_sek)}</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={Boolean(relationship)}
+                disabled={pending}
+                onChange={() => onToggle(sourceId, targetId, relationship?.id)}
+                className="h-5 w-5 shrink-0 accent-primary"
+              />
+            </label>
+            {relationship ? <label className="flex shrink-0 items-center gap-1 text-[10px] font-semibold text-muted-foreground">
+              Ordning
+              <input
+                key={`${relationship.id}:${relationship.sort_order}`}
+                type="number"
+                defaultValue={relationship.sort_order}
+                disabled={pending}
+                aria-label={`Sorteringsordning ${candidate.name}`}
+                onBlur={(event) => {
+                  const value = Number(event.currentTarget.value);
+                  if (Number.isSafeInteger(value) && value !== relationship.sort_order) onSortOrder(sourceId, targetId, value);
+                  else event.currentTarget.value = String(relationship.sort_order);
+                }}
+                onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+                className="h-8 w-14 rounded-md border border-border bg-background px-2 text-right text-xs text-foreground outline-none focus:border-primary"
+              />
+            </label> : null}
+          </div>
         ))}
       </div>
     </section>
@@ -238,9 +264,9 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
   });
 
   const relationshipMutation = useMutation({
-    mutationFn: ({ sourceId, targetId, relationshipId }: { sourceId: string; targetId: string; relationshipId?: string }) => relationshipId
+    mutationFn: ({ sourceId, targetId, relationshipId, sortOrder }: { sourceId: string; targetId: string; relationshipId?: string; sortOrder?: number }) => relationshipId && sortOrder === undefined
       ? apiDelete("api-admin", "product-relationships", { venueId, relationshipId })
-      : apiPost("api-admin", "product-relationships", { venueId, source_product_id: sourceId, target_product_id: targetId, is_active: true }),
+      : apiPost("api-admin", "product-relationships", { venueId, source_product_id: sourceId, target_product_id: targetId, is_active: true, sort_order: sortOrder ?? 0 }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["admin-product-relationships", venueId] });
       await queryClient.invalidateQueries({ queryKey: ["commerce-catalog", venueId] });
@@ -379,7 +405,7 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
               )}
             </section>
 
-            {selectedProduct && <RelationshipSelector product={{ ...selectedProduct, activity_addon_enabled: draft.activityAddonEnabled }} products={products} relationships={relationships} onToggle={(sourceId, targetId, relationshipId) => relationshipMutation.mutate({ sourceId, targetId, relationshipId })} pending={relationshipMutation.isPending} />}
+            {selectedProduct && <RelationshipSelector product={{ ...selectedProduct, activity_addon_enabled: draft.activityAddonEnabled }} products={products} relationships={relationships} onToggle={(sourceId, targetId, relationshipId) => relationshipMutation.mutate({ sourceId, targetId, relationshipId })} onSortOrder={(sourceId, targetId, sortOrder) => relationshipMutation.mutate({ sourceId, targetId, sortOrder })} pending={relationshipMutation.isPending} />}
 
             {selectedProduct && <section className="border-t border-border px-4 py-5">{draft.status === "archived" ? <button type="button" onClick={() => setDraft((current) => ({ ...current, status: "active" }))} className="flex items-center gap-2 text-sm font-semibold text-primary"><RotateCcw className="h-4 w-4" /> Återställ som aktiv</button> : <button type="button" onClick={() => setDraft((current) => ({ ...current, status: "archived" }))} className="flex items-center gap-2 text-sm font-semibold text-destructive"><Archive className="h-4 w-4" /> Arkivera produkt</button>}</section>}
           </div>
