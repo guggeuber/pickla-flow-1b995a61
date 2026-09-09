@@ -205,7 +205,10 @@ INSERT INTO public.bookings (
   'c0130000-0000-4000-8000-000000000004',
   'c0130000-0000-4000-8000-000000000010',
   'c0130000-0000-4000-8000-000000000010',
-  '2026-11-16T17:30:00Z', '2026-11-16T18:30:00Z',
+  -- Keep the fixture adjacent to the current 18:30-19:30 local Session. The
+  -- physical foundation now correctly rejects inserting an already-conflicting
+  -- booking, so the subsequent edit moves the Course onto this booking.
+  '2026-11-16T18:30:00Z', '2026-11-16T19:30:00Z',
   'confirmed', 350, 'COURSE-DRAFT-EDIT-CONFLICT'
 );
 
@@ -217,7 +220,7 @@ BEGIN
       'Partial mutation forbidden',
       '2026-11-02', '2026-11-23',
       '2026-08-15T00:00:00Z', '2026-11-01T22:59:00Z',
-      11, 1695, ARRAY[1], '18:30', '19:30', 4,
+      11, 1695, ARRAY[1], '19:30', '20:30', 4,
       ARRAY['c0130000-0000-4000-8000-000000000004'::UUID]
     );
     RAISE EXCEPTION 'Conflicting draft edit was accepted';

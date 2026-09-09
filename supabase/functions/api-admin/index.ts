@@ -12,9 +12,14 @@ import {
   isValidActivitySessionTimeOrder,
 } from '../_shared/activity_session_time.ts';
 import {
-  findGenericActivityResourceConflict,
   genericActivityOccursOnDate,
 } from '../_shared/generic_activity_resource_conflicts.ts';
+import {
+  checkPhysicalActivitySchedule,
+  claimPhysicalResourceBlocks,
+  PhysicalAvailabilityConflictError,
+  PhysicalAvailabilityLookupError,
+} from '../_shared/physical_availability.ts';
 import {
   buildCapacityProjection,
   buildOpeningIntervals,
@@ -331,29 +336,6 @@ function activitySessionOccursOnDate(session: Record<string, any>, date: string)
   return genericActivityOccursOnDate(session, date);
 }
 
-function activitySessionOccurrenceRangeUtc(session: Record<string, any>, date: string) {
-  return activitySessionOccurrenceInterval(date, session.start_time, session.end_time);
-}
-
-function rangesOverlap(startA: DateTime, endA: DateTime, startB: DateTime, endB: DateTime) {
-  return startA.toMillis() < endB.toMillis() && endA.toMillis() > startB.toMillis();
-}
-
-function formatStockholmRange(startIso: string, endIso: string) {
-  const start = DateTime.fromISO(startIso, { zone: 'utc' }).setZone('Europe/Stockholm');
-  const end = DateTime.fromISO(endIso, { zone: 'utc' }).setZone('Europe/Stockholm');
-  if (!start.isValid || !end.isValid) return '';
-  return `${start.toISODate()} ${start.toFormat('HH:mm')}–${end.toFormat('HH:mm')}`;
-}
-
-function conflictSearchWindow(session: Record<string, any>) {
-  if (session.session_date) {
-    const range = stockholmDayRangeUtc(String(session.session_date).slice(0, 10));
-    return { start: range.start!, end: range.end! };
-  }
-  return { start: stockholmDayRangeUtc(stockholmToday()).start!, end: null as string | null };
-}
-
 async function validateActivitySessionCourtAvailability(
   admin: any,
   venueId: string,
@@ -366,138 +348,38 @@ async function validateActivitySessionCourtAvailability(
   const courtIds = normalizeCourtIds(session.court_ids);
   if (!courtIds.length) return { ok: true as const };
 
-  const { data: courts, error: courtsError } = await admin
-    .from('venue_courts')
-    .select('id, name, court_number')
-    .eq('venue_id', venueId)
-    .in('id', courtIds);
-  if (courtsError) return { ok: false as const, status: 400, message: courtsError.message };
-  if ((courts || []).length !== courtIds.length) {
-    return { ok: false as const, status: 400, message: 'En eller flera valda banor tillhör inte anläggningen.' };
-  }
-
-  const courtById = new Map<string, any>((courts || []).map((court: any) => [court.id, court]));
-  const window = conflictSearchWindow(session);
-
-  let activitiesQuery = admin
-    .from('activity_sessions')
-    .select('id, name, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
-    .eq('venue_id', venueId)
-    .eq('is_active', true)
-    .eq('publish_status', 'published')
-    .overlaps('court_ids', courtIds)
-    .order('start_time', { ascending: true })
-    .limit(1000);
-  if (selfSessionId) activitiesQuery = activitiesQuery.neq('id', selfSessionId);
-  const { data: activities, error: activitiesError } = await activitiesQuery;
-  if (activitiesError) return { ok: false as const, status: 400, message: activitiesError.message };
-
-  const activityConflict = findGenericActivityResourceConflict({
-    candidate: session,
-    owners: activities || [],
-    courtNames: Object.fromEntries((courts || []).map((court: any) => [court.id, court.name])),
-    fromDate: stockholmToday(),
-    selfSessionId,
-  });
-  if (activityConflict) {
-    const ownerInterval = activitySessionOccurrenceRangeUtc({
-      start_time: activityConflict.start_time,
-      end_time: activityConflict.end_time,
-    }, activityConflict.session_date);
-    return {
-      ok: false as const,
-      status: 409,
-      code: 'resource_conflict',
-      message: `${activityConflict.resource_name} används redan av ${activityConflict.owner_name} ${activityConflict.session_date} ${activityConflict.start_time}–${activityConflict.end_time}.`,
-      conflicts: [{
-        resource_type: 'venue_court',
-        resource_id: activityConflict.resource_id,
-        resource_name: activityConflict.resource_name,
-        owner_type: 'activity_session',
-        owner_id: activityConflict.owner_id,
-        owner_name: activityConflict.owner_name,
-        session_date: activityConflict.session_date,
-        starts_at: ownerInterval?.startISO || null,
-        ends_at: ownerInterval?.endISO || null,
-      }],
-    };
-  }
-
-  let bookingsQuery = admin
-    .from('bookings')
-    .select('id, booking_ref, venue_court_id, start_time, end_time, status')
-    .eq('venue_id', venueId)
-    .in('venue_court_id', courtIds)
-    .neq('status', 'cancelled')
-    .gte('end_time', window.start)
-    .order('start_time', { ascending: true })
-    .limit(1000);
-  if (window.end) bookingsQuery = bookingsQuery.lt('start_time', window.end);
-  const { data: bookings, error: bookingsError } = await bookingsQuery;
-  if (bookingsError) return { ok: false as const, status: 400, message: bookingsError.message };
-
-  for (const booking of bookings || []) {
-    const bookingStart = DateTime.fromISO(booking.start_time, { zone: 'utc' }).setZone('Europe/Stockholm');
-    const bookingEnd = DateTime.fromISO(booking.end_time, { zone: 'utc' }).setZone('Europe/Stockholm');
-    if (!bookingStart.isValid || !bookingEnd.isValid) continue;
-    const bookingDate = bookingStart.toISODate();
-    if (!bookingDate || !activitySessionOccursOnDate(session, bookingDate)) continue;
-    const occurrence = activitySessionOccurrenceRangeUtc(session, bookingDate);
-    if (!occurrence) continue;
-    if (rangesOverlap(occurrence.start, occurrence.end, bookingStart, bookingEnd)) {
-      const court = courtById.get(booking.venue_court_id);
-      const courtName = court?.name || `Bana ${court?.court_number || ''}`.trim() || 'Banan';
+  try {
+    const decision = await checkPhysicalActivitySchedule(admin, {
+      venueId,
+      courtIds,
+      sessionDate: session.session_date ? String(session.session_date).slice(0, 10) : null,
+      recurrenceDays: Array.isArray(session.recurrence_days) ? session.recurrence_days : null,
+      startTime: session.start_time,
+      endTime: session.end_time,
+      seriesId: session.series_id || null,
+      excludeSessionId: selfSessionId || null,
+    });
+    if (!decision.available) {
       return {
         ok: false as const,
         status: 409,
-        message: `${courtName} är redan bokad ${formatStockholmRange(booking.start_time, booking.end_time)}.`,
+        code: 'physical_availability_conflict',
+        message: 'En eller flera banor är inte tillgängliga för aktivitetens schema.',
+        conflicts: decision.occurrences.filter((occurrence) => !occurrence.available),
       };
     }
-  }
-
-  let blocksQuery = admin
-    .from('event_resource_blocks')
-    .select('id, title, reason, status, starts_at, ends_at, metadata, resource_catalog_id, event_resource_catalog(id, name, resource_type, venue_court_id)')
-    .eq('venue_id', venueId)
-    .eq('blocks_public_booking', true)
-    .in('status', ['hold', 'confirmed'])
-    .gte('ends_at', window.start)
-    .order('starts_at', { ascending: true })
-    .limit(1000);
-  if (window.end) blocksQuery = blocksQuery.lt('starts_at', window.end);
-  const { data: blocks, error: blocksError } = await blocksQuery;
-  if (blocksError) return { ok: false as const, status: 400, message: blocksError.message };
-
-  const courtSet = new Set(courtIds);
-  for (const block of blocks || []) {
-    const metadata = cleanBlockMetadata(block.metadata);
-    if (selfSessionId && metadata.activity_session_id === selfSessionId) continue;
-    const resource = resourceForBlockRow(block);
-    const resourceType = String(resource?.resource_type || '').toLowerCase();
-    const blockCourtId = resource?.venue_court_id || metadata.venue_court_id;
-    const targetsSelectedCourt = metadata.scope === 'venue' ||
-      resourceType === 'venue' ||
-      resourceType === 'whole_venue' ||
-      (blockCourtId && courtSet.has(String(blockCourtId)));
-    if (!targetsSelectedCourt) continue;
-
-    const blockStart = DateTime.fromISO(block.starts_at, { zone: 'utc' });
-    const blockEnd = DateTime.fromISO(block.ends_at, { zone: 'utc' });
-    if (!blockStart.isValid || !blockEnd.isValid) continue;
-    for (const date of localDatesBetween(block.starts_at, block.ends_at)) {
-      if (!activitySessionOccursOnDate(session, date)) continue;
-      const occurrence = activitySessionOccurrenceRangeUtc(session, date);
-      if (!occurrence) continue;
-      if (rangesOverlap(DateTime.fromISO(occurrence.startISO, { zone: 'utc' }), DateTime.fromISO(occurrence.endISO, { zone: 'utc' }), blockStart, blockEnd)) {
-        const court = blockCourtId ? courtById.get(String(blockCourtId)) : null;
-        const courtName = court?.name || resource?.name || 'Vald bana';
-        return {
-          ok: false as const,
-          status: 409,
-          message: `${courtName} är blockerad ${formatStockholmRange(block.starts_at, block.ends_at)}.`,
-        };
-      }
+  } catch (error) {
+    if (error instanceof PhysicalAvailabilityLookupError) {
+      console.error('Activity physical availability failed closed:', error.message);
+      return {
+        ok: false as const,
+        status: 503,
+        code: 'physical_availability_unavailable',
+        message: 'Tillgängligheten kunde inte verifieras. Försök igen.',
+        conflicts: [],
+      };
     }
+    throw error;
   }
 
   return { ok: true as const };
@@ -512,6 +394,21 @@ function activitySessionCourtValidationResponse(validation: any) {
     }, validation.status);
   }
   return errorResponse(validation.message, validation.status);
+}
+
+function physicalBlockClaimErrorResponse(error: unknown) {
+  if (error instanceof PhysicalAvailabilityConflictError) {
+    return jsonResponse({
+      error: 'En eller flera resurser är inte tillgängliga för denna tid',
+      code: 'physical_availability_conflict',
+      conflicts: error.decision?.conflicts || [],
+    }, 409);
+  }
+  if (error instanceof PhysicalAvailabilityLookupError) {
+    console.error('Resource-block physical availability failed closed:', error.message);
+    return errorResponse('Tillgängligheten kunde inte verifieras. Inga blockeringar skapades.', 503);
+  }
+  throw error;
 }
 
 async function validateActivitySessionHostCustomers(admin: any, hostCustomerIds: string[] | null) {
@@ -5670,14 +5567,21 @@ Deno.serve(async (req) => {
         metadata: blockMetadata,
       }));
 
+      let claimedBlocks: any[];
+      try {
+        claimedBlocks = await claimPhysicalResourceBlocks(admin, requestedVenueId, blockRows);
+      } catch (error) {
+        await admin.from('venue_operation_overrides').update({ status: 'cancelled' }).eq('id', override.id).eq('venue_id', requestedVenueId);
+        return physicalBlockClaimErrorResponse(error);
+      }
+
+      const blockIds = claimedBlocks.map((block) => block.id);
       const { data: blocks, error: blocksError } = await admin
         .from('event_resource_blocks')
-        .insert(blockRows)
-        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)');
-      if (blocksError) {
-        await admin.from('venue_operation_overrides').update({ status: 'cancelled' }).eq('id', override.id).eq('venue_id', requestedVenueId);
-        return errorResponse(blocksError.message);
-      }
+        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)')
+        .eq('venue_id', requestedVenueId)
+        .in('id', blockIds);
+      if (blocksError) return errorResponse(blocksError.message);
 
       return jsonResponse({ override, blocks: blocks || [], impact }, 201);
     }
@@ -5961,10 +5865,17 @@ Deno.serve(async (req) => {
           metadata: { group_id: groupId, block_ref: blockRef, note, ...billingMetadata },
         }));
 
+      let claimedBlocks: any[];
+      try {
+        claimedBlocks = await claimPhysicalResourceBlocks(admin, venueId, rows);
+      } catch (error) {
+        return physicalBlockClaimErrorResponse(error);
+      }
       const { data, error: e } = await admin
         .from('event_resource_blocks')
-        .insert(rows)
-        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)');
+        .select('*, event_resource_catalog(id, name, resource_type, venue_court_id)')
+        .eq('venue_id', venueId)
+        .in('id', claimedBlocks.map((block) => block.id));
       if (e) return errorResponse(e.message);
       return jsonResponse(data || [], 201);
     }

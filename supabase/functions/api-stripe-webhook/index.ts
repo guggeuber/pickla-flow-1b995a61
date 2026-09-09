@@ -22,6 +22,12 @@ import {
   assertCurrentCourseParticipantIdentity,
   type CourseParticipantType,
 } from '../_shared/course_participant_policy.ts';
+import {
+  claimPhysicalBookings,
+  physicalIntervalFromLocal,
+  PhysicalAvailabilityConflictError,
+  PhysicalAvailabilityLookupError,
+} from '../_shared/physical_availability.ts';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
@@ -1770,9 +1776,9 @@ async function handleCourtBooking(
     throw new Error(`Missing metadata fields: date=${date} start=${start_time} end=${end_time} courts=${court_ids}`);
   }
 
-  // Convert Stockholm local time → UTC for storage
-  const startISO = DateTime.fromISO(`${date}T${start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
-  const endISO   = DateTime.fromISO(`${date}T${end_time}:00`,   { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+  // Convert venue-local time to an absolute half-open interval. Midnight is
+  // the following local day, rather than a negative same-day interval.
+  const { startsAt: startISO, endsAt: endISO } = physicalIntervalFromLocal(date, start_time, end_time);
 
   // Resolve user — use authenticated user, Checkout email, metadata email, or fall back to shared guest user.
   const bookingUserId = await resolveUserId(session, user_id, serviceClient, customer_email);
@@ -1781,46 +1787,23 @@ async function handleCourtBooking(
   const totalSek = Math.round((session.amount_total || 0) / 100);
   const pricePerCourt = Math.round(totalSek / courtIds.length);
   const notes = [name, phone].filter(Boolean).join(' | ');
-  const { data: existingSessionBooking } = await serviceClient
+  const { data: existingSessionBookings, error: existingSessionError } = await serviceClient
     .from('bookings')
-    .select('access_code')
+    .select('id, venue_court_id, access_code')
     .eq('stripe_session_id', session.id)
-    .not('access_code', 'is', null)
-    .limit(1)
-    .maybeSingle();
-  const sharedAccessCode = existingSessionBooking?.access_code ||
+    .neq('status', 'cancelled');
+  if (existingSessionError) throw new Error(existingSessionError.message);
+  const sharedAccessCode = (existingSessionBookings || []).find((booking: any) => booking.access_code)?.access_code ||
     (await generateAccessCode(serviceClient, venue_id, date));
-  let insertedAnyBooking = false;
+  const existingCourtIds = new Set((existingSessionBookings || []).map((booking: any) => booking.venue_court_id));
   const includedCourtHours = Number(meta.included_court_hours || 0);
   const paidCourtHours = Number(meta.paid_court_hours || 0);
   const includedHoursPerCourt = courtIds.length > 0 ? includedCourtHours / courtIds.length : 0;
   const paidHoursPerCourt = courtIds.length > 0 ? paidCourtHours / courtIds.length : 0;
 
-  for (const courtId of courtIds) {
-    // Idempotency: skip if already created for this session + court
-    const { data: existing } = await serviceClient
-      .from('bookings')
-      .select('id')
-      .eq('stripe_session_id', session.id)
-      .eq('venue_court_id', courtId)
-      .maybeSingle();
-    if (existing) continue;
-
-    const { data: conflicts } = await serviceClient
-      .from('bookings')
-      .select('id, stripe_session_id')
-      .eq('venue_id', venue_id)
-      .eq('venue_court_id', courtId)
-      .neq('status', 'cancelled')
-      .lt('start_time', endISO)
-      .gt('end_time', startISO)
-      .limit(1);
-    const conflictingBooking = (conflicts || []).find((b: any) => b.stripe_session_id !== session.id);
-    if (conflictingBooking) {
-      throw new Error(`Court ${courtId} is already booked for this time`);
-    }
-
-    const { error } = await serviceClient.from('bookings').insert({
+  const missingClaims = courtIds
+    .filter((courtId) => !existingCourtIds.has(courtId))
+    .map((courtId) => ({
       venue_id,
       venue_court_id:         courtId,
       user_id:                bookingUserId,
@@ -1843,11 +1826,62 @@ async function handleCourtBooking(
       participation_funding_source_type: includedHoursPerCourt > 0 ? 'membership_entitlement' : 'stripe_payment',
       participation_funding_source_id: includedHoursPerCourt > 0 ? (meta.membership_id || null) : session.id,
       participation_funder: includedHoursPerCourt > 0 ? 'subscription' : 'self_prepaid',
-    });
+    }));
 
-    if (error) throw new Error(`Failed to insert booking for court ${courtId}: ${error.message}`);
-    insertedAnyBooking = true;
+  try {
+    if (missingClaims.length) await claimPhysicalBookings(serviceClient, venue_id, missingClaims);
+  } catch (error) {
+    if (!(error instanceof PhysicalAvailabilityConflictError) && !(error instanceof PhysicalAvailabilityLookupError)) throw error;
+
+    const receipt = await createCourtBookingReceipt({
+      session,
+      meta,
+      serviceClient,
+      bookingUserId,
+      bookingRefs: [],
+      totalSek,
+    });
+    await createLedgerEntryFromReceipt({
+      session,
+      meta,
+      serviceClient,
+      sourceType: 'stripe_payment',
+      sourceId: session.id,
+      receipt,
+      amountIncVatMinor: Number(session.amount_total || 0),
+      metadata: {
+        intended_source_type: 'court_booking',
+        delivery_status: error instanceof PhysicalAvailabilityConflictError ? 'physical_conflict' : 'availability_lookup_failed',
+        court_ids: courtIds,
+        date,
+        start_time,
+        end_time,
+      },
+    });
+    await recordPaidCapacityConflict(serviceClient, {
+      venueId: venue_id,
+      scopeType: 'physical_court_booking',
+      scopeId: courtIds.join(','),
+      sessionDate: date,
+      stripeSessionId: session.id,
+      paymentIntentId: stripeId(session.payment_intent),
+      receiptId: receipt?.id || null,
+      ledgerSourceType: 'stripe_payment',
+      ledgerSourceId: session.id,
+      userId: bookingUserId,
+      title: 'Betald banbokning kunde inte materialiseras',
+      metadata: {
+        product_type: 'court_booking',
+        failure_category: error instanceof PhysicalAvailabilityConflictError ? 'physical_conflict' : 'availability_lookup_failed',
+        court_ids: courtIds,
+        requested_interval: { starts_at: startISO, ends_at: endISO },
+      },
+    });
+    // Payment remains recorded for manual resolution. Returning normally marks
+    // the Stripe event processed and prevents retry-driven double delivery.
+    return;
   }
+  const insertedAnyBooking = missingClaims.length > 0;
 
   const { data: sessionBookings, error: refsErr } = await serviceClient
     .from('bookings')

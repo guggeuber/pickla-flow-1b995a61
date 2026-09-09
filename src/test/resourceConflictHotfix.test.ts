@@ -84,16 +84,17 @@ describe("resource conflict hotfix regressions", () => {
     });
   });
 
-  it("makes the generic Admin activity validator query other activity owners", () => {
+  it("makes the generic Admin activity validator use the canonical physical decision", () => {
     const validator = adminApi.slice(
       adminApi.indexOf("async function validateActivitySessionCourtAvailability"),
       adminApi.indexOf("async function validateActivitySessionHostCustomers"),
     );
 
-    expect(validator).toContain(".from('activity_sessions')");
-    expect(validator).toContain(".from('bookings')");
-    expect(validator).toContain(".from('event_resource_blocks')");
-    expect(validator).toContain("code: 'resource_conflict'");
+    expect(validator).toContain("checkPhysicalActivitySchedule(admin");
+    expect(validator).toContain("code: 'physical_availability_conflict'");
+    expect(validator).not.toContain(".from('activity_sessions')");
+    expect(validator).not.toContain(".from('bookings')");
+    expect(validator).not.toContain(".from('event_resource_blocks')");
   });
 
   it("denies the exact recurring Bana 6 PATCH conflict", () => {

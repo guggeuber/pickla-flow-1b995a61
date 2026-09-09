@@ -26,6 +26,14 @@ import {
   resolveCurrentBookingParticipantCoverage,
 } from '../_shared/booking_participant_entitlement.ts';
 import { bookingParticipationFunding } from '../_shared/booking_participant_funding.ts';
+import {
+  checkPhysicalAvailability,
+  claimPhysicalBookings,
+  physicalIntervalFromLocal,
+  PhysicalAvailabilityConflictError,
+  PhysicalAvailabilityLookupError,
+  publicPhysicalConflicts,
+} from '../_shared/physical_availability.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -40,6 +48,21 @@ const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com
 const STRIPE_API_BASE = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
 
 type StripeCheckoutSession = { id: string; url: string | null };
+
+function physicalAvailabilityErrorResponse(error: unknown) {
+  if (error instanceof PhysicalAvailabilityConflictError) {
+    return jsonResponse({
+      error: 'En eller flera banor är inte tillgängliga för denna tid',
+      code: 'physical_availability_conflict',
+      conflicts: error.decision ? publicPhysicalConflicts(error.decision) : [],
+    }, 409);
+  }
+  if (error instanceof PhysicalAvailabilityLookupError) {
+    console.error('Physical availability failed closed:', error.message);
+    return errorResponse('Tillgängligheten kunde inte verifieras. Försök igen.', 503);
+  }
+  throw error;
+}
 
 function isPlayingHostReason(value: unknown) {
   return value === PLAYING_HOST_ROLE || value === LEGACY_HOST_COMP;
@@ -115,57 +138,6 @@ function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
     totalExVat: Math.round(Math.max(totalIncVat - vatAmount, 0) * 100) / 100,
     vatRate,
   };
-}
-
-function normalizeCatalogResource(row: any) {
-  const resource = row?.event_resource_catalog;
-  return Array.isArray(resource) ? resource[0] : resource;
-}
-
-function blockTargetsCourts(block: any, courtIds: string[]) {
-  const resource = normalizeCatalogResource(block);
-  const scope = block?.metadata?.scope;
-  const resourceType = String(resource?.resource_type || '').toLowerCase();
-  if (scope === 'venue' || resourceType === 'venue' || resourceType === 'whole_venue') return courtIds;
-
-  const courtId = resource?.venue_court_id || block?.metadata?.venue_court_id;
-  return courtId && courtIds.includes(courtId) ? [courtId] : [];
-}
-
-async function getCourtResourceBlocks(
-  admin: any,
-  venueId: string,
-  courtIds: string[],
-  startISO: string,
-  endISO: string,
-) {
-  if (!courtIds.length) return [];
-
-  const { data, error } = await admin
-    .from('event_resource_blocks')
-    .select('id, title, reason, status, starts_at, ends_at, metadata, resource_catalog_id, event_resource_catalog(id, name, resource_type, venue_court_id)')
-    .eq('venue_id', venueId)
-    .eq('blocks_public_booking', true)
-    .in('status', ['hold', 'confirmed'])
-    .lt('starts_at', endISO)
-    .gt('ends_at', startISO);
-
-  if (error) {
-    console.error('event_resource_blocks lookup failed', error.message);
-    return [];
-  }
-
-  return (data || []).flatMap((block: any) =>
-    blockTargetsCourts(block, courtIds).map((courtId) => ({
-      id: block.id,
-      court_id: courtId,
-      start: block.starts_at,
-      end: block.ends_at,
-      title: block.title,
-      status: block.status,
-      kind: 'resource_block',
-    }))
-  );
 }
 
 function activityOccurrenceMatchesDate(session: any, date: string) {
@@ -1267,14 +1239,18 @@ async function createFreeEntitlementBookingResponse({
   const entitlementCustomerId = await resolveCustomerIdForUser(adminFree, entitlementUserId);
 
   if (product_type === 'court_booking' && meta.court_ids && meta.date) {
-    const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
-    const endISO   = DateTime.fromISO(`${meta.date}T${meta.end_time}:00`,   { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+    let interval;
+    try {
+      interval = physicalIntervalFromLocal(meta.date, meta.start_time, meta.end_time);
+    } catch (error) {
+      return physicalAvailabilityErrorResponse(error);
+    }
+    const { startsAt: startISO, endsAt: endISO } = interval;
     const notes = [meta.name, meta.phone].filter(Boolean).join(' | ') || null;
 
     let courtIds: string[];
     try { courtIds = JSON.parse(meta.court_ids || '[]'); } catch { courtIds = []; }
     const accessCode = await generateAccessCode(adminFree, venue_id, meta.date);
-    const bookings = [];
     const quotaDate = meta.entitlement_period_start
       ? DateTime.fromISO(meta.entitlement_period_start, { zone: 'Europe/Stockholm' })
       : meta.date
@@ -1287,17 +1263,9 @@ async function createFreeEntitlementBookingResponse({
     const includedCourtHours = parseNumber(meta.included_court_hours, courtHours);
     const includedHoursPerCourt = courtIds.length > 0 ? includedCourtHours / courtIds.length : 0;
 
-    for (const courtId of courtIds) {
-      const { data: conflicts } = await adminFree.from('bookings')
-        .select('id')
-        .eq('venue_court_id', courtId)
-        .neq('status', 'cancelled')
-        .lt('start_time', endISO)
-        .gt('end_time', startISO)
-        .limit(1);
-      if (conflicts?.length) return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
-
-      const { data: booking, error: bookingErr } = await adminFree.from('bookings').insert({
+    let bookings: any[];
+    try {
+      bookings = await claimPhysicalBookings(adminFree, venue_id, courtIds.map((courtId) => ({
         venue_id, venue_court_id: courtId, user_id: entitlementUserId, booked_by: entitlementUserId,
         customer_id: entitlementCustomerId,
         start_time: startISO, end_time: endISO, total_price: 0,
@@ -1312,9 +1280,9 @@ async function createFreeEntitlementBookingResponse({
         participation_funding_source_type: 'membership_entitlement',
         participation_funding_source_id: meta.membership_id || null,
         participation_funder: 'subscription',
-      }).select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at').single();
-      if (bookingErr) return errorResponse(bookingErr.message, 500);
-      if (booking) bookings.push(booking);
+      })));
+    } catch (error) {
+      return physicalAvailabilityErrorResponse(error);
     }
 
     if (includedCourtHours > 0) {
@@ -2339,41 +2307,31 @@ Deno.serve(async (req) => {
         return errorResponse('Missing booking metadata', 400);
       }
 
-      const startISO = DateTime.fromISO(`${meta.date}T${meta.start_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
-      const endISO = DateTime.fromISO(`${meta.date}T${meta.end_time}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+      let interval;
+      try {
+        interval = physicalIntervalFromLocal(meta.date, meta.start_time, meta.end_time);
+      } catch (error) {
+        return physicalAvailabilityErrorResponse(error);
+      }
+      const { startsAt: startISO, endsAt: endISO } = interval;
       const adminCheckout = getServiceClient();
 
-      const { data: venueCourts } = await adminCheckout
-        .from('venue_courts')
-        .select('id')
-        .eq('venue_id', venue_id)
-        .in('id', courtIds);
-      if ((venueCourts || []).length !== courtIds.length) {
-        return errorResponse('One or more courts do not belong to this venue', 400);
-      }
-
-      const { data: conflicts } = await adminCheckout
-        .from('bookings')
-        .select('id')
-        .eq('venue_id', venue_id)
-        .in('venue_court_id', courtIds)
-        .neq('status', 'cancelled')
-        .lt('start_time', endISO)
-        .gt('end_time', startISO)
-        .limit(1);
-      if (conflicts?.length) {
-        return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
-      }
-
-      const resourceBlocks = await getCourtResourceBlocks(adminCheckout, venue_id, courtIds, startISO, endISO);
-      if (resourceBlocks.length) {
-        return errorResponse('En eller flera banor är blockerade för event eller intern planering', 409);
-      }
-
-      const activityBlocks = await getActivityCourtBlocks(adminCheckout, venue_id, courtIds, startISO, endISO);
-      if (activityBlocks.length) {
-        const title = activityBlocks[0]?.title || 'aktivitet';
-        return errorResponse(`En eller flera banor är reserverade för ${title}`, 409);
+      try {
+        const decision = await checkPhysicalAvailability(adminCheckout, {
+          venueId: venue_id,
+          courtIds,
+          startsAt: startISO,
+          endsAt: endISO,
+        });
+        if (!decision.available) {
+          return jsonResponse({
+            error: 'En eller flera banor är inte tillgängliga för denna tid',
+            code: 'physical_availability_conflict',
+            conflicts: publicPhysicalConflicts(decision),
+          }, 409);
+        }
+      } catch (error) {
+        return physicalAvailabilityErrorResponse(error);
       }
     }
 
@@ -3428,8 +3386,9 @@ Deno.serve(async (req) => {
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(supabaseUrl, serviceKey);
 
-    const { data: venue } = await admin.from('venues')
+    const { data: venue, error: venueError } = await admin.from('venues')
       .select('id, name').eq('slug', venueSlug).eq('is_public', true).single();
+    if (venueError && venueError.code !== 'PGRST116') return errorResponse('Availability unavailable', 503);
     if (!venue) return errorResponse('Venue not found', 404);
 
     // Get courts — display screen passes showAll=true to include unavailable courts
@@ -3438,29 +3397,42 @@ Deno.serve(async (req) => {
       .eq('venue_id', venue.id)
       .order('court_number');
     if (!showAll) courtQuery = courtQuery.eq('is_available', true);
-    const { data: courts } = await courtQuery;
+    const { data: courts, error: courtsError } = await courtQuery;
+    if (courtsError) return errorResponse('Availability unavailable', 503);
 
     // Get opening hours for requested day(s)
-    const { data: hoursRows } = await admin.from('opening_hours')
+    const { data: hoursRows, error: hoursError } = await admin.from('opening_hours')
       .select('day_of_week, open_time, close_time, is_closed')
       .eq('venue_id', venue.id);
+    if (hoursError) return errorResponse('Availability unavailable', 503);
     const hoursByDay = new Map((hoursRows || []).map((row: any) => [row.day_of_week, row]));
 
-    // Get existing bookings for the requested date range
+    // One canonical occupancy read for bookings, expanded Activity occurrences,
+    // resource blocks, court state and local opening rules.
     const { start } = stockholmDateRangeUtc(requestedDates[0]);
     const { end } = stockholmDateRangeUtc(requestedDates[requestedDates.length - 1]);
-    const { data: bookings } = await admin.from('bookings')
-      .select('venue_court_id, start_time, end_time')
-      .eq('venue_id', venue.id)
-      .neq('status', 'cancelled')
-      .lt('start_time', end)
-      .gt('end_time', start);
+    const courtIds = (courts || []).map((court: any) => court.id).filter(Boolean);
+    let physicalDecision;
+    try {
+      physicalDecision = courtIds.length
+        ? await checkPhysicalAvailability(admin, {
+          venueId: venue.id,
+          courtIds,
+          startsAt: start,
+          endsAt: end,
+        })
+        : null;
+    } catch (error) {
+      console.error('Public physical availability degraded:', error instanceof Error ? error.message : error);
+      return errorResponse('Availability unavailable', 503);
+    }
 
     // Get active pricing rules for this venue
-    const { data: pricingRules } = await admin.from('pricing_rules')
+    const { data: pricingRules, error: pricingError } = await admin.from('pricing_rules')
       .select('id, name, type, price, days_of_week, time_from, time_to, sport_type, court_type')
       .eq('venue_id', venue.id).eq('is_active', true)
       .order('price', { ascending: false });
+    if (pricingError) return errorResponse('Availability unavailable', 503);
 
     const emptyAvailability = () => ({ openingHours: null, bookings: [] as any[] });
     const availabilityByDate: Record<string, { openingHours: any; bookings: any[] }> = Object.fromEntries(
@@ -3478,55 +3450,19 @@ Deno.serve(async (req) => {
       })
     );
 
-    for (const booking of bookings || []) {
-      const bookingDate = DateTime.fromISO(booking.start_time, { zone: 'utc' })
-        .setZone('Europe/Stockholm')
-        .toISODate()!;
-      const bucket = availabilityByDate[bookingDate] || emptyAvailability();
-      bucket.bookings.push({
-        court_id: booking.venue_court_id,
-        start: booking.start_time,
-        end: booking.end_time,
-      });
-      availabilityByDate[bookingDate] = bucket;
-    }
-
-    const courtIds = (courts || []).map((court: any) => court.id).filter(Boolean);
-    const resourceBlocks = await getCourtResourceBlocks(admin, venue.id, courtIds, start, end);
-    const activityBlocks = await getActivityCourtBlocks(admin, venue.id, courtIds, start, end);
-    for (const block of resourceBlocks) {
+    for (const conflict of physicalDecision?.conflicts || []) {
+      if (!['booking', 'activity_occurrence', 'resource_block', 'court_unavailable'].includes(conflict.type)) continue;
       for (const requestedDate of requestedDates) {
         const range = stockholmDateRangeUtc(requestedDate);
-        if (block.start < range.end && block.end > range.start) {
+        if (conflict.starts_at < range.end && conflict.ends_at > range.start) {
           const bucket = availabilityByDate[requestedDate] || emptyAvailability();
           bucket.bookings.push({
-            court_id: block.court_id,
-            start: block.start,
-            end: block.end,
+            court_id: conflict.resource_id,
+            start: conflict.starts_at,
+            end: conflict.ends_at,
             status: 'blocked',
-            block_id: block.id,
-            title: block.title,
-            kind: 'resource_block',
-          });
-          availabilityByDate[requestedDate] = bucket;
-        }
-      }
-    }
-
-    for (const block of activityBlocks) {
-      for (const requestedDate of requestedDates) {
-        const range = stockholmDateRangeUtc(requestedDate);
-        if (block.start < range.end && block.end > range.start) {
-          const bucket = availabilityByDate[requestedDate] || emptyAvailability();
-          bucket.bookings.push({
-            court_id: block.court_id,
-            start: block.start,
-            end: block.end,
-            status: 'blocked',
-            title: block.title,
-            kind: 'activity_session',
-            activity_session_id: block.activity_session_id,
-            session_type: block.session_type || null,
+            title: conflict.type === 'activity_occurrence' ? 'Aktivitet' : 'Ej bokningsbar',
+            kind: conflict.type,
           });
           availabilityByDate[requestedDate] = bucket;
         }
@@ -3664,31 +3600,31 @@ Deno.serve(async (req) => {
       .select('id').eq('slug', slug).eq('is_public', true).single();
     if (!venue) return errorResponse('Venue not found', 404);
 
-    // Build UTC ISO timestamps from Stockholm local time
-    const startISO = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
-    const endISO = DateTime.fromISO(`${date}T${endTime}:00`, { zone: 'Europe/Stockholm' }).toUTC().toISO()!;
+    let interval;
+    try {
+      interval = physicalIntervalFromLocal(date, startTime, endTime);
+    } catch (error) {
+      return physicalAvailabilityErrorResponse(error);
+    }
+    const { startsAt: startISO, endsAt: endISO } = interval;
     const durationHours = (new Date(endISO).getTime() - new Date(startISO).getTime()) / 3600000;
 
-    // Check conflicts for all courts
-    for (const courtId of courtIds) {
-      const { data: conflicts } = await admin.from('bookings')
-        .select('id').eq('venue_court_id', courtId)
-        .neq('status', 'cancelled')
-        .lt('start_time', endISO).gt('end_time', startISO);
-      if (conflicts && conflicts.length > 0) {
-        return errorResponse('En eller flera banor är redan bokade för denna tid', 409);
+    try {
+      const decision = await checkPhysicalAvailability(admin, {
+        venueId: venue.id,
+        courtIds,
+        startsAt: startISO,
+        endsAt: endISO,
+      });
+      if (!decision.available) {
+        return jsonResponse({
+          error: 'En eller flera banor är inte tillgängliga för denna tid',
+          code: 'physical_availability_conflict',
+          conflicts: publicPhysicalConflicts(decision),
+        }, 409);
       }
-    }
-
-    const resourceBlocks = await getCourtResourceBlocks(admin, venue.id, courtIds, startISO, endISO);
-    if (resourceBlocks.length) {
-      return errorResponse('En eller flera banor är blockerade för event eller intern planering', 409);
-    }
-
-    const activityBlocks = await getActivityCourtBlocks(admin, venue.id, courtIds, startISO, endISO);
-    if (activityBlocks.length) {
-      const title = activityBlocks[0]?.title || 'aktivitet';
-      return errorResponse(`En eller flera banor är reserverade för ${title}`, 409);
+    } catch (error) {
+      return physicalAvailabilityErrorResponse(error);
     }
 
     // Try to resolve authenticated user from Authorization header
@@ -3790,11 +3726,10 @@ Deno.serve(async (req) => {
       return errorResponse('Betalning krävs innan bokningen kan bekräftas.', 402);
     }
 
-    const bookings = [];
-    let totalHoursBooked = 0;
     const sharedAccessCode = await generateAccessCode(admin, venue.id, date);
-    for (const { courtId, price } of pricedCourts) {
-      const { data: booking, error: bErr } = await admin.from('bookings').insert({
+    let bookings: any[];
+    try {
+      bookings = await claimPhysicalBookings(admin, venue.id, pricedCourts.map(({ courtId, price }) => ({
         venue_id: venue.id,
         venue_court_id: courtId,
         user_id: bookingUserId,
@@ -3811,12 +3746,11 @@ Deno.serve(async (req) => {
         participation_funder: validCorporatePackageId ? 'employer' : 'house_comped',
         access_code: sharedAccessCode,
         access_code_expires_at: endISO,
-      }).select().single();
-
-      if (bErr) return errorResponse(bErr.message);
-      bookings.push(booking);
-      totalHoursBooked += durationHours;
+      })));
+    } catch (error) {
+      return physicalAvailabilityErrorResponse(error);
     }
+    const totalHoursBooked = durationHours * pricedCourts.length;
 
     // Deduct hours from corporate package
     if (validCorporatePackageId && totalHoursBooked > 0) {
@@ -4952,37 +4886,30 @@ Deno.serve(async (req) => {
         return errorResponse('Missing required fields');
       }
 
-      const { data: conflicts } = await client.from('bookings')
-        .select('id').eq('venue_court_id', venueCourtId)
-        .neq('status', 'cancelled')
-        .lt('start_time', endTime).gt('end_time', startTime);
-
-      if (conflicts && conflicts.length > 0) {
-        return errorResponse('Court is already booked for this time slot', 409);
-      }
-
       const bookingDate = DateTime.fromISO(startTime, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate()!;
       const serviceClient = getServiceClient();
       const accessCode = await generateAccessCode(serviceClient, venueId, bookingDate);
       const customerId = await resolveCustomerIdForUser(serviceClient, userId);
 
-      const { data, error: insertErr } = await client.from('bookings').insert({
-        venue_id: venueId,
-        venue_court_id: venueCourtId,
-        customer_id: customerId,
-        user_id: userId,
-        booked_by: bookedBy || userId,
-        start_time: startTime,
-        end_time: endTime,
-        total_price: totalPrice,
-        status: 'confirmed',
-        notes,
-        access_code: accessCode,
-        access_code_expires_at: endTime,
-      }).select().single();
-
-      if (insertErr) return errorResponse(insertErr.message);
-      return jsonResponse(data, 201);
+      try {
+        const [booking] = await claimPhysicalBookings(serviceClient, venueId, [{
+          venue_id: venueId,
+          venue_court_id: venueCourtId,
+          customer_id: customerId,
+          user_id: userId,
+          booked_by: bookedBy || userId,
+          start_time: startTime,
+          end_time: endTime,
+          total_price: totalPrice,
+          status: 'confirmed',
+          notes,
+          access_code: accessCode,
+          access_code_expires_at: endTime,
+        }]);
+        return jsonResponse(booking, 201);
+      } catch (error) {
+        return physicalAvailabilityErrorResponse(error);
+      }
     }
 
     // PATCH /api-bookings/update

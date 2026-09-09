@@ -23,6 +23,11 @@ import {
   canonicalEventOfferObjectPath,
   EVENT_OFFER_SIGNED_URL_TTL_SECONDS,
 } from '../_shared/event_offer_storage.ts';
+import {
+  checkPhysicalAvailability,
+  PhysicalAvailabilityConflictError,
+  PhysicalAvailabilityLookupError,
+} from '../_shared/physical_availability.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno';
 
@@ -63,9 +68,10 @@ function eventDateTimeRange(eventRow: any) {
   if (!date || !startTime) return null;
   const endTime = normalizeTime(eventRow?.end_time);
   const start = DateTime.fromISO(`${date}T${startTime}:00`, { zone: 'Europe/Stockholm' });
-  const end = endTime
+  let end = endTime
     ? DateTime.fromISO(`${date}T${endTime}:00`, { zone: 'Europe/Stockholm' })
     : start.plus({ hours: 2 });
+  if (endTime && end.isValid && end <= start) end = end.plus({ days: 1 });
   if (!start.isValid || !end.isValid || end <= start) return null;
   return { start, end, startUtc: start.toUTC().toISO(), endUtc: end.toUTC().toISO() };
 }
@@ -87,15 +93,6 @@ function scheduleRangeFromInput(dateValue: unknown, startValue: unknown, endValu
   return { eventDate, startTime, endTime, range };
 }
 
-function overlapTime(aStart: string | null, aEnd: string | null, bStart: string | null, bEnd: string | null) {
-  const startA = normalizeTime(aStart);
-  const endA = normalizeTime(aEnd) || (startA ? DateTime.fromISO(`2026-01-01T${startA}:00`).plus({ hours: 2 }).toFormat('HH:mm') : null);
-  const startB = normalizeTime(bStart);
-  const endB = normalizeTime(bEnd) || (startB ? DateTime.fromISO(`2026-01-01T${startB}:00`).plus({ hours: 2 }).toFormat('HH:mm') : null);
-  if (!startA || !endA || !startB || !endB) return false;
-  return startA < endB && endA > startB;
-}
-
 async function checkEventResourceConflicts(admin: any, eventRow: any) {
   const range = eventDateTimeRange(eventRow);
   if (!range) {
@@ -107,64 +104,31 @@ async function checkEventResourceConflicts(admin: any, eventRow: any) {
     };
   }
 
-  const { data: eventCourts } = await admin
-    .from('event_courts')
-    .select('venue_court_id, venue_courts(id, name, court_number)')
-    .eq('event_id', eventRow.id);
-  const courtIds = (eventCourts || []).map((row: any) => row.venue_court_id).filter(Boolean);
+  const { resources } = await selectedEventCourtResources(admin, eventRow);
+  const courtIds = uniqueStrings(resources.map((resource: any) => resource.venue_court_id).filter(Boolean));
   if (courtIds.length === 0) {
     return { ok: true, reason: null, conflicts: [], courtIds: [] };
   }
 
-  const conflicts: any[] = [];
-  const eventDate = normalizeDate(eventRow.start_date);
-  const { data: bookingRows } = await admin
-    .from('bookings')
-    .select('id, booking_ref, venue_court_id, start_time, end_time, status, venue_courts(name, court_number)')
+  const { data: existingBlocks, error: existingBlocksError } = await admin
+    .from('event_resource_blocks')
+    .select('id')
     .eq('venue_id', eventRow.venue_id)
-    .in('venue_court_id', courtIds)
-    .in('status', ['confirmed', 'checked_in', 'active'])
-    .lt('start_time', range.endUtc)
-    .gt('end_time', range.startUtc);
+    .eq('event_id', eventRow.id)
+    .in('status', ['hold', 'confirmed']);
+  if (existingBlocksError) throw new PhysicalAvailabilityLookupError(existingBlocksError.message);
 
-  for (const row of bookingRows || []) {
-    conflicts.push({
-      type: 'booking',
-      id: row.id,
-      label: row.booking_ref || 'Bokning',
-      court: row.venue_courts?.name || row.venue_courts?.court_number || row.venue_court_id,
-      start_time: row.start_time,
-      end_time: row.end_time,
-    });
-  }
-
-  const { data: eventRows } = await admin
-    .from('events')
-    .select('id, name, display_name, start_date, start_time, end_time, planning_status, event_courts(venue_court_id, venue_courts(name, court_number))')
-    .eq('venue_id', eventRow.venue_id)
-    .neq('id', eventRow.id)
-    .not('planning_status', 'in', '("cancelled","done")');
-
-  for (const other of eventRows || []) {
-    if (eventDate && normalizeDate(other.start_date) !== eventDate) continue;
-    if (!overlapTime(eventRow.start_time, eventRow.end_time, other.start_time, other.end_time)) continue;
-    for (const court of other.event_courts || []) {
-      if (!courtIds.includes(court.venue_court_id)) continue;
-      conflicts.push({
-        type: 'event',
-        id: other.id,
-        label: other.display_name || other.name || 'Event',
-        court: court.venue_courts?.name || court.venue_court_id,
-        start_time: other.start_time,
-        end_time: other.end_time,
-      });
-    }
-  }
-
+  const decision = await checkPhysicalAvailability(admin, {
+    venueId: eventRow.venue_id,
+    courtIds,
+    startsAt: range.startUtc,
+    endsAt: range.endUtc,
+    excludeResourceBlockIds: (existingBlocks || []).map((block: any) => block.id),
+  });
   return {
-    ok: conflicts.length === 0,
-    reason: conflicts.length ? 'Valda resurser är upptagna.' : null,
-    conflicts,
+    ok: decision.available,
+    reason: decision.available ? null : 'Valda resurser är upptagna.',
+    conflicts: decision.conflicts,
     courtIds,
   };
 }
@@ -448,35 +412,27 @@ async function createOrUpdateEventResourceBlocks(admin: any, eventRow: any, lead
     });
   }
 
-  if (blockIdsToUpdate.length) {
-    const { error } = await admin
-      .from('event_resource_blocks')
-      .update({
-        event_lead_id: lead.id,
-        title: offer.title || eventRow.display_name || eventRow.name || 'Event',
-        reason: 'event',
-        status: 'confirmed',
-        starts_at: range.startUtc,
-        ends_at: range.endUtc,
-        blocks_public_booking: true,
-      })
-      .eq('venue_id', eventRow.venue_id)
-      .in('id', blockIdsToUpdate);
-    if (error) throw new Error(error.message);
-  }
-
-  if (blockIdsToRelease.length) {
-    const { error } = await admin
-      .from('event_resource_blocks')
-      .update({ status: 'released', blocks_public_booking: false })
-      .eq('venue_id', eventRow.venue_id)
-      .in('id', blockIdsToRelease);
-    if (error) throw new Error(error.message);
-  }
-
-  if (blocksToInsert.length) {
-    const { error } = await admin.from('event_resource_blocks').insert(blocksToInsert);
-    if (error) throw new Error(error.message);
+  const { error: reconcileError } = await admin.rpc('reconcile_physical_resource_blocks', {
+    p_venue_id: eventRow.venue_id,
+    p_update_ids: blockIdsToUpdate,
+    p_release_ids: blockIdsToRelease,
+    p_event_lead_id: lead.id,
+    p_title: offer.title || eventRow.display_name || eventRow.name || 'Event',
+    p_starts_at: range.startUtc,
+    p_ends_at: range.endUtc,
+    p_claims: blocksToInsert,
+  });
+  if (reconcileError) {
+    let decision: any = null;
+    try {
+      decision = reconcileError.details?.trim().startsWith('{') ? JSON.parse(reconcileError.details) : null;
+    } catch {
+      decision = null;
+    }
+    if (reconcileError.message === 'physical_availability_conflict') {
+      throw new PhysicalAvailabilityConflictError(reconcileError.message, decision);
+    }
+    throw new PhysicalAvailabilityLookupError(reconcileError.message || 'Physical resource reconciliation failed closed');
   }
 
   const allocationIds = (allocations || []).map((row: any) => row.id).filter(Boolean);
@@ -1322,7 +1278,15 @@ Deno.serve(async (req) => {
       if (!lead.event_id) return errorResponse('Lead has no event yet', 404);
       const { data: eventRow } = await admin.from('events').select('*').eq('id', lead.event_id).maybeSingle();
       if (!eventRow) return errorResponse('Event not found', 404);
-      const resourceCheck = await checkEventResourceConflicts(admin, eventRow);
+      let resourceCheck;
+      try {
+        resourceCheck = await checkEventResourceConflicts(admin, eventRow);
+      } catch (error) {
+        if (error instanceof PhysicalAvailabilityLookupError) {
+          return errorResponse('Tillgängligheten kunde inte verifieras.', 503);
+        }
+        throw error;
+      }
       const total = Number(offer.total_price || lead.estimated_value || 0);
       const defaultDeposit = Math.max(500, Math.min(total || 500, Math.round((total * DEFAULT_DEPOSIT_PERCENT) / 100)));
       return jsonResponse({ lead, offer, event: eventRow, resource_check: resourceCheck, default_deposit_amount: defaultDeposit });
@@ -1343,9 +1307,37 @@ Deno.serve(async (req) => {
       const { data: eventRow } = await admin.from('events').select('*').eq('id', lead.event_id).maybeSingle();
       if (!eventRow) return errorResponse('Event not found', 404);
 
-      const resourceCheck = await checkEventResourceConflicts(admin, eventRow);
+      let resourceCheck;
+      try {
+        resourceCheck = await checkEventResourceConflicts(admin, eventRow);
+      } catch (error) {
+        if (error instanceof PhysicalAvailabilityLookupError) {
+          return errorResponse('Tillgängligheten kunde inte verifieras. Ingen bokning bekräftades.', 503);
+        }
+        throw error;
+      }
       if (!resourceCheck.ok) return jsonResponse({ ok: false, blocked: true, resource_check: resourceCheck }, 409);
-      const capacityPlan = await createOrUpdateEventResourceBlocks(admin, eventRow, lead, offer, userId);
+      let capacityPlan;
+      try {
+        capacityPlan = await createOrUpdateEventResourceBlocks(admin, eventRow, lead, offer, userId);
+      } catch (error) {
+        if (error instanceof PhysicalAvailabilityConflictError) {
+          return jsonResponse({
+            ok: false,
+            blocked: true,
+            resource_check: {
+              ok: false,
+              reason: 'Valda resurser hann bli upptagna.',
+              conflicts: error.decision?.conflicts || [],
+              courtIds: resourceCheck.courtIds,
+            },
+          }, 409);
+        }
+        if (error instanceof PhysicalAvailabilityLookupError) {
+          return errorResponse('Tillgängligheten kunde inte verifieras. Ingen bokning bekräftades.', 503);
+        }
+        throw error;
+      }
 
       const total = Number(offer.total_price || lead.estimated_value || 0);
       const fallbackDeposit = Math.max(500, Math.min(total || 500, Math.round((total * DEFAULT_DEPOSIT_PERCENT) / 100)));

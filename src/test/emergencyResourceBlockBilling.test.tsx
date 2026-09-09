@@ -209,16 +209,17 @@ describe("ER-1 resource-block billing", () => {
     expect(adminApiSource).toContain("metadata: { group_id: groupId, block_ref: blockRef, note, ...billingMetadata }");
   });
 
-  it("does not let generic metadata patches bypass billing validation or change booking logic", () => {
+  it("does not let generic metadata patches bypass billing validation or leak billing data through availability", () => {
     expect(adminApiSource).toContain("delete metadataPatch.customer_id");
     expect(adminApiSource).toContain("delete metadataPatch.billing_rate_minor");
-    const bookingBlockLookup = bookingApiSource.slice(
-      bookingApiSource.indexOf("async function getCourtResourceBlocks"),
-      bookingApiSource.indexOf("function activityOccurrenceMatchesDate", bookingApiSource.indexOf("async function getCourtResourceBlocks")),
+    const bookingAvailability = bookingApiSource.slice(
+      bookingApiSource.indexOf("path === 'public-courts'"),
+      bookingApiSource.indexOf("path === 'public-open-bookings'"),
     );
-    expect(bookingBlockLookup).not.toContain("customer_id");
-    expect(bookingBlockLookup).not.toContain("billing_rate_minor");
-    expect(bookingBlockLookup).toContain(".in('status', ['hold', 'confirmed'])");
-    expect(bookingBlockLookup).toContain(".eq('blocks_public_booking', true)");
+    expect(bookingAvailability).toContain("checkPhysicalAvailability");
+    expect(bookingAvailability).toContain("title: conflict.type === 'activity_occurrence' ? 'Aktivitet' : 'Ej bokningsbar'");
+    expect(bookingAvailability).not.toContain("source_id:");
+    expect(bookingAvailability).not.toContain("customer_id");
+    expect(bookingAvailability).not.toContain("billing_rate_minor");
   });
 });
