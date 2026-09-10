@@ -29,6 +29,7 @@ import EventPlanPublic from "./pages/EventPlanPublic";
 import BookingPage from "./pages/BookingPage";
 import GroupBookingPage from "./pages/GroupBookingPage";
 import EventBusinessPage from "./pages/EventBusinessPage";
+import CorporateCompanyPage from "./pages/CorporateCompanyPage";
 import EventlokalerPage from "./pages/EventlokalerPage";
 import ForetagseventPage from "./pages/ForetagseventPage";
 import KickoffPage from "./pages/KickoffPage";
@@ -161,6 +162,7 @@ function AppRoutes() {
             <Route path="/book" element={<BookingPage />} />
             <Route path="/book/group" element={<GroupBookingPage />} />
             <Route path="/event-foretag" element={<EventBusinessPage />} />
+            <Route path="/foretag/:slug" element={<CorporateCompanyPage />} />
             <Route path="/eventlokaler" element={<EventlokalerPage />} />
             <Route path="/foretagsevent-stockholm" element={<ForetagseventPage />} />
             <Route path="/kickoff-stockholm" element={<KickoffPage />} />

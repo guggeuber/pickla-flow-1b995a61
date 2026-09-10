@@ -1,19 +1,24 @@
-import { ArrowRight, Building2, CalendarHeart, Mail } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight, Building2, CalendarHeart, Loader2, Mail } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { Button } from "@/components/ui/button";
-
-const B2B_EMAIL = "hello@picklaparks.com";
-
-export function picklaBusinessContactHref(slug: string) {
-  const subject = encodeURIComponent("Företag med Pickla");
-  const body = encodeURIComponent(`Hej Pickla,\n\nVi vill prata om ett bredare eller återkommande företagsupplägg.\n\nAnläggning: ${slug}\n`);
-  return `mailto:${B2B_EMAIL}?subject=${subject}&body=${body}`;
-}
+import { apiGet } from "@/lib/api";
+import { picklaBusinessContactHref } from "@/lib/corporatePublic";
 
 export default function EventBusinessPage() {
   const [params] = useSearchParams();
   const slug = params.get("v") || "pickla-arena-sthlm";
+  const { data, isLoading } = useQuery({
+    queryKey: ["public-corporate-companies", slug],
+    queryFn: () => apiGet<{ companies: Array<{ company_name: string; slug: string; public_intro: string | null }> }>(
+      "api-corporate",
+      "public-companies",
+      { venueSlug: slug },
+      { auth: "omit", publicRead: { maxRetries: 1 } },
+    ),
+  });
+  const companies = data?.companies || [];
 
   return <div className="min-h-[100dvh] bg-[#fffaf7] text-neutral-950">
     <PicklaTopBar slug={slug} background="#fffaf7" />
@@ -36,12 +41,12 @@ export default function EventBusinessPage() {
         <article className="rounded-[24px] border border-black/10 bg-white p-5">
           <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#effcf4] text-[#147a45]"><Building2 className="h-5 w-5" /></span>
           <p className="mt-5 text-[10px] font-black uppercase tracking-[0.18em] text-[#147a45]">Företag med Pickla</p>
-          <h2 className="mt-2 text-2xl font-black">Återkommande spel eller bredare samarbete</h2>
-          <p className="mt-3 text-sm leading-relaxed text-neutral-500">För kontraktstider, återkommande aktiviteter, företagsaccess, wellbeing eller partnerskap tar vi först en personlig dialog.</p>
-          <Button asChild variant="outline" size="lg" className="mt-5 w-full rounded-full border-neutral-300 font-black text-neutral-950">
-            <a href={picklaBusinessContactHref(slug)}>Kontakta Pickla <Mail className="h-4 w-4" /></a>
+          <h2 className="mt-2 text-2xl font-black">Hitta ert företagsupplägg</h2>
+          <p className="mt-3 text-sm leading-relaxed text-neutral-500">Företag med ett aktivt, publikt Pickla-upplägg visas här. Du behöver ingen sökning – välj företaget i listan.</p>
+          {isLoading ? <div className="grid min-h-24 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-[#147a45]" /></div> : companies.length > 0 ? <div className="mt-5 grid gap-2">{companies.map((company) => <Link key={company.slug} to={`/foretag/${company.slug}`} className="flex min-h-14 items-center justify-between rounded-2xl border border-black/10 px-4 font-black transition-colors hover:bg-[#effcf4]">{company.company_name}<ArrowRight className="h-4 w-4" /></Link>)}</div> : <p className="mt-5 rounded-2xl bg-neutral-50 p-4 text-sm text-neutral-500">Inga publika företagsupplägg är listade för den här anläggningen ännu.</p>}
+          <Button asChild variant="ghost" size="sm" className="mt-4 w-full rounded-full text-neutral-600">
+            <a href={picklaBusinessContactHref(slug)}>Prata med Pickla om företagsspel <Mail className="h-4 w-4" /></a>
           </Button>
-          <p className="mt-3 text-xs leading-relaxed text-neutral-400">Detta öppnar e-post till Pickla. Det skapar ingen beställning, bokning eller företagsprodukt.</p>
         </article>
       </div>
     </main>

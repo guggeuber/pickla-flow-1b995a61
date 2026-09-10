@@ -2,9 +2,12 @@ import { readFileSync } from "node:fs";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import EventBusinessPage, { picklaBusinessContactHref } from "@/pages/EventBusinessPage";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import EventBusinessPage from "@/pages/EventBusinessPage";
+import { picklaBusinessContactHref } from "@/lib/corporatePublic";
 
 vi.mock("@/components/PicklaTopBar", () => ({ PicklaTopBar: ({ slug }: { slug: string }) => <div data-testid="topbar">{slug}</div> }));
+vi.mock("@/lib/api", () => ({ apiGet: vi.fn().mockResolvedValue({ companies: [{ company_name: "Ericsson", slug: "ericsson", public_intro: "Spela med oss" }] }) }));
 
 function LocationProbe() {
   const location = useLocation();
@@ -12,10 +15,12 @@ function LocationProbe() {
 }
 
 function renderDestination() {
-  return render(<MemoryRouter initialEntries={["/event-foretag?v=venue-north"]}><Routes>
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={["/event-foretag?v=venue-north"]}><Routes>
     <Route path="/event-foretag" element={<EventBusinessPage />} />
     <Route path="/book/group" element={<LocationProbe />} />
-  </Routes></MemoryRouter>);
+    <Route path="/foretag/:slug" element={<LocationProbe />} />
+  </Routes></MemoryRouter></QueryClientProvider>);
 }
 
 describe("customer Event & företag discovery", () => {
@@ -31,13 +36,17 @@ describe("customer Event & företag discovery", () => {
     expect(app).toContain('<Route path="/book/group" element={<GroupBookingPage />} />');
   });
 
-  it("offers a truthful B2B contact instead of fake self-service", () => {
+  it("lists explicitly public companies without search and retains a truthful contact path", async () => {
     renderDestination();
-    expect(screen.getByRole("heading", { name: "Återkommande spel eller bredare samarbete" })).toBeInTheDocument();
-    const contact = screen.getByRole("link", { name: /Kontakta Pickla/i });
+    expect(await screen.findByRole("heading", { name: "Hitta ert företagsupplägg" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("link", { name: /Ericsson/i }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/foretag/ericsson");
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+    cleanup();
+    renderDestination();
+    const contact = await screen.findByRole("link", { name: /Prata med Pickla/i });
     expect(contact).toHaveAttribute("href", picklaBusinessContactHref("venue-north"));
     expect(contact.getAttribute("href")).toMatch(/^mailto:hello@picklaparks\.com/);
-    expect(screen.getByText(/Det skapar ingen beställning, bokning eller företagsprodukt/i)).toBeInTheDocument();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 });
