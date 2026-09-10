@@ -59,6 +59,16 @@ function capacityData(overrides: Record<string, unknown> = {}) {
     intervals: [
       interval(),
       interval({
+        id: "activity_session:activity-1:court-1:2026-07-28",
+        source_type: "activity_session",
+        source_id: "activity-1",
+        starts_at: "2026-07-28T14:00:00.000Z",
+        ends_at: "2026-07-28T15:00:00.000Z",
+        classification: "activity",
+        title: "Open Play",
+        detail_target: { kind: "module", module_id: "schedule", source_id: "activity-1", session_date: "2026-07-28" },
+      }),
+      interval({
         id: "event:event-1:court-2:2026-07-28",
         source_type: "event_reservation",
         source_id: "event-1",
@@ -113,6 +123,7 @@ describe("Capacity V1", () => {
     expect(screen.getByText("26 h")).toBeInTheDocument();
     expect(screen.getAllByText("Bana 1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Bana 2").length).toBeGreaterThan(0);
+    expect(screen.getByText("Open Play")).toBeInTheDocument();
     expect(screen.queryByText(/skapa/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/spara/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/ta bort/i)).not.toBeInTheDocument();
@@ -254,7 +265,7 @@ describe("Capacity V1 endpoint contract", () => {
     expect(aggregator).not.toContain("customer_phone");
     expect(aggregator).toContain("capacityDatesWithinOperationalWindow");
     expect(aggregator).toContain("capacity source row limit exceeded");
-    expect(aggregator).toContain("if (override?.status === 'cancelled') continue");
+    expect(aggregator).toContain("if (['hidden', 'cancelled'].includes(String(override?.status || ''))) continue");
     expect(aggregator).toContain("includeOperations");
     expect(aggregator).toContain("admin.from('events')");
     expect(aggregator).toContain("linkedOperationOverrideIds.has(String(override.id))");

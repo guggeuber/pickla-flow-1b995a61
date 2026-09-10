@@ -336,6 +336,10 @@ function activitySessionOccursOnDate(session: Record<string, any>, date: string)
   return genericActivityOccursOnDate(session, date);
 }
 
+function activitySessionOccurrenceRangeUtc(session: Record<string, unknown>, date: string) {
+  return activitySessionOccurrenceInterval(date, session.start_time, session.end_time);
+}
+
 async function validateActivitySessionCourtAvailability(
   admin: any,
   venueId: string,
@@ -3094,7 +3098,7 @@ async function buildOperationsWeekProjection(
       if (!range) continue;
       const sourceKey = operationalSourceKey('activity_session', session.id, date);
       const override = overrideByOccurrence.get(sourceKey);
-      if (override?.status === 'cancelled') continue;
+      if (['hidden', 'cancelled'].includes(String(override?.status || ''))) continue;
       addOccurrence({
         source_type: 'activity_session',
         source_id: session.id,
@@ -3533,7 +3537,7 @@ async function capacityResponse(
       const interval = activitySessionOccurrenceRangeUtc(session, date);
       if (!interval || interval.startISO >= range.end || interval.endISO <= range.start) continue;
       const override = overrideByOccurrence.get(`${session.id}:${date}`);
-      if (override?.status === 'cancelled') continue;
+      if (['hidden', 'cancelled'].includes(String(override?.status || ''))) continue;
       for (const courtId of sessionCourtIds) {
         inputs.push({
           source_type: 'activity_session',
