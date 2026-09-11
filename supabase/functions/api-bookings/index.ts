@@ -8,6 +8,12 @@ import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
 import { auditMutation, canOperateVenue } from '../_shared/authorization.ts';
 import { canonicalPublicOrigin, canonicalPublicUrl } from '../_shared/canonical_origin.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import {
+  activityScheduleVersionsBySession,
+  effectiveActivityScheduleForDate,
+  effectiveActivityOccurrenceForDate,
+  type ActivityScheduleVersion,
+} from '../_shared/activity_schedule_versions.ts';
 import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 import {
   createPublicReadContext,
@@ -140,13 +146,6 @@ function vatPartsFromIncludedTotal(totalIncVat: number, vatRate = 6) {
   };
 }
 
-function activityOccurrenceMatchesDate(session: any, date: string) {
-  if (session.session_date) return String(session.session_date).slice(0, 10) === date;
-  const recurrenceDays = Array.isArray(session.recurrence_days) ? session.recurrence_days : [];
-  const weekday = DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7;
-  return recurrenceDays.includes(weekday);
-}
-
 function activityOccurrenceRangeUtc(session: any, date: string) {
   const interval = activitySessionOccurrenceInterval(date, session.start_time, session.end_time);
   return interval ? { start: interval.startISO, end: interval.endISO } : null;
@@ -173,28 +172,39 @@ async function getActivityCourtBlocks(
 
   const { data, error } = await admin
     .from('activity_sessions')
-    .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status, schedule_effective_from')
     .eq('venue_id', venueId)
-    .eq('is_active', true)
-    .eq('publish_status', 'published')
     .limit(1000);
 
   if (error) {
     console.error('activity session court block lookup failed', error.message);
     return [];
   }
+  if (!(data || []).length) return [];
 
+  const { data: versionRows, error: versionError } = await admin
+    .from('activity_session_schedule_versions')
+    .select('id, activity_session_id, effective_from, effective_until, series_id, series_start_date, series_end_date, series_total_sessions, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .eq('venue_id', venueId)
+    .in('activity_session_id', (data || []).map((session) => session.id))
+    .lte('effective_from', dates[dates.length - 1])
+    .or(`effective_until.is.null,effective_until.gt.${dates[0]}`);
+  if (versionError) {
+    console.error('activity schedule version lookup failed', versionError.message);
+    return [];
+  }
+  const versions = activityScheduleVersionsBySession((versionRows || []) as ActivityScheduleVersion[]);
   const requestedCourtSet = new Set(courtIds);
   const blocks: any[] = [];
   for (const session of data || []) {
-    const sessionCourtIds = Array.isArray(session.court_ids)
-      ? session.court_ids.map((id: unknown) => String(id)).filter((id: string) => requestedCourtSet.has(id))
-      : [];
-    if (!sessionCourtIds.length) continue;
-
     for (const date of dates) {
-      if (!activityOccurrenceMatchesDate(session, date)) continue;
-      const range = activityOccurrenceRangeUtc(session, date);
+      const effectiveSession = effectiveActivityOccurrenceForDate(session, date, versions);
+      if (!effectiveSession) continue;
+      const sessionCourtIds = Array.isArray(effectiveSession.court_ids)
+        ? effectiveSession.court_ids.map((id: unknown) => String(id)).filter((id: string) => requestedCourtSet.has(id))
+        : [];
+      if (!sessionCourtIds.length) continue;
+      const range = activityOccurrenceRangeUtc(effectiveSession, date);
       if (!range) continue;
       if (range.start < endISO && range.end > startISO) {
         blocks.push(...sessionCourtIds.map((courtId: string) => ({
@@ -202,10 +212,10 @@ async function getActivityCourtBlocks(
           court_id: courtId,
           start: range.start,
           end: range.end,
-          title: session.name || 'Aktivitet',
+          title: effectiveSession.name || 'Aktivitet',
           kind: 'activity_session',
           activity_session_id: session.id,
-          session_type: session.session_type || null,
+          session_type: effectiveSession.session_type || null,
         })));
       }
     }
@@ -4640,6 +4650,19 @@ Deno.serve(async (req) => {
 
         if (regErr) return errorResponse(regErr.message);
 
+        const registrationSessionIds = Array.from(new Set((registrations || []).map((row) => row.activity_session_id).filter(Boolean)));
+        const { data: registrationVersionRows, error: registrationVersionError } = registrationSessionIds.length
+          ? await lookupClient
+            .from('activity_session_schedule_versions')
+            .select('id, activity_session_id, effective_from, effective_until, series_id, series_start_date, series_end_date, series_total_sessions, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+            .eq('venue_id', venueId)
+            .in('activity_session_id', registrationSessionIds)
+            .lte('effective_from', date)
+            .or(`effective_until.is.null,effective_until.gt.${date}`)
+          : { data: [], error: null };
+        if (registrationVersionError) return errorResponse(registrationVersionError.message);
+        const registrationScheduleVersions = activityScheduleVersionsBySession((registrationVersionRows || []) as ActivityScheduleVersion[]);
+
         const userIds = Array.from(new Set((registrations || []).map((row: any) => row.user_id).filter(Boolean)));
         const registrationIds = Array.from(new Set((registrations || []).map((row: any) => row.id).filter(Boolean)));
         const stripeSessionIds = Array.from(new Set((registrations || []).map((row: any) => row.stripe_session_id).filter(Boolean)));
@@ -4740,7 +4763,8 @@ Deno.serve(async (req) => {
         }
 
         activityRegistrations = (registrations || []).map((registration: any) => {
-          const session = registration.activity_sessions || {};
+          const baseSession = registration.activity_sessions || {};
+          const session = effectiveActivityScheduleForDate(baseSession, registration.session_date, registrationScheduleVersions) || baseSession;
           const occurrence = activitySessionOccurrenceInterval(registration.session_date, session.start_time, session.end_time);
           const startTime = occurrence?.startISO || null;
           const endTime = occurrence?.endISO || null;

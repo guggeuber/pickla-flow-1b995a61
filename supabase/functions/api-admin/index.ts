@@ -15,11 +15,17 @@ import {
   genericActivityOccursOnDate,
 } from '../_shared/generic_activity_resource_conflicts.ts';
 import {
+  checkPhysicalActivityScheduleDelta,
   checkPhysicalActivitySchedule,
   claimPhysicalResourceBlocks,
   PhysicalAvailabilityConflictError,
   PhysicalAvailabilityLookupError,
 } from '../_shared/physical_availability.ts';
+import {
+  activityScheduleVersionsBySession,
+  effectiveActivityOccurrenceForDate,
+  type ActivityScheduleVersion,
+} from '../_shared/activity_schedule_versions.ts';
 import {
   buildCapacityProjection,
   buildOpeningIntervals,
@@ -36,7 +42,7 @@ import {
   isManagedActivitySeries,
   MANAGED_SERIES_MESSAGE,
 } from '../_shared/series_management.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const ZETTLE_OAUTH_BASE_URL = 'https://oauth.zettle.com';
@@ -332,6 +338,55 @@ function effectiveActivitySessionDraft(existing: Record<string, any> | null, nex
   };
 }
 
+const ACTIVITY_SCHEDULE_FIELDS = [
+  'series_id',
+  'session_date',
+  'recurrence_days',
+  'start_time',
+  'end_time',
+  'court_ids',
+  'is_active',
+  'publish_status',
+] as const;
+
+function normalizedScheduleValue(field: typeof ACTIVITY_SCHEDULE_FIELDS[number], value: unknown) {
+  if (field === 'court_ids') return normalizeCourtIds(value).sort();
+  if (field === 'recurrence_days') {
+    return Array.isArray(value) ? [...new Set(value.map(Number))].sort((a, b) => a - b) : null;
+  }
+  if (field === 'session_date') return value ? String(value).slice(0, 10) : null;
+  if (field === 'series_id') return value || null;
+  return value;
+}
+
+function activitySessionScheduleChanged(existing: Record<string, unknown>, draft: Record<string, unknown>) {
+  return ACTIVITY_SCHEDULE_FIELDS.some((field) => (
+    JSON.stringify(normalizedScheduleValue(field, existing[field]))
+    !== JSON.stringify(normalizedScheduleValue(field, draft[field]))
+  ));
+}
+
+async function loadActivityScheduleVersions(
+  admin: SupabaseClient,
+  venueId: string,
+  activitySessionIds: string[],
+  startDate: string,
+  endDate: string,
+) {
+  const cleanIds = uniqueStrings(activitySessionIds);
+  if (!cleanIds.length) return activityScheduleVersionsBySession([]);
+  const { data, error } = await admin
+    .from('activity_session_schedule_versions')
+    .select('id, activity_session_id, effective_from, effective_until, series_id, series_start_date, series_end_date, series_total_sessions, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .eq('venue_id', venueId)
+    .in('activity_session_id', cleanIds)
+    .lte('effective_from', endDate)
+    .or(`effective_until.is.null,effective_until.gt.${startDate}`)
+    .order('effective_from', { ascending: true });
+  if (error) throw new Error(error.message);
+  return activityScheduleVersionsBySession((data || []) as ActivityScheduleVersion[]);
+}
+
 function activitySessionOccursOnDate(session: Record<string, any>, date: string) {
   return genericActivityOccursOnDate(session, date);
 }
@@ -389,12 +444,89 @@ async function validateActivitySessionCourtAvailability(
   return { ok: true as const };
 }
 
+type ActivityScheduleConflictDetail = {
+  occurrence_date?: string | null;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  claim_starts_at?: string | null;
+  claim_ends_at?: string | null;
+  resource_id?: string | null;
+  type?: string | null;
+};
+
+async function decorateActivityScheduleConflicts(
+  admin: SupabaseClient,
+  venueId: string,
+  conflicts: ActivityScheduleConflictDetail[],
+) {
+  const courtIds = uniqueStrings((conflicts || []).map((conflict) => conflict.resource_id));
+  const { data, error } = courtIds.length
+    ? await admin.from('venue_courts').select('id, name, court_number').eq('venue_id', venueId).in('id', courtIds)
+    : { data: [], error: null };
+  if (error) throw new Error(error.message);
+  const courtById = new Map((data || []).map((court) => [court.id, court]));
+  return (conflicts || []).map((conflict) => {
+    const court = courtById.get(conflict.resource_id);
+    return {
+      occurrence_date: String(conflict.occurrence_date || '').slice(0, 10),
+      starts_at: conflict.claim_starts_at || conflict.starts_at,
+      ends_at: conflict.claim_ends_at || conflict.ends_at,
+      resource_id: conflict.resource_id,
+      court_name: court?.name || (court?.court_number ? `Bana ${court.court_number}` : 'Vald bana'),
+      type: conflict.type,
+    };
+  });
+}
+
+async function validateActivitySessionScheduleDelta(
+  admin: SupabaseClient,
+  venueId: string,
+  existing: Record<string, unknown>,
+  draft: Record<string, unknown>,
+  effectiveFrom: string,
+) {
+  try {
+    const decision = await checkPhysicalActivityScheduleDelta(admin, {
+      venueId,
+      sessionId: String(existing.id || ''),
+      effectiveFrom,
+      oldSchedule: existing,
+      newSchedule: draft,
+    });
+    if (!decision.available) {
+      return {
+        ok: false as const,
+        status: 409,
+        code: 'physical_availability_conflict',
+        message: 'Nya tider eller banor krockar med befintlig tillgänglighet.',
+        effective_from: effectiveFrom,
+        conflicts: await decorateActivityScheduleConflicts(admin, venueId, decision.conflicts),
+      };
+    }
+    return { ok: true as const, decision };
+  } catch (error) {
+    if (error instanceof PhysicalAvailabilityLookupError) {
+      console.error('Activity schedule delta availability failed closed:', error.message);
+      return {
+        ok: false as const,
+        status: 503,
+        code: 'physical_availability_unavailable',
+        message: 'Tillgängligheten kunde inte verifieras. Inga schemaändringar sparades.',
+        effective_from: effectiveFrom,
+        conflicts: [],
+      };
+    }
+    throw error;
+  }
+}
+
 function activitySessionCourtValidationResponse(validation: any) {
   if (validation.code && Array.isArray(validation.conflicts)) {
     return jsonResponse({
       error: validation.message,
       code: validation.code,
       conflicts: validation.conflicts,
+      ...(validation.effective_from ? { effective_from: validation.effective_from } : {}),
     }, validation.status);
   }
   return errorResponse(validation.message, validation.status);
@@ -2928,13 +3060,15 @@ async function validateOperationalStaffingSource(
 ) {
   if (sourceType === 'activity_session') {
     const { data, error } = await admin.from('activity_sessions')
-      .select('id, venue_id, session_date, recurrence_days, start_time, end_time, is_active, publish_status')
+      .select('id, venue_id, session_date, recurrence_days, start_time, end_time, is_active, publish_status, schedule_effective_from')
       .eq('id', sourceId).eq('venue_id', venueId).maybeSingle();
     if (error) throw new Error(error.message);
-    if (!data || !data.is_active || data.publish_status !== 'published' || !activitySessionOccursOnDate(data, occurrenceDate)) {
+    const versions = data ? await loadActivityScheduleVersions(admin, venueId, [data.id], occurrenceDate, occurrenceDate) : activityScheduleVersionsBySession([]);
+    const effectiveSession = data ? effectiveActivityOccurrenceForDate(data, occurrenceDate, versions) : null;
+    if (!effectiveSession) {
       throw new Error('Activity occurrence not found');
     }
-    return data;
+    return effectiveSession;
   }
 
   if (sourceType === 'booking') {
@@ -2981,6 +3115,7 @@ async function buildOperationsWeekProjection(
   operationOverrides: any[],
   extras: any[],
   capacityProjection: any,
+  scheduleVersions: Map<string, ActivityScheduleVersion[]>,
 ) {
   const [eventsResult, assignmentsResult, staffResult, incidentsResult, attentionOrdersResult, pickupLinesResult] = extras;
   const extraResults = [
@@ -3091,10 +3226,13 @@ async function buildOperationsWeekProjection(
   };
 
   for (const session of sessions) {
-    const courtIds = Array.isArray(session.court_ids) ? session.court_ids.map(String).filter((id: string) => resourceById.has(id)) : [];
     for (const date of dates) {
-      if (!activitySessionOccursOnDate(session, date)) continue;
-      const range = activitySessionOccurrenceRangeUtc(session, date);
+      const effectiveSession = effectiveActivityOccurrenceForDate(session, date, scheduleVersions);
+      if (!effectiveSession) continue;
+      const courtIds = Array.isArray(effectiveSession.court_ids)
+        ? effectiveSession.court_ids.map(String).filter((id: string) => resourceById.has(id))
+        : [];
+      const range = activitySessionOccurrenceRangeUtc(effectiveSession, date);
       if (!range) continue;
       const sourceKey = operationalSourceKey('activity_session', session.id, date);
       const override = overrideByOccurrence.get(sourceKey);
@@ -3414,10 +3552,8 @@ async function capacityResponse(
       .order('start_time', { ascending: true })
       .limit(5000),
     admin.from('activity_sessions')
-      .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, capacity, series_id, requires_staffing, is_active, publish_status', { count: 'exact' })
+      .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, capacity, series_id, requires_staffing, is_active, publish_status, schedule_effective_from', { count: 'exact' })
       .eq('venue_id', venueId)
-      .eq('is_active', true)
-      .eq('publish_status', 'published')
       .or(`session_date.is.null,and(session_date.gte.${dates[0]},session_date.lte.${dates[dates.length - 1]})`)
       .limit(1000),
     admin.from('activity_session_overrides')
@@ -3496,6 +3632,22 @@ async function capacityResponse(
   }
 
   const inputs: CapacityIntervalInput[] = [];
+  let scheduleVersions = new Map<string, ActivityScheduleVersion[]>();
+  if (!sessionsResult.error) {
+    try {
+      scheduleVersions = await loadActivityScheduleVersions(
+        admin,
+        venueId,
+        (sessionsResult.data || []).map((session) => session.id),
+        dates[0],
+        dates[dates.length - 1],
+      );
+      sourceStatus.activity_schedule_versions = { status: 'ok' };
+    } catch (error) {
+      console.error('capacity schedule versions failed', { venueId, message: error instanceof Error ? error.message : String(error) });
+      sourceStatus.activity_schedule_versions = { status: 'error', message: 'Schemahistorik kunde inte läsas' };
+    }
+  }
   const bookingGroups = new Map<string, any[]>();
   for (const booking of bookingsResult.data || []) {
     if (!courtById.has(String(booking.venue_court_id || ''))) continue;
@@ -3528,13 +3680,14 @@ async function capacityResponse(
     overrideByOccurrence.set(`${override.activity_session_id}:${String(override.session_date).slice(0, 10)}`, override);
   }
   for (const session of sessionsResult.data || []) {
-    const sessionCourtIds = Array.isArray(session.court_ids)
-      ? session.court_ids.map(String).filter((id: string) => courtById.has(id))
-      : [];
-    if (!sessionCourtIds.length) continue;
     for (const date of dates) {
-      if (!activitySessionOccursOnDate(session, date)) continue;
-      const interval = activitySessionOccurrenceRangeUtc(session, date);
+      const effectiveSession = effectiveActivityOccurrenceForDate(session, date, scheduleVersions);
+      if (!effectiveSession) continue;
+      const sessionCourtIds = Array.isArray(effectiveSession.court_ids)
+        ? effectiveSession.court_ids.map(String).filter((id: string) => courtById.has(id))
+        : [];
+      if (!sessionCourtIds.length) continue;
+      const interval = activitySessionOccurrenceRangeUtc(effectiveSession, date);
       if (!interval || interval.startISO >= range.end || interval.endISO <= range.start) continue;
       const override = overrideByOccurrence.get(`${session.id}:${date}`);
       if (['hidden', 'cancelled'].includes(String(override?.status || ''))) continue;
@@ -3619,6 +3772,7 @@ async function capacityResponse(
       operationOverridesResult.data || [],
       operationsExtras,
       projection,
+      scheduleVersions,
     )
     : null;
   const partial = Object.values(sourceStatus).some((source) => source.status === 'error');
@@ -3668,28 +3822,29 @@ async function analyzeOperationImpact(
   const endMs = DateTime.fromISO(endsAt, { zone: 'utc' }).toMillis();
   const { data: sessions, error: sessionsError } = await admin
     .from('activity_sessions')
-    .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status, schedule_effective_from')
     .eq('venue_id', venueId)
-    .eq('is_active', true)
     .limit(500);
   if (sessionsError) throw new Error(sessionsError.message);
+  const scheduleVersions = await loadActivityScheduleVersions(
+    admin,
+    venueId,
+    (sessions || []).map((session) => session.id),
+    dates[0] || stockholmToday(),
+    dates[dates.length - 1] || stockholmToday(),
+  );
 
   const courtSet = new Set(courtIds);
   const activitySamples: any[] = [];
   let activityCount = 0;
   for (const session of sessions || []) {
-    const sessionCourtIds = Array.isArray(session.court_ids) ? session.court_ids.map((id: unknown) => String(id)) : [];
-    if (!affectsEntireVenue && sessionCourtIds.length && !sessionCourtIds.some((id: string) => courtSet.has(id))) {
-      continue;
-    }
-
     for (const date of dates) {
-      const isConcrete = session.session_date === date;
-      const isRecurring = !session.session_date && Array.isArray(session.recurrence_days)
-        && session.recurrence_days.includes(DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7);
-      if (!isConcrete && !isRecurring) continue;
+      const effectiveSession = effectiveActivityOccurrenceForDate(session, date, scheduleVersions);
+      if (!effectiveSession) continue;
+      const sessionCourtIds = Array.isArray(effectiveSession.court_ids) ? effectiveSession.court_ids.map((id: unknown) => String(id)) : [];
+      if (!affectsEntireVenue && sessionCourtIds.length && !sessionCourtIds.some((id: string) => courtSet.has(id))) continue;
 
-      const occurrence = activitySessionOccurrenceInterval(date, session.start_time, session.end_time);
+      const occurrence = activitySessionOccurrenceInterval(date, effectiveSession.start_time, effectiveSession.end_time);
       if (!occurrence) continue;
       if (occurrence.start.toMillis() < endMs && occurrence.end.toMillis() > startMs) {
         activityCount += 1;
@@ -3700,8 +3855,8 @@ async function analyzeOperationImpact(
             name: session.name,
             session_type: session.session_type,
             session_date: date,
-            start_time: String(session.start_time).slice(0, 5),
-            end_time: String(session.end_time).slice(0, 5),
+            start_time: String(effectiveSession.start_time).slice(0, 5),
+            end_time: String(effectiveSession.end_time).slice(0, 5),
           });
         }
       }
@@ -4750,14 +4905,24 @@ Deno.serve(async (req) => {
 
       const { data: sessions, error: sessionsError } = await admin
         .from('activity_sessions')
-        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity, product_key, metadata, activity_series(id, name, format_id, access_product_id, activity_formats(presentation_type))')
+        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, court_ids, price_sek, capacity, product_key, metadata, schedule_effective_from, activity_series(id, name, format_id, access_product_id, activity_formats(presentation_type))')
         .eq('venue_id', scopedVenueId)
-        .eq('is_active', true)
         .order('start_time', { ascending: true })
         .limit(800);
       if (sessionsError) return errorResponse(sessionsError.message);
 
-      const activityCourtIds = uniqueStrings((sessions || []).flatMap((session) => Array.isArray(session.court_ids) ? session.court_ids : []));
+      const scheduleVersions = await loadActivityScheduleVersions(
+        admin,
+        scopedVenueId,
+        (sessions || []).map((session) => session.id),
+        dates[0],
+        dates[dates.length - 1],
+      );
+      const versionCourtIds = [...scheduleVersions.values()].flatMap((versions) => versions.flatMap((version) => version.court_ids || []));
+      const activityCourtIds = uniqueStrings([
+        ...(sessions || []).flatMap((session) => Array.isArray(session.court_ids) ? session.court_ids : []),
+        ...versionCourtIds,
+      ]);
       const { data: activityCourts, error: activityCourtsError } = activityCourtIds.length
         ? await admin.from('venue_courts').select('id, name, court_number, sport_type').eq('venue_id', scopedVenueId).in('id', activityCourtIds)
         : { data: [], error: null };
@@ -4766,11 +4931,9 @@ Deno.serve(async (req) => {
 
       const activitySamples: any[] = [];
       for (const date of dates) {
-        const weekday = DateTime.fromISO(date, { zone: 'Europe/Stockholm' }).weekday % 7;
         for (const session of sessions || []) {
-          const isConcrete = session.session_date === date;
-          const isRecurring = !session.session_date && Array.isArray(session.recurrence_days) && session.recurrence_days.includes(weekday);
-          if (!isConcrete && !isRecurring) continue;
+          const effectiveSession = effectiveActivityOccurrenceForDate(session, date, scheduleVersions);
+          if (!effectiveSession) continue;
           const parentSeries = Array.isArray(session.activity_series) ? session.activity_series[0] : session.activity_series;
           const managedProjection = parentSeries ? activitySeriesManagementProjection(parentSeries) : null;
           const managedSeries = managedProjection?.management_mode === 'managed_series' ? parentSeries : null;
@@ -4782,8 +4945,8 @@ Deno.serve(async (req) => {
             source_id: session.id,
             activity_session_id: session.id,
             date,
-            time: cleanTime(session.start_time) || '--:--',
-            end_time: cleanTime(session.end_time) || null,
+            time: cleanTime(effectiveSession.start_time) || '--:--',
+            end_time: cleanTime(effectiveSession.end_time) || null,
             title: session.name || 'Aktivitet',
             kind: 'activity',
             tone: 'lime',
@@ -4794,8 +4957,8 @@ Deno.serve(async (req) => {
             desk_price_sek: Number(session.metadata?.desk_price_sek ?? session.price_sek ?? 0),
             pricing_channel_mode: session.metadata?.pricing_channel_mode || null,
             capacity: session.capacity || null,
-            court_ids: Array.isArray(session.court_ids) ? session.court_ids : [],
-            courts: (Array.isArray(session.court_ids) ? session.court_ids : []).map((courtId: string) => activityCourtById.get(courtId)).filter(Boolean),
+            court_ids: Array.isArray(effectiveSession.court_ids) ? effectiveSession.court_ids : [],
+            courts: (Array.isArray(effectiveSession.court_ids) ? effectiveSession.court_ids : []).map((courtId: string) => activityCourtById.get(courtId)).filter(Boolean),
             moduleTarget: managedSeries ? null : 'schedule',
             managed_series_id: managedSeries?.id || null,
             managed_series_name: managedSeries?.name || null,
@@ -5173,7 +5336,6 @@ Deno.serve(async (req) => {
       const day = DateTime.fromISO(date, { zone: 'Europe/Stockholm' });
       if (!day.isValid) return errorResponse('Invalid date', 400);
       const range = stockholmDayRangeUtc(date);
-      const weekday = day.weekday % 7;
       const items: any[] = [];
 
       const bookingItems = await groupedCourtBookingSummaryItems(admin, scopedVenueId, range.start!, range.end!);
@@ -5189,18 +5351,17 @@ Deno.serve(async (req) => {
 
       const { data: sessions, error: sessionsError } = await admin
         .from('activity_sessions')
-        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status')
+        .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, is_active, publish_status, schedule_effective_from')
         .eq('venue_id', scopedVenueId)
-        .eq('is_active', true)
         .order('start_time', { ascending: true })
         .limit(500);
       if (sessionsError) return errorResponse(sessionsError.message);
 
+      const scheduleVersions = await loadActivityScheduleVersions(admin, scopedVenueId, (sessions || []).map((session) => session.id), date, date);
       for (const session of sessions || []) {
-        const isConcrete = session.session_date === date;
-        const isRecurring = !session.session_date && Array.isArray(session.recurrence_days) && session.recurrence_days.includes(weekday);
-        if (!isConcrete && !isRecurring) continue;
-        const time = cleanTime(session.start_time);
+        const effectiveSession = effectiveActivityOccurrenceForDate(session, date, scheduleVersions);
+        if (!effectiveSession) continue;
+        const time = cleanTime(effectiveSession.start_time);
         items.push({
           id: `activity-${session.id}-${date}`,
           time: time || '--:--',
@@ -6444,16 +6605,50 @@ Deno.serve(async (req) => {
       if (!isValidActivitySessionTimeOrder(draft.start_time, draft.end_time)) {
         return errorResponse('Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.', 400);
       }
-      const courtValidation = await validateActivitySessionCourtAvailability(
-        admin,
-        venueId,
-        draft,
-        sessionId,
-      );
-      if (!courtValidation.ok) return activitySessionCourtValidationResponse(courtValidation);
+      const scheduleChanged = activitySessionScheduleChanged(existingSession, draft);
+      if (scheduleChanged) {
+        const earliestEffectiveFrom = DateTime.now().setZone('Europe/Stockholm').plus({ days: 1 }).toISODate()!;
+        const effectiveFrom = String(normalized.schedule_effective_from || earliestEffectiveFrom).slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || effectiveFrom < earliestEffectiveFrom) {
+          return errorResponse('Schemaändringen måste börja gälla tidigast nästa verksamhetsdag.', 400);
+        }
+        normalized.schedule_effective_from = effectiveFrom;
+        draft.schedule_effective_from = effectiveFrom;
+        const deltaValidation = await validateActivitySessionScheduleDelta(
+          admin,
+          venueId,
+          existingSession,
+          draft,
+          effectiveFrom,
+        );
+        if (!deltaValidation.ok) return activitySessionCourtValidationResponse(deltaValidation);
+      } else {
+        delete normalized.schedule_effective_from;
+      }
       const { data, error: e } = await admin.from('activity_sessions')
         .update(normalized).eq('id', sessionId).eq('venue_id', venueId).select().single();
-      if (e) return errorResponse(e.message);
+      if (e) {
+        if (e.message === 'physical_availability_conflict') {
+          let detail: Record<string, unknown> | null = null;
+          try {
+            detail = typeof e.details === 'string' && e.details.trim().startsWith('{') ? JSON.parse(e.details) : null;
+          } catch {
+            detail = null;
+          }
+          return activitySessionCourtValidationResponse({
+            status: 409,
+            code: 'physical_availability_conflict',
+            message: 'Nya tider eller banor krockar med befintlig tillgänglighet.',
+            effective_from: normalized.schedule_effective_from || null,
+            conflicts: await decorateActivityScheduleConflicts(
+              admin,
+              venueId,
+              Array.isArray(detail?.conflicts) ? detail.conflicts as ActivityScheduleConflictDetail[] : [],
+            ),
+          });
+        }
+        return errorResponse(e.message);
+      }
       try {
         await syncActivitySessionHosts(admin, { venueId, sessionId, hostCustomerIds, userId });
         const [sessionWithHosts] = await attachActivitySessionHosts(admin, [data]);

@@ -26,6 +26,27 @@ export type PhysicalAvailabilityDecision = {
   conflicts: PhysicalAvailabilityConflict[];
 };
 
+export type PhysicalActivityScheduleDeltaDecision = {
+  available: boolean;
+  venue_id: string;
+  activity_session_id: string;
+  effective_from: string;
+  interval_semantics: '[start,end)';
+  new_claims: Array<{
+    occurrence_date: string;
+    resource_id: string;
+    starts_at: string;
+    ends_at: string;
+    available: boolean;
+    conflicts: PhysicalAvailabilityConflict[];
+  }>;
+  conflicts: Array<PhysicalAvailabilityConflict & {
+    occurrence_date: string;
+    claim_starts_at: string;
+    claim_ends_at: string;
+  }>;
+};
+
 type PhysicalRpcError = { message?: string; details?: string } | null;
 
 type PhysicalRpcClient = {
@@ -192,6 +213,52 @@ export async function checkPhysicalActivitySchedule(
       conflicts: PhysicalAvailabilityConflict[];
     }>;
   };
+}
+
+export async function checkPhysicalActivityScheduleDelta(
+  client: PhysicalRpcClient,
+  input: {
+    venueId: string;
+    sessionId: string;
+    effectiveFrom: string;
+    oldSchedule: Record<string, unknown>;
+    newSchedule: Record<string, unknown>;
+  },
+): Promise<PhysicalActivityScheduleDeltaDecision> {
+  const oldSchedule = input.oldSchedule || {};
+  const newSchedule = input.newSchedule || {};
+  const { data, error } = await client.rpc('check_physical_activity_schedule_delta', {
+    p_venue_id: input.venueId,
+    p_session_id: input.sessionId,
+    p_effective_from: input.effectiveFrom,
+    p_old_series_id: oldSchedule.series_id || null,
+    p_old_session_date: oldSchedule.session_date || null,
+    p_old_recurrence_days: oldSchedule.recurrence_days || null,
+    p_old_start_time: oldSchedule.start_time,
+    p_old_end_time: oldSchedule.end_time,
+    p_old_court_ids: uniqueIds(Array.isArray(oldSchedule.court_ids) ? oldSchedule.court_ids : []),
+    p_old_is_active: oldSchedule.is_active !== false,
+    p_old_publish_status: oldSchedule.publish_status || 'published',
+    p_new_series_id: newSchedule.series_id || null,
+    p_new_session_date: newSchedule.session_date || null,
+    p_new_recurrence_days: newSchedule.recurrence_days || null,
+    p_new_start_time: newSchedule.start_time,
+    p_new_end_time: newSchedule.end_time,
+    p_new_court_ids: uniqueIds(Array.isArray(newSchedule.court_ids) ? newSchedule.court_ids : []),
+    p_new_is_active: newSchedule.is_active !== false,
+    p_new_publish_status: newSchedule.publish_status || 'published',
+  });
+  if (
+    error
+    || !data
+    || typeof data !== 'object'
+    || typeof (data as { available?: unknown }).available !== 'boolean'
+    || !Array.isArray((data as { new_claims?: unknown }).new_claims)
+    || !Array.isArray((data as { conflicts?: unknown }).conflicts)
+  ) {
+    throw new PhysicalAvailabilityLookupError(error?.message || 'Physical activity schedule delta returned an invalid decision');
+  }
+  return data as PhysicalActivityScheduleDeltaDecision;
 }
 
 export async function claimPhysicalResourceBlocks(client: PhysicalRpcClient, venueId: string, claims: Record<string, unknown>[]) {

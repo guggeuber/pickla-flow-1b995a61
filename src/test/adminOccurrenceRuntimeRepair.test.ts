@@ -89,7 +89,8 @@ describe("api-admin activity occurrence runtime", () => {
       endISO: "2026-08-10T17:30:00.000Z",
       durationMinutes: 90,
     });
-    expect(apiAdmin.match(/activitySessionOccurrenceRangeUtc\(session, date\)/g)).toHaveLength(2);
+    expect(apiAdmin.match(/activitySessionOccurrenceRangeUtc\(effectiveSession, date\)/g)).toHaveLength(2);
+    expect(apiAdmin).toContain("effectiveActivityOccurrenceForDate(session, date, scheduleVersions)");
   });
 
   it("returns an empty occurrence for invalid ranges and preserves venue-local DST conversion", () => {

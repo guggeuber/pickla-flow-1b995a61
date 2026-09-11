@@ -50,6 +50,7 @@ const GENERIC_ACTIVITY_SESSION_UPDATE_FIELDS = new Set([
   'first_visit_price_minor',
   'first_visit_only',
   'requires_staffing',
+  'schedule_effective_from',
 ]);
 
 export function genericActivitySessionUpdates(value: Record<string, unknown>) {

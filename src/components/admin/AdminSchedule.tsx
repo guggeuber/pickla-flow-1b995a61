@@ -3,8 +3,9 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { motion } from "framer-motion";
 import { AlertTriangle, CalendarDays, Edit3, ImagePlus, Loader2, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { DateTime } from "luxon";
 import { formatSek } from "@/lib/activityPricing";
-import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { ApiRequestError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
 import AdminCourses from "@/components/admin/AdminCourses";
 import { namedEventImagePath, nextNamedEventImageSlot, removeNamedEventImage, uploadNamedEventImage } from "@/lib/eventMedia";
@@ -97,6 +98,36 @@ type PartnerSessionEligibility = {
   publication_reference: string | null;
   publication_error: string | null;
 };
+
+type ActivityScheduleConflict = {
+  occurrence_date?: string;
+  starts_at?: string;
+  ends_at?: string;
+  court_name?: string;
+  type?: string;
+};
+
+const ACTIVITY_CONFLICT_LABELS: Record<string, string> = {
+  venue_closed: "utanför öppettid",
+  court_unavailable: "bana ej tillgänglig",
+  booking: "bokning",
+  activity_occurrence: "annan aktivitet",
+  resource_block: "resursblockering",
+};
+
+function activityScheduleConflictSummary(error: unknown) {
+  if (!(error instanceof ApiRequestError) || error.code !== "physical_availability_conflict") return null;
+  const conflicts = Array.isArray(error.data?.conflicts) ? error.data.conflicts as ActivityScheduleConflict[] : [];
+  if (!conflicts.length) return error.message;
+  return conflicts.slice(0, 4).map((conflict) => {
+    const date = DateTime.fromISO(String(conflict.occurrence_date || ""), { zone: "Europe/Stockholm" });
+    const start = DateTime.fromISO(String(conflict.starts_at || ""), { zone: "utc" }).setZone("Europe/Stockholm");
+    const end = DateTime.fromISO(String(conflict.ends_at || ""), { zone: "utc" }).setZone("Europe/Stockholm");
+    const dateLabel = date.isValid ? date.setLocale("sv").toFormat("ccc d LLL") : "Okänt datum";
+    const timeLabel = start.isValid && end.isValid ? `${start.toFormat("HH:mm")}–${end.toFormat("HH:mm")}` : "okänd tid";
+    return `${dateLabel} ${timeLabel} · ${conflict.court_name || "Vald bana"} · ${ACTIVITY_CONFLICT_LABELS[String(conflict.type || "")] || "konflikt"}`;
+  }).join("\n");
+}
 
 const PUBLICATION_LABELS: Record<PartnerSessionEligibility["publication_status"], string> = {
   needs_publication: "Behöver publiceras",
@@ -579,6 +610,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [seriesDrafts, setSeriesDrafts] = useState<Record<string, any>>({});
   const [sessionDrafts, setSessionDrafts] = useState<Record<string, any>>({});
+  const [sessionConflictSummary, setSessionConflictSummary] = useState<string | null>(null);
   const [hostSearch, setHostSearch] = useState("");
   const [seriesImageBusyId, setSeriesImageBusyId] = useState<string | null>(null);
 
@@ -707,9 +739,14 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     mutationFn: (body: any) => apiPatch("api-admin", "activity-sessions", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin-activity-sessions", venueId] });
+      setSessionConflictSummary(null);
       toast.success("Pass uppdaterat");
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (error: unknown) => {
+      const conflictSummary = activityScheduleConflictSummary(error);
+      setSessionConflictSummary(conflictSummary);
+      toast.error(conflictSummary || (error instanceof Error ? error.message : "Passet kunde inte uppdateras"));
+    },
   });
 
   const updatePartnerSessionEligibility = useMutation({
@@ -931,6 +968,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     const online = sessionOnlinePrice(session);
     const desk = sessionDeskPrice(session);
     setEditingSessionId(session.id);
+    setSessionConflictSummary(null);
     setSessionDrafts((current) => ({
       ...current,
       [session.id]: {
@@ -960,6 +998,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         requires_staffing: Boolean(session.requires_staffing),
         hosts: session.hosts || [],
         host_customer_ids: session.host_customer_ids || (session.hosts || []).map((host: any) => host.customer_id).filter(Boolean),
+        schedule_effective_from: DateTime.now().setZone("Europe/Stockholm").plus({ days: 1 }).toISODate(),
       },
     }));
     setHostSearch("");
@@ -1023,6 +1062,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
       first_visit_only: true,
       requires_staffing: Boolean(draft.requires_staffing),
       host_customer_ids: Array.isArray(draft.host_customer_ids) ? draft.host_customer_ids : [],
+      schedule_effective_from: draft.schedule_effective_from,
     }, {
       onSuccess: () => setEditingSessionId(null),
     });
@@ -1771,6 +1811,14 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       ))}
                     </div>
                   )}
+                  {sessionConflictSummary && (
+                    <div role="alert" className="whitespace-pre-line rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] font-semibold text-destructive">
+                      {sessionConflictSummary}
+                    </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    Schemaändringar gäller från {DateTime.fromISO(String(draft.schedule_effective_from || "")).setLocale("sv").toFormat("d LLL yyyy")}. Tidigare förekomster lämnas oförändrade.
+                  </p>
                   <div className="flex flex-wrap gap-1.5">
                     {DAYS.map((day) => (
                       <button

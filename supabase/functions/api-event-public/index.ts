@@ -6,6 +6,11 @@ import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
+import {
+  activityScheduleVersionsBySession,
+  effectiveActivityOccurrenceForDate,
+  type ActivityScheduleVersion,
+} from '../_shared/activity_schedule_versions.ts';
 import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
 import {
   createPublicReadContext,
@@ -529,12 +534,27 @@ async function buildActivityPreview(client: any, {
 
   const sessionStartedAt = performance.now();
   const sessionQuery = client.from('activity_sessions')
-    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, closed_to_public, activity_series(id, name, series_type, image_urls, activity_formats(image_urls)), venues(id, slug, name, is_public)')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, closed_to_public, schedule_effective_from, activity_series(id, name, series_type, image_urls, activity_formats(image_urls)), venues(id, slug, name, is_public)')
     .eq('id', resolvedSessionId)
     .maybeSingle();
-  const { data: session, error: sessionErr } = await sessionQuery;
+  const { data: baseSession, error: sessionErr } = await sessionQuery;
   if (timings) timings.sessionLookupMs = Math.round(performance.now() - sessionStartedAt);
-  if (sessionErr || !session) throw new Error('Activity session not found');
+  if (sessionErr || !baseSession) throw new Error('Activity session not found');
+  let session = baseSession;
+  if (occurrenceDate) {
+    const { data: versionRows, error: versionError } = await client
+      .from('activity_session_schedule_versions')
+      .select('id, activity_session_id, effective_from, effective_until, series_id, series_start_date, series_end_date, series_total_sessions, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+      .eq('venue_id', baseSession.venue_id)
+      .eq('activity_session_id', baseSession.id)
+      .lte('effective_from', occurrenceDate)
+      .or(`effective_until.is.null,effective_until.gt.${occurrenceDate}`);
+    if (versionError) throw versionError;
+    const versions = activityScheduleVersionsBySession((versionRows || []) as ActivityScheduleVersion[]);
+    const effectiveSession = effectiveActivityOccurrenceForDate(baseSession, occurrenceDate, versions);
+    if (!effectiveSession) throw new Error('Activity occurrence is not available');
+    session = effectiveSession;
+  }
   if (session.is_active !== true || session.publish_status !== 'published' || session.closed_to_public === true) throw new Error('Activity session is not public');
   if (session.venues?.is_public !== true) throw new Error('Venue not public');
   if (venueSlug && session.venues?.slug !== venueSlug) throw new Error('Venue mismatch');
@@ -1334,20 +1354,24 @@ Deno.serve(async (req) => {
       }
 
       try {
-        const [venueResolution, sessionsResult, seriesOccurrencesResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
+        const [venueResolution, sessionsResult, scheduleVersionsResult, seriesOccurrencesResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
           resolvePublicVenueQuery(readContext, () => client.from('venues')
             .select('id, name, slug')
             .eq('slug', venueSlug)
             .eq('is_public', true)
             .maybeSingle()),
           measurePublicReadStage(readContext, 'sessions', () => client.from('activity_sessions')
-            .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, activity_series(image_urls, activity_formats(image_urls)), venues!inner(slug, is_public)')
+            .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, closed_to_public, schedule_effective_from, activity_series(image_urls, activity_formats(image_urls)), venues!inner(slug, is_public)')
             .eq('venues.slug', venueSlug)
             .eq('venues.is_public', true)
-            .eq('is_active', true)
-            .eq('publish_status', 'published')
             .eq('closed_to_public', false)
             .order('start_time', { ascending: true })),
+          measurePublicReadStage(readContext, 'schedule_versions', () => client.from('activity_session_schedule_versions')
+            .select('id, activity_session_id, effective_from, effective_until, series_id, series_start_date, series_end_date, series_total_sessions, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status, venues!inner(slug, is_public)')
+            .eq('venues.slug', venueSlug)
+            .eq('venues.is_public', true)
+            .lte('effective_from', endDate)
+            .or(`effective_until.is.null,effective_until.gt.${startDate}`)),
           measurePublicReadStage(readContext, 'series_occurrences', () => client.from('activity_sessions')
             .select('id, series_id, name, session_date, start_time, end_time, capacity, is_active, publish_status, activity_series!inner(id, name, series_type, status, registration_opens_at, registration_closes_at, image_urls, activity_formats!inner(name, presentation_type, image_urls)), venues!inner(slug, is_public)')
             .eq('venues.slug', venueSlug)
@@ -1396,6 +1420,7 @@ Deno.serve(async (req) => {
 
         const primaryResults = [
           { stage: 'sessions', error: sessionsResult.error },
+          { stage: 'schedule_versions', error: scheduleVersionsResult.error },
           { stage: 'series_occurrences', error: seriesOccurrencesResult.error },
           { stage: 'events', error: eventsResult.error },
           { stage: 'overrides', error: overridesResult.error },
@@ -1422,9 +1447,21 @@ Deno.serve(async (req) => {
           .map((row: unknown) => projectPublicTodaySocialEventOccurrence(row, seriesProjectionInput))
           .filter((occurrence): occurrence is NonNullable<typeof occurrence> => occurrence !== null);
         const seriesOccurrenceSessionIds = new Set(seriesOccurrences.map((occurrence) => occurrence.session_id));
+        const scheduleVersions = activityScheduleVersionsBySession((scheduleVersionsResult.data || []) as ActivityScheduleVersion[]);
+        const versionedSessions: Array<Record<string, unknown>> = [];
+        const start = DateTime.fromISO(startDate, { zone: 'Europe/Stockholm' });
+        const end = DateTime.fromISO(endDate, { zone: 'Europe/Stockholm' });
+        for (let cursor = start; cursor <= end; cursor = cursor.plus({ days: 1 })) {
+          const date = cursor.toISODate()!;
+          for (const session of sessionsResult.data || []) {
+            const effectiveSession = effectiveActivityOccurrenceForDate(session, date, scheduleVersions);
+            if (!effectiveSession || effectiveSession.closed_to_public === true) continue;
+            versionedSessions.push({ ...effectiveSession, id: session.id, session_date: date, recurrence_days: null });
+          }
+        }
         return publicReadJsonResponse({
           venue: venueResolution.data,
-          sessions: (sessionsResult.data || []).filter((session) => !seriesOccurrenceSessionIds.has(String(session.id))),
+          sessions: versionedSessions.filter((session) => !seriesOccurrenceSessionIds.has(String(session.id))),
           seriesOccurrences,
           events: eventsResult.data || [],
           overrides: overridesResult.data || [],
