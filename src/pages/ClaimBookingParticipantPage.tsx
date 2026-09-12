@@ -12,6 +12,7 @@ import { canonicalAppOrigin, canonicalRedirectUrl, enforceCanonicalHost } from "
 import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@/components/bookings/BookingParticipantSummary";
 import { SessionActions, SessionDrawerShell, SessionPeopleRow, SessionPriceBlock } from "@/components/session";
 import { openBookingToPresentation } from "@/lib/sessionPresentation";
+import { bookingParticipantCustomerCopy, bookingParticipantStateView } from "@/lib/bookingParticipantState";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -28,12 +29,31 @@ type InviteInfo = {
     capacity: number;
     claimed_count: number;
     committed_count?: number;
+    confirmed_count?: number;
+    reserved_count?: number;
+    available_count?: number;
+    pending_unreserved_count?: number;
     source?: "open_booking" | "private_invite" | string;
     pace_label?: string | null;
     open_for_more_note?: string | null;
     booker_first_name?: string | null;
   };
   participant_summary?: BookingParticipantSummaryData;
+  viewer_participant?: {
+    id: string;
+    display_name?: string | null;
+    price_minor?: number | null;
+    amount_sek?: number | null;
+    payment_status?: string | null;
+    access_reason?: string | null;
+    operational_state?: string | null;
+    has_place?: boolean | null;
+    reserved?: boolean | null;
+    reservation_expires_at?: string | null;
+    can_resume_payment?: boolean | null;
+    can_retry_payment?: boolean | null;
+    requires_attention?: boolean | null;
+  } | null;
   pricing?: {
     price_minor: number;
     price_sek: number;
@@ -127,14 +147,33 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
     .join(", ");
 
   const isOpenPrivateBooking = data?.booking?.source === "open_booking";
+  const viewerState = data?.viewer_participant ? bookingParticipantStateView(data.viewer_participant) : null;
+  const viewerCopy = data?.viewer_participant ? bookingParticipantCustomerCopy(data.viewer_participant) : null;
+  const viewerConfirmed = viewerState?.hasPlace === true;
+  const viewerAttention = viewerState?.state === "payment_attention";
+  const viewerCancelled = viewerState?.state === "cancelled_released";
   const hasPlayPlus = (data?.pricing?.membership_tier_names || []).some((name) => /play\+/i.test(name));
   const requiresPayment = Boolean(data?.pricing?.requires_payment);
   const pricingBlocked = Boolean(data?.pricing?.blocked);
   const sessionEmail = String(verifiedUser?.email || "").trim();
   const effectiveEmail = email.trim() || sessionEmail;
-  const needsReceiptEmail = Boolean(verifiedUser && requiresPayment && !effectiveEmail);
-  const authenticatedPricingResolving = Boolean(verifiedUser) && (!data?.pricing || isLoading);
-  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || needsReceiptEmail || pricingBlocked;
+  const needsReceiptEmail = Boolean(verifiedUser && !viewerConfirmed && requiresPayment && !effectiveEmail);
+  const authenticatedPricingResolving = Boolean(verifiedUser) && !viewerConfirmed && !viewerAttention && !viewerCancelled && (!data?.pricing || isLoading);
+  const claimDisabled = submitting || authLoading || !sessionHydrated || !verifiedUser || !data?.booking || authenticatedPricingResolving || needsReceiptEmail || (!viewerConfirmed && pricingBlocked) || viewerAttention || viewerCancelled;
+  const serverPriceLabel = data?.pricing && Number.isFinite(Number(data.pricing.price_sek))
+    ? `${Number(data.pricing.price_sek).toLocaleString("sv-SE")} kr`
+    : null;
+  const primaryActionLabel = viewerConfirmed
+    ? "Visa min plats"
+    : viewerState?.state === "payment_pending"
+    ? "Fortsätt betalningen"
+    : viewerState?.state === "confirmation_pending"
+    ? "Bekräfta plats"
+    : requiresPayment && serverPriceLabel
+    ? `Betala ${serverPriceLabel}`
+    : requiresPayment
+    ? "Betala och boka plats"
+    : "Boka plats";
   const claimDebugState = {
     authLoaded: !authLoading && sessionHydrated,
     inviteLoaded: Boolean(data),
@@ -171,11 +210,7 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
         people: participantPeople,
         committedCount: Number(data.booking.committed_count ?? data.participant_summary?.committed_count ?? 0),
         capacity: Number(data.booking.capacity || data.participant_summary?.capacity || 0),
-        placesLeft: Math.max(
-          0,
-          Number(data.booking.capacity || data.participant_summary?.capacity || 0) -
-            Number(data.booking.committed_count ?? data.participant_summary?.committed_count ?? 0),
-        ),
+        placesLeft: Math.max(0, Number(data.booking.available_count ?? data.participant_summary?.available_count ?? 0)),
         pace: data.booking.pace_label,
         description: data.booking.open_for_more_note,
         pricing: verifiedUser
@@ -187,11 +222,7 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
           : null,
         primaryAction: {
           key: verifiedUser ? "claim" : "login",
-          label: verifiedUser
-            ? data.pricing?.requires_payment
-              ? "Betala och boka plats"
-              : "Boka plats"
-            : "Logga in",
+          label: verifiedUser ? primaryActionLabel : "Logga in",
         },
         route: currentPath,
       })
@@ -348,6 +379,24 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
             }}
           />
         </>
+      ) : viewerAttention || viewerCancelled ? (
+        <>
+          <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
+            {viewerCopy?.title}
+          </p>
+          <p className="mt-2 text-[13px] font-semibold leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
+            {viewerCopy?.detail}
+          </p>
+          <SessionActions
+            className="mt-4"
+            primary={{
+              key: "participant-state-blocked",
+              label: viewerCancelled ? "Platsen är avbokad" : "Kontakta Pickla",
+              disabled: true,
+              icon: <Ticket className="h-5 w-5" />,
+            }}
+          />
+        </>
       ) : authenticatedPricingResolving ? (
         <>
           <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
@@ -366,7 +415,7 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
             }}
           />
         </>
-      ) : pricingBlocked ? (
+      ) : pricingBlocked && !viewerConfirmed ? (
         <>
           <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
             Kan inte boka platsen ännu
@@ -387,12 +436,12 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
       ) : (
         <>
           <p className="text-[18px] font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>
-            {requiresPayment ? "Betala och boka plats" : "Boka plats"}
+            {viewerCopy?.title || (requiresPayment ? "Slutför betalningen för att säkra platsen" : "Boka plats")}
           </p>
           <p className="mt-2 text-[13px] font-semibold leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-            {requiresPayment
-              ? "Din plats blir klar när betalningen är genomförd."
-              : `${data.pricing?.label || "Din rätt gäller"} för den här sessionen.`}
+            {viewerCopy?.detail || (requiresPayment
+              ? "Din plats blir klar först när betalningen är genomförd."
+              : `${data.pricing?.label || "Din rätt gäller"} för den här sessionen.`)}
           </p>
           {isOpenPrivateBooking && data.pricing?.requires_payment && hasPlayPlus ? (
             <p className="mt-3 rounded-2xl border border-neutral-200 bg-white px-3 py-2 text-[12px] font-semibold text-neutral-500" style={{ fontFamily: FONT_MONO }}>
@@ -418,7 +467,7 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
             className="mt-4"
             primary={{
               key: "claim",
-              label: requiresPayment ? "Betala och boka plats" : "Boka plats",
+              label: primaryActionLabel,
               onClick: handleClaim,
               disabled: claimDisabled,
               icon: submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Ticket className="h-5 w-5" />,

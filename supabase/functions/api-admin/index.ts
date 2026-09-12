@@ -27,6 +27,16 @@ import {
   type ActivityScheduleVersion,
 } from '../_shared/activity_schedule_versions.ts';
 import {
+  bookingParticipantReservedCount,
+  loadBookingParticipantHoldTruth,
+  projectBookingParticipantOperationalState,
+  resolveBookingParticipantGroupCapacity,
+} from '../_shared/booking_participant_state.ts';
+import {
+  projectBookingParticipantCoverage,
+  resolveCurrentBookingParticipantCoverage,
+} from '../_shared/booking_participant_entitlement.ts';
+import {
   buildCapacityProjection,
   buildOpeningIntervals,
   capacityDates,
@@ -2733,6 +2743,12 @@ function bookingGroupKey(row: any) {
   return `booking:${row.id}`;
 }
 
+function bookingParticipantGroupKey(row: Record<string, unknown>) {
+  if (row?.stripe_session_id) return `stripe:${row.stripe_session_id}`;
+  if (row?.access_code) return `code:${row.access_code}:${row.start_time}:${row.end_time}`;
+  return `booking:${row?.id || row?.booking_ref || ''}`;
+}
+
 function bookingNoteParts(notes?: string | null) {
   const parts = String(notes || '').split(' | ').map((part) => part.trim());
   return {
@@ -2810,7 +2826,7 @@ async function groupedCourtBookingSummaryItems(admin: any, venueId: string, star
   });
 }
 
-const ADMIN_BOOKING_DETAIL_SELECT = 'id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, customer_id, user_id, booked_by, notes, start_time, end_time, status, total_price, created_at, venue_courts(id, name, court_number, sport_type)';
+const ADMIN_BOOKING_DETAIL_SELECT = 'id, booking_ref, stripe_session_id, access_code, venue_id, venue_court_id, customer_id, user_id, booked_by, notes, start_time, end_time, status, total_price, created_at, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, venue_courts(id, name, court_number, sport_type)';
 
 async function groupedCourtBookingDetail(admin: any, venueId: string, bookingId: string) {
   const { data: anchor, error: anchorError } = await admin
@@ -2880,6 +2896,59 @@ async function groupedCourtBookingDetail(admin: any, venueId: string, bookingId:
     sport_type: row.venue_courts?.sport_type || null,
   }));
   const courtLabel = courts.map((court: any) => court.name).filter(Boolean).join(', ') || 'Bana';
+  const participantGroupKey = bookingParticipantGroupKey(first);
+  const { data: participantRows, error: participantRowsError } = await admin
+    .from('booking_participants')
+    .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
+    .eq('venue_id', venueId)
+    .eq('booking_group_key', participantGroupKey)
+    .order('created_at', { ascending: true });
+  if (participantRowsError) throw new Error(participantRowsError.message);
+  const participantsWithCoverage = await Promise.all((participantRows || []).map(async (participant) => {
+    const coverage = await resolveCurrentBookingParticipantCoverage(admin, participant, {
+      bookingRows: groupRows,
+      channel: 'desk',
+    });
+    return projectBookingParticipantCoverage(participant, coverage);
+  }));
+  const holdTruth = await loadBookingParticipantHoldTruth(admin, venueId, [participantGroupKey]);
+  const inviteIds = uniqueStrings((participantRows || []).map((participant) => participant.invite_id));
+  const inviteTokenById = new Map<string, string>();
+  if (inviteIds.length > 0) {
+    const { data: invites, error: invitesError } = await admin
+      .from('booking_participant_invites')
+      .select('id, token')
+      .eq('venue_id', venueId)
+      .in('id', inviteIds);
+    if (invitesError) throw new Error(invitesError.message);
+    for (const invite of invites || []) inviteTokenById.set(invite.id, invite.token);
+  }
+  const participants = participantsWithCoverage.map((participant) => ({
+    ...projectBookingParticipantOperationalState(
+      participant,
+      holdTruth.latestByParticipantId.get(participant.id),
+    ),
+    amount_sek: Math.round(Number(participant.price_minor || 0)) / 100,
+    checked_in: Boolean(participant.checked_in_at),
+    invite_token: participant.invite_id ? inviteTokenById.get(participant.invite_id) || null : null,
+  }));
+  const participantCounts = resolveBookingParticipantGroupCapacity(
+    groupRows,
+    participants,
+    {
+      reservedCountOverride: bookingParticipantReservedCount(
+      participants,
+      holdTruth.liveHoldSourceKeysByGroupKey.get(participantGroupKey) || new Set<string>(),
+      ),
+    },
+  );
+  const participantSummary = {
+    ...participantCounts,
+    claimed_count: participantCounts.confirmed_count,
+    committed_count: participantCounts.confirmed_count,
+    remaining_committed_capacity: participantCounts.available_count,
+    participants: participants.filter((participant) => participant.confirmed === true),
+  };
 
   return {
     id: `booking-${first.id}`,
@@ -2889,7 +2958,7 @@ async function groupedCourtBookingDetail(admin: any, venueId: string, bookingId:
     customer_id: receipt?.customer_id || first.customer_id || null,
     user_id: first.user_id || null,
     customer_user_id: first.user_id || null,
-    booking_group_key: bookingGroupKey(first),
+    booking_group_key: participantGroupKey,
     booking_refs: groupRows.map((row: any) => row.booking_ref).filter(Boolean),
     title: `${customerName} · ${courtLabel}`,
     customer_name: customerName,
@@ -2915,7 +2984,8 @@ async function groupedCourtBookingDetail(admin: any, venueId: string, bookingId:
     notes: first.notes || null,
     access_code: first.access_code || null,
     stripe_session_id: first.stripe_session_id || null,
-    participants: [],
+    participants,
+    participant_summary: participantSummary,
   };
 }
 

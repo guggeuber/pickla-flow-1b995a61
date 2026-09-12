@@ -62,4 +62,34 @@ describe("Operations booking drawer read-only adapter", () => {
     expect(screen.getByRole("button", { name: "Checka in kund" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Lägg till spelare manuellt" })).toBeInTheDocument();
   });
+
+  it("shows canonical place truth and only valid participant payment actions", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <OperationsBookingDrawer
+          open
+          onClose={vi.fn()}
+          booking={{
+            ...booking,
+            participant_summary: { confirmed_count: 1, reserved_count: 1, available_count: 2, capacity: 4 },
+            participants: [
+              { id: "paid", display_name: "Betald", payment_status: "paid", operational_state: "confirmed_paid", has_place: true },
+              { id: "pending", display_name: "Pågår", payment_status: "pending", operational_state: "payment_pending", reserved: true, reservation_expires_at: "2026-09-13T12:30:00.000Z", can_resume_payment: true, invite_token: "pending-token" },
+              { id: "expired", display_name: "Utgången", payment_status: "pending", operational_state: "payment_expired", amount_sek: 198, can_retry_payment: true, invite_token: "expired-token" },
+              { id: "attention", display_name: "Kontroll", payment_status: "pending", operational_state: "payment_attention", requires_attention: true, invite_token: "attention-token" },
+            ],
+          }}
+          readOnly={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("1 har plats · 1 reserverad · 2 lediga")).toBeInTheDocument();
+    expect(screen.getByText("HAR PLATS")).toBeInTheDocument();
+    expect(screen.getByText("BETALNING PÅGÅR")).toBeInTheDocument();
+    expect(screen.getByText("KRÄVER ÅTGÄRD")).toBeInTheDocument();
+    expect(screen.queryByText("Claimad")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Kopiera .*betalningslänk/ })).toHaveLength(2);
+  });
 });

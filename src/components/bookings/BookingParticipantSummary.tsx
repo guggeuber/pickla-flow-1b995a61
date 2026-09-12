@@ -1,4 +1,9 @@
 import { Users } from "lucide-react";
+import {
+  bookingParticipantStateView,
+  bookingParticipantSummaryLabel,
+  type BookingParticipantOperationalState,
+} from "@/lib/bookingParticipantState";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -15,12 +20,24 @@ export type BookingParticipantSummaryData = {
     payment_status?: string | null;
     checked_in_at?: string | null;
     committed?: boolean | null;
+    confirmed?: boolean | null;
+    has_place?: boolean | null;
+    operational_state?: BookingParticipantOperationalState | null;
   }>;
   committed_count?: number;
+  confirmed_count?: number;
+  reserved_count?: number;
+  available_count?: number;
+  pending_unreserved_count?: number;
   claimed_count?: number;
   anonymous_others_count?: number;
   capacity?: number;
   remaining_committed_capacity?: number;
+  capacity_source?: string;
+  capacity_is_authoritative?: boolean;
+  capacity_state?: "ok" | "over_capacity_attention";
+  capacity_invariant_violation?: boolean;
+  over_capacity_count?: number;
 };
 
 function initials(name?: string | null) {
@@ -32,20 +49,6 @@ function initials(name?: string | null) {
     .join("")
     .slice(0, 2)
     .toUpperCase() || "P";
-}
-
-function statusLabel(status?: string | null) {
-  const normalized = String(status || "").toLowerCase();
-  if (normalized === "free") return "Ingår";
-  if (normalized === "paid") return "Betald";
-  return "Väntar på betalning";
-}
-
-function statusStyle(status?: string | null) {
-  const normalized = String(status || "").toLowerCase();
-  if (normalized === "free") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (normalized === "paid") return "border-neutral-200 bg-neutral-950 text-white";
-  return "border-amber-200 bg-amber-50 text-amber-700";
 }
 
 export function BookingParticipantSummary({
@@ -62,12 +65,15 @@ export function BookingParticipantSummary({
   if (!summary) return null;
 
   const participants = Array.isArray(summary.participants)
-    ? summary.participants.filter((participant) => participant.committed === true || ["paid", "free"].includes(String(participant.payment_status || "").toLowerCase()))
+    ? summary.participants.filter((participant) => participant.confirmed === true || participant.has_place === true || participant.committed === true || ["paid", "free"].includes(String(participant.payment_status || "").toLowerCase()))
     : [];
-  const committedCount = Number(summary.committed_count || 0);
+  const confirmedCount = Number(summary.confirmed_count ?? summary.committed_count ?? 0);
+  const reservedCount = Number(summary.reserved_count || 0);
+  const pendingUnreservedCount = Number(summary.pending_unreserved_count || 0);
   const anonymousOthersCount = Number(summary.anonymous_others_count || 0);
   const capacity = Number(summary.capacity || 0);
-  const remaining = Math.max(0, Number(summary.remaining_committed_capacity ?? capacity - committedCount));
+  const availableCount = Math.max(0, Number(summary.available_count ?? summary.remaining_committed_capacity ?? 0));
+  const capacityRequiresAttention = summary.capacity_invariant_violation === true || summary.capacity_state === "over_capacity_attention";
   const muted = tone === "dark" ? "text-white/50" : "text-neutral-500";
   const text = tone === "dark" ? "text-white" : "text-neutral-950";
   const panel = tone === "dark"
@@ -87,8 +93,13 @@ export function BookingParticipantSummary({
             </p>
           ) : null}
           {capacity > 0 ? (
-            <p className={`mt-1 text-xs font-semibold ${muted}`} style={{ fontFamily: FONT_MONO }}>
-              {committedCount} av {capacity} spelare klara · {remaining} platser kvar
+            <p className={`mt-1 text-xs font-semibold ${capacityRequiresAttention ? "text-red-600" : muted}`} style={{ fontFamily: FONT_MONO }}>
+              {bookingParticipantSummaryLabel({ ...summary, confirmed_count: confirmedCount, reserved_count: reservedCount, available_count: availableCount })}
+            </p>
+          ) : null}
+          {pendingUnreservedCount > 0 && viewerIsBooker ? (
+            <p className={`mt-1 text-[11px] font-semibold ${muted}`} style={{ fontFamily: FONT_MONO }}>
+              {pendingUnreservedCount} väntar utan reserverad plats
             </p>
           ) : null}
         </div>
@@ -96,21 +107,24 @@ export function BookingParticipantSummary({
 
       {participants.length > 0 ? (
         <div className="mt-4 space-y-2">
-          {participants.map((participant) => (
-            <div key={participant.id} className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-black ${tone === "dark" ? "bg-black text-white" : "bg-neutral-950 text-white"}`}>
-                  {initials(participant.display_name)}
+          {participants.map((participant) => {
+            const state = bookingParticipantStateView(participant);
+            return (
+              <div key={participant.id} className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-black ${tone === "dark" ? "bg-black text-white" : "bg-neutral-950 text-white"}`}>
+                    {initials(participant.display_name)}
+                  </div>
+                  <p className={`truncate text-sm font-bold ${text}`} style={{ fontFamily: FONT_GROTESK }}>
+                    {participant.display_name || "Spelare"}
+                  </p>
                 </div>
-                <p className={`truncate text-sm font-bold ${text}`} style={{ fontFamily: FONT_GROTESK }}>
-                  {participant.display_name || "Spelare"}
-                </p>
+                <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${state.state === "confirmed_included" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-neutral-200 bg-neutral-950 text-white"}`} style={{ fontFamily: FONT_MONO }}>
+                  {state.detail}
+                </span>
               </div>
-              <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${statusStyle(participant.payment_status)}`} style={{ fontFamily: FONT_MONO }}>
-                {statusLabel(participant.payment_status)}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : anonymousOthersCount > 0 ? (
         <p className={`mt-3 text-xs font-semibold ${muted}`} style={{ fontFamily: FONT_MONO }}>
@@ -118,7 +132,7 @@ export function BookingParticipantSummary({
         </p>
       ) : (
         <p className={`mt-3 text-xs font-semibold ${muted}`} style={{ fontFamily: FONT_MONO }}>
-          Inga medspelare har hämtat sin plats än.
+          Inga ytterligare bekräftade platser visas än.
         </p>
       )}
     </section>

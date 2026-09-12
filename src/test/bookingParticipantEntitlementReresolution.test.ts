@@ -5,6 +5,7 @@ const policy = readFileSync("supabase/functions/_shared/booking_participant_enti
 const bookingsApi = readFileSync("supabase/functions/api-bookings/index.ts", "utf8");
 const checkinsApi = readFileSync("supabase/functions/api-checkins/index.ts", "utf8");
 const desk = readFileSync("src/components/desk/shell/DeskToday.tsx", "utf8");
+const participantState = readFileSync("src/lib/bookingParticipantState.ts", "utf8");
 
 describe("unpaid booking-participant entitlement re-resolution", () => {
   it("limits mutation to identified, unsettled pending participation", () => {
@@ -59,9 +60,10 @@ describe("unpaid booking-participant entitlement re-resolution", () => {
   });
 
   it("removes the stale Desk collection action when current coverage applies", () => {
-    expect(desk).toContain("effective_access_reason");
-    expect(desk).toContain("`Ingår · ${accessReason}`");
+    expect(desk).toContain("bookingParticipantStateView(participant)");
+    expect(participantState).toContain("metadata.effective_access_reason");
+    expect(participantState).toContain("`Ingår · ${reason}`");
     expect(desk).not.toContain("Betald på plats");
-    expect(desk).toContain("Ingen plats ännu · betala");
+    expect(participantState).toContain("Betalning utgången · betala");
   });
 });

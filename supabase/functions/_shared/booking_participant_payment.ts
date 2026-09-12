@@ -2,8 +2,8 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { resolveCustomerIdForUser } from './customers.ts';
 import { recordPaidCapacityConflict } from './paid_capacity_conflict.ts';
 import type { StripeCheckoutStatus } from './commerce_checkout_expiry.ts';
+import { resolveBookingGroupCapacity } from './booking_participant_state.ts';
 
-const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 
 function stripeObjectId(value: unknown): string | null {
@@ -22,27 +22,6 @@ function bookingSessionDate(row: any) {
   const iso = row?.start_time;
   if (!iso) return DateTime.now().setZone('Europe/Stockholm').toISODate()!;
   return DateTime.fromISO(iso, { zone: 'utc' }).setZone('Europe/Stockholm').toISODate()!;
-}
-
-function bookingParticipantCapacity(rows: any[]) {
-  return Math.max(rows.length, 1) * BOOKING_PARTICIPANT_MAX_PER_COURT;
-}
-
-function openBookingCapacity(rows: any[]) {
-  const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  if (representative.open_for_more_status !== 'open') return 0;
-  const publicCapacity = Number(representative.open_for_more_public_capacity || 0);
-  if (publicCapacity > 0) return publicCapacity;
-  const openedPlaces = Number(representative.open_for_more_opened_places || 0);
-  const committedAtPublication = Number(representative.open_for_more_committed_at_publication || 0);
-  if (openedPlaces > 0) return committedAtPublication + openedPlaces;
-  return Math.max(Number(representative.open_for_more_total_players || 0), 0);
-}
-
-function bookingParticipantCapacityLimit(rows: any[]) {
-  return rows.some((row: any) => row?.open_for_more_status === 'open')
-    ? openBookingCapacity(rows)
-    : bookingParticipantCapacity(rows);
 }
 
 async function getBookingGroupRows(serviceClient: any, booking: any) {
@@ -235,7 +214,7 @@ export async function finalizePaidBookingParticipantCheckout(
   }
 
   const groupedRows = await getBookingGroupRows(serviceClient, booking);
-  const capacity = stableOpenBookingCapacity > 0 ? stableOpenBookingCapacity : bookingParticipantCapacityLimit(groupedRows);
+  const capacity = resolveBookingGroupCapacity(groupedRows).capacity;
   const { data: commit, error: commitError } = await serviceClient.rpc('commit_booking_participant_capacity', {
     p_venue_id: participant.venue_id,
     p_booking_id: participant.booking_id,

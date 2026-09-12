@@ -36,6 +36,13 @@ import {
   BookingParticipantRetryError,
   reconcileBookingParticipantRetry,
 } from '../_shared/booking_participant_retry.ts';
+import {
+  bookingParticipantReservedCount,
+  loadBookingParticipantHoldTruth,
+  projectBookingParticipantOperationalState,
+  resolveBookingGroupCapacity,
+  resolveBookingParticipantGroupCapacity,
+} from '../_shared/booking_participant_state.ts';
 import { finalizePaidBookingParticipantCheckout } from '../_shared/booking_participant_payment.ts';
 import {
   checkPhysicalAvailability,
@@ -48,7 +55,6 @@ import {
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
-const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
 const BOOKING_PARTICIPANT_GUEST_PRICE_MINOR_PER_HOUR = 9900;
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
 const PARTICIPANT_TICKET_INVITE_SOURCE = 'booking_participant_ticket';
@@ -275,28 +281,12 @@ function bookingChatResourceId(row: any) {
   return row?.booking_ref || row?.id || '';
 }
 
-function bookingParticipantCapacity(rows: any[]) {
-  return Math.max(rows.length, 1) * BOOKING_PARTICIPANT_MAX_PER_COURT;
-}
-
-function openBookingCapacity(rows: any[]) {
-  const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  if (representative?.open_for_more_status !== 'open') return 0;
-
-  const publicCapacity = Number(representative?.open_for_more_public_capacity || 0);
-  if (publicCapacity > 0) return publicCapacity;
-
-  const openedPlaces = Number(representative?.open_for_more_opened_places || 0);
-  const committedAtPublication = Number(representative?.open_for_more_committed_at_publication || 0);
-  if (openedPlaces > 0) return committedAtPublication + openedPlaces;
-
-  const legacyTotal = Number(representative?.open_for_more_total_players || 0);
-  return legacyTotal > 0 ? legacyTotal : 0;
-}
-
 function openBookingCapacitySnapshot(rows: any[], fallbackCapacity = 0) {
   const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  const publicCapacity = openBookingCapacity(rows) || fallbackCapacity;
+  const resolved = resolveBookingGroupCapacity(rows);
+  const publicCapacity = resolved.capacity_is_authoritative
+    ? resolved.capacity
+    : fallbackCapacity || resolved.capacity;
   const openedPlaces = Number(representative?.open_for_more_opened_places || 0);
   const committedAtPublication = Number(representative?.open_for_more_committed_at_publication || 0);
   return {
@@ -305,21 +295,6 @@ function openBookingCapacitySnapshot(rows: any[], fallbackCapacity = 0) {
     committed_at_publication: committedAtPublication >= 0 ? committedAtPublication : null,
     published_at: representative?.open_for_more_published_at || null,
   };
-}
-
-function bookingParticipantCapacityLimit(rows: any[], options: { openOnly?: boolean } = {}) {
-  if (options.openOnly) return openBookingCapacity(rows);
-  return bookingParticipantCapacity(rows);
-}
-
-function openBookingInviteApplies(invite: any, rows: any[]) {
-  const source = invite?.metadata?.source;
-  const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  return source === OPEN_BOOKING_INVITE_SOURCE && representative?.open_for_more_status === 'open';
-}
-
-function bookingGroupIsOpenForMore(rows: any[]) {
-  return rows.some((row: any) => row?.open_for_more_status === 'open');
 }
 
 function bookingSessionDate(row: any) {
@@ -600,8 +575,26 @@ async function listBookingParticipants(admin: any, venueId: string, groupKey: st
   return data || [];
 }
 
-function participantIsClaimed(participant: any) {
-  return Boolean(participant?.customer_id || participant?.user_id);
+async function projectBookingParticipantGroupState(
+  admin: Parameters<typeof loadBookingParticipantHoldTruth>[0],
+  venueId: string,
+  groupKey: string,
+  participants: Array<Parameters<typeof projectBookingParticipantOperationalState>[0]>,
+) {
+  const holdTruth = await loadBookingParticipantHoldTruth(admin, venueId, [groupKey]);
+  const projectedParticipants = participants.map((participant) =>
+    projectBookingParticipantOperationalState(
+      participant,
+      holdTruth.latestByParticipantId.get(participant.id),
+    )
+  );
+  return {
+    participants: projectedParticipants,
+    reservedCount: bookingParticipantReservedCount(
+      projectedParticipants,
+      holdTruth.liveHoldSourceKeysByGroupKey.get(groupKey) || new Set<string>(),
+    ),
+  };
 }
 
 function participantIsCommitted(participant: any) {
@@ -618,52 +611,68 @@ function firstName(value: unknown) {
   return publicParticipantName(value).split(/\s+/).filter(Boolean)[0] || 'bokaren';
 }
 
-function bookingGroupParticipantSummary(participants: any[], bookingRows: any[], capacity: number) {
+function bookingGroupParticipantSummary(
+  participants: Array<ReturnType<typeof projectBookingParticipantOperationalState>>,
+  bookingRows: Array<{ notes?: string | null; [key: string]: unknown }>,
+  reservedCount?: number,
+) {
   const representative = bookingRows[0] || {};
   const contact = bookingContactFromNotes(representative.notes);
   const bookerParticipant = (participants || []).find((participant: any) => participant.role === 'booker');
   const bookerName = publicParticipantName(bookerParticipant?.display_name || contact.name || 'Bokaren');
-  const claimed = (participants || [])
-    .filter((participant: any) => participantIsClaimed(participant) && participantIsCommitted(participant))
-    .map((participant: any) => ({
+  const confirmedParticipants = (participants || [])
+    .filter((participant) => participant?.confirmed === true || participantIsCommitted(participant))
+    .map((participant) => ({
       id: participant.id,
       display_name: publicParticipantName(participant.display_name),
       role: participant.role || 'player',
       payment_status: participant.payment_status || 'pending',
       checked_in_at: participant.checked_in_at || null,
-      committed: participantIsCommitted(participant),
+      operational_state: participant.operational_state || null,
+      has_place: true,
+      confirmed: true,
+      committed: true,
     }));
-  const committedCount = claimed.filter((participant: any) => participant.committed).length;
+  const counts = resolveBookingParticipantGroupCapacity(bookingRows, participants, {
+    reservedCountOverride: reservedCount,
+  });
 
   return {
     booker: {
       display_name: bookerName,
       first_name: firstName(bookerName),
     },
-    participants: claimed,
-    claimed_count: claimed.length,
-    committed_count: committedCount,
-    capacity,
-    remaining_committed_capacity: Math.max(0, capacity - committedCount),
+    participants: confirmedParticipants,
+    claimed_count: counts.confirmed_count,
+    committed_count: counts.confirmed_count,
+    ...counts,
+    remaining_committed_capacity: counts.available_count,
   };
 }
 
-function bookingGroupPublicSummary(participants: any[], bookingRows: any[], capacity: number) {
+function bookingGroupPublicSummary(
+  participants: Array<ReturnType<typeof projectBookingParticipantOperationalState>>,
+  bookingRows: Array<{ notes?: string | null; [key: string]: unknown }>,
+  reservedCount?: number,
+) {
   const representative = bookingRows[0] || {};
   const contact = bookingContactFromNotes(representative.notes);
   const bookerParticipant = (participants || []).find((participant: any) => participant.role === 'booker');
   const bookerName = publicParticipantName(bookerParticipant?.display_name || contact.name || 'Bokaren');
-  const committedCount = (participants || []).filter(participantIsCommitted).length;
-  const anonymousOthersCount = Math.max(0, committedCount - 1);
+  const counts = resolveBookingParticipantGroupCapacity(bookingRows, participants, {
+    reservedCountOverride: reservedCount,
+  });
+  const anonymousOthersCount = Math.max(0, counts.confirmed_count - 1);
 
   return {
     booker: {
       first_name: firstName(bookerName),
     },
     anonymous_others_count: anonymousOthersCount,
-    committed_count: committedCount,
-    capacity,
-    remaining_committed_capacity: Math.max(0, capacity - committedCount),
+    claimed_count: counts.confirmed_count,
+    committed_count: counts.confirmed_count,
+    ...counts,
+    remaining_committed_capacity: counts.available_count,
   };
 }
 
@@ -1118,7 +1127,7 @@ async function ensureBookerParticipant(admin: any, bookingRows: any[]) {
     p_booking_id: booking.id,
     p_booking_group_key: groupKey,
     p_session_date: bookingSessionDate(booking),
-    p_capacity: bookingParticipantCapacity(bookingRows),
+    p_capacity: resolveBookingGroupCapacity(bookingRows).capacity,
     p_customer_id: customerId,
     p_user_id: booking.user_id,
     p_display_name: displayName,
@@ -1626,12 +1635,19 @@ Deno.serve(async (req) => {
       });
       return projectBookingParticipantCoverage(row, coverage);
     }));
-    const effectiveParticipant = projectedParticipants.find((row: any) => row.id === participant.id) || participant;
-    if (!participantIsCommitted(effectiveParticipant)) {
-      return errorResponse('Platsen är inte bekräftad. Slutför betalningen först.', 409);
-    }
-    const capacity = bookingParticipantCapacity(bookingRows);
-    const participantSummary = bookingGroupParticipantSummary(projectedParticipants, bookingRows, capacity);
+    const groupState = await projectBookingParticipantGroupState(
+      admin,
+      participant.venue_id,
+      participant.booking_group_key,
+      projectedParticipants,
+    );
+    const effectiveParticipant = groupState.participants.find((row) => row.id === participant.id)
+      || projectBookingParticipantOperationalState(participant);
+    const participantSummary = bookingGroupParticipantSummary(
+      groupState.participants,
+      bookingRows,
+      groupState.reservedCount,
+    );
     const userId = await getOptionalAuthUserId(req, admin);
     const canMutate = Boolean(userId && participant.user_id === userId);
     const venue = Array.isArray(invite.venues) ? invite.venues[0] : invite.venues;
@@ -1639,8 +1655,8 @@ Deno.serve(async (req) => {
     return jsonResponse({
       ticket: {
         token,
-        can_cancel: canMutate,
-        can_check_in: canMutate,
+        can_cancel: canMutate && effectiveParticipant.has_place === true,
+        can_check_in: canMutate && effectiveParticipant.check_in_allowed === true,
       },
       venue,
       booking: {
@@ -1648,7 +1664,7 @@ Deno.serve(async (req) => {
         chat_resource_id: bookingChatResourceId(representative),
         start_time: representative.start_time,
         end_time: representative.end_time,
-        capacity,
+        capacity: participantSummary.capacity,
         courts: bookingRows.map((row: any) => ({
           id: row.venue_court_id,
           name: row.venue_courts?.name || null,
@@ -1666,6 +1682,13 @@ Deno.serve(async (req) => {
         checked_in_at: effectiveParticipant.checked_in_at,
         access_reason: effectiveParticipant.access_reason || effectiveParticipant.metadata?.access_reason || null,
         entitlement_type: effectiveParticipant.entitlement_type || effectiveParticipant.metadata?.entitlement_type || null,
+        operational_state: effectiveParticipant.operational_state,
+        has_place: effectiveParticipant.has_place,
+        confirmed: effectiveParticipant.confirmed,
+        reserved: effectiveParticipant.reserved,
+        reservation_expires_at: effectiveParticipant.reservation_expires_at,
+        check_in_allowed: effectiveParticipant.check_in_allowed,
+        requires_attention: effectiveParticipant.requires_attention,
       },
     }, 200, userId ? 0 : 30);
   }
@@ -1693,12 +1716,6 @@ Deno.serve(async (req) => {
     const groupKey = invite.booking_group_key || bookingGroupKey(representative);
     const participants = await listBookingParticipants(admin, invite.venue_id, groupKey);
     const isPublicOpenBookingInvite = isOpenBookingInvite(invite);
-    const capacity = bookingParticipantCapacityLimit(bookingRows, {
-      openOnly: openBookingInviteApplies(invite, bookingRows) || bookingGroupIsOpenForMore(bookingRows),
-    });
-    const participantSummary = isPublicOpenBookingInvite
-      ? bookingGroupPublicSummary(participants, bookingRows, capacity)
-      : bookingGroupParticipantSummary(participants, bookingRows, capacity);
     const userId = await getOptionalAuthUserId(req, admin);
     const customerId = userId ? await resolveCustomerIdForUser(admin, userId) : null;
     const durationHours = bookingDurationHours(representative);
@@ -1712,6 +1729,30 @@ Deno.serve(async (req) => {
         bookingRows,
       )
       : null;
+    const coverageProjectedParticipants = participants.map((participant) => {
+      const isViewer = Boolean(userId) && (
+        participant.user_id === userId ||
+        (customerId && participant.customer_id === customerId)
+      );
+      return isViewer && pricing?.coverage?.covered
+        ? projectBookingParticipantCoverage(participant, pricing.coverage)
+        : participant;
+    });
+    const groupState = await projectBookingParticipantGroupState(
+      admin,
+      invite.venue_id,
+      groupKey,
+      coverageProjectedParticipants,
+    );
+    const participantSummary = isPublicOpenBookingInvite
+      ? bookingGroupPublicSummary(groupState.participants, bookingRows, groupState.reservedCount)
+      : bookingGroupParticipantSummary(groupState.participants, bookingRows, groupState.reservedCount);
+    const viewerParticipant = groupState.participants.find((participant) =>
+      Boolean(userId) && (
+        participant.user_id === userId ||
+        (customerId && participant.customer_id === customerId)
+      )
+    ) || null;
 
     return jsonResponse({
       invite: {
@@ -1732,9 +1773,13 @@ Deno.serve(async (req) => {
           name: row.venue_courts?.name || null,
           court_number: row.venue_courts?.court_number || null,
         })),
-        capacity,
+        capacity: participantSummary.capacity,
         claimed_count: (participantSummary as any).claimed_count,
         committed_count: participantSummary.committed_count,
+        confirmed_count: participantSummary.confirmed_count,
+        reserved_count: participantSummary.reserved_count,
+        available_count: participantSummary.available_count,
+        pending_unreserved_count: participantSummary.pending_unreserved_count,
         founder_booking: isFounderBookingGroup(bookingRows),
         source: isPublicOpenBookingInvite ? 'open_booking' : 'private_invite',
         pace: openBookingPaceValue(representative.open_for_more_pace),
@@ -1745,6 +1790,24 @@ Deno.serve(async (req) => {
         booker_first_name: participantSummary.booker?.first_name || 'bokaren',
       },
       participant_summary: participantSummary,
+      viewer_participant: viewerParticipant ? {
+        id: viewerParticipant.id,
+        display_name: publicParticipantName(viewerParticipant.display_name),
+        role: viewerParticipant.role || 'player',
+        price_minor: viewerParticipant.price_minor,
+        amount_sek: minorToSek(pricing?.price_minor ?? viewerParticipant.price_minor),
+        currency: viewerParticipant.currency || 'SEK',
+        payment_status: viewerParticipant.payment_status,
+        access_reason: viewerParticipant.access_reason || viewerParticipant.metadata?.effective_access_reason || viewerParticipant.metadata?.access_reason || null,
+        operational_state: viewerParticipant.operational_state,
+        has_place: viewerParticipant.has_place,
+        confirmed: viewerParticipant.confirmed,
+        reserved: viewerParticipant.reserved,
+        reservation_expires_at: viewerParticipant.reservation_expires_at,
+        can_resume_payment: viewerParticipant.can_resume_payment,
+        can_retry_payment: viewerParticipant.can_retry_payment,
+        requires_attention: viewerParticipant.requires_attention,
+      } : null,
       identity_required: !userId,
       pricing: pricing ? {
         price_minor: pricing.price_minor,
@@ -1787,9 +1850,7 @@ Deno.serve(async (req) => {
     const groupKey = invite.booking_group_key || bookingGroupKey(representative);
     const isPublicOpenBookingInvite = isOpenBookingInvite(invite);
     const openBookingPublishedAt = isPublicOpenBookingInvite ? openBookingPublishedAtFromRows(bookingRows) : null;
-    const capacity = bookingParticipantCapacityLimit(bookingRows, {
-      openOnly: openBookingInviteApplies(invite, bookingRows) || bookingGroupIsOpenForMore(bookingRows),
-    });
+    const capacity = resolveBookingGroupCapacity(bookingRows).capacity;
     await ensureBookerParticipant(admin, bookingRows);
     const participants = await listBookingParticipants(admin, invite.venue_id, groupKey);
 
@@ -2856,17 +2917,7 @@ Deno.serve(async (req) => {
         const booking = Array.isArray(participant?.bookings) ? participant.bookings[0] : participant?.bookings;
         if (!participant || !booking) return errorResponse('Booking participant not found', 404);
         const bookingRows = await getBookingGroupRows(adminCapacity, booking);
-        const participantMetadata = participant.metadata && typeof participant.metadata === 'object' ? participant.metadata : {};
-        const publicOpenCapacity = Number(
-          meta.open_booking_public_capacity ||
-          meta.open_booking_total_players ||
-          participantMetadata.open_booking_public_capacity ||
-          participantMetadata.open_booking_total_players ||
-          0
-        );
-        const capacity = publicOpenCapacity > 0
-          ? publicOpenCapacity
-          : bookingParticipantCapacityLimit(bookingRows, { openOnly: bookingGroupIsOpenForMore(bookingRows) });
+        const capacity = resolveBookingGroupCapacity(bookingRows).capacity;
         let hold;
         try {
           hold = await acquireBookingParticipantPaymentHold(adminCapacity, participant, booking, capacity);
@@ -3421,6 +3472,23 @@ Deno.serve(async (req) => {
     } catch (participantErr) {
       console.error('Booking participant lookup failed:', (participantErr as Error).message);
     }
+    const groupState = await projectBookingParticipantGroupState(
+      admin,
+      booking.venue_id,
+      groupKey,
+      participants,
+    );
+    const publicParticipants = groupState.participants
+      .filter((participant) => participant.confirmed === true)
+      .map((participant) => ({
+        id: participant.id,
+        display_name: publicParticipantName(participant.display_name),
+        role: participant.role || 'player',
+        payment_status: participant.payment_status,
+        checked_in_at: participant.checked_in_at || null,
+        operational_state: participant.operational_state,
+        has_place: participant.has_place,
+      }));
 
     return jsonResponse({
       booking,
@@ -3430,7 +3498,7 @@ Deno.serve(async (req) => {
         court_name: b.venue_courts?.name,
         price: b.total_price,
       })),
-      participants,
+      participants: publicParticipants,
       totalPrice,
       receipt: receiptView,
     }, 200, 30);
@@ -3598,10 +3666,14 @@ Deno.serve(async (req) => {
     const items: any[] = [];
     for (const [groupKey, bookingRows] of groups.entries()) {
       const representative = bookingRows[0];
-      const capacity = openBookingCapacity(bookingRows);
       const participants = await listBookingParticipants(admin, venue.id, groupKey);
-      const summary = bookingGroupPublicSummary(participants, bookingRows, capacity);
-      const openSpots = Math.max(0, capacity - Number(summary.committed_count || 0));
+      const groupState = await projectBookingParticipantGroupState(admin, venue.id, groupKey, participants);
+      const summary = bookingGroupPublicSummary(
+        groupState.participants,
+        bookingRows,
+        groupState.reservedCount,
+      );
+      const openSpots = summary.available_count;
       if (openSpots <= 0) continue;
       const { data: invite } = await admin
         .from('booking_participant_invites')
@@ -3628,9 +3700,9 @@ Deno.serve(async (req) => {
           court_number: row.venue_courts?.court_number || null,
         })),
         open_spots: openSpots,
-        public_capacity: capacity,
-        total_players: capacity,
-        opened_places: Number(representative.open_for_more_opened_places || Math.max(0, capacity - Number(summary.committed_count || 0))),
+        public_capacity: summary.capacity,
+        total_players: summary.capacity,
+        opened_places: Number(representative.open_for_more_opened_places || Math.max(0, summary.capacity - Number(summary.committed_count || 0))),
         committed_at_publication: Number(representative.open_for_more_committed_at_publication || 0),
         pace: openBookingPaceValue(representative.open_for_more_pace),
         pace_label: openBookingPaceLabel(openBookingPaceValue(representative.open_for_more_pace)),
@@ -3904,22 +3976,38 @@ Deno.serve(async (req) => {
             channel: 'my_page',
           });
           const effectiveParticipant = projectBookingParticipantCoverage(participant, coverage);
-          if (!participantIsCommitted(effectiveParticipant)) continue;
           const rows = ownedParticipantsByGroupKey.get(participant.booking_group_key) || [];
           rows.push(effectiveParticipant);
           ownedParticipantsByGroupKey.set(participant.booking_group_key, rows);
         }
       }
+      const ownedReservedByGroupKey = new Map<string, number>();
+      for (const groupKey of ownedGroupKeys) {
+        const groupRows = ownedRowsByGroupKey.get(groupKey) || [];
+        const venueId = groupRows[0]?.venue_id;
+        if (!venueId) continue;
+        const groupState = await projectBookingParticipantGroupState(
+          admin,
+          venueId,
+          groupKey,
+          ownedParticipantsByGroupKey.get(groupKey) || [],
+        );
+        ownedParticipantsByGroupKey.set(groupKey, groupState.participants);
+        ownedReservedByGroupKey.set(groupKey, groupState.reservedCount);
+      }
       const owned = ownedRaw.map((row: any) => {
         const groupKey = bookingGroupKey(row);
         const groupRows = ownedRowsByGroupKey.get(groupKey) || [row];
         const participants = ownedParticipantsByGroupKey.get(groupKey) || [];
-        const capacity = bookingParticipantCapacity(groupRows);
         return {
           ...row,
           booking_group_key: groupKey,
           participants,
-          participant_summary: bookingGroupParticipantSummary(participants, groupRows, capacity),
+          participant_summary: bookingGroupParticipantSummary(
+            participants,
+            groupRows,
+            ownedReservedByGroupKey.get(groupKey) || 0,
+          ),
         };
       });
       const ownedKeys = new Set(owned.map((row: any) => bookingChatResourceId(row)).filter(Boolean));
@@ -3933,6 +4021,18 @@ Deno.serve(async (req) => {
       if (participantErr) return errorResponse(participantErr.message, 500);
 
       const participantRowsOut: any[] = [];
+      const participantInviteIds = Array.from(new Set((participantRows || []).map((row) => row.invite_id).filter(Boolean)));
+      const participantInviteTokenById = new Map<string, string>();
+      if (participantInviteIds.length > 0) {
+        const { data: participantInvites, error: participantInvitesError } = await admin
+          .from('booking_participant_invites')
+          .select('id, token')
+          .in('id', participantInviteIds);
+        if (participantInvitesError) return errorResponse(participantInvitesError.message, 500);
+        for (const participantInvite of participantInvites || []) {
+          participantInviteTokenById.set(participantInvite.id, participantInvite.token);
+        }
+      }
       for (const participant of participantRows || []) {
         const { data: representative, error: bookingErr } = await admin
           .from('bookings')
@@ -3952,21 +4052,36 @@ Deno.serve(async (req) => {
           });
           return projectBookingParticipantCoverage(row, coverage);
         }));
-        const effectiveParticipant = projectedGroupParticipants.find((row: any) => row.id === participant.id) || participant;
-        if (!participantIsCommitted(effectiveParticipant)) continue;
-        const committedGroupParticipants = projectedGroupParticipants.filter(participantIsCommitted);
-        const capacity = bookingParticipantCapacity(groupRows);
-        const participantSummary = bookingGroupParticipantSummary(committedGroupParticipants, groupRows, capacity);
+        const groupState = await projectBookingParticipantGroupState(
+          admin,
+          participant.venue_id,
+          participant.booking_group_key,
+          projectedGroupParticipants,
+        );
+        const projectedParticipant = groupState.participants.find((row) => row.id === participant.id)
+          || projectBookingParticipantOperationalState(participant);
+        const effectiveParticipant = {
+          ...projectedParticipant,
+          invite_token: projectedParticipant.invite_id
+            ? participantInviteTokenById.get(projectedParticipant.invite_id) || null
+            : null,
+        };
+        const participantSummary = bookingGroupParticipantSummary(
+          groupState.participants,
+          groupRows,
+          groupState.reservedCount,
+        );
         for (const row of groupRows) {
           participantRowsOut.push({
             ...row,
             booking_group_key: participant.booking_group_key,
-            participants: committedGroupParticipants,
+            participants: groupState.participants,
             participant_summary: participantSummary,
             participant: effectiveParticipant,
             is_participant_place: effectiveParticipant.role !== 'booker' || row.user_id !== userId,
             participant_id: effectiveParticipant.id,
             participant_payment_status: effectiveParticipant.payment_status,
+            participant_operational_state: effectiveParticipant.operational_state,
             participant_checked_in_at: effectiveParticipant.checked_in_at,
           });
         }
@@ -4167,7 +4282,7 @@ Deno.serve(async (req) => {
       await ensureBookerParticipant(admin, bookingRows);
       const groupKey = bookingGroupKey(booking);
       const participants = await listBookingParticipants(admin, booking.venue_id, groupKey);
-      const capacity = bookingParticipantCapacityLimit(bookingRows, { openOnly: bookingGroupIsOpenForMore(bookingRows) });
+      const capacity = resolveBookingGroupCapacity(bookingRows).capacity;
       if (participants.filter(participantIsCommitted).length >= capacity) {
         return errorResponse('Bokningen har inga öppna platser kvar', 409);
       }
@@ -4305,12 +4420,13 @@ Deno.serve(async (req) => {
         metadata: { booking_id: booking.id, booking_group_key: groupKey, invite_id: invite.id },
       });
 
+      const operationalParticipant = projectBookingParticipantOperationalState(participant);
       return jsonResponse({
         ok: true,
         participant: {
-          ...participant,
+          ...operationalParticipant,
           checked_in: false,
-          amount_sek: minorToSek(participant.price_minor),
+          amount_sek: minorToSek(operationalParticipant.price_minor),
           claim_url: canonicalPublicUrl(`/booking/invite/${encodeURIComponent(invite.token)}`, req),
         },
         token: invite.token,
@@ -4598,15 +4714,16 @@ Deno.serve(async (req) => {
         bookingRowsByGroupKey.set(key, rows);
       }
       const participantsByGroupKey = new Map<string, any[]>();
+      const participantSummaryByGroupKey = new Map<string, ReturnType<typeof bookingGroupParticipantSummary>>();
       if (groupKeys.length > 0) {
         const { data: participantRows, error: participantRowsErr } = await lookupClient
           .from('booking_participants')
           .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
           .eq('venue_id', venueId)
           .in('booking_group_key', groupKeys)
-          .neq('payment_status', 'cancelled')
           .order('created_at', { ascending: true });
         if (participantRowsErr) return errorResponse(participantRowsErr.message);
+        const holdTruth = await loadBookingParticipantHoldTruth(lookupClient, venueId, groupKeys);
         const inviteIds = Array.from(new Set((participantRows || []).map((row: any) => row.invite_id).filter(Boolean)));
         const inviteTokenById = new Map<string, string>();
         if (inviteIds.length > 0) {
@@ -4625,7 +4742,11 @@ Deno.serve(async (req) => {
             bookingRows: bookingRowsByGroupKey.get(participant.booking_group_key) || [],
             channel: 'desk',
           });
-          const effectiveParticipant = projectBookingParticipantCoverage(participant, coverage);
+          const coverageParticipant = projectBookingParticipantCoverage(participant, coverage);
+          const effectiveParticipant = projectBookingParticipantOperationalState(
+            coverageParticipant,
+            holdTruth.latestByParticipantId.get(participant.id),
+          );
           const rows = participantsByGroupKey.get(participant.booking_group_key) || [];
           rows.push({
             ...effectiveParticipant,
@@ -4634,6 +4755,17 @@ Deno.serve(async (req) => {
             invite_token: effectiveParticipant.invite_id ? inviteTokenById.get(effectiveParticipant.invite_id) || null : null,
           });
           participantsByGroupKey.set(participant.booking_group_key, rows);
+        }
+        for (const groupKey of groupKeys) {
+          const groupRows = bookingRowsByGroupKey.get(groupKey) || [];
+          participantSummaryByGroupKey.set(groupKey, bookingGroupParticipantSummary(
+            participantsByGroupKey.get(groupKey) || [],
+            groupRows,
+            bookingParticipantReservedCount(
+              participantsByGroupKey.get(groupKey) || [],
+              holdTruth.liveHoldSourceKeysByGroupKey.get(groupKey) || new Set<string>(),
+            ),
+          ));
         }
       }
 
@@ -4658,6 +4790,7 @@ Deno.serve(async (req) => {
         checked_in_at: checkinByBookingId.get(booking.id)?.checked_in_at || null,
         booking_group_key: bookingGroupKey(booking),
         participants: participantsByGroupKey.get(bookingGroupKey(booking)) || [],
+        participant_summary: participantSummaryByGroupKey.get(bookingGroupKey(booking)) || null,
       }));
 
       let activityCourtBlocks: any[] = [];

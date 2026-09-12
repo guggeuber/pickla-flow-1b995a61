@@ -10,6 +10,7 @@ import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@/components/bookings/BookingParticipantSummary";
+import { bookingParticipantCustomerCopy, bookingParticipantStateView } from "@/lib/bookingParticipantState";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -35,6 +36,12 @@ type ParticipantTicketResponse = {
     checked_in_at: string | null;
     access_reason?: string | null;
     entitlement_type?: string | null;
+    operational_state?: string | null;
+    has_place?: boolean | null;
+    reserved?: boolean | null;
+    reservation_expires_at?: string | null;
+    check_in_allowed?: boolean | null;
+    requires_attention?: boolean | null;
   };
 };
 
@@ -83,7 +90,9 @@ export default function BookingParticipantTicketPage() {
     checkedIn,
     checkInAvailable,
   }) : "";
-  const paidEnough = ["paid", "free"].includes(String(data?.participant?.payment_status || "").toLowerCase());
+  const participantState = data?.participant ? bookingParticipantStateView(data.participant) : null;
+  const participantCopy = data?.participant ? bookingParticipantCustomerCopy(data.participant) : null;
+  const hasPlace = participantState?.hasPlace === true;
   const needsAuth = !user;
 
   const goToAuth = () => {
@@ -152,7 +161,7 @@ export default function BookingParticipantTicketPage() {
     );
   }
 
-  const isCancelled = data.participant.payment_status === "cancelled";
+  const isCancelled = participantState?.state === "cancelled_released";
 
   return (
     <div className="min-h-[100dvh] bg-[#f7f4ee] text-neutral-950">
@@ -201,11 +210,9 @@ export default function BookingParticipantTicketPage() {
                   {data.participant.display_name || "Din biljett"}
                 </p>
                 <p className="text-sm text-neutral-500" style={{ fontFamily: FONT_MONO }}>
-                  {data.participant.payment_status === "free"
-                    ? (data.participant.access_reason ? `Ingår · ${data.participant.access_reason}` : "Ingår")
-                    : data.participant.payment_status === "paid"
-                      ? `Betald · ${moneyFromMinor(data.participant.price_minor)}`
-                      : "Väntar på betalning"}
+                  {participantState?.state === "confirmed_paid"
+                    ? `Betald · ${moneyFromMinor(data.participant.price_minor)}`
+                    : participantState?.detail}
                 </p>
               </div>
             </div>
@@ -215,7 +222,14 @@ export default function BookingParticipantTicketPage() {
             <BookingParticipantSummary summary={data.participant_summary} viewerIsBooker={data.participant.role === "booker"} />
           </div>
 
-          {needsAuth && (
+          {!hasPlace && participantCopy ? (
+            <div className="mt-5 rounded-3xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-base font-black text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>{participantCopy.title}</p>
+              <p className="mt-1 text-sm text-neutral-600" style={{ fontFamily: FONT_MONO }}>{participantCopy.detail}</p>
+            </div>
+          ) : null}
+
+          {needsAuth && hasPlace && (
             <button
               onClick={goToAuth}
               className="mt-5 w-full rounded-full bg-neutral-950 px-5 py-4 text-base font-black text-white"
@@ -225,11 +239,11 @@ export default function BookingParticipantTicketPage() {
             </button>
           )}
 
-          {!needsAuth && !isCancelled && (
+          {!needsAuth && hasPlace && !isCancelled && (
             <div className="mt-5 space-y-3">
               <button
                 onClick={handleCheckIn}
-                disabled={checkingIn || checkedIn || !paidEnough || !checkInAvailable}
+                disabled={checkingIn || checkedIn || data.ticket.can_check_in !== true || participantState?.checkInAllowed !== true || !checkInAvailable}
                 className="inline-flex w-full items-center justify-center gap-3 rounded-full bg-neutral-950 px-5 py-4 text-base font-black text-white disabled:opacity-40"
                 style={{ fontFamily: FONT_GROTESK }}
               >
@@ -244,15 +258,17 @@ export default function BookingParticipantTicketPage() {
                 <MessageCircle className="h-5 w-5" />
                 Gå till chatt
               </button>
-              <button
-                onClick={handleCancel}
-                disabled={cancelling}
-                className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-red-100 bg-white px-5 py-4 text-sm font-black text-red-500 disabled:opacity-50"
-                style={{ fontFamily: FONT_GROTESK }}
-              >
-                {cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
-                Avboka min plats
-              </button>
+              {data.ticket.can_cancel ? (
+                <button
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-red-100 bg-white px-5 py-4 text-sm font-black text-red-500 disabled:opacity-50"
+                  style={{ fontFamily: FONT_GROTESK }}
+                >
+                  {cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                  Avboka min plats
+                </button>
+              ) : null}
             </div>
           )}
         </section>

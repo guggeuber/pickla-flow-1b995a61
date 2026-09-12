@@ -1,9 +1,8 @@
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { bookingParticipationFunding } from './booking_participant_funding.ts';
 import { expireStripeCheckoutSession, stripeCheckoutLifecycleState } from './commerce_checkout_expiry.ts';
+import { resolveBookingGroupCapacity } from './booking_participant_state.ts';
 
-const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
-const OPEN_BOOKING_SOURCE = 'open_booking_slot';
 const RESOLVABLE_ENTITLEMENT_TYPES = [
   'booking_access',
   'membership_access',
@@ -68,28 +67,6 @@ function founderBooking(rows: any[]) {
     Number(row?.included_court_hours || 0) > 0 ||
     row?.membership_usage_entitlement_type === 'court_hours_per_week'
   );
-}
-
-function openBookingCapacity(rows: any[]) {
-  const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  if (representative.open_for_more_status !== 'open') return 0;
-  const publicCapacity = Number(representative.open_for_more_public_capacity || 0);
-  if (publicCapacity > 0) return publicCapacity;
-  const openedPlaces = Number(representative.open_for_more_opened_places || 0);
-  const committedAtPublication = Number(representative.open_for_more_committed_at_publication || 0);
-  if (openedPlaces > 0) return committedAtPublication + openedPlaces;
-  return Math.max(Number(representative.open_for_more_total_players || 0), 0);
-}
-
-function participantUsesOpenCapacity(participant: any, rows: any[]) {
-  const metadata = metadataOf(participant);
-  return (metadata.source === OPEN_BOOKING_SOURCE || metadata.open_booking_public_claim === true) &&
-    rows.some((row: any) => row?.open_for_more_status === 'open');
-}
-
-function participantCapacity(participant: any, rows: any[]) {
-  if (participantUsesOpenCapacity(participant, rows)) return openBookingCapacity(rows);
-  return Math.max(rows.length, 1) * BOOKING_PARTICIPANT_MAX_PER_COURT;
 }
 
 function noCoverage(status: string): BookingParticipantCoverage {
@@ -321,7 +298,7 @@ export async function persistCurrentBookingParticipantCoverage(
   const rows = options.bookingRows?.length ? options.bookingRows : await loadBookingRows(admin, participant);
   const booking = representativeBooking(participant, rows);
   const serviceDate = bookingServiceDate(booking);
-  const capacity = participantCapacity(participant, rows);
+  const capacity = resolveBookingGroupCapacity(rows).capacity;
   if (!booking || !serviceDate || capacity <= 0) throw new Error('booking_participant_capacity_missing');
 
   const { data: latestHold, error: activeHoldError } = await admin

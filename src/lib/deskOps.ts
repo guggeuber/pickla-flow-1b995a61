@@ -86,8 +86,17 @@ export function bookingParticipantCheckinEligibility(participant: any, booking: 
   if (!participant?.id || !booking?.venue_id) return { ok: false, reason: "Deltagardata saknas" };
   if (participant.checked_in || participant.checked_in_at) return { ok: false, reason: "Redan inne" };
   if (!participant.customer_id && !participant.user_id) return { ok: false, reason: "Behöver identitet" };
-  const paymentStatus = String(participant.payment_status || "").toLowerCase();
-  if (!["paid", "free"].includes(paymentStatus)) return { ok: false, reason: "Ej betald" };
+  if (participant.has_place === false || participant.check_in_allowed === false) {
+    const state = String(participant.operational_state || "");
+    if (state === "payment_pending") return { ok: false, reason: "Plats reserverad" };
+    if (state === "payment_attention") return { ok: false, reason: "Kräver åtgärd" };
+    if (state === "cancelled_released") return { ok: false, reason: "Avbokad" };
+    return { ok: false, reason: "Har inte plats ännu" };
+  }
+  if (participant.has_place !== true) {
+    const paymentStatus = String(participant.payment_status || "").toLowerCase();
+    if (!["paid", "free"].includes(paymentStatus)) return { ok: false, reason: "Har inte plats ännu" };
+  }
   return deskBookingCheckinEligibility({ ...booking, checked_in: false, payment_status: "free", total_price: 0 });
 }
 

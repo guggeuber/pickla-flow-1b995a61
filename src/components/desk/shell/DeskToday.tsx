@@ -13,6 +13,7 @@ import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import type { DeskFulfillmentItem, DeskFulfillmentResponse } from "@/lib/commerce";
 import DeskBrucePanel from "@/components/desk/shell/DeskBrucePanel";
+import { bookingParticipantStateView, bookingParticipantSummaryLabel } from "@/lib/bookingParticipantState";
 
 interface Props {
   venueId: string | undefined;
@@ -234,7 +235,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const participantManualMutation = useMutation({
     mutationFn: ({ booking, input }: { booking: any; input: { displayName: string; email?: string; phone?: string } }) => addManualBookingParticipant(booking, input),
     onSuccess: (result: any) => {
-      const committed = ["paid", "free"].includes(String(result?.participant?.payment_status || "").toLowerCase());
+      const committed = result?.participant?.has_place === true;
       toast.success(committed ? "Spelaren är tillagd" : "Betalningslänk skapad · ingen plats är bekräftad");
       qc.invalidateQueries({ queryKey: ["today-bookings", venueId] });
     },
@@ -607,6 +608,7 @@ function BookingActionRow({
   const paymentLabel = isActivityBlock ? "Aktivitetsblock" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "pending" ? "Väntar" : "Okänd";
   const paymentTone = isActivityBlock ? "electric" : paymentStatus === "paid" || paymentStatus === "free" ? "lime" : paymentStatus === "pending" ? "sun" : "neutral";
   const participants = Array.isArray(booking.participants) ? booking.participants : [];
+  const participantSummary = booking.participant_summary || null;
   const manualSearch = (manualEmail.trim() || manualPhone.trim() || manualName.trim()).trim();
   const customerSuggestions = useQuery<any[]>({
     queryKey: ["booking-participant-manual-customer-search", booking?.venue_id, manualSearch],
@@ -687,7 +689,12 @@ function BookingActionRow({
       {!isActivityBlock && (
         <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: ax("borderSoft") }}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>Deltagare</p>
+            <div>
+              <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>Deltagare</p>
+              {participantSummary ? (
+                <p className="mt-1 text-xs font-black text-white">{bookingParticipantSummaryLabel(participantSummary)}</p>
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={() => setManualOpen((current) => !current)}
@@ -799,15 +806,10 @@ function BookingActionRow({
           ) : null}
           {participants.map((participant: any) => {
             const participantEligibility = bookingParticipantCheckinEligibility(participant, booking);
-            const paid = participant.payment_status === "paid";
-            const free = participant.payment_status === "free";
             const checkedIn = Boolean(participant.checked_in || participant.checked_in_at);
-            const claimed = Boolean(participant.customer_id || participant.user_id);
-            const metadata = participant.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
-            const accessReason = String(participant.access_reason || metadata.access_reason || metadata.effective_access_reason || "").trim();
-            const manualPlaceholder = !claimed && metadata.source === "manual_placeholder";
+            const state = bookingParticipantStateView(participant);
+            const stateTone = state.tone === "positive" ? "lime" : state.tone === "attention" ? "danger" : state.tone === "cancelled" ? "neutral" : "sun";
             const claimUrl = participant.invite_token ? canonicalAppUrl(`/booking/invite/${encodeURIComponent(participant.invite_token)}`) : "";
-            const amountSek = Number(participant.amount_sek || 0);
             return (
               <div key={participant.id} className="grid gap-2 rounded-xl border p-2 md:grid-cols-[1fr_auto]" style={{ borderColor: ax("borderSoft"), background: ax("panel") }}>
                 <div className="min-w-0">
@@ -818,21 +820,19 @@ function BookingActionRow({
                     </p>
                   )}
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    <AxChip tone={claimed ? "lime" : "sun"}>{claimed ? "Claimad" : "Behöver identitet"}</AxChip>
+                    <AxChip tone={stateTone}>{state.headline}</AxChip>
                     <AxChip tone={checkedIn ? "lime" : "sun"}>{checkedIn ? "Incheckad" : "Ej inne"}</AxChip>
-                    <AxChip tone={paid || free ? "lime" : "sun"}>
-                      {manualPlaceholder ? "Ingen plats ännu · identitet krävs" : paid ? "Betald" : free ? (accessReason ? `Ingår · ${accessReason}` : "Ingår") : `Ingen plats ännu · betala ${amountSek.toLocaleString("sv-SE")} kr`}
-                    </AxChip>
+                    <AxChip tone={stateTone}>{state.detail}</AxChip>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 md:justify-end">
-                  {(!claimed || (!paid && !free)) && claimUrl ? (
+                  {state.paymentLinkAction && state.paymentLinkLabel && claimUrl ? (
                     <button
                       type="button"
                       onClick={async () => {
                         try {
                           await shareOrCopy({ copyText: claimUrl });
-                          toast.success("Claim-länk kopierad");
+                          toast.success("Deltagarlänk kopierad");
                         } catch {
                           toast.error("Kunde inte kopiera länken");
                         }
@@ -841,7 +841,7 @@ function BookingActionRow({
                       style={{ background: ax("electric", 0.16), color: ax("electricSoft") }}
                     >
                       <Copy className="h-3.5 w-3.5" />
-                      {claimed ? "Kopiera betalningslänk" : "Kopiera länk"}
+                      {state.paymentLinkLabel}
                     </button>
                   ) : null}
                   {checkedIn ? (

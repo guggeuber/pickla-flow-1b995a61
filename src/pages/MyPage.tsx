@@ -29,6 +29,7 @@ import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@
 import { BookingStatusChip } from "@/components/bookings/BookingStatusChip";
 import { BookingConversationIndicator } from "@/components/bookings/BookingConversationIndicator";
 import { bookingHasConversation, buildBookingHistory, formatBookingHistoryTime } from "@/lib/bookingHistory";
+import { bookingParticipantCustomerCopy, bookingParticipantStateView } from "@/lib/bookingParticipantState";
 import { useMyBookings } from "@/hooks/useMyBookings";
 import {
   cancelCommerceActivityOrder,
@@ -865,12 +866,13 @@ function BookingDetailsSheet({
     null
   ) as BookingParticipantSummaryData | null;
   const committedParticipants = Number(participantSummary?.committed_count || 0);
+  const reservedParticipants = Number(participantSummary?.reserved_count || 0);
   const openForMorePublicCapacityEffective = Number(
     openBookingSource?.open_for_more_public_capacity ||
     openBookingSource?.open_for_more_total_players ||
     (committedParticipants + openForMoreOpenedPlaces)
   );
-  const openForMoreSpots = Math.max(0, openForMorePublicCapacityEffective - committedParticipants);
+  const openForMoreSpots = Math.max(0, openForMorePublicCapacityEffective - committedParticipants - reservedParticipants);
   const openForMoreDraftCapacity = committedParticipants + openForMoreOpenedPlaces;
   const openForMoreExceedsMax = openForMoreDraftCapacity > OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY;
   const participants = Array.isArray((booking as any).participants)
@@ -894,8 +896,9 @@ function BookingDetailsSheet({
     endTime: endSthlm.toFormat("HH:mm"),
   });
   const personalCheckedIn = Boolean(personalParticipant?.checked_in_at);
-  const personalPaymentStatus = String(personalParticipant?.payment_status || "").toLowerCase();
-  const personalPaidEnough = ["paid", "free"].includes(personalPaymentStatus);
+  const personalState = personalParticipant ? bookingParticipantStateView(personalParticipant) : null;
+  const personalCopy = personalParticipant ? bookingParticipantCustomerCopy(personalParticipant) : null;
+  const personalHasPlace = personalState?.hasPlace === true;
   const dateLabel = start.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
   const timeLabel = `${start.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
   const bookingTimingLabel = activityTimingLabel({
@@ -906,7 +909,8 @@ function BookingDetailsSheet({
     checkInAvailable: Boolean(personalParticipant?.id) && checkInWindowOpen,
   });
   const participantCanCheckIn = Boolean(personalParticipant?.id)
-    && personalPaidEnough
+    && personalHasPlace
+    && personalState?.checkInAllowed !== false
     && !personalCheckedIn
     && checkInWindowOpen;
   const checkInOpensLabel = startSthlm.minus({ minutes: 30 }).toFormat("HH:mm");
@@ -914,13 +918,19 @@ function BookingDetailsSheet({
     ? "Incheckad ✓"
     : !personalParticipant?.id
       ? "Check-in via biljett"
-      : !personalPaidEnough
-        ? "Väntar på betalning"
+      : !personalHasPlace
+        ? "Har inte plats ännu"
         : DateTime.now().setZone("Europe/Stockholm") > endSthlm
           ? "Check-in stängd"
           : checkInWindowOpen
             ? "Checka in"
             : `Check-in öppnar ${checkInOpensLabel}`;
+  const participantRecoveryLabel = personalState?.state === "payment_pending"
+    ? "Fortsätt betalningen"
+    : personalState?.state === "confirmation_pending"
+    ? "Bekräfta plats"
+    : "Slutför betalningen";
+  const participantCanCancel = personalHasPlace || ["payment_pending", "payment_expired", "confirmation_pending", "identity_pending"].includes(String(personalState?.state || ""));
 
   const handleCancel = async () => {
     if (!bookingIds.length) return;
@@ -1065,7 +1075,9 @@ function BookingDetailsSheet({
           <p className="text-xs uppercase tracking-wider mb-1" style={{ fontFamily: FONT_MONO, color: TEXT_MUTED }}>
             {isParticipantPlace ? "Din plats" : "Bokning"}
           </p>
-          <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>Din plats</p>
+          <p className="text-xl font-bold" style={{ fontFamily: FONT_HEADING, color: TEXT_PRIMARY }}>
+            {isParticipantPlace && personalCopy ? personalCopy.title : "Din plats"}
+          </p>
           <p className="text-sm mt-1" style={{ color: TEXT_SECONDARY }}>{courtName}</p>
           {courtNames !== courtName && (
             <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>{courtNames}</p>
@@ -1088,13 +1100,7 @@ function BookingDetailsSheet({
                 {participant.display_name || "Din plats"}
               </p>
               <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
-                {participant.payment_status === "free"
-                  ? (participant.access_reason || participant.metadata?.effective_access_reason || participant.metadata?.access_reason
-                    ? `Ingår · ${participant.access_reason || participant.metadata?.effective_access_reason || participant.metadata?.access_reason}`
-                    : "Ingår")
-                  : participant.payment_status === "paid"
-                  ? "Betald"
-                  : "Väntar på betalning"}
+                {personalState?.detail || personalCopy?.detail || "Deltagarstatus saknas"}
               </p>
             </div>
           )}
@@ -1251,6 +1257,16 @@ function BookingDetailsSheet({
           )}
 
           <div className="flex flex-col gap-2 mt-5">
+            {isParticipantPlace && personalState?.paymentLinkAction && participant?.invite_token ? (
+              <button
+                onClick={() => navigate(`/booking/invite/${encodeURIComponent(participant.invite_token)}`)}
+                className="w-full py-3 rounded-xl text-sm font-bold active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+                style={{ background: BLUE, color: CARD_BG, fontFamily: FONT_HEADING }}
+              >
+                <CreditCard className="w-4 h-4" />
+                {participantRecoveryLabel}
+              </button>
+            ) : null}
             {personalParticipant?.id && (
               <button
                 onClick={handleParticipantCheckIn}
@@ -1273,7 +1289,7 @@ function BookingDetailsSheet({
                 Bjud in spelare
               </button>
             )}
-            <button
+            {(!isParticipantPlace || personalHasPlace) && <button
               onClick={() => {
                 const chatResourceId = getBookingChatResourceId(booking);
                 const returnTo = bookingDrawerKey
@@ -1286,7 +1302,7 @@ function BookingDetailsSheet({
             >
               <MessageCircle className="w-4 h-4" />
               Gå till chatt
-            </button>
+            </button>}
             {!isParticipantPlace && (
               <button
                 onClick={() => { onOpenChange(false); navigate(`/b/${booking.primary_booking_ref || booking.booking_ref || booking.id}`); }}
@@ -1297,7 +1313,7 @@ function BookingDetailsSheet({
                 Visa kvitto
               </button>
             )}
-            {confirmCancel ? (
+            {(!isParticipantPlace || participantCanCancel) && (confirmCancel ? (
               <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)" }}>
                 <p className="text-xs text-center" style={{ color: TEXT_SECONDARY }}>
                   {isParticipantPlace ? "Säker på att du vill avboka din plats?" : "Säker på att du vill avboka?"}
@@ -1333,7 +1349,7 @@ function BookingDetailsSheet({
               >
                 {isParticipantPlace ? "Avboka min plats" : "Avboka"}
               </button>
-            )}
+            ))}
           </div>
         </div>
         </div>
@@ -2786,6 +2802,11 @@ const MyPage = () => {
                       <p className="text-xs" style={{ color: TEXT_MUTED }}>
                         {formatBookingHistoryTime(b)}
                       </p>
+                      {b.is_participant_place && b.participant ? (
+                        <p className="text-[11px] mt-1 font-bold" style={{ color: bookingParticipantStateView(b.participant).hasPlace ? GREEN : "#D97706" }}>
+                          {bookingParticipantCustomerCopy(b.participant).title}
+                        </p>
+                      ) : null}
                       {b.court_count > 1 && (
                         <p className="text-[11px] mt-1 truncate" style={{ color: TEXT_MUTED }}>
                           {getBookingCourtNamesLabel(b)}
@@ -2920,6 +2941,11 @@ const MyPage = () => {
                               <p className="text-xs" style={{ color: TEXT_MUTED }}>
                                 {formatBookingHistoryTime(b)}
                               </p>
+                              {b.is_participant_place && b.participant ? (
+                                <p className="text-[11px] mt-1 font-bold" style={{ color: bookingParticipantStateView(b.participant).hasPlace ? GREEN : "#D97706" }}>
+                                  {bookingParticipantCustomerCopy(b.participant).title}
+                                </p>
+                              ) : null}
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <BookingConversationIndicator visible={bookingHasConversation(b, conversationRooms)} />

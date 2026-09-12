@@ -19,6 +19,7 @@ import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 import { finalizeExpiredCommerceCheckout } from '../_shared/commerce_checkout_expiry.ts';
 import { finalizePaidBookingParticipantCheckout } from '../_shared/booking_participant_payment.ts';
+import { resolveBookingGroupCapacity } from '../_shared/booking_participant_state.ts';
 import { recordPaidCapacityConflict } from '../_shared/paid_capacity_conflict.ts';
 import {
   assertCurrentCourseParticipantIdentity,
@@ -1046,7 +1047,7 @@ async function ensureBookerParticipant(serviceClient: any, bookingRows: any[]) {
     p_booking_id: booking.id,
     p_booking_group_key: groupKey,
     p_session_date: bookingSessionDate(booking),
-    p_capacity: bookingParticipantCapacity(bookingRows),
+    p_capacity: resolveBookingGroupCapacity(bookingRows).capacity,
     p_customer_id: customerId,
     p_user_id: booking.user_id,
     p_display_name: contact.name || 'Bokare',

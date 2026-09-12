@@ -242,4 +242,50 @@ describe("MyPage detail routes", () => {
     expect(within(drawer).getByText("Hotfix Player")).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: "Gå till chatt" })).toBeInTheDocument();
   });
+
+  it("does not present an expired unpaid participant intent as a confirmed place", async () => {
+    const bookingRef = "UNPAID-PARTICIPANT-REF";
+    const startsAt = new Date(Date.now() + 60 * 60 * 1000);
+    const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1000);
+
+    renderMyPage(`/my?booking=${bookingRef}`, {
+      bookings: [{
+        id: "booking-unpaid",
+        booking_ref: bookingRef,
+        venue_id: "venue-id",
+        user_id: "booker-user-id",
+        status: "confirmed",
+        start_time: startsAt.toISOString(),
+        end_time: endsAt.toISOString(),
+        total_price: 0,
+        venue_courts: { name: "Bana Sanning" },
+        is_participant_place: true,
+        participant: {
+          id: "participant-unpaid",
+          user_id: auth.user.id,
+          display_name: "Hotfix Player",
+          payment_status: "pending",
+          operational_state: "payment_expired",
+          has_place: false,
+          check_in_allowed: false,
+          can_retry_payment: true,
+          amount_sek: 198,
+          invite_token: "retry-token",
+        },
+        participant_summary: {
+          confirmed_count: 1,
+          reserved_count: 0,
+          available_count: 3,
+          pending_unreserved_count: 1,
+          capacity: 4,
+        },
+      }],
+    });
+
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).getAllByText("Slutför betalningen för att säkra platsen").length).toBeGreaterThan(0);
+    expect(within(drawer).getByRole("button", { name: "Slutför betalningen" })).toBeInTheDocument();
+    expect(within(drawer).getByRole("button", { name: "Har inte plats ännu" })).toBeDisabled();
+    expect(within(drawer).queryByRole("button", { name: "Gå till chatt" })).not.toBeInTheDocument();
+  });
 });

@@ -9,6 +9,7 @@ import { addManualBookingParticipant, checkInDeskBooking, deskBookingCheckinElig
 import { shareOrCopy } from "@/lib/share";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
+import { bookingParticipantStateView, bookingParticipantSummaryLabel, type ParticipantSummaryInput } from "@/lib/bookingParticipantState";
 
 export type OperationsCourt = {
   id?: string | null;
@@ -53,6 +54,7 @@ export type OperationsBookingDetail = {
   access_code?: string | null;
   stripe_session_id?: string | null;
   participants?: any[];
+  participant_summary?: ParticipantSummaryInput;
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -142,6 +144,7 @@ export function buildOperationsBookingDetailFromRows(rows: any[]): OperationsBoo
     access_code: first.access_code || null,
     stripe_session_id: first.stripe_session_id || null,
     participants: Array.isArray(first.participants) ? first.participants : [],
+    participant_summary: first.participant_summary || null,
   };
 }
 
@@ -233,6 +236,7 @@ export function OperationsBookingDrawer({
   const canOpenCustomer = !readOnly && Boolean(booking?.venue_id && (bookingCustomerId || bookingCustomerUserId));
   const canCheckIn = !readOnly && !effectiveCheckedIn && deskBookingCheckinEligibility(booking).ok;
   const participants = Array.isArray(booking?.participants) ? booking.participants : [];
+  const participantSummary = booking?.participant_summary || null;
   const manualSearch = (manualEmail.trim() || manualPhone.trim() || manualName.trim()).trim();
   const customerSuggestions = useQuery<any[]>({
     queryKey: ["booking-drawer-manual-customer-search", booking?.venue_id, manualSearch],
@@ -295,7 +299,7 @@ export function OperationsBookingDrawer({
       });
     },
     onSuccess: (result: any) => {
-      const committed = ["paid", "free"].includes(String(result?.participant?.payment_status || "").toLowerCase());
+      const committed = result?.participant?.has_place === true;
       toast.success(committed ? "Spelaren är tillagd" : "Betalningslänk skapad · ingen plats är bekräftad");
       setManualName("");
       setManualPhone("");
@@ -398,9 +402,14 @@ export function OperationsBookingDrawer({
 
               {!readOnly && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
-                    <UserRound className="h-3.5 w-3.5" />
-                    Spelare
+                  <div>
+                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
+                      <UserRound className="h-3.5 w-3.5" />
+                      Spelare
+                    </div>
+                    {participantSummary ? (
+                      <p className="mt-1 text-xs font-black text-white">{bookingParticipantSummaryLabel(participantSummary)}</p>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -494,12 +503,15 @@ export function OperationsBookingDrawer({
                 {participants.length ? (
                   <div className="mt-3 space-y-2">
                     {participants.map((participant) => {
-                      const claimed = Boolean(participant.customer_id || participant.user_id);
-                      const paid = participant.payment_status === "paid";
-                      const free = participant.payment_status === "free";
                       const checkedIn = Boolean(participant.checked_in || participant.checked_in_at);
-                      const metadata = participant.metadata && typeof participant.metadata === "object" ? participant.metadata : {};
-                      const manualPlaceholder = !claimed && metadata.source === "manual_placeholder";
+                      const state = bookingParticipantStateView(participant);
+                      const stateClass = state.tone === "positive"
+                        ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300"
+                        : state.tone === "attention"
+                        ? "border-red-500/25 bg-red-500/15 text-red-300"
+                        : state.tone === "cancelled"
+                        ? "border-neutral-500/25 bg-neutral-500/15 text-neutral-300"
+                        : "border-amber-500/25 bg-amber-500/15 text-amber-300";
                       const claimUrl = participant.invite_token ? canonicalAppUrl(`/booking/invite/${encodeURIComponent(participant.invite_token)}`) : "";
                       return (
                         <div key={participant.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
@@ -512,13 +524,13 @@ export function OperationsBookingDrawer({
                                 </p>
                               )}
                             </div>
-                            {(!claimed || (!paid && !free)) && claimUrl ? (
+                            {state.paymentLinkAction && state.paymentLinkLabel && claimUrl ? (
                               <button
                                 type="button"
                                 onClick={async () => {
                                   try {
                                     await shareOrCopy({ copyText: claimUrl });
-                                    toast.success("Claim-länk kopierad");
+                                    toast.success("Deltagarlänk kopierad");
                                   } catch {
                                     toast.error("Kunde inte kopiera länken");
                                   }
@@ -526,19 +538,19 @@ export function OperationsBookingDrawer({
                                 className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 px-2.5 py-1.5 text-[11px] font-black text-white"
                               >
                                 <Copy className="h-3.5 w-3.5" />
-                                {claimed ? "Kopiera betalningslänk" : "Kopiera länk"}
+                                {state.paymentLinkLabel}
                               </button>
                             ) : null}
                           </div>
                           <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-black uppercase tracking-wider">
-                            <span className={`rounded-full border px-2.5 py-1 ${claimed ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
-                              {claimed ? "Claimad" : "Behöver identitet"}
+                            <span className={`rounded-full border px-2.5 py-1 ${stateClass}`}>
+                              {state.headline}
                             </span>
                             <span className={`rounded-full border px-2.5 py-1 ${checkedIn ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
                               {checkedIn ? "Incheckad" : "Ej inne"}
                             </span>
-                            <span className={`rounded-full border px-2.5 py-1 ${paid || free ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-300" : "border-amber-500/25 bg-amber-500/15 text-amber-300"}`}>
-                              {manualPlaceholder ? "Ingen plats ännu · identitet krävs" : paid ? "Betald" : free ? "Ingår" : "Ingen plats ännu · betalning krävs"}
+                            <span className={`rounded-full border px-2.5 py-1 ${stateClass}`}>
+                              {state.detail}
                             </span>
                           </div>
                         </div>
