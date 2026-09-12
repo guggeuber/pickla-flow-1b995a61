@@ -1,11 +1,44 @@
 type ServiceClient = any;
 
-type StripeCheckoutStatus = {
+export type StripeCheckoutStatus = {
   id?: string | null;
+  url?: string | null;
   status?: string | null;
   payment_status?: string | null;
+  amount_total?: number | null;
+  currency?: string | null;
+  mode?: string | null;
+  payment_intent?: string | { id?: string | null } | null;
+  payment_method_types?: string[] | null;
+  customer?: string | { id?: string | null } | null;
+  customer_details?: {
+    name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+  } | null;
   metadata?: Record<string, unknown> | null;
 };
+
+export type StripeCheckoutLifecycleState = 'paid' | 'open' | 'expired_unpaid' | 'unknown';
+
+type FetchLike = typeof fetch;
+
+export class StripeCheckoutLifecycleError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'StripeCheckoutLifecycleError';
+    this.code = code;
+  }
+}
+
+export function stripeCheckoutLifecycleState(session: StripeCheckoutStatus): StripeCheckoutLifecycleState {
+  if (session.payment_status === 'paid') return 'paid';
+  if (session.status === 'open') return 'open';
+  if (session.status === 'expired' && session.payment_status !== 'paid') return 'expired_unpaid';
+  return 'unknown';
+}
 
 export function stripeCheckoutCanBeReleased(session: StripeCheckoutStatus) {
   return session.status === 'expired' && session.payment_status !== 'paid';
@@ -79,13 +112,56 @@ export async function finalizeExpiredCommerceCheckout(
   return { released: true, orderId };
 }
 
-async function retrieveStripeCheckoutSession(stripeKey: string, stripeApiBase: string, sessionId: string) {
-  const response = await fetch(`${stripeApiBase.replace(/\/$/, '')}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
-    headers: { Authorization: `Bearer ${stripeKey}` },
+export async function retrieveStripeCheckoutSession(
+  stripeKey: string,
+  stripeApiBase: string,
+  sessionId: string,
+  fetchImpl: FetchLike = fetch,
+) {
+  const response = await fetchImpl(`${stripeApiBase.replace(/\/$/, '')}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: {
+      Authorization: `Bearer ${stripeKey}`,
+      'Stripe-Version': '2023-10-16',
+    },
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message || `Stripe session lookup failed ${response.status}`);
+  if (!response.ok) {
+    throw new StripeCheckoutLifecycleError(
+      'stripe_checkout_lookup_failed',
+      payload?.error?.message || `Stripe session lookup failed ${response.status}`,
+    );
+  }
   return payload as StripeCheckoutStatus;
+}
+
+export async function expireStripeCheckoutSession(
+  stripeKey: string,
+  stripeApiBase: string,
+  sessionId: string,
+  fetchImpl: FetchLike = fetch,
+) {
+  const base = stripeApiBase.replace(/\/$/, '');
+  const response = await fetchImpl(`${base}/checkout/sessions/${encodeURIComponent(sessionId)}/expire`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${stripeKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Stripe-Version': '2023-10-16',
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.ok) return payload as StripeCheckoutStatus;
+
+  // Expiry races with payment and Stripe's own timeout. Always re-read the
+  // authoritative state before deciding whether capacity may be released.
+  try {
+    return await retrieveStripeCheckoutSession(stripeKey, base, sessionId, fetchImpl);
+  } catch (lookupError) {
+    throw new StripeCheckoutLifecycleError(
+      'stripe_checkout_expiry_failed',
+      payload?.error?.message || (lookupError as Error).message || `Stripe session expiry failed ${response.status}`,
+    );
+  }
 }
 
 export async function reconcileExpiredFirstVisitCheckouts(

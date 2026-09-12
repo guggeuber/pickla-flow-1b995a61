@@ -33,6 +33,11 @@ import {
 } from '../_shared/booking_participant_entitlement.ts';
 import { bookingParticipationFunding } from '../_shared/booking_participant_funding.ts';
 import {
+  BookingParticipantRetryError,
+  reconcileBookingParticipantRetry,
+} from '../_shared/booking_participant_retry.ts';
+import { finalizePaidBookingParticipantCheckout } from '../_shared/booking_participant_payment.ts';
+import {
   checkPhysicalAvailability,
   claimPhysicalBookings,
   physicalIntervalFromLocal,
@@ -539,6 +544,28 @@ async function acquireBookingParticipantPaymentHold(
     throw error;
   }
   return hold;
+}
+
+async function prepareBookingParticipantPaymentRetry(
+  admin: any,
+  participant: any,
+  expectedAmountMinor: number,
+) {
+  return reconcileBookingParticipantRetry(admin, participant, {
+    stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+    stripeApiBase: STRIPE_API_BASE,
+    expectedAmountMinor,
+    finalizePaid: finalizePaidBookingParticipantCheckout,
+  });
+}
+
+function bookingParticipantRetryErrorResponse(error: unknown) {
+  if (!(error instanceof BookingParticipantRetryError)) throw error;
+  console.error('booking participant retry reconciliation failed', error.code, error.message);
+  if (error.code === 'paid_capacity_conflict') {
+    return errorResponse('Betalningen är mottagen men platsen kräver manuell kontroll. Ingen ny betalning skapades.', 409);
+  }
+  return errorResponse('Det tidigare betalningsförsöket kunde inte verifieras. Ingen ny betalning skapades.', 503);
 }
 
 async function getBookingGroupRows(admin: any, booking: any) {
@@ -1802,7 +1829,38 @@ Deno.serve(async (req) => {
     const existing = participants.find((row: any) => row.user_id === userId || row.customer_id === customerId);
     if (existing) {
       if (!participantIsCommitted(existing)) {
-        if (Number(pricing.price_minor || 0) <= 0) {
+        let retry;
+        if (Number(existing.price_minor || 0) > 0) {
+          try {
+            retry = await prepareBookingParticipantPaymentRetry(admin, existing, Number(pricing.price_minor || 0));
+          } catch (retryError) {
+            return bookingParticipantRetryErrorResponse(retryError);
+          }
+          if (retry.action === 'reuse_checkout') {
+            return jsonResponse({
+              success: true,
+              participant_id: existing.id,
+              booking_ref: representative.booking_ref,
+              free: false,
+              payment_status: 'pending',
+              amount_sek: minorToSek(existing.price_minor),
+              capacity_hold_id: retry.holdId,
+              checkout_url: retry.checkoutUrl,
+              checkout_reused: true,
+              durable: false,
+            }, 200, 0);
+          }
+        }
+
+        if (retry?.action === 'paid_reconciled') {
+          const { data: reconciled, error: reconciledError } = await admin.from('booking_participants')
+            .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at')
+            .eq('id', existing.id)
+            .maybeSingle();
+          if (reconciledError || !participantIsCommitted(reconciled)) {
+            return errorResponse('Betalningen är mottagen men deltagarplatsen kunde inte bekräftas.', 409);
+          }
+        } else if (Number(pricing.price_minor || 0) <= 0) {
           try {
             await commitBookingParticipantCapacity(admin, {
               p_venue_id: invite.venue_id,
@@ -2234,6 +2292,26 @@ Deno.serve(async (req) => {
         bookingRows,
         channel: 'checkout',
       });
+      let retry;
+      try {
+        retry = await prepareBookingParticipantPaymentRetry(
+          adminCheckout,
+          participant,
+          currentCoverage.covered ? 0 : Number(participant.price_minor || 0),
+        );
+      } catch (retryError) {
+        return bookingParticipantRetryErrorResponse(retryError);
+      }
+      if (retry.action === 'reuse_checkout') {
+        return jsonResponse({ url: retry.checkoutUrl, reused: true });
+      }
+      if (retry.action === 'paid_reconciled') {
+        return jsonResponse({
+          free: true,
+          reconciled: true,
+          redirect: booking?.booking_ref ? `/b/${booking.booking_ref}` : '/my',
+        });
+      }
       if (currentCoverage.covered) {
         let persisted;
         try {
@@ -2789,30 +2867,12 @@ Deno.serve(async (req) => {
         const capacity = publicOpenCapacity > 0
           ? publicOpenCapacity
           : bookingParticipantCapacityLimit(bookingRows, { openOnly: bookingGroupIsOpenForMore(bookingRows) });
-        const hold = await acquireCapacityHold(adminCapacity, {
-          p_venue_id: participant.venue_id,
-          p_scope_type: 'booking_group',
-          p_scope_id: participant.booking_group_key,
-          p_session_date: bookingSessionDate(booking),
-          p_capacity: capacity,
-          p_user_id: participant.user_id || null,
-          p_customer_id: participant.customer_id || null,
-          p_source_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
-          p_source_id: participant.id,
-          p_idempotency_key: requestIdempotencyKey || null,
-          p_metadata: {
-            product_type,
-            booking_id: participant.booking_id,
-            booking_group_key: participant.booking_group_key,
-            open_booking_context: meta.open_booking_context || null,
-            open_booking_opened_places: meta.open_booking_opened_places || null,
-            open_booking_public_capacity: meta.open_booking_public_capacity || meta.open_booking_total_players || null,
-            open_booking_committed_at_publication: meta.open_booking_committed_at_publication || null,
-            open_booking_total_players: meta.open_booking_public_capacity || meta.open_booking_total_players || null,
-            open_booking_published_at: meta.open_booking_published_at || null,
-          },
-        });
-        if (!hold.ok) return errorResponse('Bokningen har inga öppna platser kvar', 409);
+        let hold;
+        try {
+          hold = await acquireBookingParticipantPaymentHold(adminCapacity, participant, booking, capacity);
+        } catch {
+          return errorResponse('Bokningen har inga öppna platser kvar', 409);
+        }
         capacityHoldId = String(hold.hold_id || '');
         meta.capacity_hold_id = capacityHoldId;
       }
@@ -2933,7 +2993,7 @@ Deno.serve(async (req) => {
           metadata: stripeMetadata,
           success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
           cancel_url:  `${origin}${cancelPath}`,
-        }, requestIdempotencyKey || (product_type === BOOKING_PARTICIPANT_SOURCE_TYPE ? capacityHoldId : ''));
+        }, product_type === BOOKING_PARTICIPANT_SOURCE_TYPE ? capacityHoldId : requestIdempotencyKey);
       }
     } catch (stripeErr) {
       await releaseCapacityHold(getServiceClient(), capacityHoldId, 'stripe_checkout_create_failed');

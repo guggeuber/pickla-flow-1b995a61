@@ -1,5 +1,6 @@
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { bookingParticipationFunding } from './booking_participant_funding.ts';
+import { expireStripeCheckoutSession, stripeCheckoutLifecycleState } from './commerce_checkout_expiry.ts';
 
 const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
 const OPEN_BOOKING_SOURCE = 'open_booking_slot';
@@ -113,24 +114,14 @@ function noCoverage(status: string): BookingParticipantCoverage {
 async function expireSupersededStripeCheckout(sessionId: string) {
   const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
   if (!stripeKey) throw new Error('stripe_not_configured_for_entitlement_reresolution');
-  const stripeApiBase = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
-  const headers = {
-    Authorization: `Bearer ${stripeKey}`,
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'Stripe-Version': '2023-10-16',
-  };
-  const expireResponse = await fetch(`${stripeApiBase}/checkout/sessions/${encodeURIComponent(sessionId)}/expire`, {
-    method: 'POST',
-    headers,
-  });
-  if (expireResponse.ok) return;
-
-  const statusResponse = await fetch(`${stripeApiBase}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
-    headers: { Authorization: `Bearer ${stripeKey}`, 'Stripe-Version': '2023-10-16' },
-  });
-  const session = await statusResponse.json().catch(() => ({}));
-  if (statusResponse.ok && session?.status === 'expired') return;
-  if (statusResponse.ok && (session?.status === 'complete' || session?.payment_status === 'paid')) {
+  const session = await expireStripeCheckoutSession(
+    stripeKey,
+    Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1',
+    sessionId,
+  );
+  const state = stripeCheckoutLifecycleState(session);
+  if (state === 'expired_unpaid') return;
+  if (state === 'paid') {
     throw new Error('booking_participant_payment_already_settled');
   }
   throw new Error('booking_participant_checkout_expiry_failed');

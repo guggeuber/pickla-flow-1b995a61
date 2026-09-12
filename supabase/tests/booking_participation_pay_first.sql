@@ -135,6 +135,56 @@ BEGIN
   END IF;
 END $$;
 
+-- A Stripe-linked hold is deliberately not lazy-expired by acquire_capacity_hold.
+-- Retry code must first prove the Checkout expired/unpaid and then use the
+-- canonical release primitive. Once released, the stable purchase-intent key
+-- can safely back a new hold with a fresh hold/payment-attempt identity.
+DO $$
+DECLARE
+  v_stale RECORD;
+  v_retry RECORD;
+  v_retry_again RECORD;
+BEGIN
+  SELECT * INTO v_stale FROM public.acquire_capacity_hold(
+    'bf100000-0000-4000-8000-000000000002',
+    'booking_group', 'stripe-linked-retry-proof', '2026-08-22', 1,
+    'bf100000-0000-4000-8000-000000000011', NULL,
+    'booking_participant', NULL, 'stable-participant-intent', '{}', 600
+  );
+  PERFORM public.attach_capacity_hold_stripe_session(v_stale.hold_id, 'cs_expired_unpaid_retry_proof');
+  UPDATE public.capacity_holds SET expires_at = now() - interval '1 second' WHERE id = v_stale.hold_id;
+
+  IF NOT public.release_capacity_hold(v_stale.hold_id, 'stripe_checkout_expired') THEN
+    RAISE EXCEPTION 'Stripe-proven expired hold was not released';
+  END IF;
+
+  SELECT * INTO v_retry FROM public.acquire_capacity_hold(
+    'bf100000-0000-4000-8000-000000000002',
+    'booking_group', 'stripe-linked-retry-proof', '2026-08-22', 1,
+    'bf100000-0000-4000-8000-000000000011', NULL,
+    'booking_participant', NULL, 'stable-participant-intent', '{}', 600
+  );
+  IF NOT v_retry.ok OR v_retry.hold_id IS NULL OR v_retry.hold_id = v_stale.hold_id THEN
+    RAISE EXCEPTION 'fresh retry attempt did not acquire a new hold: stale %, retry %', row_to_json(v_stale), row_to_json(v_retry);
+  END IF;
+  SELECT * INTO v_retry_again FROM public.acquire_capacity_hold(
+    'bf100000-0000-4000-8000-000000000002',
+    'booking_group', 'stripe-linked-retry-proof', '2026-08-22', 1,
+    'bf100000-0000-4000-8000-000000000011', NULL,
+    'booking_participant', NULL, 'stable-participant-intent', '{}', 600
+  );
+  IF NOT v_retry_again.ok OR v_retry_again.hold_id <> v_retry.hold_id OR v_retry_again.reason <> 'existing_hold' THEN
+    RAISE EXCEPTION 'concurrent retry did not collapse onto one effective attempt: retry %, again %', row_to_json(v_retry), row_to_json(v_retry_again);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.capacity_holds
+    WHERE id = v_stale.hold_id AND status = 'expired'
+      AND metadata->>'release_reason' = 'stripe_checkout_expired'
+  ) THEN
+    RAISE EXCEPTION 'stale Stripe-linked hold lifecycle was not preserved';
+  END IF;
+END $$;
+
 -- The migration deliberately never rewrites historical desk payment history.
 INSERT INTO public.booking_participants (
   venue_id, booking_id, booking_group_key, user_id, display_name,

@@ -18,6 +18,8 @@ import {
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
 import { finalizeExpiredCommerceCheckout } from '../_shared/commerce_checkout_expiry.ts';
+import { finalizePaidBookingParticipantCheckout } from '../_shared/booking_participant_payment.ts';
+import { recordPaidCapacityConflict } from '../_shared/paid_capacity_conflict.ts';
 import {
   assertCurrentCourseParticipantIdentity,
   type CourseParticipantType,
@@ -30,7 +32,6 @@ import {
 } from '../_shared/physical_availability.ts';
 
 const BOOKING_PARTICIPANT_SOURCE_TYPE = 'booking_participant';
-const BOOKING_PARTICIPANT_MAX_PER_COURT = 4;
 type ServiceClient = ReturnType<typeof getServiceClient>;
 type StripeRefundObject = {
   id?: string | null;
@@ -248,7 +249,7 @@ const stripeWebhookHandler = async (req: Request) => {
     } else if (product_type === 'activity_ticket') {
       await handleActivityTicket(session, meta, serviceClient);
     } else if (product_type === BOOKING_PARTICIPANT_SOURCE_TYPE) {
-      await handleBookingParticipant(session, meta, serviceClient);
+      await finalizePaidBookingParticipantCheckout(session, serviceClient);
     } else if (product_type === 'membership') {
       await handleMembership(session, meta, serviceClient);
     }
@@ -928,30 +929,6 @@ function bookingGroupKey(row: any) {
   return `booking:${row?.id || row?.booking_ref || crypto.randomUUID()}`;
 }
 
-function bookingParticipantCapacity(rows: any[]) {
-  return Math.max(rows.length, 1) * BOOKING_PARTICIPANT_MAX_PER_COURT;
-}
-
-function openBookingCapacity(rows: any[]) {
-  const representative = rows.find((row: any) => row?.open_for_more_status === 'open') || rows[0] || {};
-  if (representative?.open_for_more_status !== 'open') return 0;
-  const publicCapacity = Number(representative?.open_for_more_public_capacity || 0);
-  if (publicCapacity > 0) return publicCapacity;
-  const openedPlaces = Number(representative?.open_for_more_opened_places || 0);
-  const committedAtPublication = Number(representative?.open_for_more_committed_at_publication || 0);
-  if (openedPlaces > 0) return committedAtPublication + openedPlaces;
-  const legacyTotal = Number(representative?.open_for_more_total_players || 0);
-  return legacyTotal > 0 ? legacyTotal : 0;
-}
-
-function bookingGroupIsOpenForMore(rows: any[]) {
-  return rows.some((row: any) => row?.open_for_more_status === 'open');
-}
-
-function bookingParticipantCapacityLimit(rows: any[]) {
-  return bookingGroupIsOpenForMore(rows) ? openBookingCapacity(rows) : bookingParticipantCapacity(rows);
-}
-
 function bookingSessionDate(row: any) {
   const iso = row?.start_time;
   if (!iso) return DateTime.now().setZone('Europe/Stockholm').toISODate()!;
@@ -1026,93 +1003,6 @@ async function recordPaidCommerceFulfillmentFailure(serviceClient: any, params: 
   if (error) throw new Error(error.message);
 }
 
-async function recordPaidCapacityConflict(serviceClient: any, params: {
-  venueId: string;
-  scopeType: string;
-  scopeId: string;
-  sessionDate?: string | null;
-  stripeSessionId: string;
-  paymentIntentId?: string | null;
-  receiptId?: string | null;
-  ledgerSourceType?: string | null;
-  ledgerSourceId?: string | null;
-  customerId?: string | null;
-  userId?: string | null;
-  title: string;
-  metadata?: Record<string, unknown>;
-}) {
-  const agentKey = `paid_capacity_conflict:${params.stripeSessionId}`;
-  const incidentMetadata = {
-    type: 'paid_capacity_conflict',
-    agent_key: agentKey,
-    scope_type: params.scopeType,
-    scope_id: params.scopeId,
-    session_date: params.sessionDate || null,
-    stripe_session_id: params.stripeSessionId,
-    stripe_payment_intent_id: params.paymentIntentId || null,
-    booking_receipt_id: params.receiptId || null,
-    ledger_source_type: params.ledgerSourceType || null,
-    ledger_source_id: params.ledgerSourceId || null,
-    customer_id: params.customerId || null,
-    user_id: params.userId || null,
-    ...(params.metadata || {}),
-  };
-
-  const { data: existing } = await serviceClient
-    .from('ops_incidents')
-    .select('id')
-    .eq('venue_id', params.venueId)
-    .contains('metadata', { agent_key: agentKey })
-    .neq('status', 'resolved')
-    .limit(1)
-    .maybeSingle();
-
-  if (existing?.id) {
-    await serviceClient.from('ops_incidents')
-      .update({
-        status: 'open',
-        severity: 'P1',
-        title: params.title,
-        impact: 'Betalning mottagen men ingen spelrätt kunde levereras eftersom kapaciteten var full.',
-        metadata: incidentMetadata,
-      })
-      .eq('id', existing.id);
-  } else {
-    await serviceClient.from('ops_incidents').insert({
-      venue_id: params.venueId,
-      severity: 'P1',
-      title: params.title,
-      status: 'open',
-      owner_name: 'Desk',
-      impact: 'Betalning mottagen men ingen spelrätt kunde levereras eftersom kapaciteten var full.',
-      containment: 'Blockera automatisk incheckning och lös manuellt innan spel.',
-      affected_ids: [params.scopeId, params.stripeSessionId, params.receiptId].filter(Boolean).join(','),
-      metadata: incidentMetadata,
-    });
-  }
-
-  await serviceClient.from('ops_signals')
-    .upsert({
-      venue_id: params.venueId,
-      signal_key: 'bookings',
-      status: 'red',
-      note: 'Betald plats kunde inte levereras på grund av full kapacitet.',
-      source: 'stripe_webhook',
-      details: incidentMetadata,
-      last_auto_checked_at: new Date().toISOString(),
-    }, { onConflict: 'venue_id,signal_key' });
-
-  await serviceClient.from('audit_log').insert({
-    venue_id: params.venueId,
-    actor_type: 'webhook',
-    action: 'capacity.paid_capacity_conflict',
-    entity_table: 'ops_incidents',
-    request_id: params.stripeSessionId,
-    after: incidentMetadata,
-    metadata: incidentMetadata,
-  });
-}
-
 function bookingContactFromNotes(notes?: string | null) {
   const parts = String(notes || '').split(' | ').map((part) => part.trim());
   return {
@@ -1127,26 +1017,6 @@ function isFounderBookingGroup(rows: any[]) {
     Number(row?.included_court_hours || 0) > 0 ||
     row?.membership_usage_entitlement_type === 'court_hours_per_week'
   );
-}
-
-async function getBookingGroupRows(serviceClient: any, booking: any) {
-  let query = serviceClient
-    .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
-    .eq('venue_id', booking.venue_id)
-    .neq('status', 'cancelled');
-
-  if (booking.stripe_session_id) {
-    query = query.eq('stripe_session_id', booking.stripe_session_id);
-  } else if (booking.access_code) {
-    query = query.eq('access_code', booking.access_code).eq('start_time', booking.start_time).eq('end_time', booking.end_time);
-  } else {
-    query = query.eq('start_time', booking.start_time).eq('end_time', booking.end_time).eq('notes', booking.notes);
-  }
-
-  const { data, error } = await query.order('start_time', { ascending: true });
-  if (error) throw new Error(error.message);
-  return data?.length ? data : [booking];
 }
 
 async function ensureBookerParticipant(serviceClient: any, bookingRows: any[]) {
@@ -1948,164 +1818,6 @@ async function handleCourtBooking(
       used_value: Number(usage?.used_value || 0) + includedCourtHours,
     }, { onConflict: 'user_id,venue_id,entitlement_type,period_start' });
   }
-}
-
-async function handleBookingParticipant(
-  session: any,
-  meta: Record<string, string>,
-  serviceClient: any,
-): Promise<void> {
-  const participantId = String(meta.booking_participant_id || '').trim();
-  if (!participantId) throw new Error('Missing booking_participant_id');
-
-  const { data: participant, error: participantErr } = await serviceClient
-    .from('booking_participants')
-    .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, email, phone, price_minor, payment_status, booking_receipt_id, metadata, bookings(booking_ref, venue_id, start_time, end_time, access_code, stripe_session_id, notes, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
-    .eq('id', participantId)
-    .maybeSingle();
-  if (participantErr) throw new Error(participantErr.message);
-  if (!participant) throw new Error('Booking participant not found');
-
-  const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
-  const amountMinor = Number(session.amount_total || 0);
-  if (amountMinor <= 0) throw new Error('Booking participant payment amount must be positive');
-
-  const resolvedUserId = participant.user_id || meta.user_id || null;
-  const paidMeta = {
-    ...meta,
-    venue_id: participant.venue_id,
-    customer_name: participant.display_name || meta.customer_name || '',
-    customer_email: session.customer_details?.email || participant.email || meta.customer_email || '',
-    customer_phone: participant.phone || meta.customer_phone || '',
-    product_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
-  };
-
-  const receipt = await createPurchaseReceipt({
-    session,
-    meta: paidMeta,
-    serviceClient,
-    userId: resolvedUserId,
-    bookingRefs: booking?.booking_ref ? [booking.booking_ref] : [],
-    totalSek: Math.round((amountMinor / 100) * 100) / 100,
-    purchaseType: BOOKING_PARTICIPANT_SOURCE_TYPE,
-    productDescription: 'Medspelarplats · Banbokning',
-  });
-
-  const { data: representativeBooking } = await serviceClient
-    .from('bookings')
-    .select('id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, total_price, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at')
-    .eq('id', participant.booking_id)
-    .maybeSingle();
-  const bookingForCapacity = representativeBooking || booking;
-  const groupedRows = bookingForCapacity ? await getBookingGroupRows(serviceClient, bookingForCapacity) : [];
-  const participantMetadata = participant.metadata && typeof participant.metadata === 'object' ? participant.metadata : {};
-  const stableOpenBookingCapacity = Number(
-    meta.open_booking_public_capacity ||
-    meta.open_booking_total_players ||
-    participantMetadata.open_booking_public_capacity ||
-    participantMetadata.open_booking_total_players ||
-    0
-  );
-  const capacity = stableOpenBookingCapacity > 0
-    ? stableOpenBookingCapacity
-    : bookingParticipantCapacityLimit(groupedRows);
-  const commit = await commitBookingParticipantCapacity(serviceClient, {
-    p_venue_id: participant.venue_id,
-    p_booking_id: participant.booking_id,
-    p_booking_group_key: participant.booking_group_key,
-    p_session_date: bookingSessionDate(bookingForCapacity),
-    p_capacity: capacity,
-    p_customer_id: participant.customer_id || receipt?.customer_id || null,
-    p_user_id: resolvedUserId,
-    p_display_name: participant.display_name || paidMeta.customer_name || 'Spelare',
-    p_email: session.customer_details?.email || participant.email || null,
-    p_phone: participant.phone || null,
-    p_role: 'player',
-    p_price_minor: amountMinor,
-    p_payment_status: 'paid',
-    p_payment_method: receiptPaymentMethod(session),
-    p_payment_stripe_session_id: session.id,
-    p_booking_receipt_id: receipt?.id || null,
-    p_metadata: {
-      ...(participant.metadata || {}),
-      stripe_session_id: session.id,
-      stripe_payment_intent_id: session.payment_intent || null,
-    },
-    p_hold_id: meta.capacity_hold_id || null,
-    p_participant_id: participant.id,
-  });
-
-  if (!commit.ok) {
-    await createLedgerEntryFromReceipt({
-      session,
-      meta: paidMeta,
-      serviceClient,
-      sourceType: 'stripe_payment',
-      sourceId: session.id,
-      receipt,
-      amountIncVatMinor: amountMinor,
-      metadata: {
-        intended_source_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
-        delivery_status: 'capacity_conflict',
-        booking_participant_id: participant.id,
-        booking_id: participant.booking_id,
-        booking_group_key: participant.booking_group_key,
-        booking_ref: booking?.booking_ref || null,
-        open_booking_context: meta.open_booking_context || participantMetadata.source || null,
-        open_booking_opened_places: Number(meta.open_booking_opened_places || participantMetadata.open_booking_opened_places || 0) || null,
-        open_booking_public_capacity: stableOpenBookingCapacity || null,
-        open_booking_committed_at_publication: Number(meta.open_booking_committed_at_publication || participantMetadata.open_booking_committed_at_publication || 0) || null,
-        open_booking_total_players: stableOpenBookingCapacity || null,
-      },
-    });
-    await recordPaidCapacityConflict(serviceClient, {
-      venueId: participant.venue_id,
-      scopeType: 'booking_group',
-      scopeId: participant.booking_group_key,
-      sessionDate: bookingSessionDate(bookingForCapacity),
-      stripeSessionId: session.id,
-      paymentIntentId: session.payment_intent || null,
-      receiptId: receipt?.id || null,
-      ledgerSourceType: 'stripe_payment',
-      ledgerSourceId: session.id,
-      customerId: participant.customer_id || receipt?.customer_id || null,
-      userId: resolvedUserId,
-      title: `Betald medspelarplats kunde inte levereras: ${participant.display_name || 'Spelare'}`,
-      metadata: {
-        product_type: BOOKING_PARTICIPANT_SOURCE_TYPE,
-        booking_participant_id: participant.id,
-        booking_group_key: participant.booking_group_key,
-        booking_id: participant.booking_id,
-        open_booking_context: meta.open_booking_context || participantMetadata.source || null,
-        open_booking_opened_places: Number(meta.open_booking_opened_places || participantMetadata.open_booking_opened_places || 0) || null,
-        open_booking_public_capacity: stableOpenBookingCapacity || null,
-        open_booking_committed_at_publication: Number(meta.open_booking_committed_at_publication || participantMetadata.open_booking_committed_at_publication || 0) || null,
-        open_booking_total_players: stableOpenBookingCapacity || null,
-      },
-    });
-    return;
-  }
-
-  await createLedgerEntryFromReceipt({
-    session,
-    meta: paidMeta,
-    serviceClient,
-    sourceType: BOOKING_PARTICIPANT_SOURCE_TYPE,
-    sourceId: participant.id,
-    receipt,
-    amountIncVatMinor: amountMinor,
-    metadata: {
-      booking_participant_id: participant.id,
-      booking_id: participant.booking_id,
-      booking_group_key: participant.booking_group_key,
-      booking_ref: booking?.booking_ref || null,
-      open_booking_context: meta.open_booking_context || participantMetadata.source || null,
-      open_booking_opened_places: Number(meta.open_booking_opened_places || participantMetadata.open_booking_opened_places || 0) || null,
-      open_booking_public_capacity: stableOpenBookingCapacity || null,
-      open_booking_committed_at_publication: Number(meta.open_booking_committed_at_publication || participantMetadata.open_booking_committed_at_publication || 0) || null,
-      open_booking_total_players: stableOpenBookingCapacity || null,
-    },
-  });
 }
 
 // ── Shared: resolve a real user from metadata + Stripe customer_details ──────

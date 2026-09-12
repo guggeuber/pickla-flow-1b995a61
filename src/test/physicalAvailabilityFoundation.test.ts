@@ -128,7 +128,7 @@ describe("Physical Availability Foundation V1", () => {
   });
 
   it("uses the same final claim in the paid webhook and records the non-destructive recovery state", () => {
-    const courtHandler = between(webhook, "async function handleCourtBooking", "async function handleBookingParticipant");
+    const courtHandler = between(webhook, "async function handleCourtBooking", "// ── Shared: resolve a real user");
     expect(courtHandler).toContain("claimPhysicalBookings(serviceClient");
     expect(courtHandler).toContain("delivery_status:");
     expect(courtHandler).toContain("recordPaidCapacityConflict");

@@ -263,6 +263,11 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
         return;
       }
 
+      if (claim.checkout_url) {
+        window.location.href = claim.checkout_url;
+        return;
+      }
+
       if (!effectiveEmail) {
         toast.error("E-post krävs för betalning.");
         await refetch();
@@ -283,6 +288,10 @@ export default function ClaimBookingParticipantPage({ overlayOnly = false }: { o
           success_path: "/booking/confirmed?type=booking_participant",
         },
       });
+      if (checkout?.free && checkout?.redirect) {
+        navigate(checkout.redirect);
+        return;
+      }
       if (checkout?.url) {
         window.location.href = checkout.url;
         return;

@@ -167,7 +167,7 @@ describe("commerce participation webhook fulfillment", () => {
       "async function recordPaidCommerceFulfillmentFailure",
     );
     const end = webhookSource.indexOf(
-      "async function recordPaidCapacityConflict",
+      "function bookingContactFromNotes",
       start,
     );
     const genericIncidentSource = webhookSource.slice(start, end);
