@@ -92,6 +92,16 @@ describe("frontend version convergence", () => {
     },
   );
 
+  it.each(["/today", "/desk", "/hub/admin"])(
+    "converges build A to build B through the shared coordinator on %s",
+    async (pathname) => {
+      const harness = coordinatorHarness({ pathname });
+      await harness.coordinator.check("bootstrap", true);
+      expect(harness.reload).toHaveBeenCalledTimes(1);
+      expect(harness.marker()).toBe(buildB.sha);
+    },
+  );
+
   it("waits for the current worker build before reloading a controlled document", async () => {
     const worker = { postMessage: vi.fn() };
     const harness = coordinatorHarness({ controller: worker });
@@ -133,6 +143,18 @@ describe("frontend version convergence", () => {
     release();
     expect(harness.reload).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["/desk", "/hub/admin/schedule"])(
+    "defers an unsaved operational form on %s and converges after release",
+    async (pathname) => {
+      const harness = coordinatorHarness({ pathname });
+      const release = harness.coordinator.beginCriticalSection("unsaved_form");
+      await harness.coordinator.check("bootstrap", true);
+      expect(harness.reload).not.toHaveBeenCalled();
+      release();
+      expect(harness.reload).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not fabricate current state or reload while offline, and retries when online", async () => {
     const harness = coordinatorHarness({ online: false });
@@ -219,6 +241,22 @@ describe("legacy client recovery", () => {
     expect(client.navigate).not.toHaveBeenCalled();
   });
 
+  it.each(["/", "/desk", "/hub/admin"])(
+    "recovers an old %s surface without requiring old-JS cooperation",
+    async (pathname) => {
+      const client = legacyClient(`https://playpickla.com${pathname}`);
+      await recoverLegacyClients({
+        build: buildB,
+        acknowledgedClientIds: new Set(),
+        listClients: async () => [client],
+        waitForAcknowledgements: async () => undefined,
+        origin: "https://playpickla.com",
+      });
+      expect(client.postMessage).toHaveBeenCalledWith({ type: "PICKLA_VERSION_ACTIVATED", build: buildB });
+      expect(client.navigate).toHaveBeenCalledWith(client.url);
+    },
+  );
+
   it("never blindly navigates a legacy client on a protected transaction URL", async () => {
     for (const pathname of ["/cart", "/auth/callback", "/commerce/confirmed", "/booking/confirmed"]) {
       const client = legacyClient(`https://playpickla.com${pathname}`);
@@ -268,6 +306,8 @@ describe("version policy and production contract", () => {
     expect(headers.get("/sw.js")).toContain("no-store");
     expect(headers.get("/version.json")).toContain("no-store");
     expect(headers.get("/manifest.webmanifest")).toContain("must-revalidate");
+    expect(headers.get("/manifest-desk.webmanifest")).toContain("must-revalidate");
+    expect(headers.get("/manifest-admin.webmanifest")).toContain("must-revalidate");
     expect(headers.get("/assets/(.*)")).toBe("public, max-age=31536000, immutable");
   });
 });

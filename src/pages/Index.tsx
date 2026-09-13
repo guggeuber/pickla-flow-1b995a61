@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, Loader2, LogOut, Settings, RefreshCw, UserCheck, Gauge, Radio, AlertTriangle } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useVenueForStaff, useTodayBookings } from "@/hooks/useDesk";
@@ -16,6 +16,21 @@ import DeskCommandBar from "@/components/desk/shell/DeskCommandBar";
 import { AdminBookingDetailDrawer } from "@/components/operations/AdminBookingDetailDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
+type DeskBookingRow = {
+  id?: string;
+  kind?: string;
+  payment_status?: string | null;
+  source_id?: string | null;
+  source_ids?: string[] | null;
+  status?: string | null;
+  [key: string]: unknown;
+};
+
+type StaffVenueIdentity = {
+  name?: string | null;
+  slug?: string | null;
+};
+
 function useClock() {
   const [now, setNow] = useState(new Date());
   useMemo(() => {
@@ -28,27 +43,34 @@ function useClock() {
 const Index = () => {
   const { signOut } = useAuth();
   const navigate = useNavigate();
+  const { bookingId: deepLinkedBookingId } = useParams<{ bookingId?: string }>();
   const queryClient = useQueryClient();
   const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
   const venueId = staffVenue?.venue_id;
 
   const [active, setActive] = useState<DeskSurfaceId>("arrivals");
-  const [openBookingId, setOpenBookingId] = useState<string | null>(null);
+  const [openBookingId, setOpenBookingId] = useState<string | null>(deepLinkedBookingId || null);
   const now = useClock();
+
+  useEffect(() => {
+    setOpenBookingId(deepLinkedBookingId || null);
+  }, [deepLinkedBookingId]);
 
   const { data: bookings } = useTodayBookings(venueId);
   const courtRows = useMemo(
-    () => ((bookings as any[] | undefined) || []).filter((b: any) => b.kind !== "activity_registration" && b.kind !== "activity_court_block"),
+    () => ((bookings as DeskBookingRow[] | undefined) || []).filter((booking) =>
+      booking.kind !== "activity_registration" && booking.kind !== "activity_court_block"
+    ),
     [bookings]
   );
   const pendingCount = useMemo(
     () =>
-      courtRows.filter((b: any) => (b.payment_status || "").toLowerCase() === "pending").length +
-      courtRows.filter((b: any) => b.status === "cancelled").length,
+      courtRows.filter((booking) => (booking.payment_status || "").toLowerCase() === "pending").length +
+      courtRows.filter((booking) => booking.status === "cancelled").length,
     [courtRows]
   );
 
-  const openBookingFromRow = (booking: any, _sourceRows: any[] = courtRows) => {
+  const openBookingFromRow = (booking: DeskBookingRow, _sourceRows: DeskBookingRow[] = courtRows) => {
     const bookingId = booking?.source_ids?.[0] || booking?.source_id || booking?.id;
     if (bookingId) setOpenBookingId(bookingId);
   };
@@ -97,7 +119,8 @@ const Index = () => {
     );
   }
 
-  const venueName = (staffVenue as any)?.venues?.name || "Venue";
+  const venue = staffVenue.venues as StaffVenueIdentity | null | undefined;
+  const venueName = venue?.name || "Venue";
 
   return (
     <div className="min-h-screen" style={{ background: ax("ink"), color: "white" }}>
@@ -161,7 +184,7 @@ const Index = () => {
           <div className="mt-3">
             <DeskCommandBar
               venueId={venueId}
-              venueSlug={(staffVenue as any)?.venues?.slug || "solna"}
+              venueSlug={venue?.slug || "solna"}
               bookings={courtRows}
               onOpenBooking={openBookingFromRow}
             />
@@ -172,7 +195,7 @@ const Index = () => {
       {/* Subtle grid bg behind content */}
       <div
         className="pointer-events-none fixed inset-0 opacity-40"
-        style={AX_GRID_BG as any}
+        style={AX_GRID_BG}
       />
 
       <main className="relative mx-auto max-w-[1600px] px-4 py-5 pb-24">
@@ -196,7 +219,10 @@ const Index = () => {
         open={!!openBookingId}
         venueId={venueId}
         bookingId={openBookingId}
-        onClose={() => setOpenBookingId(null)}
+        onClose={() => {
+          setOpenBookingId(null);
+          if (deepLinkedBookingId) navigate("/desk", { replace: true });
+        }}
       />
     </div>
   );

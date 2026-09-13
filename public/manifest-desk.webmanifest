@@ -1,0 +1,41 @@
+{
+  "id": "/desk",
+  "name": "Pickla Desk",
+  "short_name": "Desk",
+  "description": "Picklas operativa personalyta för bokningar och incheckning.",
+  "start_url": "/desk",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "any",
+  "lang": "sv",
+  "theme_color": "#111A35",
+  "background_color": "#111A35",
+  "icons": [
+    {
+      "src": "/pwa-desk-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-desk-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-desk-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Öppna Desk",
+      "url": "/desk",
+      "icons": [{ "src": "/pwa-desk-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}

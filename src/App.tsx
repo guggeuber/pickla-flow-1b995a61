@@ -89,6 +89,7 @@ import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { enforceCanonicalHost } from "@/lib/canonicalOrigin";
 import { shouldRetryQuery } from "@/lib/queryRetry";
 import { notifyFrontendRouteChange } from "@/lib/frontendVersionCoordinator";
+import { syncPwaSurfaceMetadata } from "@/lib/pwaSurface";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -141,6 +142,7 @@ function AppRoutes() {
             <Route path="/order/:token" element={<CommerceOrderPage />} />
             <Route path="/hub/admin/investors" element={<ProtectedRoute><AdminInvestorPage /></ProtectedRoute>} />
             <Route path="/desk" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+            <Route path="/desk/booking/:bookingId" element={<ProtectedRoute><Index /></ProtectedRoute>} />
             <Route path="/hub" element={<HubPage />} />
             <Route path="/hub/admin/:modulePath" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/hub/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
@@ -231,6 +233,7 @@ function CanonicalHostGuard() {
 function FrontendVersionRouteGuard() {
   const location = useLocation();
   useEffect(() => {
+    syncPwaSurfaceMetadata(location.pathname);
     notifyFrontendRouteChange();
   }, [location.key, location.pathname, location.search]);
   return null;

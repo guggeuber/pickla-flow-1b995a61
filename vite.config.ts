@@ -4,6 +4,7 @@ import path from "path";
 import { execFileSync } from "node:child_process";
 import { componentTagger } from "lovable-tagger";
 import { VitePWA } from "vite-plugin-pwa";
+import { renderPwaSurfaceBootstrap } from "./src/lib/pwaSurface";
 
 function resolveBuildSha() {
   const environmentSha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA;
@@ -17,10 +18,6 @@ function resolveBuildSha() {
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  const appName = "Pickla";
-  const icon192 = "/pwa-192x192.png";
-  const icon512 = "/pwa-512x512.png";
-  const themeColor = "#F8FAFC";
   const buildIdentity = {
     sha: resolveBuildSha(),
     built_at: new Date().toISOString(),
@@ -33,6 +30,17 @@ export default defineConfig(({ mode }) => {
         fileName: "version.json",
         source: `${JSON.stringify(buildIdentity)}\n`,
       });
+    },
+  };
+  const pwaSurfaceHtmlPlugin: Plugin = {
+    name: "pickla-pwa-surface-bootstrap",
+    transformIndexHtml() {
+      return [{
+        tag: "script",
+        attrs: { id: "pickla-pwa-surface-bootstrap" },
+        children: renderPwaSurfaceBootstrap(),
+        injectTo: "head-prepend",
+      }];
     },
   };
 
@@ -56,6 +64,7 @@ export default defineConfig(({ mode }) => {
     react(),
     mode === "development" && componentTagger(),
     buildIdentityPlugin,
+    pwaSurfaceHtmlPlugin,
     VitePWA({
       registerType: "autoUpdate",
       strategies: "injectManifest",
@@ -67,60 +76,17 @@ export default defineConfig(({ mode }) => {
       },
       includeAssets: [
         "favicon.ico",
-        "pwa-192x192.png",
-        "pwa-512x512.png",
+        "pwa-customer-192x192.png",
+        "pwa-customer-512x512.png",
+        "pwa-customer-maskable-512x512.png",
+        "pwa-desk-192x192.png",
+        "pwa-desk-512x512.png",
+        "pwa-desk-maskable-512x512.png",
+        "pwa-admin-192x192.png",
+        "pwa-admin-512x512.png",
+        "pwa-admin-maskable-512x512.png",
       ],
-      manifest: {
-        name: appName,
-        short_name: appName,
-        description: "Boka, spela och hantera ditt Pickla-konto.",
-        theme_color: themeColor,
-        background_color: themeColor,
-        display: "standalone",
-        display_override: ["standalone"],
-        lang: "sv",
-        orientation: "portrait",
-        scope: "/",
-        start_url: "/",
-        id: "/",
-        icons: [
-          {
-            src: icon192,
-            sizes: "192x192",
-            type: "image/png",
-            purpose: "any",
-          },
-          {
-            src: icon512,
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "any",
-          },
-          {
-            src: icon512,
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "maskable",
-          },
-        ],
-        shortcuts: [
-          {
-            name: "Idag",
-            url: "/",
-            icons: [{ src: icon192, sizes: "192x192" }],
-          },
-          {
-            name: "Boka",
-            url: "/book",
-            icons: [{ src: icon192, sizes: "192x192" }],
-          },
-          {
-            name: "Min profil",
-            url: "/my",
-            icons: [{ src: icon192, sizes: "192x192" }],
-          },
-        ],
-      },
+      manifest: false,
     }),
   ].filter(Boolean),
   define: {

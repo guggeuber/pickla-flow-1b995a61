@@ -355,7 +355,18 @@ export function installFrontendVersionCoordinator(
   });
   const markDirtyForm = (event: Event) => {
     const target = event.target;
-    if (!(target instanceof Element) || !target.closest("form") || releaseDirtyFormGuard) return;
+    if (!(target instanceof Element) || releaseDirtyFormGuard) return;
+    const isFormControl = target.matches("input, textarea, select, [contenteditable='true']");
+    const isOperationalSurface = window.location.pathname === "/desk"
+      || window.location.pathname.startsWith("/desk/")
+      || window.location.pathname === "/hub/admin"
+      || window.location.pathname.startsWith("/hub/admin/")
+      || window.location.pathname.startsWith("/admin/")
+      || window.location.pathname === "/ops"
+      || window.location.pathname.startsWith("/ops/")
+      || window.location.pathname === "/event-ops"
+      || window.location.pathname.startsWith("/event-ops/");
+    if (!target.closest("form") && !(isOperationalSurface && isFormControl)) return;
     releaseDirtyFormGuard = coordinator.beginCriticalSection("unsaved_form");
   };
   const clearDirtyForm = () => {
