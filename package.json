@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "ops:agent": "node scripts/ops-agent-check.mjs",
     "preview": "vite preview",
-    "prod:check": "npm run test && npm run build",
+    "prod:check": "npm run test && npm run build && npm run verify:pwa-build",
+    "verify:pwa-build": "node scripts/verify-pwa-build.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

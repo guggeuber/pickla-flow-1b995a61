@@ -3,10 +3,17 @@ import { setCacheNameDetails } from 'workbox-core';
 import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
 import { registerRoute } from 'workbox-routing';
 import { NetworkOnly } from 'workbox-strategies';
+import { RUNNING_FRONTEND_BUILD } from '@/lib/frontendBuild';
+import {
+  LEGACY_CLIENT_HANDSHAKE_MS,
+  recoverLegacyClients,
+  type LegacyRecoveryClient,
+} from '@/lib/legacyClientRecovery';
 
 declare const self: ServiceWorkerGlobalScope;
 
-const CACHE_VERSION = '2026-07-02-no-maintenance-fallback';
+const CACHE_VERSION = '2026-09-13-version-convergence';
+const acknowledgedClientIds = new Set<string>();
 
 setCacheNameDetails({
   prefix: 'pickla',
@@ -28,6 +35,18 @@ type PushPayload = {
 };
 
 self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('message', (event: ExtendableMessageEvent) => {
+  if (!event.data || typeof event.data !== 'object') return;
+  const source = event.source;
+  if (event.data.type === 'PICKLA_VERSION_CLIENT_ACK' && source && 'id' in source) {
+    acknowledgedClientIds.add(source.id);
+    return;
+  }
+  if (event.data.type === 'PICKLA_GET_BUILD' && source && 'postMessage' in source) {
+    source.postMessage({ type: 'PICKLA_SW_BUILD', build: RUNNING_FRONTEND_BUILD });
+  }
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await self.caches.keys();
@@ -44,6 +63,20 @@ self.addEventListener('activate', (event) => {
         .map((key) => self.caches.delete(key))
     );
     await self.clients.claim();
+    await recoverLegacyClients({
+      build: RUNNING_FRONTEND_BUILD,
+      acknowledgedClientIds,
+      origin: self.location.origin,
+      listClients: async () => (
+        await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      ) as unknown as LegacyRecoveryClient[],
+      waitForAcknowledgements: () => new Promise((resolve) => {
+        setTimeout(resolve, LEGACY_CLIENT_HANDSHAKE_MS);
+      }),
+      onDiagnostic: (diagnostic, detail) => {
+        console.info(`[frontend-version] ${diagnostic}`, detail);
+      },
+    });
   })());
 });
 

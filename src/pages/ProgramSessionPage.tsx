@@ -41,6 +41,7 @@ import {
   PROGRAM_SESSION_PUBLIC_PREVIEW_ENDPOINT,
   resolveProgramSessionPricingView,
 } from "@/lib/programSessionPricing";
+import { beginFrontendUpdateCriticalSection } from "@/lib/frontendVersionCoordinator";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -835,6 +836,8 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (loading) return;
+    const releaseUpdateGuard = beginFrontendUpdateCriticalSection("stripe_checkout_handoff");
+    let externalHandoffStarted = false;
     purchaseInFlight.current = true;
     setLoading(true);
     try {
@@ -895,10 +898,12 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
         return;
       }
       if (!result.url) throw new Error("Kunde inte starta betalning");
+      externalHandoffStarted = true;
       window.location.href = result.url;
     } catch (err: unknown) {
       toast.error(purchaseErrorMessage(err, "Kunde inte starta anmälan"));
     } finally {
+      if (!externalHandoffStarted) releaseUpdateGuard();
       purchaseInFlight.current = false;
       setLoading(false);
     }

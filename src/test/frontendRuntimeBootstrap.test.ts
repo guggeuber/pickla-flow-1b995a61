@@ -12,9 +12,12 @@ describe("production frontend bootstrap", () => {
     expect(mainSource).not.toContain('import("./lib/clientObservability.ts")');
   });
 
-  it("does not start a redundant service-worker update after registration", () => {
-    expect(mainSource).not.toContain("onRegisteredSW");
-    expect(mainSource).not.toMatch(/registration\?\.update\(\)/);
+  it("hands service-worker registration to the bounded coordinator without a blind reload", () => {
+    expect(mainSource).toContain("onRegisteredSW");
+    expect(mainSource).toContain("setFrontendVersionRegistration(registration)");
+    expect(mainSource).toContain("updateServiceWorker?.(false)");
+    expect(mainSource).not.toContain("updateServiceWorker?.(true)");
+    expect(mainSource).not.toContain("window.location.reload()");
   });
 
   it("keeps browser translation from mutating React-owned transaction DOM", () => {

@@ -5,28 +5,50 @@ import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { renderBootstrapRecovery } from "@/lib/appRecovery";
 import {
   installClientObservability,
+  reportClientEvent,
   reportBootstrapFailure,
 } from "@/lib/clientObservability";
+import {
+  installFrontendVersionCoordinator,
+  notifyFrontendWorkerRefresh,
+  setFrontendVersionRegistration,
+  type FrontendVersionDiagnostic,
+} from "@/lib/frontendVersionCoordinator";
 import "./index.css";
 
 const MAINTENANCE_MODE = import.meta.env.VITE_MAINTENANCE_MODE === "true";
-const hadServiceWorkerController =
-  typeof navigator !== "undefined" && "serviceWorker" in navigator && Boolean(navigator.serviceWorker.controller);
-
 let updateServiceWorker: ((reloadPage?: boolean) => Promise<void>) | undefined;
 
-if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (!hadServiceWorkerController || refreshing) return;
-    refreshing = true;
-    window.location.reload();
+function reportFrontendVersionDiagnostic(
+  event: FrontendVersionDiagnostic,
+  detail: Record<string, unknown>,
+) {
+  const level = event === "convergence_failure" ? "error" : event === "version_checked" ? "info" : "warn";
+  console[level](`[frontend-version] ${event}`, detail);
+  if (event === "version_checked") return;
+  void reportClientEvent({
+    event_type: `frontend_${event}`,
+    severity: event === "convergence_failure" ? "error" : event === "reload_deferred" ? "info" : "warning",
+    message: event.replaceAll("_", " "),
+    fingerprint: `frontend-version:${event}:${String(detail.current_sha || "unknown")}`,
+    metadata: detail,
+    privacy_safe: true,
   });
+}
 
+if (typeof navigator !== "undefined") {
+  installFrontendVersionCoordinator(reportFrontendVersionDiagnostic);
+}
+
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
   updateServiceWorker = registerSW({
     immediate: true,
+    onRegisteredSW(_swUrl, registration) {
+      setFrontendVersionRegistration(registration);
+    },
     onNeedRefresh() {
-      updateServiceWorker?.(true);
+      void updateServiceWorker?.(false);
+      notifyFrontendWorkerRefresh();
     },
   });
 }

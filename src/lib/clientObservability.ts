@@ -1,9 +1,6 @@
 import { errorMessage, isStaleChunkError, showChunkRecovery } from "@/lib/appRecovery";
 import { getSessionSingleFlight } from "@/lib/authSessionSingleFlight";
-
-declare const __BUILD_TIME__: string;
-
-const BUILD_ID = typeof __BUILD_TIME__ === "undefined" ? "local" : __BUILD_TIME__;
+import { RUNNING_FRONTEND_BUILD } from "@/lib/frontendBuild";
 
 const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
 const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
@@ -17,6 +14,7 @@ type ClientEvent = {
   route?: string;
   fingerprint?: string;
   metadata?: Record<string, unknown>;
+  privacy_safe?: boolean;
 };
 
 let installed = false;
@@ -66,8 +64,10 @@ export async function reportClientEvent(event: ClientEvent) {
   const fingerprint = event.fingerprint || `${event.event_type}:${event.message}:${window.location.pathname}`;
   if (!shouldSend(fingerprint)) return;
 
-  const { data } = await getSessionSingleFlight().catch(() => ({ data: { session: null } }));
-  const anonymousUserId = await anonymizedUserId(data.session?.user?.id);
+  const { data } = event.privacy_safe
+    ? { data: { session: null } }
+    : await getSessionSingleFlight().catch(() => ({ data: { session: null } }));
+  const anonymousUserId = event.privacy_safe ? null : await anonymizedUserId(data.session?.user?.id);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -78,12 +78,17 @@ export async function reportClientEvent(event: ClientEvent) {
     event_type: event.event_type,
     severity: event.severity,
     message: event.message.slice(0, 500),
-    route: `${window.location.pathname}${window.location.search}`.slice(0, 500),
+    route: event.privacy_safe
+      ? window.location.pathname.slice(0, 500)
+      : `${window.location.pathname}${window.location.search}`.slice(0, 500),
     fingerprint: fingerprint.slice(0, 500),
     user_agent: navigator.userAgent,
     metadata: {
-      url: window.location.href,
-      release: BUILD_ID,
+      url: event.privacy_safe
+        ? `${window.location.origin}${window.location.pathname}`
+        : window.location.href,
+      release: RUNNING_FRONTEND_BUILD.sha,
+      release_built_at: RUNNING_FRONTEND_BUILD.built_at,
       anonymous_user_id: anonymousUserId,
       ...event.metadata,
     },

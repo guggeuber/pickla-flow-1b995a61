@@ -1,6 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-
-declare const __BUILD_TIME__: string;
 import { motion, AnimatePresence } from "framer-motion";
 import { Calendar, Ticket, Loader2, Check, Pencil, Save, Phone, Gift, Copy, Send, Trash2, ShoppingBag, Building2, ChevronRight, CreditCard, Plus, Bell, ChevronDown, Sparkles, Share2, X, MessageCircle, FileText, LogOut, UserCheck, Trophy } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
@@ -9,6 +7,7 @@ import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
+import { RUNNING_FRONTEND_BUILD, shortFrontendSha } from "@/lib/frontendBuild";
 import { useAuth } from "@/hooks/useAuth";
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -2418,7 +2417,7 @@ function SettingsSection() {
       </div>
 
       <p className="text-xs mt-2 text-right" style={{ color: TEXT_MUTED, fontFamily: FONT_HEADING }}>
-        Version {__BUILD_TIME__.replace("T", " ")}
+        Version {shortFrontendSha(RUNNING_FRONTEND_BUILD.sha)} · {RUNNING_FRONTEND_BUILD.built_at.replace("T", " ").replace("Z", " UTC")}
       </p>
     </motion.div>
   );

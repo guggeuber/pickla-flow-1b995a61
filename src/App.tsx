@@ -88,6 +88,7 @@ import { Loader2 } from "lucide-react";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { enforceCanonicalHost } from "@/lib/canonicalOrigin";
 import { shouldRetryQuery } from "@/lib/queryRetry";
+import { notifyFrontendRouteChange } from "@/lib/frontendVersionCoordinator";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -227,6 +228,14 @@ function CanonicalHostGuard() {
   return null;
 }
 
+function FrontendVersionRouteGuard() {
+  const location = useLocation();
+  useEffect(() => {
+    notifyFrontendRouteChange();
+  }, [location.key, location.pathname, location.search]);
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -234,6 +243,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <CanonicalHostGuard />
+        <FrontendVersionRouteGuard />
         <AuthProvider>
           <AuthenticatedAppBootstrap>
             <AppRoutes />

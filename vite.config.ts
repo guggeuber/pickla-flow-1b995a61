@@ -1,8 +1,19 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
+import { execFileSync } from "node:child_process";
 import { componentTagger } from "lovable-tagger";
 import { VitePWA } from "vite-plugin-pwa";
+
+function resolveBuildSha() {
+  const environmentSha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA;
+  if (environmentSha?.trim()) return environmentSha.trim();
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  } catch {
+    return "local";
+  }
+}
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -10,6 +21,20 @@ export default defineConfig(({ mode }) => {
   const icon192 = "/pwa-192x192.png";
   const icon512 = "/pwa-512x512.png";
   const themeColor = "#F8FAFC";
+  const buildIdentity = {
+    sha: resolveBuildSha(),
+    built_at: new Date().toISOString(),
+  };
+  const buildIdentityPlugin: Plugin = {
+    name: "pickla-build-identity",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "version.json",
+        source: `${JSON.stringify(buildIdentity)}\n`,
+      });
+    },
+  };
 
   return {
   build: {
@@ -30,6 +55,7 @@ export default defineConfig(({ mode }) => {
   plugins: [
     react(),
     mode === "development" && componentTagger(),
+    buildIdentityPlugin,
     VitePWA({
       registerType: "autoUpdate",
       strategies: "injectManifest",
@@ -98,7 +124,8 @@ export default defineConfig(({ mode }) => {
     }),
   ].filter(Boolean),
   define: {
-    __BUILD_TIME__: JSON.stringify(new Date().toISOString().slice(0, 16)),
+    __BUILD_SHA__: JSON.stringify(buildIdentity.sha),
+    __BUILD_TIME__: JSON.stringify(buildIdentity.built_at),
   },
   resolve: {
     alias: {

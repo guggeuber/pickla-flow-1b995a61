@@ -131,3 +131,25 @@ References:
 - [observability-and-ops-agent.md](./observability-and-ops-agent.md)
 - [launch-runbook.md](./launch-runbook.md)
 - [support-runbook.md](./support-runbook.md)
+
+## Gate 9: PWA Frontend Version Convergence
+
+Pass criteria:
+
+- `npm run prod:check` proves that `version.json`, the main JavaScript bundle, and the service worker contain the same Git SHA.
+- HTML, `sw.js`, and `/version.json` are not retained as stale cache truth; content-hashed assets remain immutable.
+- A modern client converges to a new build with at most one safe reload per target SHA.
+- Auth, Stripe, confirmation, booking, membership, and unsaved-form flows defer reload until a safe route or lifecycle retry.
+- A legacy client that cannot understand the current message contract is recovered by service-worker `WindowClient.navigate()` only on a safe same-origin URL.
+- Convergence diagnostics contain build identity and reason, but no customer, auth, session, query-string, or payment data.
+- The Customer, Desk, and Admin multi-PWA split remains blocked until telemetry and physical iOS Home Screen verification are green.
+
+Manual stage smoke:
+
+- Install build A on an iPhone Home Screen, leave it resident, deploy build B to stage, then reopen it after a long idle period.
+- On a safe route, verify one convergence navigation/reload and confirm that `/my` shows build B's short SHA and UTC timestamp.
+- Repeat while an auth callback, Stripe test checkout, confirmation route, and dirty form are active; verify that no reload happens until the flow is safe.
+- Repeat offline and return online; verify no reload loop and eventual convergence.
+- Verify a legacy/pre-contract build opened on a safe route is navigated by the new service worker without relying on old JavaScript.
+
+Reference: [pwa-version-contract.md](./pwa-version-contract.md)

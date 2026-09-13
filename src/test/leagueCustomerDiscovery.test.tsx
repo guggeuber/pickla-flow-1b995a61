@@ -57,6 +57,8 @@ const publicLeague = {
 
 describe("League customer discovery and canonical public results", () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-02T12:00:00.000Z"));
     mocks.user = null;
     mocks.authStatus = "anonymous";
     mocks.fetchLeaguePublic.mockResolvedValue(publicLeague);
@@ -65,6 +67,7 @@ describe("League customer discovery and canonical public results", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("resolves the customer discovery route to the canonical League detail", async () => {
