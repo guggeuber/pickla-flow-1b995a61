@@ -397,11 +397,15 @@ export async function primeActivityPricingReadSnapshot(input: {
   const batchOccurrences = occurrences.map((item) => {
     const productKey = activityPricingProductKey({ session: item.session, purchaseKind: 'activity_ticket' });
     const occurrence = activitySessionOccurrenceInterval(item.sessionDate, item.session?.start_time, item.session?.end_time);
+    const metadata = item.session?.metadata && typeof item.session.metadata === 'object' ? item.session.metadata : {};
+    const occurrenceScarcityMode = scarcityModeFrom(item.session?.scarcity_mode ?? metadata.scarcity_mode);
     return {
       activity_session_id: item.activitySessionId,
       session_date: item.sessionDate,
       product_key: productKey,
       resolve_at: occurrence?.startISO || new Date().toISOString(),
+      needs_capacity_fill: occurrenceScarcityMode !== 'none',
+      needs_early_bird_fill: occurrenceScarcityMode === 'early_bird',
     };
   });
 

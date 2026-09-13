@@ -37,12 +37,16 @@ BEGIN
       row.activity_session_id,
       row.session_date,
       row.product_key,
-      row.resolve_at
+      row.resolve_at,
+      COALESCE(row.needs_capacity_fill, false) AS needs_capacity_fill,
+      COALESCE(row.needs_early_bird_fill, false) AS needs_early_bird_fill
     FROM jsonb_to_recordset(COALESCE(p_occurrences, '[]'::jsonb)) AS row(
       activity_session_id UUID,
       session_date DATE,
       product_key TEXT,
-      resolve_at TIMESTAMPTZ
+      resolve_at TIMESTAMPTZ,
+      needs_capacity_fill BOOLEAN,
+      needs_early_bird_fill BOOLEAN
     )
     WHERE row.activity_session_id IS NOT NULL
       AND row.session_date IS NOT NULL
@@ -70,23 +74,23 @@ BEGIN
         COALESCE(p_access_context, '{}'::jsonb)
       )
     END AS canonical_access,
-    COALESCE((
-      SELECT fill.fill_count
-      FROM public.capacity_fill(
-        p_venue_id,
-        'activity_session',
-        requested.activity_session_id::TEXT,
-        requested.session_date
-      ) fill
-    ), 0)::INTEGER AS capacity_fill,
-    COALESCE((
-      SELECT early.fill_count
-      FROM public.activity_early_bird_fill(
-        p_venue_id,
-        requested.activity_session_id,
-        requested.session_date
-      ) early
-    ), 0)::INTEGER AS early_bird_fill
+    CASE WHEN requested.needs_capacity_fill THEN COALESCE((
+        SELECT fill.fill_count
+        FROM public.capacity_fill(
+          p_venue_id,
+          'activity_session',
+          requested.activity_session_id::TEXT,
+          requested.session_date
+        ) fill
+      ), 0)::INTEGER ELSE 0 END AS capacity_fill,
+    CASE WHEN requested.needs_early_bird_fill THEN COALESCE((
+        SELECT early.fill_count
+        FROM public.activity_early_bird_fill(
+          p_venue_id,
+          requested.activity_session_id,
+          requested.session_date
+        ) early
+      ), 0)::INTEGER ELSE 0 END AS early_bird_fill
   FROM requested
   JOIN public.activity_sessions session
     ON session.id = requested.activity_session_id
