@@ -15,14 +15,24 @@ function cleanName(value: unknown) {
   return name || null;
 }
 
-export async function resolveCustomerIdForUser(admin: any, userId?: string | null): Promise<string | null> {
+export async function resolveCustomerIdForUser(
+  admin: any,
+  userId?: string | null,
+  authenticatedEmail?: string | null,
+  diagnostics?: { dbQueryCount: number; authAdminQueryCount: number },
+): Promise<string | null> {
   const cleanUserId = String(userId || '').trim();
   if (!cleanUserId) return null;
 
-  const { data: authResult } = await admin.auth.admin.getUserById(cleanUserId);
-  const email = String(authResult?.user?.email || '').trim().toLowerCase();
+  let authResult = null;
+  if (authenticatedEmail === undefined) {
+    if (diagnostics) diagnostics.authAdminQueryCount += 1;
+    authResult = (await admin.auth.admin.getUserById(cleanUserId)).data;
+  }
+  const email = String(authenticatedEmail ?? authResult?.user?.email ?? '').trim().toLowerCase();
   if (email === PUBLIC_BOOKING_GUEST_EMAIL) return null;
 
+  if (diagnostics) diagnostics.dbQueryCount += 1;
   const { data: profile, error: profileError } = await admin
     .from('player_profiles')
     .select('customer_id')
@@ -33,6 +43,7 @@ export async function resolveCustomerIdForUser(admin: any, userId?: string | nul
   }
   if (profile?.customer_id) return profile.customer_id;
 
+  if (diagnostics) diagnostics.dbQueryCount += 1;
   const { data: customer, error: customerError } = await admin
     .from('customers')
     .select('id')

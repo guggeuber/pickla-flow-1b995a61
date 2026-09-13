@@ -1,7 +1,12 @@
 import { corsHeaders, jsonResponse, errorResponse, privateErrorResponse, privateJsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { choosePackage, estimateValue, leadActivity, leadSummary, sanitizeLeadInput, scoreLead } from '../_shared/event_agents.ts';
-import { firstVisitEligibilityForCustomer, resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
+import {
+  createActivityPricingReadCache,
+  firstVisitEligibilityForCustomer,
+  primeActivityPricingReadSnapshot,
+  resolveActivityPricingDecision,
+} from '../_shared/activity_pricing.ts';
 import { resolveCustomerIdForUser } from '../_shared/customers.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
 import { projectPublicEventParticipants } from '../_shared/security_projections.ts';
@@ -20,7 +25,6 @@ import {
   publicReadFailureResponse,
   publicReadJsonResponse,
   publicReadNotFoundResponse,
-  resolvePublicVenueQuery,
 } from '../_shared/public_read_resilience.ts';
 import {
   activitySocialProof,
@@ -28,7 +32,11 @@ import {
 } from '../_shared/activity_social_proof.ts';
 import { loadPublicTodaySecondary } from '../_shared/today_secondary.ts';
 import { loadPublicPrices } from '../_shared/public_prices.ts';
-import { projectPublicTodaySocialEventOccurrence } from '../_shared/today_primary.ts';
+import {
+  loadTodayPrimaryProjection,
+  TODAY_PRIMARY_QUERY_COUNT,
+  type TodayPrimaryProjection,
+} from '../_shared/today_primary_projection.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
@@ -393,6 +401,259 @@ function activityOccurrenceDates(session: any, startDate: string, days = 7) {
     }
   }
   return dates;
+}
+
+const MAX_PERSONALIZED_PRICING_OCCURRENCES = 24;
+
+async function pricingIdentityFingerprint(userId: string) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(`pickla-pricing:${userId}`),
+  );
+  return Array.from(new Uint8Array(digest).slice(0, 12))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function reusableActivityPricingDecision(
+  decision: any,
+  venueId: string,
+  identityFingerprint: string,
+  resolvedAt: string,
+  purchaseKind: 'activity_ticket' | 'day_pass',
+) {
+  const safeDebug = decision.debug || {};
+  const freshUntil = new Date(new Date(resolvedAt).getTime() + 15_000).toISOString();
+  return {
+    activitySessionId: decision.activitySessionId,
+    sessionDate: decision.sessionDate,
+    productKey: decision.productKey,
+    productKind: decision.productKind,
+    baseAmountSek: decision.baseAmountSek,
+    finalAmountSek: decision.finalAmountSek,
+    effectivePriceSek: decision.effectivePriceSek,
+    requiresCheckout: decision.requiresCheckout,
+    checkoutLabel: decision.checkoutLabel,
+    pricingReason: decision.pricingReason,
+    accessDecision: decision.accessDecision,
+    entitlementType: decision.entitlementType,
+    accessReason: decision.accessReason,
+    fundingType: decision.fundingType,
+    funder: decision.funder,
+    consumptionRequired: decision.consumptionRequired,
+    membershipTierName: decision.membershipTierName,
+    customerPresentation: decision.customerPresentation,
+    decision: {
+      schema_version: 1,
+      decision_id: crypto.randomUUID(),
+      identity_context: 'authenticated',
+      identity_fingerprint: identityFingerprint,
+      currency: 'SEK',
+      price_minor: Math.round(Number(decision.effectivePriceSek || 0) * 100),
+      list_price_minor: Math.round(Number(decision.baseAmountSek || 0) * 100),
+      reason: decision.pricingReason,
+      resolved_at: resolvedAt,
+      fresh_until: freshUntil,
+      context: {
+        venue_id: venueId,
+        activity_session_id: decision.activitySessionId,
+        session_date: decision.sessionDate,
+        product_key: decision.productKey,
+        purchase_kind: purchaseKind,
+        sales_channel: safeDebug.sales_channel || 'online',
+      },
+    },
+    debug: {
+      pricing_source: safeDebug.pricing_source || decision.pricingReason,
+      pricing_mode: safeDebug.pricing_mode || 'standard',
+      member_discount_percent: safeDebug.member_discount_percent || 0,
+      online_price_sek: safeDebug.online_price_sek ?? null,
+      desk_price_sek: safeDebug.desk_price_sek ?? null,
+      day_pass_included: safeDebug.day_pass_included ?? null,
+      membership_included: safeDebug.membership_included ?? null,
+      first_visit_offer: safeDebug.first_visit_offer || null,
+      scarcity: safeDebug.scarcity || null,
+    },
+  };
+}
+
+type PersonalizedTodayOccurrence = {
+  activitySessionId: string;
+  sessionDate: string;
+  session: any;
+};
+
+function boundedPersonalizedTodayOccurrences(
+  projection: TodayPrimaryProjection,
+  now = DateTime.now().setZone('Europe/Stockholm'),
+) {
+  const blocked = new Set((projection.overrides || []).flatMap((row: any) => (
+    ['hidden', 'cancelled'].includes(String(row.status || ''))
+      ? [`${row.activity_session_id}@${row.session_date}`]
+      : []
+  )));
+  const seen = new Set<string>();
+  return (projection.sessions || [])
+    .map((session: any) => ({
+      activitySessionId: String(session.id || ''),
+      sessionDate: String(session.session_date || ''),
+      session,
+    }))
+    .filter((item: PersonalizedTodayOccurrence) => {
+      const key = `${item.activitySessionId}@${item.sessionDate}`;
+      if (!item.activitySessionId || !/^\d{4}-\d{2}-\d{2}$/.test(item.sessionDate) || seen.has(key) || blocked.has(key)) return false;
+      const interval = activitySessionOccurrenceInterval(item.sessionDate, item.session.start_time, item.session.end_time);
+      if (!interval || interval.end <= now) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left: PersonalizedTodayOccurrence, right: PersonalizedTodayOccurrence) => (
+      `${left.sessionDate}T${left.session.start_time}`.localeCompare(`${right.sessionDate}T${right.session.start_time}`)
+    ))
+    .slice(0, MAX_PERSONALIZED_PRICING_OCCURRENCES);
+}
+
+async function resolvePersonalizedPricingProjection(input: {
+  client: any;
+  venueId: string;
+  venueSlug: string;
+  userId: string;
+  authenticatedEmail?: string | null;
+  occurrences: PersonalizedTodayOccurrence[];
+  timings: Record<string, number>;
+}) {
+  const identityStartedAt = performance.now();
+  const customerDiagnostics = { dbQueryCount: 0, authAdminQueryCount: 0 };
+  const [customerId, identityFingerprint] = await Promise.all([
+    resolveCustomerIdForUser(input.client, input.userId, input.authenticatedEmail, customerDiagnostics),
+    pricingIdentityFingerprint(input.userId),
+  ]);
+  input.timings.identity_ms = Math.round(performance.now() - identityStartedAt);
+
+  const eligibilityStartedAt = performance.now();
+  const expiryReconciliationScanCount = customerId && Deno.env.get('STRIPE_SECRET_KEY') ? 1 : 0;
+  let expiryReconciliation = { checked: 0, released: 0, errors: 0 };
+  if (customerId) {
+    expiryReconciliation = await reconcileExpiredFirstVisitCheckouts(input.client, {
+      customerId,
+      stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+      stripeApiBase: Deno.env.get('STRIPE_API_BASE'),
+    });
+  }
+  const firstVisitEligibility = await firstVisitEligibilityForCustomer(input.client, customerId, input.userId);
+  input.timings.first_visit_ms = Math.round(performance.now() - eligibilityStartedAt);
+
+  const productCache = new Map<string, Promise<any>>();
+  const readCache = createActivityPricingReadCache();
+  const snapshotStartedAt = performance.now();
+  const snapshot = await primeActivityPricingReadSnapshot({
+    client: input.client,
+    readCache,
+    productCache,
+    venueId: input.venueId,
+    userId: input.userId,
+    customerId,
+    occurrences: input.occurrences,
+  });
+  input.timings.access_snapshot_ms = Math.round(performance.now() - snapshotStartedAt);
+
+  const resolvedAt = new Date().toISOString();
+  const pricingStartedAt = performance.now();
+  const pricing = await Promise.all(input.occurrences.map(async ({ activitySessionId, sessionDate, session }) => {
+    const [activityTicketDecision, dayPassDecision] = await Promise.all([
+      resolveActivityPricingDecision({
+        client: input.client,
+        venueId: input.venueId,
+        userId: input.userId,
+        customerId,
+        firstVisitEligibility,
+        activitySessionId,
+        sessionDate,
+        requestedProductKey: session.product_key,
+        requestedAmountSek: session.price_sek,
+        purchaseKind: 'activity_ticket',
+        session,
+        productCache,
+        readCache,
+      }),
+      resolveActivityPricingDecision({
+        client: input.client,
+        venueId: input.venueId,
+        userId: input.userId,
+        customerId,
+        firstVisitEligibility,
+        activitySessionId,
+        sessionDate,
+        requestedProductKey: 'day_access',
+        requestedAmountSek: null,
+        purchaseKind: 'day_pass',
+        session,
+        productCache,
+        readCache,
+      }),
+    ]);
+    return {
+      activity_session_id: activitySessionId,
+      session_date: sessionDate,
+      effective_price_sek: activityTicketDecision.effectivePriceSek,
+      requires_checkout: activityTicketDecision.requiresCheckout,
+      pricing_reason: activityTicketDecision.pricingReason,
+      customer_presentation: activityTicketDecision.customerPresentation,
+      activity_ticket_pricing: reusableActivityPricingDecision(
+        activityTicketDecision,
+        input.venueId,
+        identityFingerprint,
+        resolvedAt,
+        'activity_ticket',
+      ),
+      day_pass_pricing: reusableActivityPricingDecision(
+        dayPassDecision,
+        input.venueId,
+        identityFingerprint,
+        resolvedAt,
+        'day_pass',
+      ),
+    };
+  }));
+  input.timings.pricing_projection_ms = Math.round(performance.now() - pricingStartedAt);
+
+  const occurrences = pricing.flatMap((item: any) => item.customer_presentation?.offerState === 'eligible'
+    ? [{
+      activity_session_id: item.activity_session_id,
+      session_date: item.session_date,
+      applied: true,
+      price_sek: Number(item.customer_presentation.displayPriceSek || 0),
+      regular_price_sek: Number(item.customer_presentation.listPriceSek || 0),
+    }]
+    : []);
+  const items = pricing.filter((item: any) => Boolean(item.customer_presentation?.offerState)).map((offer: any) => ({
+    ...offer,
+    route: programSessionPath(offer.activity_session_id, offer.session_date, input.venueSlug),
+  }));
+
+  return {
+    is_first_time: firstVisitEligibility.eligible,
+    has_configured_offer: input.occurrences.some((item) => item.session.first_visit_offer_enabled === true),
+    pricing,
+    occurrences,
+    items,
+    resolved_at: resolvedAt,
+    diagnostics: {
+      occurrence_count: pricing.length,
+      resolver_count: pricing.length * 2,
+      edge_request_count: 1,
+      customer_identity_db_query_count: customerDiagnostics.dbQueryCount,
+      customer_identity_auth_admin_query_count: customerDiagnostics.authAdminQueryCount,
+      first_visit_eligibility_query_count: 1,
+      expiry_reconciliation_scan_count: expiryReconciliationScanCount,
+      expiry_reconciliation_candidate_count: expiryReconciliation.checked,
+      access_snapshot: snapshot,
+      cache_hits: readCache.diagnostics.cacheHits,
+      cache_misses_after_snapshot: readCache.diagnostics.cacheMisses,
+      backend_read_ms: readCache.diagnostics.durationsMs,
+      timings: input.timings,
+    },
+  };
 }
 
 function ogTitleForActivity(session: any, occurrenceDate: string) {
@@ -1354,126 +1615,17 @@ Deno.serve(async (req) => {
       }
 
       try {
-        const [venueResolution, sessionsResult, scheduleVersionsResult, seriesOccurrencesResult, eventsResult, overridesResult, registrationsResult] = await Promise.all([
-          resolvePublicVenueQuery(readContext, () => client.from('venues')
-            .select('id, name, slug')
-            .eq('slug', venueSlug)
-            .eq('is_public', true)
-            .maybeSingle()),
-          measurePublicReadStage(readContext, 'sessions', () => client.from('activity_sessions')
-            .select('id, name, session_type, session_date, recurrence_days, start_time, end_time, capacity, price_sek, product_key, venue_id, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, closed_to_public, schedule_effective_from, activity_series(image_urls, activity_formats(image_urls)), venues!inner(slug, is_public)')
-            .eq('venues.slug', venueSlug)
-            .eq('venues.is_public', true)
-            .eq('closed_to_public', false)
-            .order('start_time', { ascending: true })),
-          measurePublicReadStage(readContext, 'schedule_versions', () => client.from('activity_session_schedule_versions')
-            .select('id, activity_session_id, effective_from, effective_until, series_id, series_start_date, series_end_date, series_total_sessions, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status, venues!inner(slug, is_public)')
-            .eq('venues.slug', venueSlug)
-            .eq('venues.is_public', true)
-            .lte('effective_from', endDate)
-            .or(`effective_until.is.null,effective_until.gt.${startDate}`)),
-          measurePublicReadStage(readContext, 'series_occurrences', () => client.from('activity_sessions')
-            .select('id, series_id, name, session_date, start_time, end_time, capacity, is_active, publish_status, activity_series!inner(id, name, series_type, status, registration_opens_at, registration_closes_at, image_urls, activity_formats!inner(name, presentation_type, image_urls)), venues!inner(slug, is_public)')
-            .eq('venues.slug', venueSlug)
-            .eq('venues.is_public', true)
-            .eq('is_active', true)
-            .eq('publish_status', 'published')
-            .gte('session_date', startDate)
-            .lte('session_date', endDate)
-            .eq('activity_series.series_type', 'course')
-            .eq('activity_series.status', 'active')
-            .eq('activity_series.activity_formats.presentation_type', 'social_event')
-            .order('session_date', { ascending: true })
-            .order('start_time', { ascending: true })),
-          measurePublicReadStage(readContext, 'events', () => client.from('events')
-            .select('id, name, display_name, slug, category, status, start_date, start_time, end_time, logo_url, background_url, venues!inner(slug, is_public)')
-            .eq('venues.slug', venueSlug)
-            .eq('venues.is_public', true)
-            .eq('is_public', true)
-            .in('status', ['upcoming', 'active', 'live'])
-            .gte('start_date', startDate)
-            .lte('start_date', endDate)
-            .order('start_date', { ascending: true })),
-          measurePublicReadStage(readContext, 'overrides', () => client.from('activity_session_overrides')
-            .select('id, activity_session_id, session_date, status, reason, venues!inner(slug, is_public)')
-            .eq('venues.slug', venueSlug)
-            .eq('venues.is_public', true)
-            .gte('session_date', startDate)
-            .lte('session_date', endDate)),
-          measurePublicReadStage(readContext, 'committed_counts', () => client.from('session_registrations')
-            .select('activity_session_id, session_date, status, venues!inner(slug, is_public)')
-            .eq('venues.slug', venueSlug)
-            .eq('venues.is_public', true)
-            .gte('session_date', startDate)
-            .lte('session_date', endDate)),
-        ]);
-
-        if (venueResolution.kind === 'error') {
+        const projection = await loadTodayPrimaryProjection(client, { venueSlug, startDate, endDate, readContext });
+        if (projection.kind === 'error') {
           return await publicReadFailureResponse({
             context: readContext,
-            stage: 'venue',
-            error: venueResolution.error,
+            stage: projection.stage,
+            error: projection.error,
             serviceCredential,
           });
         }
-        if (venueResolution.kind === 'not_found') return publicReadNotFoundResponse('Venue not found', readContext);
-
-        const primaryResults = [
-          { stage: 'sessions', error: sessionsResult.error },
-          { stage: 'schedule_versions', error: scheduleVersionsResult.error },
-          { stage: 'series_occurrences', error: seriesOccurrencesResult.error },
-          { stage: 'events', error: eventsResult.error },
-          { stage: 'overrides', error: overridesResult.error },
-          { stage: 'committed_counts', error: registrationsResult.error },
-        ];
-        const failedStage = primaryResults.find((result) => result.error);
-        if (failedStage) {
-          return await publicReadFailureResponse({
-            context: readContext,
-            stage: failedStage.stage,
-            error: failedStage.error,
-            serviceCredential,
-          });
-        }
-
-        const registrationCounts = new Map<string, number>();
-        for (const registration of registrationsResult.data || []) {
-          if (!COMMITTED_REGISTRATION_STATUSES.has(String(registration.status || ''))) continue;
-          const key = `${registration.activity_session_id}:${registration.session_date}`;
-          registrationCounts.set(key, (registrationCounts.get(key) || 0) + 1);
-        }
-        const seriesProjectionInput = { venueSlug, startDate, endDate, asOf: new Date() };
-        const seriesOccurrences = (seriesOccurrencesResult.data || [])
-          .map((row: unknown) => projectPublicTodaySocialEventOccurrence(row, seriesProjectionInput))
-          .filter((occurrence): occurrence is NonNullable<typeof occurrence> => occurrence !== null);
-        const seriesOccurrenceSessionIds = new Set(seriesOccurrences.map((occurrence) => occurrence.session_id));
-        const scheduleVersions = activityScheduleVersionsBySession((scheduleVersionsResult.data || []) as ActivityScheduleVersion[]);
-        const versionedSessions: Array<Record<string, unknown>> = [];
-        const start = DateTime.fromISO(startDate, { zone: 'Europe/Stockholm' });
-        const end = DateTime.fromISO(endDate, { zone: 'Europe/Stockholm' });
-        for (let cursor = start; cursor <= end; cursor = cursor.plus({ days: 1 })) {
-          const date = cursor.toISODate()!;
-          for (const session of sessionsResult.data || []) {
-            const effectiveSession = effectiveActivityOccurrenceForDate(session, date, scheduleVersions);
-            if (!effectiveSession || effectiveSession.closed_to_public === true) continue;
-            versionedSessions.push({ ...effectiveSession, id: session.id, session_date: date, recurrence_days: null });
-          }
-        }
-        return publicReadJsonResponse({
-          venue: venueResolution.data,
-          sessions: versionedSessions.filter((session) => !seriesOccurrenceSessionIds.has(String(session.id))),
-          seriesOccurrences,
-          events: eventsResult.data || [],
-          overrides: overridesResult.data || [],
-          registrationCounts: [...registrationCounts].map(([key, count]) => {
-            const separator = key.lastIndexOf(':');
-            return {
-              activity_session_id: key.slice(0, separator),
-              session_date: key.slice(separator + 1),
-              registrations_count: count,
-            };
-          }),
-        }, readContext, 200, 5);
+        if (projection.kind === 'not_found') return publicReadNotFoundResponse('Venue not found', readContext);
+        return publicReadJsonResponse(projection.data, readContext, 200, 5);
       } catch (error) {
         const stage = error instanceof PublicReadStageError ? error.stage : 'unknown';
         const originalError = error instanceof PublicReadStageError ? error.originalError : error;
@@ -1486,7 +1638,116 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Public discovery read model. Anonymous visitors are provisionally eligible;
+    // Authenticated Today is one atomic server read model: schedule truth plus
+    // bounded personalized decisions. The browser never renders the public
+    // session price while waiting for a second private enrichment request.
+    if (req.method === 'GET' && path === 'today-personalized') {
+      const totalStartedAt = performance.now();
+      const readContext = createPublicReadContext('api-event-public', 'today-personalized');
+      const timings: Record<string, number> = {};
+      const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
+      const startDate = String(url.searchParams.get('startDate') || '').trim();
+      const endDate = String(url.searchParams.get('endDate') || '').trim();
+      const start = DateTime.fromISO(startDate, { zone: 'Europe/Stockholm' });
+      const end = DateTime.fromISO(endDate, { zone: 'Europe/Stockholm' });
+      const rangeDays = start.isValid && end.isValid ? Math.round(end.startOf('day').diff(start.startOf('day'), 'days').days) : -1;
+      if (!venueSlug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(venueSlug) || rangeDays < 0 || rangeDays > 13) {
+        return privateErrorResponse('Venue and a 1–14 day date range are required', 400);
+      }
+
+      try {
+        const scheduleStartedAt = performance.now();
+        const authStartedAt = performance.now();
+        const [auth, projection] = await Promise.all([
+          getAuthenticatedClient(req).then((result) => {
+            timings.auth_ms = Math.round(performance.now() - authStartedAt);
+            return result;
+          }),
+          loadTodayPrimaryProjection(client, { venueSlug, startDate, endDate, readContext }),
+        ]);
+        timings.schedule_projection_ms = Math.round(performance.now() - scheduleStartedAt);
+        if (auth.error || !auth.userId) return privateErrorResponse('Unauthorized', 401);
+        if (projection.kind === 'not_found') return privateErrorResponse('Venue not found', 404);
+        if (projection.kind === 'error') throw new PublicReadStageError(projection.stage, projection.error);
+
+        const boundedOccurrences = boundedPersonalizedTodayOccurrences(projection.data);
+        const allowedOccurrenceKeys = new Set(boundedOccurrences.map((item) => `${item.activitySessionId}@${item.sessionDate}`));
+        const boundedProjection = {
+          ...projection.data,
+          sessions: projection.data.sessions.filter((session: any) => (
+            allowedOccurrenceKeys.has(`${session.id}@${session.session_date}`)
+          )),
+        };
+        const personalizedPricing = boundedOccurrences.length > 0
+          ? await resolvePersonalizedPricingProjection({
+            client,
+            venueId: String(projection.data.venue.id),
+            venueSlug,
+            userId: auth.userId,
+            authenticatedEmail: auth.user?.email || null,
+            occurrences: boundedOccurrences,
+            timings,
+          })
+          : {
+            is_first_time: false,
+            has_configured_offer: false,
+            pricing: [],
+            occurrences: [],
+            items: [],
+            resolved_at: new Date().toISOString(),
+            diagnostics: {
+              occurrence_count: 0,
+              resolver_count: 0,
+              edge_request_count: 1,
+              customer_identity_db_query_count: 0,
+              customer_identity_auth_admin_query_count: 0,
+              first_visit_eligibility_query_count: 0,
+              expiry_reconciliation_scan_count: 0,
+              expiry_reconciliation_candidate_count: 0,
+              access_snapshot: null,
+              timings,
+            },
+          };
+        timings.total_ms = Math.round(performance.now() - totalStartedAt);
+        personalizedPricing.diagnostics.timings = timings;
+        const diagnostics = {
+          edge_request_count: 1,
+          today_projection_query_count: TODAY_PRIMARY_QUERY_COUNT,
+          bounded_occurrence_count: boundedOccurrences.length,
+          bounded_occurrence_limit: MAX_PERSONALIZED_PRICING_OCCURRENCES,
+          access_snapshot_query_count: personalizedPricing.diagnostics.access_snapshot?.queryCount || 0,
+          customer_identity_db_query_count: personalizedPricing.diagnostics.customer_identity_db_query_count || 0,
+          first_visit_eligibility_query_count: personalizedPricing.diagnostics.first_visit_eligibility_query_count || 0,
+          expiry_reconciliation_scan_count: personalizedPricing.diagnostics.expiry_reconciliation_scan_count || 0,
+          membership_lookup_count: personalizedPricing.diagnostics.access_snapshot?.membershipLookupCount || 0,
+          day_access_lookup_count: personalizedPricing.diagnostics.access_snapshot?.dayAccessLookupCount || 0,
+          entitlement_batch_lookup_count: personalizedPricing.diagnostics.access_snapshot?.entitlementBatchLookupCount || 0,
+          database_roundtrip_count_without_expired_checkout_recovery:
+            TODAY_PRIMARY_QUERY_COUNT
+            + (personalizedPricing.diagnostics.customer_identity_db_query_count || 0)
+            + (personalizedPricing.diagnostics.first_visit_eligibility_query_count || 0)
+            + (personalizedPricing.diagnostics.expiry_reconciliation_scan_count || 0)
+            + (personalizedPricing.diagnostics.access_snapshot?.queryCount || 0),
+          pricing_resolver_count: personalizedPricing.diagnostics.resolver_count,
+          timings,
+        };
+        console.log('authenticated-today-personalized-timing', diagnostics);
+        return privateJsonResponse({
+          ...boundedProjection,
+          personalized_pricing: personalizedPricing,
+          diagnostics,
+        });
+      } catch (error) {
+        timings.total_ms = Math.round(performance.now() - totalStartedAt);
+        console.error('authenticated-today-personalized-failure', {
+          stage: error instanceof PublicReadStageError ? error.stage : 'personalized_projection',
+          timings,
+          error_class: error instanceof Error ? error.name : 'unknown',
+        });
+        return privateErrorResponse('Personalized Today is temporarily unavailable', 503);
+      }
+    }
+
     // identified customers are checked against committed relevant activity truth.
     // Checkout runs the same resolver again before any price is committed.
     if (req.method === 'GET' && path === 'first-visit-offers') {
@@ -1583,6 +1844,7 @@ Deno.serve(async (req) => {
           userId = auth.userId;
         }
         timings.authMs = Math.round(performance.now() - userStartedAt);
+        const identityFingerprint = userId ? await pricingIdentityFingerprint(userId) : null;
         const customerId = userId ? await resolveCustomerIdForUser(client, userId) : null;
         if (customerId) {
           await reconcileExpiredFirstVisitCheckouts(client, {
@@ -1600,6 +1862,7 @@ Deno.serve(async (req) => {
           timings,
         });
         const productCache = new Map<string, Promise<any>>();
+        const readCache = createActivityPricingReadCache();
         const socialProofPromise = (async () => {
           const socialProofStartedAt = performance.now();
           const [registrationCount, interests] = await Promise.all([
@@ -1628,6 +1891,7 @@ Deno.serve(async (req) => {
               purchaseKind: 'activity_ticket',
               session: preview.activity_session,
               productCache,
+              readCache,
             }),
             resolveActivityPricingDecision({
               client,
@@ -1641,6 +1905,7 @@ Deno.serve(async (req) => {
               purchaseKind: 'day_pass',
               session: preview.activity_session,
               productCache,
+              readCache,
             }),
           ]);
           timings.pricingMs = Math.round(performance.now() - pricingStartedAt);
@@ -1660,25 +1925,35 @@ Deno.serve(async (req) => {
         if (supabaseUrl.includes('ptnvhbniiiapzbyofctg')) {
           timings.totalMs = Math.round(performance.now() - totalStartedAt);
           console.log('activity-preview-timing', {
-            userId: userId || null,
-            membershipTier: activityTicketPricing.membershipTierName,
-            activitySessionId: activityTicketPricing.activitySessionId,
-            sessionDate: activityTicketPricing.sessionDate,
+            identityState: userId ? 'authenticated' : 'anonymous',
             pricingBranch: activityTicketPricing.pricingReason,
-            activityTicketPriceSek: activityTicketPricing.effectivePriceSek,
-            dayPassPriceSek: dayPassPricing.effectivePriceSek,
             recommendedOption,
             timings,
+            cacheHits: readCache.diagnostics.cacheHits,
+            cacheMisses: readCache.diagnostics.cacheMisses,
+            backendReadMs: readCache.diagnostics.durationsMs,
           });
         }
         preview.interests = interests;
         preview.registrations = { count: registrationCount };
-        preview.activityTicketPricing = activityTicketPricing;
-        preview.dayPassPricing = dayPassPricing;
+        const resolvedAt = new Date().toISOString();
+        preview.activityTicketPricing = isPersonalizedActivityPreview
+          ? reusableActivityPricingDecision(activityTicketPricing, preview.activity_session.venue_id, identityFingerprint!, resolvedAt, 'activity_ticket')
+          : activityTicketPricing;
+        preview.dayPassPricing = isPersonalizedActivityPreview
+          ? reusableActivityPricingDecision(dayPassPricing, preview.activity_session.venue_id, identityFingerprint!, resolvedAt, 'day_pass')
+          : dayPassPricing;
         preview.scarcity = activityTicketPricing.debug?.scarcity || null;
         preview.recommendedOption = recommendedOption;
         preview.upgradeDeltaSek = upgradeDeltaSek;
-        preview.pricing = activityTicketPricing;
+        preview.pricing = preview.activityTicketPricing;
+        preview.resolved_at = resolvedAt;
+        preview.diagnostics = isPersonalizedActivityPreview ? {
+          timings,
+          cache_hits: readCache.diagnostics.cacheHits,
+          cache_misses: readCache.diagnostics.cacheMisses,
+          backend_read_ms: readCache.diagnostics.durationsMs,
+        } : undefined;
         return isPersonalizedActivityPreview
           ? privateJsonResponse(preview)
           : jsonResponse(preview, 200, 5);

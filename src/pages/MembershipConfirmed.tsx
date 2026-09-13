@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { resolveEntryDestination, safeLocalPath } from "@/lib/entryResolver";
+import { invalidatePersonalizedPricing } from "@/lib/personalizedPricing";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
@@ -20,7 +21,7 @@ export default function MembershipConfirmed() {
 
   useEffect(() => {
     queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
-    queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
+    invalidatePersonalizedPricing(queryClient, "membership_activated");
   }, [queryClient]);
 
   return (

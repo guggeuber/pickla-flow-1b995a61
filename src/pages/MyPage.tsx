@@ -8,6 +8,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { RUNNING_FRONTEND_BUILD, shortFrontendSha } from "@/lib/frontendBuild";
+import { invalidatePersonalizedPricing } from "@/lib/personalizedPricing";
 import { useAuth } from "@/hooks/useAuth";
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -493,6 +494,7 @@ function MembershipDetailsSheet({
 
     toast.success("Medlemskapet är avslutat");
     queryClient.invalidateQueries({ queryKey: ["my-membership"] });
+    invalidatePersonalizedPricing(queryClient, "membership_cancelled");
     onOpenChange(false);
   };
 

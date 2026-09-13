@@ -138,6 +138,104 @@ function secondaryResponse(pricing: Array<Record<string, unknown>> = []) {
   };
 }
 
+function personalizedPricingRow({
+  price = 99,
+  reason = "membership_tier_pricing",
+  sessionId = "visible-session",
+  sessionDate = "2026-08-26",
+}: {
+  price?: number;
+  reason?: string;
+  sessionId?: string;
+  sessionDate?: string;
+} = {}) {
+  const decision = (purchaseKind: "activity_ticket" | "day_pass", productKey: string, decisionPrice: number) => ({
+    activitySessionId: sessionId,
+    sessionDate,
+    productKey,
+    productKind: purchaseKind === "day_pass" ? "day_access" : "session_ticket",
+    baseAmountSek: 165,
+    finalAmountSek: decisionPrice,
+    effectivePriceSek: decisionPrice,
+    requiresCheckout: decisionPrice > 0,
+    checkoutLabel: decisionPrice > 0 ? `${decisionPrice} kr` : "Ingår",
+    pricingReason: reason,
+    accessDecision: decisionPrice > 0 ? "paid" : "membership_included",
+    entitlementType: decisionPrice > 0 ? "" : "open_play_unlimited",
+    accessReason: null,
+    fundingType: decisionPrice > 0 ? null : "subscription",
+    funder: null,
+    consumptionRequired: false,
+    membershipTierName: price === 99 ? "Play" : price === 0 ? "Play+" : null,
+    customerPresentation: {
+      identityState: "identified",
+      displayPriceSek: decisionPrice,
+      displayLabel: decisionPrice > 0 ? `${decisionPrice} kr` : "Ingår",
+      listPriceSek: 165,
+      offerState: null,
+      offerLabel: null,
+      offerDetail: null,
+    },
+    decision: {
+      schema_version: 1,
+      decision_id: `${sessionId}-${sessionDate}-${purchaseKind}`,
+      identity_context: "authenticated",
+      identity_fingerprint: "safe-fingerprint",
+      currency: "SEK",
+      price_minor: decisionPrice * 100,
+      list_price_minor: 16500,
+      reason,
+      resolved_at: new Date().toISOString(),
+      fresh_until: new Date(Date.now() + 15_000).toISOString(),
+      context: {
+        venue_id: "venue-1",
+        activity_session_id: sessionId,
+        session_date: sessionDate,
+        product_key: productKey,
+        purchase_kind: purchaseKind,
+        sales_channel: "online",
+      },
+    },
+    debug: {},
+  });
+  return {
+    activity_session_id: sessionId,
+    session_date: sessionDate,
+    effective_price_sek: price,
+    requires_checkout: price > 0,
+    pricing_reason: reason,
+    customer_presentation: {
+      identityState: "identified",
+      displayPriceSek: price,
+      displayLabel: price > 0 ? `${price} kr` : "Ingår",
+      listPriceSek: 165,
+      offerState: null,
+      offerLabel: null,
+      offerDetail: null,
+    },
+    activity_ticket_pricing: decision("activity_ticket", "open_play", price),
+    day_pass_pricing: decision("day_pass", "day_access", 250),
+  };
+}
+
+function personalizedTodayResponse(
+  primary: typeof primaryResponse = primaryResponse,
+  pricing = [personalizedPricingRow()],
+) {
+  return {
+    ...primary,
+    personalized_pricing: {
+      is_first_time: false,
+      has_configured_offer: false,
+      occurrences: [],
+      items: [],
+      pricing,
+      resolved_at: new Date().toISOString(),
+    },
+    diagnostics: { edge_request_count: 1, bounded_occurrence_count: pricing.length },
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -296,11 +394,13 @@ describe("Today customer first paint", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-08-26T10:00:00Z"));
     vi.stubGlobal("scrollTo", vi.fn());
-    mocks.account.state = "remote_validating";
+    mocks.account.state = "anonymous";
     mocks.account.account = null;
     mocks.account.verifiedUserId = null;
     mocks.account.isVerified = false;
-    mocks.user = { id: "user-1", email: "private@example.test" };
+    mocks.account.verifiedUserId = null;
+    mocks.account.isVerified = false;
+    mocks.user = null;
     mocks.venueData = undefined;
     mocks.venueError = false;
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
@@ -320,52 +420,69 @@ describe("Today customer first paint", () => {
     vi.clearAllMocks();
   });
 
-  it("renders truthful primary activity before venue discovery or remote account enrichment", async () => {
+  it("keeps authenticated Today neutral while remote identity validation is pending", async () => {
+    mocks.user = { id: "user-1", email: "private@example.test" };
+    mocks.account.state = "remote_validating";
     renderToday();
 
-    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
-    expect(screen.queryByText("Inställt pass")).not.toBeInTheDocument();
-    expect(screen.getByText("Boka plats")).toBeInTheDocument();
+    expect(screen.getByTestId("today-personalized-skeleton")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Open Play Express" })).not.toBeInTheDocument();
     expect(screen.queryByText(/private@example.test/i)).not.toBeInTheDocument();
-    expect(mocks.apiGet).toHaveBeenCalledWith(
-      "api-event-public",
-      "today-primary",
-      expect.objectContaining({ venueSlug: "pickla-arena-sthlm" }),
-      expect.objectContaining({
-        auth: "omit",
-        publicRead: expect.objectContaining({ maxRetries: 1 }),
-      }),
-    );
+    expect(mocks.apiGet.mock.calls.some((call) => call[1] === "today-primary")).toBe(false);
+    expect(mocks.apiGet.mock.calls.some((call) => call[1] === "today-personalized")).toBe(false);
     expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
     expect(mocks.fetchLeagueHome).not.toHaveBeenCalled();
   });
 
-  it("keeps the primary hero stable and defers private projections until public identity is known", async () => {
-    const view = renderToday();
-    expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
-    const hero = screen.getByTestId("today-featured-hero");
-    const greetingSlot = screen.getByTestId("today-hero-greeting-slot");
-    expect(greetingSlot.textContent?.trim()).toBe("");
-
+  it("makes the first authenticated actionable render the canonical Play price with no public-price flash", async () => {
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
-    view.rerender(
-      <QueryClientProvider client={view.queryClient}>
-        <MemoryRouter initialEntries={["/today"]}><TodayPage /></MemoryRouter>
-      </QueryClientProvider>,
-    );
+    const response = deferred<ReturnType<typeof personalizedTodayResponse>>();
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-personalized") return response.promise;
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      return never();
+    });
 
+    renderToday();
+    expect(screen.getByTestId("today-personalized-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText("Boka plats · 165 kr")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Kontrollerar pris/)).not.toBeInTheDocument();
+    await act(async () => response.resolve(personalizedTodayResponse()));
+
+    expect(await screen.findByText("Boka plats · 99 kr")).toBeInTheDocument();
     expect(await screen.findByText("Hej private.")).toBeInTheDocument();
-    expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
-    expect(mocks.fetchCourseDetail).not.toHaveBeenCalled();
-    expect(mocks.fetchLeagueHome).not.toHaveBeenCalled();
-    expect(mocks.fetchLeaguePublic).not.toHaveBeenCalled();
-    expect(screen.getByTestId("today-featured-hero")).toBe(hero);
-    expect(screen.getByTestId("today-hero-greeting-slot")).toBe(greetingSlot);
-    expect(greetingSlot).toHaveClass("h-[22px]");
-    expect(screen.getByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
-    expect(screen.getByText("Boka plats")).toBeInTheDocument();
+    expect(screen.queryByText("Boka plats · 165 kr")).not.toBeInTheDocument();
+    expect(mocks.apiGet.mock.calls.filter((call) => call[1] === "today-personalized")).toHaveLength(1);
+    expect(mocks.apiGet.mock.calls.some((call) => call[1] === "today-primary")).toBe(false);
+    expect(mocks.apiGet.mock.calls.some((call) => call[1] === "activity-pricing-previews-personalized")).toBe(false);
+  });
+
+  it.each([
+    { label: "non-member", row: personalizedPricingRow({ price: 165, reason: "regular_price" }), expected: "Boka plats · 165 kr" },
+    { label: "Play+", row: personalizedPricingRow({ price: 0, reason: "membership_open_play_unlimited" }), expected: "Boka plats · Ingår" },
+  ])("renders the canonical authenticated $label price on the first actionable card", async ({ row, expected }) => {
+    mocks.user = { id: "user-1", email: "private@example.test" };
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse(primaryResponse, [row]));
+      if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
+      if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
+      if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
+      return never();
+    });
+
+    renderToday();
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.queryByText(/Kontrollerar pris/)).not.toBeInTheDocument();
+    expect(mocks.apiGet.mock.calls.filter((call) => call[1] === "today-personalized")).toHaveLength(1);
+    expect(mocks.apiGet.mock.calls.some((call) => call[1] === "today-primary")).toBe(false);
   });
 
   it("also renders the public primary feed for an anonymous visitor", async () => {
@@ -373,6 +490,23 @@ describe("Today customer first paint", () => {
     mocks.account.state = "anonymous";
     renderToday();
     expect(await screen.findByRole("heading", { name: "Open Play Express" })).toBeInTheDocument();
+  });
+
+  it("fails closed instead of restoring the public 165 price when personalized pricing fails", async () => {
+    mocks.user = { id: "user-1", email: "private@example.test" };
+    mocks.account.state = "verified";
+    mocks.account.verifiedUserId = "user-1";
+    mocks.account.isVerified = true;
+    mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "today-personalized") return Promise.reject(new Error("pricing unavailable"));
+      return never();
+    });
+
+    renderToday();
+
+    expect(await screen.findByText("Dagens personliga priser kunde inte hämtas.")).toBeInTheDocument();
+    expect(screen.queryByTestId("today-featured-hero")).not.toBeInTheDocument();
+    expect(screen.queryByText("Boka plats · 165 kr")).not.toBeInTheDocument();
   });
 
   it("shows Parker as the third weekend row, preserves Open Play/Pickla Open, and removes a duplicate promotion", async () => {
@@ -570,11 +704,12 @@ describe("Today customer first paint", () => {
   });
 
   it("preserves verified registered state through the bounded social projection", async () => {
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
-      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse());
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [{
         activity_session_id: "visible-session",
         session_date: "2026-08-26",
@@ -585,13 +720,6 @@ describe("Today customer first paint", () => {
       }] });
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
-      if (endpoint === "first-visit-offers") return Promise.resolve({
-        is_first_time: false,
-        has_configured_offer: false,
-        occurrences: [],
-        items: [],
-        pricing: [],
-      });
       return never();
     });
     mocks.fetchCourseHome.mockResolvedValue({ mode: "none", item: null });
@@ -754,11 +882,12 @@ describe("Today customer first paint", () => {
     expect(screen.queryByRole("heading", { name: "Open Play Express" })).not.toBeInTheDocument();
   });
 
-  it("keeps Parker Brunch mounted and enriches ownership in place instead of replacing it with Pickla Start", async () => {
+  it("keeps Parker Brunch selected after the authenticated Today projection resolves", async () => {
     const courseDetail = deferred<Record<string, unknown>>();
     const promotions = publicPromotions();
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse(primaryWithSecondaryRow()));
       if (endpoint === "today-secondary") return Promise.resolve(promotions);
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
@@ -783,6 +912,7 @@ describe("Today customer first paint", () => {
     expect(publicCard).toHaveAttribute("data-promotion-id", "parker-brunch");
     expect(publicCard).toHaveAttribute("data-customer-state", "available");
 
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
@@ -794,8 +924,8 @@ describe("Today customer first paint", () => {
 
     await waitFor(() => expect(mocks.fetchCourseDetail).toHaveBeenCalledWith("parker-brunch"));
     expect(mocks.fetchCourseHome).not.toHaveBeenCalled();
-    expect(screen.getByTestId("home-series-card")).toBe(publicCard);
     expect(screen.getByRole("heading", { name: "Parker Brunch" })).toBeInTheDocument();
+    const authenticatedCard = screen.getByTestId("home-series-card");
 
     await act(async () => {
       courseDetail.resolve({
@@ -807,8 +937,8 @@ describe("Today customer first paint", () => {
       });
     });
 
-    await waitFor(() => expect(publicCard).toHaveAttribute("data-customer-state", "owned"));
-    expect(screen.getByTestId("home-series-card")).toBe(publicCard);
+    await waitFor(() => expect(authenticatedCard).toHaveAttribute("data-customer-state", "owned"));
+    expect(screen.getByTestId("home-series-card")).toBe(authenticatedCard);
     expect(screen.getByText("EVENT · Redan anmäld")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Visa bokning" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Pickla Start" })).not.toBeInTheDocument();
@@ -816,15 +946,15 @@ describe("Today customer first paint", () => {
 
   it("keeps Parker Brunch as the deterministic initial candidate when verification is already available and it is not owned", async () => {
     const promotions = publicPromotions();
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
-      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse(primaryWithSecondaryRow()));
       if (endpoint === "today-secondary") return Promise.resolve(promotions);
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
-      if (endpoint === "first-visit-offers") return Promise.resolve(promotions.first_visit);
       return never();
     });
     mocks.fetchCourseDetail.mockResolvedValue({
@@ -853,11 +983,12 @@ describe("Today customer first paint", () => {
   it.each([
     { label: "not owned", customerTeamId: null, expectedState: "available", expectedCta: "Anmäl lag" },
     { label: "owned", customerTeamId: "private-team-id", expectedState: "owned", expectedCta: "Visa laget" },
-  ])("keeps the public League node stable while $label enrichment resolves", async ({ customerTeamId, expectedState, expectedCta }) => {
+  ])("keeps the authenticated League node stable while $label enrichment resolves", async ({ customerTeamId, expectedState, expectedCta }) => {
     const leagueDetail = deferred<Record<string, unknown>>();
     const promotions = publicPromotions();
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse());
       if (endpoint === "today-secondary") return Promise.resolve(promotions);
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
@@ -868,8 +999,8 @@ describe("Today customer first paint", () => {
 
     const view = renderToday();
     expect(await screen.findByRole("heading", { name: "League Season 01" })).toBeInTheDocument();
-    const leagueCard = screen.getByTestId("league-home-offer");
 
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
@@ -880,7 +1011,7 @@ describe("Today customer first paint", () => {
     );
 
     await waitFor(() => expect(mocks.fetchLeaguePublic).toHaveBeenCalledWith("league-1"));
-    expect(screen.getByTestId("league-home-offer")).toBe(leagueCard);
+    const leagueCard = screen.getByTestId("league-home-offer");
     expect(leagueCard).toHaveAttribute("data-customer-state", "available");
 
     await act(async () => {
@@ -900,15 +1031,17 @@ describe("Today customer first paint", () => {
     expect(screen.queryByTestId("owned-league-home-card")).not.toBeInTheDocument();
   });
 
-  it("keeps the First Visit slot and downstream DOM order stable when verified eligibility disappears", async () => {
-    const privateFirstVisit = deferred<Record<string, unknown>>();
+  it("removes the public First Visit offer while the authenticated Today projection is pending", async () => {
+    const privateToday = deferred<ReturnType<typeof personalizedTodayResponse>>();
     const promotions = publicPromotions();
+    mocks.user = null;
+    mocks.account.state = "anonymous";
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
       if (endpoint === "today-secondary") return Promise.resolve(promotions);
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
-      if (endpoint === "first-visit-offers") return privateFirstVisit.promise;
+      if (endpoint === "today-personalized") return privateToday.promise;
       return never();
     });
     mocks.fetchCourseDetail.mockImplementation(() => never());
@@ -917,11 +1050,11 @@ describe("Today customer first paint", () => {
     const view = renderToday();
     expect(await screen.findByText("Första gången? Spela för 99 kr.")).toBeInTheDocument();
     const slot = screen.getByTestId("today-first-visit-slot");
-    const action = screen.getByRole("button", { name: /Första gången\? Spela för 99 kr/ });
     const downstream = screen.getByTestId("today-more-heading");
     expect(slot.compareDocumentPosition(downstream) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(slot).toHaveClass("min-h-[72px]");
 
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
@@ -930,23 +1063,16 @@ describe("Today customer first paint", () => {
         <MemoryRouter initialEntries={["/today"]}><TodayPage /></MemoryRouter>
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(mocks.apiGet.mock.calls.some((call) => call[1] === "first-visit-offers")).toBe(true));
+    expect(screen.getByTestId("today-personalized-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText("Första gången? Spela för 99 kr.")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.apiGet.mock.calls.some((call) => call[1] === "today-personalized")).toBe(true));
 
     await act(async () => {
-      privateFirstVisit.resolve({
-        is_first_time: false,
-        has_configured_offer: false,
-        occurrences: [],
-        items: [],
-        pricing: [],
-      });
+      privateToday.resolve(personalizedTodayResponse(primaryWithSecondaryRow()));
     });
 
     expect(await screen.findByText("Välkommen tillbaka till Pickla.")).toBeInTheDocument();
-    expect(screen.getByTestId("today-first-visit-slot")).toBe(slot);
-    expect(screen.getByRole("button", { name: /Välkommen tillbaka till Pickla/ })).toBe(action);
-    expect(screen.getByTestId("today-more-heading")).toBe(downstream);
-    expect(slot).toHaveAttribute("data-customer-state", "ineligible");
+    expect(screen.getByTestId("today-first-visit-slot")).toHaveAttribute("data-customer-state", "ineligible");
     expect(screen.queryByText("Första gången? Spela för 99 kr.")).not.toBeInTheDocument();
   });
 
@@ -1004,15 +1130,15 @@ describe("Today customer first paint", () => {
   it("keeps the public Course card through an enrichment error and upgrades the same node after retry", async () => {
     const promotions = publicPromotions();
     const queryClient = client();
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
-      if (endpoint === "today-primary") return Promise.resolve(primaryWithSecondaryRow());
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse(primaryWithSecondaryRow()));
       if (endpoint === "today-secondary") return Promise.resolve(promotions);
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
-      if (endpoint === "first-visit-offers") return Promise.resolve(promotions.first_visit);
       return never();
     });
     mocks.fetchCourseDetail
@@ -1049,15 +1175,15 @@ describe("Today customer first paint", () => {
     const cached = publicPromotions();
     const refreshed = publicPromotions("pickla-start", "Pickla Start");
     queryClient.setQueryData(["today-secondary", "pickla-arena-sthlm"], cached, { updatedAt: 1 });
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
-      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse());
       if (endpoint === "today-secondary") return Promise.resolve(refreshed);
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
-      if (endpoint === "first-visit-offers") return Promise.resolve(cached.first_visit);
       return never();
     });
     mocks.fetchCourseDetail.mockImplementation((seriesId: string) => Promise.resolve({
@@ -1088,15 +1214,15 @@ describe("Today customer first paint", () => {
   });
 
   it("does not fabricate a public card when the committed public candidate is absent", async () => {
+    mocks.user = { id: "user-1", email: "private@example.test" };
     mocks.account.state = "verified";
     mocks.account.verifiedUserId = "user-1";
     mocks.account.isVerified = true;
     mocks.apiGet.mockImplementation((_fn: string, endpoint: string) => {
-      if (endpoint === "today-primary") return Promise.resolve(primaryResponse);
+      if (endpoint === "today-personalized") return Promise.resolve(personalizedTodayResponse());
       if (endpoint === "today-secondary") return Promise.resolve(secondaryResponse());
       if (endpoint === "public-open-bookings") return Promise.resolve({ items: [] });
       if (endpoint === "activity-social-proof") return Promise.resolve({ occurrences: [] });
-      if (endpoint === "first-visit-offers") return Promise.resolve(secondaryResponse().first_visit);
       return never();
     });
     mocks.fetchCourseHome.mockResolvedValue({ mode: "registration", item: publicPromotions().course.item });

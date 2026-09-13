@@ -42,6 +42,15 @@ import {
   resolveProgramSessionPricingView,
 } from "@/lib/programSessionPricing";
 import { beginFrontendUpdateCriticalSection } from "@/lib/frontendVersionCoordinator";
+import {
+  isFreshPersonalizedPricingEntry,
+  invalidatePersonalizedPricing,
+  personalizedPricingQueryKey,
+  pricingEntryFromActivityPreview,
+  reportPersonalizedPricingReuse,
+  usePersonalizedPricingGeneration,
+  type PersonalizedPricingEntry,
+} from "@/lib/personalizedPricing";
 
 const BG = "#fbf7f2";
 const TEXT = "#020617";
@@ -152,10 +161,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [optimisticInterest, setOptimisticInterest] = useState<{ count: number; mine: boolean } | null>(null);
   const requestedDate = searchParams.get("date");
   const venueSlug = searchParams.get("v") || "pickla-arena-sthlm";
+  const pricingGeneration = usePersonalizedPricingGeneration();
   const programPath = sessionId ? publicProgramPath(sessionId, requestedDate, venueSlug) : "/today";
   const ticketPath = sessionId ? ticketProgramPath(sessionId, requestedDate, venueSlug) : "/today";
   const todayPath = `/today?v=${encodeURIComponent(venueSlug)}`;
-  const routeState = location.state as { activitySession?: any } | null;
+  const routeState = location.state as { activitySession?: any; activityUserState?: { interested?: boolean } } | null;
   const optimisticSession = routeState?.activitySession || null;
 
   const { data: directSession, isLoading: sessionLoading } = useQuery({
@@ -175,8 +185,11 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
 
   const earlyVenueId = directSession?.venue_id || optimisticSession?.venue_id || null;
   const earlyOccurrenceDate = requestedDate || directSession?.session_date || optimisticSession?.session_date || null;
-  const accessSnapshot = useAccessSnapshot({ venueId: earlyVenueId, sessionDate: earlyOccurrenceDate });
-  const waitForAccessSnapshot = !!user?.id && !!earlyVenueId && accessSnapshot.isLoading;
+  const earlyConfiguredProductKey = String(directSession?.product_key || optimisticSession?.product_key || "");
+  const earlySessionType = directSession?.session_type || optimisticSession?.session_type;
+  const earlyProductKey = earlyConfiguredProductKey === "day_access"
+    ? earlySessionType === "open_play" ? "open_play_slot" : "session_ticket"
+    : earlyConfiguredProductKey || (earlySessionType === "open_play" ? "open_play_slot" : "session_ticket");
 
   const publicPreview = useQuery({
     queryKey: [
@@ -193,58 +206,69 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       ...(requestedDate ? { date: requestedDate } : {}),
     }, { auth: "omit" }),
   });
-  const verifiedPreview = useQuery({
-    queryKey: [
-      "program-session-entry",
-      verifiedAccount.verifiedUserId,
-      sessionId,
-      earlyOccurrenceDate || requestedDate || "date-pending",
-      venueSlug,
-      accessSnapshot.version,
-    ],
-    enabled: verifiedAccount.isVerified && !!sessionId && !waitForAccessSnapshot,
-    staleTime: 0,
-    queryFn: () => apiGet<any>("api-event-public", PROGRAM_SESSION_PERSONALIZED_PREVIEW_ENDPOINT, {
-      sessionId: sessionId!,
-      venueSlug,
-      ...(requestedDate ? { date: requestedDate } : {}),
-    }),
-  });
-  const personalizedPreviewIdentity = [
-    verifiedAccount.verifiedUserId || "unverified",
-    sessionId || "no-session",
-    earlyOccurrenceDate || requestedDate || "date-pending",
+  const personalizedPricingKey = personalizedPricingQueryKey({
+    userId: verifiedAccount.verifiedUserId || "unverified",
+    venueId: earlyVenueId || "no-venue",
     venueSlug,
-    accessSnapshot.version,
-  ].join(":");
-  const committedPersonalizedPreviewRef = useRef<{
-    identity: string;
-    data: typeof verifiedPreview.data;
-  } | null>(null);
+    activitySessionId: sessionId || "no-session",
+    sessionDate: earlyOccurrenceDate || "date-pending",
+    productKey: earlyProductKey,
+    generation: pricingGeneration,
+  });
+  const pricingContext = {
+    venueId: earlyVenueId || "no-venue",
+    activitySessionId: sessionId || "no-session",
+    sessionDate: earlyOccurrenceDate || "date-pending",
+    productKey: earlyProductKey,
+    salesChannel: "online" as const,
+  };
+  const pricingCachedBeforeQuery = queryClient.getQueryData<PersonalizedPricingEntry>(personalizedPricingKey);
+  const hadFreshTodayDecision = isFreshPersonalizedPricingEntry(pricingCachedBeforeQuery, pricingContext);
+  const personalizedPricing = useQuery({
+    queryKey: personalizedPricingKey,
+    enabled: verifiedAccount.isVerified
+      && !!sessionId
+      && !!earlyVenueId
+      && !!earlyOccurrenceDate
+      && !!earlyProductKey,
+    staleTime: 15_000,
+    queryFn: async () => {
+      const preview = await apiGet<any>("api-event-public", PROGRAM_SESSION_PERSONALIZED_PREVIEW_ENDPOINT, {
+        sessionId: sessionId!,
+        venueSlug,
+        date: earlyOccurrenceDate!,
+      });
+      return pricingEntryFromActivityPreview(preview);
+    },
+  });
+  const pricingReuseReportRef = useRef("");
   useEffect(() => {
-    if (!verifiedAccount.isVerified || !verifiedPreview.data) return;
-    committedPersonalizedPreviewRef.current = {
-      identity: personalizedPreviewIdentity,
-      data: verifiedPreview.data,
-    };
-  }, [personalizedPreviewIdentity, verifiedAccount.isVerified, verifiedPreview.data]);
-  const committedPersonalizedPreview = verifiedPreview.data || (
-    committedPersonalizedPreviewRef.current?.identity === personalizedPreviewIdentity
-      ? committedPersonalizedPreviewRef.current.data
-      : null
-  );
+    if (!verifiedAccount.isVerified || !sessionId || !earlyOccurrenceDate || !earlyVenueId) return;
+    const reportKey = `${pricingGeneration}:${sessionId}:${earlyOccurrenceDate}`;
+    if (pricingReuseReportRef.current === reportKey) return;
+    pricingReuseReportRef.current = reportKey;
+    reportPersonalizedPricingReuse(hadFreshTodayDecision);
+  }, [earlyOccurrenceDate, earlyVenueId, hadFreshTodayDecision, pricingGeneration, sessionId, verifiedAccount.isVerified]);
+  const committedPersonalizedPricing = isFreshPersonalizedPricingEntry(personalizedPricing.data, pricingContext)
+    ? personalizedPricing.data
+    : null;
+  const committedPersonalizedPreview = committedPersonalizedPricing ? {
+    ...(committedPersonalizedPricing.preview || {}),
+    activityTicketPricing: committedPersonalizedPricing.activityTicketPricing,
+    dayPassPricing: committedPersonalizedPricing.dayPassPricing,
+    pricing: committedPersonalizedPricing.activityTicketPricing,
+    scarcity: committedPersonalizedPricing.activityTicketPricing.debug?.scarcity || null,
+  } : null;
   const pricingView = resolveProgramSessionPricingView({
     accountState: verifiedAccount.state,
     publicPreview: publicPreview.data,
     personalizedPreview: committedPersonalizedPreview,
     publicError: publicPreview.isError,
-    personalizedError: verifiedPreview.isError,
-    accessPending: waitForAccessSnapshot,
+    personalizedError: personalizedPricing.isError,
+    accessPending: false,
   });
   const pricingData = pricingView.preview;
-  const data = verifiedAccount.isVerified && committedPersonalizedPreview
-    ? committedPersonalizedPreview
-    : publicPreview.data;
+  const data = committedPersonalizedPricing?.preview || publicPreview.data;
   const previewLoading = publicPreview.isLoading;
   const error = publicPreview.error;
 
@@ -404,7 +428,18 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     : null;
   const occurrenceHidden = isPublicActivityOverrideHidden(occurrenceOverride?.status) || Boolean(error && !data?.activity_session);
   const accessSnapshotForResolvedSession = useAccessSnapshot({ venueId, sessionDate: occurrenceDate });
-  const isLoading = (sessionLoading && (previewLoading || waitForAccessSnapshot))
+  const committedAccessVersionRef = useRef<{ scope: string; version: string } | null>(null);
+  useEffect(() => {
+    if (accessSnapshotForResolvedSession.isLoading || !venueId || !occurrenceDate) return;
+    const version = accessSnapshotForResolvedSession.version;
+    if (!version || version === "snapshot-loading" || version === "anonymous") return;
+    const scope = `${venueId}:${occurrenceDate}`;
+    const previous = committedAccessVersionRef.current;
+    committedAccessVersionRef.current = { scope, version };
+    if (!previous || previous.scope !== scope || previous.version === version) return;
+    invalidatePersonalizedPricing(queryClient, "access_snapshot_changed");
+  }, [accessSnapshotForResolvedSession.isLoading, accessSnapshotForResolvedSession.version, occurrenceDate, queryClient, venueId]);
+  const isLoading = (sessionLoading && previewLoading)
     || (!!venueId && commerceCatalog.isLoading);
 
   const { data: registrations = [], refetch: refetchRegistrations } = useQuery({
@@ -462,7 +497,10 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
   const [localCheckedIn, setLocalCheckedIn] = useState(false);
   const [checkinLoading, setCheckinLoading] = useState(false);
   const isCheckedIn = localCheckedIn || currentRegistration?.status === "checked_in";
-  const userIsInterested = optimisticInterest?.mine ?? Boolean(data?.interests?.user_is_interested);
+  const userIsInterested = optimisticInterest?.mine
+    ?? data?.interests?.user_is_interested
+    ?? routeState?.activityUserState?.interested
+    ?? false;
   const backendPricing = pricingData?.activityTicketPricing || pricingData?.pricing || null;
   const dayPassPricing = pricingData?.dayPassPricing || null;
   const selectedPricing = commercePurchaseKind === "day_pass" ? dayPassPricing : backendPricing;
@@ -490,10 +528,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
     : onlinePrice;
   const pricingError = pricingView.phase === "error";
   const pricingPending = pricingView.phase === "pending"
-    || (pricingView.phase === "resolved" && (
-      accessSnapshotForResolvedSession.isLoading
-      || !selectedPricing
-    ));
+    || (pricingView.phase === "resolved" && !selectedPricing);
   const pricingPendingLabel = verifiedAccount.state === "anonymous"
     ? "Hämtar pris…"
     : "Kontrollerar ditt pris…";
@@ -584,7 +619,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       return;
     }
     if (verifiedAccount.isVerified) {
-      void verifiedPreview.refetch();
+      void personalizedPricing.refetch();
       return;
     }
     void publicPreview.refetch();
@@ -890,7 +925,7 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
       if (result.free) {
         await announceJoin();
         queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
-        queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
+        invalidatePersonalizedPricing(queryClient, "activity_entitlement_consumed");
         queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
         await refetchRegistrations();
         toast.success("Biljetten är klar");

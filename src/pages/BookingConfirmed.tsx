@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { resolveEntryDestination, safeLocalPath } from "@/lib/entryResolver";
 import { canonicalAppOrigin } from "@/lib/canonicalOrigin";
+import { invalidatePersonalizedPricing } from "@/lib/personalizedPricing";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO    = "'Space Mono', monospace";
@@ -43,7 +44,7 @@ export default function BookingConfirmed() {
   useEffect(() => {
     if (!isDayPass && !isSessionTicket) return;
     queryClient.invalidateQueries({ queryKey: ["access-snapshot"] });
-    queryClient.invalidateQueries({ queryKey: ["program-session-entry"] });
+    invalidatePersonalizedPricing(queryClient, isDayPass ? "day_access_activated" : "activity_registration_changed");
     queryClient.invalidateQueries({ queryKey: ["program-session-registrations"] });
   }, [isDayPass, isSessionTicket, queryClient]);
 

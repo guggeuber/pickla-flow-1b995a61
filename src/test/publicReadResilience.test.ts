@@ -11,6 +11,7 @@ import {
 } from "../../supabase/functions/_shared/public_read_resilience";
 
 const eventPublicSource = readFileSync("supabase/functions/api-event-public/index.ts", "utf8");
+const todayPrimaryProjectionSource = readFileSync("supabase/functions/_shared/today_primary_projection.ts", "utf8");
 const bookingsSource = readFileSync("supabase/functions/api-bookings/index.ts", "utf8");
 
 function fakeServiceJwt() {
@@ -160,12 +161,13 @@ describe("critical endpoint integration contracts", () => {
   it("today-primary uses measured stages, a true no-row 404, and classified query failures", () => {
     const route = eventPublicSource.slice(
       eventPublicSource.indexOf("path === 'today-primary'"),
-      eventPublicSource.indexOf("path === 'first-visit-offers'"),
+      eventPublicSource.indexOf("path === 'today-personalized'"),
     );
-    expect(route).toContain("resolvePublicVenueQuery(readContext");
-    expect(route).toContain(".maybeSingle()");
+    expect(route).toContain("loadTodayPrimaryProjection(client");
+    expect(todayPrimaryProjectionSource).toContain("resolvePublicVenueQuery(readContext");
+    expect(todayPrimaryProjectionSource).toContain(".maybeSingle()");
     for (const stage of ["sessions", "series_occurrences", "events", "overrides", "committed_counts"]) {
-      expect(route).toContain(`'${stage}'`);
+      expect(todayPrimaryProjectionSource).toContain(`'${stage}'`);
     }
     expect(route).toContain("publicReadNotFoundResponse('Venue not found', readContext)");
     expect(route).toContain("publicReadFailureResponse({");

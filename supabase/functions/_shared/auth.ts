@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 export async function getAuthenticatedClient(req: Request) {
   const authHeader = req.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
-    return { client: null, userId: null, error: 'Missing authorization' };
+    return { client: null, userId: null, user: null, error: 'Missing authorization' };
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -19,10 +19,10 @@ export async function getAuthenticatedClient(req: Request) {
   const token = authHeader.slice('Bearer '.length);
   const { data: { user }, error } = await client.auth.getUser(token);
   if (error || !user) {
-    return { client: null, userId: null, error: 'Unauthorized' };
+    return { client: null, userId: null, user: null, error: 'Unauthorized' };
   }
 
-  return { client, userId: user.id, error: null };
+  return { client, userId: user.id, user, error: null };
 }
 
 export function getServiceClient() {

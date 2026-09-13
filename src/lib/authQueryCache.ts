@@ -41,6 +41,7 @@ const PRIVATE_QUERY_KEYS = new Set([
   "event-templates",
   "forum-badge",
   "payment-methods",
+  "personalized-pricing",
   "receipt",
   "recent-customers",
   "today-bookings",

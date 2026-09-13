@@ -153,3 +153,22 @@ Manual stage smoke:
 - Verify a legacy/pre-contract build opened on a safe route is navigated by the new service worker without relying on old JavaScript.
 
 Reference: [pwa-version-contract.md](./pwa-version-contract.md)
+
+## Gate 10: Authenticated Today Pricing
+
+Pass criteria:
+
+- An authenticated user sees no actionable Today activity until the atomic `today-personalized` read model has returned schedule truth and a canonical personal price for every included session occurrence.
+- Anonymous Today remains on the cacheable `today-primary` read; private Today responses are `no-store` and account-, generation-, and frontend-build-scoped in React Query.
+- One request snapshots products, day access, membership, tier rules, host assignments, and bounded occurrence facts before the shared pricing resolver runs. The request accepts at most 24 visible occurrences.
+- Opening a drawer from Today reuses its still-fresh exact occurrence decision without another personalized-pricing request. A direct link resolves its own decision once.
+- Membership, day-access, and activity-registration changes invalidate both Today and drawer personalized state. Checkout still resolves the canonical price again and rejects a changed quote.
+- Auth or pricing failure shows a neutral retry state; it never falls back to a public or list price for an authenticated account.
+
+Release order and stage smoke:
+
+- Apply `20260913130000_bounded_activity_pricing_facts.sql`, reload the PostgREST schema, then deploy `api-event-public --no-verify-jwt` before releasing the frontend.
+- Verify first actionable Today prices for a non-member (`165 kr`), Play (`99 kr`), Play+ (`Ingår`), and active day access (`Ingår`) against stage fixtures.
+- Confirm one `today-personalized` request and no `today-primary` or retired personalized batch request for an authenticated first render; then open the same activity drawer and confirm zero additional personalized requests.
+- Activate/cancel access and confirm the next Today request uses a new generation and replaces the prior price. Complete one Stripe test checkout and one included-access registration to confirm checkout authority and fulfillment remain unchanged.
+- Record `authenticated-today-personalized-timing` diagnostics, including total time, schedule time, access-snapshot query count, occurrence count, and resolver count. Do not promote until the stage latency and physical iOS PWA checks meet the release budget.

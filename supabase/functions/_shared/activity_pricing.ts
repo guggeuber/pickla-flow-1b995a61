@@ -34,6 +34,22 @@ function defaultProductKeyForSession(sessionType?: string | null) {
   return 'session_ticket';
 }
 
+export function activityPricingProductKey(input: {
+  session: any;
+  purchaseKind?: 'activity_ticket' | 'day_pass';
+  requestedProductKey?: string | null;
+}) {
+  const purchaseKind = input.purchaseKind || 'activity_ticket';
+  const sessionProductKey = purchaseKind === 'activity_ticket' && input.session?.product_key === 'day_access'
+    ? null
+    : input.session?.product_key;
+  return String(
+    purchaseKind === 'day_pass'
+      ? (input.requestedProductKey || 'day_access')
+      : (sessionProductKey || defaultProductKeyForSession(input.session?.session_type) || input.requestedProductKey),
+  );
+}
+
 function formatSek(amount: number) {
   return `${roundSek(amount).toLocaleString('sv-SE', {
     minimumFractionDigits: Number.isInteger(roundSek(amount)) ? 0 : 2,
@@ -171,7 +187,18 @@ export async function firstVisitEligibilityForCustomer(
   };
 }
 
-async function countActivityFill(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
+async function countActivityFill(
+  client: any,
+  venueId: string,
+  activitySessionId: string,
+  sessionDate: string,
+  readCache?: ActivityPricingReadCache,
+) {
+  const cached = readCache?.capacityFill.get(`${venueId}:${activitySessionId}:${sessionDate}`);
+  if (cached) {
+    readCache.diagnostics.cacheHits.capacity_fill = (readCache.diagnostics.cacheHits.capacity_fill || 0) + 1;
+    return cached as Promise<number>;
+  }
   const { data: fillRows, error: fillError } = await client.rpc('capacity_fill', {
     p_venue_id: venueId,
     p_scope_type: 'activity_session',
@@ -199,7 +226,18 @@ async function countActivityFill(client: any, venueId: string, activitySessionId
   return count || 0;
 }
 
-async function countActivityEarlyBirdFill(client: any, venueId: string, activitySessionId: string, sessionDate: string) {
+async function countActivityEarlyBirdFill(
+  client: any,
+  venueId: string,
+  activitySessionId: string,
+  sessionDate: string,
+  readCache?: ActivityPricingReadCache,
+) {
+  const cached = readCache?.earlyBirdFill.get(`${venueId}:${activitySessionId}:${sessionDate}`);
+  if (cached) {
+    readCache.diagnostics.cacheHits.early_bird_fill = (readCache.diagnostics.cacheHits.early_bird_fill || 0) + 1;
+    return cached as Promise<number>;
+  }
   const { data: fillRows, error: fillError } = await client.rpc('activity_early_bird_fill', {
     p_venue_id: venueId,
     p_activity_session_id: activitySessionId,
@@ -254,6 +292,260 @@ export type ActivityPricingDecision = {
   debug: Record<string, unknown>;
 };
 
+type CachedPricingRead = Promise<unknown>;
+
+export type ActivityPricingReadDiagnostics = {
+  cacheHits: Record<string, number>;
+  cacheMisses: Record<string, number>;
+  durationsMs: Record<string, number>;
+};
+
+export type ActivityPricingReadCache = {
+  customerIds: Map<string, CachedPricingRead>;
+  hostAssignments: Map<string, CachedPricingRead>;
+  dayAccess: Map<string, CachedPricingRead>;
+  memberships: Map<string, CachedPricingRead>;
+  membershipBenefits: Map<string, CachedPricingRead>;
+  tierPricing: Map<string, CachedPricingRead>;
+  canonicalAccess: Map<string, CachedPricingRead>;
+  capacityFill: Map<string, Promise<number>>;
+  earlyBirdFill: Map<string, Promise<number>>;
+  diagnostics: ActivityPricingReadDiagnostics;
+};
+
+export function createActivityPricingReadCache(): ActivityPricingReadCache {
+  return {
+    customerIds: new Map(),
+    hostAssignments: new Map(),
+    dayAccess: new Map(),
+    memberships: new Map(),
+    membershipBenefits: new Map(),
+    tierPricing: new Map(),
+    canonicalAccess: new Map(),
+    capacityFill: new Map(),
+    earlyBirdFill: new Map(),
+    diagnostics: { cacheHits: {}, cacheMisses: {}, durationsMs: {} },
+  };
+}
+
+async function cachedPricingRead<T>(
+  cache: ActivityPricingReadCache | undefined,
+  store: Map<string, CachedPricingRead> | undefined,
+  category: string,
+  key: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  if (!cache || !store) return read();
+  const existing = store.get(key);
+  if (existing) {
+    cache.diagnostics.cacheHits[category] = (cache.diagnostics.cacheHits[category] || 0) + 1;
+    return existing as Promise<T>;
+  }
+  cache.diagnostics.cacheMisses[category] = (cache.diagnostics.cacheMisses[category] || 0) + 1;
+  const startedAt = performance.now();
+  const pending = Promise.resolve(read()).finally(() => {
+    cache.diagnostics.durationsMs[category] = Math.round(
+      (cache.diagnostics.durationsMs[category] || 0) + performance.now() - startedAt,
+    );
+  });
+  store.set(key, pending);
+  return pending;
+}
+
+type ActivityPricingSnapshotOccurrence = {
+  activitySessionId: string;
+  sessionDate: string;
+  session: any;
+};
+
+export type ActivityPricingSnapshotDiagnostics = {
+  queryCount: number;
+  occurrenceCount: number;
+  productCount: number;
+  serviceDateCount: number;
+  membershipLookupCount: 1;
+  dayAccessLookupCount: 1;
+  entitlementBatchLookupCount: 1;
+};
+
+function seedPricingRead(store: Map<string, CachedPricingRead>, key: string, value: unknown) {
+  store.set(key, Promise.resolve(value));
+}
+
+/**
+ * Preloads the bounded personalized-pricing context as one request snapshot.
+ * The pricing resolver remains the only rules engine; this helper only replaces
+ * per-occurrence I/O with set-based reads and seeds its request-local cache.
+ */
+export async function primeActivityPricingReadSnapshot(input: {
+  client: any;
+  readCache: ActivityPricingReadCache;
+  productCache: Map<string, Promise<any>>;
+  venueId: string;
+  userId: string;
+  customerId: string | null;
+  occurrences: ActivityPricingSnapshotOccurrence[];
+}): Promise<ActivityPricingSnapshotDiagnostics> {
+  const { client, readCache, productCache, venueId, userId, customerId } = input;
+  const occurrences = input.occurrences.slice(0, 24);
+  const serviceDates = [...new Set(occurrences.map((item) => item.sessionDate))];
+  const sessionIds = [...new Set(occurrences.map((item) => item.activitySessionId))];
+  const productKeys = [...new Set(occurrences.flatMap((item) => [
+    activityPricingProductKey({ session: item.session, purchaseKind: 'activity_ticket' }),
+    activityPricingProductKey({ session: item.session, purchaseKind: 'day_pass', requestedProductKey: 'day_access' }),
+  ]))];
+  const batchOccurrences = occurrences.map((item) => {
+    const productKey = activityPricingProductKey({ session: item.session, purchaseKind: 'activity_ticket' });
+    const occurrence = activitySessionOccurrenceInterval(item.sessionDate, item.session?.start_time, item.session?.end_time);
+    return {
+      activity_session_id: item.activitySessionId,
+      session_date: item.sessionDate,
+      product_key: productKey,
+      resolve_at: occurrence?.startISO || new Date().toISOString(),
+    };
+  });
+
+  let queryCount = 0;
+  const counted = <T>(operation: PromiseLike<T>) => {
+    queryCount += 1;
+    return operation;
+  };
+  const [productsResult, dayAccessResult, membershipResult, hostsResult, pricingFactsResult] = await Promise.all([
+    counted(client.from('access_products')
+      .select('product_key, product_kind, base_price_sek, session_type, early_bird_price_minor, early_bird_slots, scarcity_mode')
+      .eq('venue_id', venueId)
+      .eq('is_active', true)
+      .in('product_key', productKeys)),
+    counted(client.from('access_entitlements')
+      .select('id, funder, valid_date')
+      .eq('user_id', userId)
+      .eq('venue_id', venueId)
+      .eq('entitlement_type', 'day_access')
+      .eq('status', 'active')
+      .in('valid_date', serviceDates)),
+    counted(client.from('memberships')
+      .select('id, tier_id, venue_id')
+      .eq('user_id', userId)
+      .eq('venue_id', venueId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()),
+    customerId
+      ? counted(client.from('activity_session_hosts')
+        .select('id, customer_id, activity_session_id')
+        .eq('venue_id', venueId)
+        .eq('customer_id', customerId)
+        .eq('status', 'active')
+        .in('activity_session_id', sessionIds))
+      : Promise.resolve({ data: [], error: null }),
+    counted(client.rpc('resolve_activity_pricing_facts_batch', {
+      p_venue_id: venueId,
+      p_customer_id: customerId,
+      p_user_id: userId,
+      p_occurrences: batchOccurrences,
+      p_access_context: { entitlement_types: ['series_access', 'punch_card', 'partner_access'] },
+    })),
+  ]);
+
+  const baseResults = [productsResult, dayAccessResult, membershipResult, hostsResult, pricingFactsResult];
+  const baseError = baseResults.find((result: any) => result?.error)?.error;
+  if (baseError) throw new Error(baseError.message || 'Could not build personalized pricing snapshot');
+
+  const productByKey = new Map((productsResult.data || []).map((row: any) => [String(row.product_key), row]));
+  for (const productKey of productKeys) {
+    productCache.set(`${venueId}:${productKey}`, Promise.resolve(productByKey.get(productKey) || null));
+  }
+  // The caller has already resolved this identity once for the request. Cache
+  // the null result too so customer-less accounts cannot trigger a second
+  // identity lookup from each pricing branch.
+  seedPricingRead(readCache.customerIds, userId, customerId);
+
+  const dayAccessByDate = new Map((dayAccessResult.data || []).map((row: any) => [String(row.valid_date), row]));
+  for (const serviceDate of serviceDates) {
+    seedPricingRead(readCache.dayAccess, `${userId}:${venueId}:${serviceDate}`, {
+      data: dayAccessByDate.get(serviceDate) || null,
+      error: null,
+    });
+  }
+
+  seedPricingRead(readCache.memberships, `${userId}:${venueId}`, membershipResult);
+  const hostBySession = new Map((hostsResult.data || []).map((row: any) => [String(row.activity_session_id), row]));
+  if (customerId) {
+    for (const sessionId of sessionIds) {
+      seedPricingRead(readCache.hostAssignments, `${venueId}:${sessionId}:${customerId}`, {
+        data: hostBySession.get(sessionId) || null,
+        error: null,
+      });
+    }
+  }
+
+  const pricingFacts = Array.isArray(pricingFactsResult.data) ? pricingFactsResult.data : [];
+  const factsByOccurrence = new Map(pricingFacts.map((row: any) => [
+    `${row.activity_session_id}@${row.session_date}`,
+    row,
+  ]));
+  if (pricingFacts.length !== occurrences.length) {
+    throw new Error('Incomplete personalized pricing facts snapshot');
+  }
+  for (const item of occurrences) {
+    const occurrenceKey = `${item.activitySessionId}@${item.sessionDate}`;
+    const facts = factsByOccurrence.get(occurrenceKey);
+    if (!facts) throw new Error('Missing personalized pricing facts');
+    const productKey = activityPricingProductKey({ session: item.session, purchaseKind: 'activity_ticket' });
+    if (customerId) {
+      seedPricingRead(readCache.canonicalAccess, `${venueId}:${customerId}:${item.activitySessionId}:${item.sessionDate}:${productKey}`, {
+        data: facts.canonical_access || null,
+        error: null,
+      });
+    }
+    readCache.capacityFill.set(
+      `${venueId}:${item.activitySessionId}:${item.sessionDate}`,
+      Promise.resolve(Number(facts.capacity_fill || 0)),
+    );
+    readCache.earlyBirdFill.set(
+      `${venueId}:${item.activitySessionId}:${item.sessionDate}`,
+      Promise.resolve(Number(facts.early_bird_fill || 0)),
+    );
+  }
+
+  const membership = membershipResult.data;
+  if (membership?.tier_id) {
+    const [entitlementsResult, tierResult, tierPricingResult] = await Promise.all([
+      counted(client.from('membership_entitlements')
+        .select('entitlement_type, value, period, sport_type')
+        .eq('tier_id', membership.tier_id)),
+      counted(client.from('membership_tiers')
+        .select('discount_percent, name')
+        .eq('id', membership.tier_id)
+        .maybeSingle()),
+      counted(client.from('membership_tier_pricing')
+        .select('product_type, fixed_price, discount_percent')
+        .eq('tier_id', membership.tier_id)
+        .in('product_type', productKeys)),
+    ]);
+    const tierError = [entitlementsResult, tierResult, tierPricingResult].find((result: any) => result?.error)?.error;
+    if (tierError) throw new Error(tierError.message || 'Could not build membership pricing snapshot');
+    seedPricingRead(readCache.membershipBenefits, String(membership.tier_id), [entitlementsResult, tierResult]);
+    for (const productKey of productKeys) {
+      seedPricingRead(readCache.tierPricing, `${membership.tier_id}:${productKey}`, {
+        data: (tierPricingResult.data || []).filter((row: any) => row.product_type === productKey),
+        error: null,
+      });
+    }
+  }
+
+  return {
+    queryCount,
+    occurrenceCount: occurrences.length,
+    productCount: productKeys.length,
+    serviceDateCount: serviceDates.length,
+    membershipLookupCount: 1,
+    dayAccessLookupCount: 1,
+    entitlementBatchLookupCount: 1,
+  };
+}
+
 export async function resolveActivityPricingDecision({
   client,
   venueId,
@@ -270,6 +562,7 @@ export async function resolveActivityPricingDecision({
   applyFirstVisit = true,
   customerId,
   firstVisitEligibility,
+  readCache,
 }: {
   client: any;
   venueId: string;
@@ -286,6 +579,7 @@ export async function resolveActivityPricingDecision({
   applyFirstVisit?: boolean;
   customerId?: string | null;
   firstVisitEligibility?: FirstVisitEligibility;
+  readCache?: ActivityPricingReadCache;
 }): Promise<ActivityPricingDecision> {
   const session = providedSession?.id
     ? providedSession
@@ -299,14 +593,7 @@ export async function resolveActivityPricingDecision({
     throw new Error('Activity session not found for venue');
   }
 
-  const sessionProductKey = purchaseKind === 'activity_ticket' && session.product_key === 'day_access'
-    ? null
-    : session.product_key;
-  const productKey = String(
-    purchaseKind === 'day_pass'
-      ? (requestedProductKey || 'day_access')
-      : (sessionProductKey || defaultProductKeyForSession(session.session_type) || requestedProductKey),
-  );
+  const productKey = activityPricingProductKey({ session, purchaseKind, requestedProductKey });
 
   const productCacheKey = `${venueId}:${productKey}`;
   const productPromise = productCache?.get(productCacheKey) || client
@@ -344,10 +631,10 @@ export async function resolveActivityPricingDecision({
   const scarcityMode = configuredScarcityMode;
   const shouldCountRegistrations = purchaseKind === 'activity_ticket' && scarcityMode !== 'none';
   const registrationsCount = shouldCountRegistrations
-    ? await countActivityFill(client, venueId, activitySessionId, sessionDate)
+    ? await countActivityFill(client, venueId, activitySessionId, sessionDate, readCache)
     : 0;
   const earlyBirdFill = purchaseKind === 'activity_ticket' && scarcityMode === 'early_bird'
-    ? await countActivityEarlyBirdFill(client, venueId, activitySessionId, sessionDate)
+    ? await countActivityEarlyBirdFill(client, venueId, activitySessionId, sessionDate, readCache)
     : 0;
   const earlyBirdPriceSek = minorToSek(earlyBirdPriceMinor);
   const earlyBirdRemaining = earlyBirdSlots ? Math.max(earlyBirdSlots - earlyBirdFill, 0) : 0;
@@ -391,7 +678,18 @@ export async function resolveActivityPricingDecision({
   let membershipTierName: string | null = null;
   let sourceId: string | null = null;
   let pricingReason = 'regular_price';
-  let entitlementCustomerId: string | null = null;
+  let entitlementCustomerId: string | null = customerId || null;
+  const resolvePricingCustomerId = async () => {
+    if (entitlementCustomerId || !userId) return entitlementCustomerId;
+    entitlementCustomerId = await cachedPricingRead(
+      readCache,
+      readCache?.customerIds,
+      'customer',
+      userId,
+      () => resolveCustomerIdForUser(client, userId),
+    );
+    return entitlementCustomerId;
+  };
   const rawPricingMode = String(sessionMetadata.pricing_mode || 'standard');
   const pricingMode = rawPricingMode === 'fixed_ticket' || rawPricingMode === 'member_discount'
     ? rawPricingMode
@@ -456,16 +754,22 @@ export async function resolveActivityPricingDecision({
   };
 
   if (purchaseKind === 'activity_ticket' && userId) {
-    entitlementCustomerId = await resolveCustomerIdForUser(client, userId);
+    entitlementCustomerId = await resolvePricingCustomerId();
     if (entitlementCustomerId) {
-      const { data: hostAssignment, error: hostError } = await client
-        .from('activity_session_hosts')
-        .select('id, customer_id')
-        .eq('venue_id', venueId)
-        .eq('activity_session_id', activitySessionId)
-        .eq('customer_id', entitlementCustomerId)
-        .eq('status', 'active')
-        .maybeSingle();
+      const { data: hostAssignment, error: hostError } = await cachedPricingRead(
+        readCache,
+        readCache?.hostAssignments,
+        'host',
+        `${venueId}:${activitySessionId}:${entitlementCustomerId}`,
+        () => client
+          .from('activity_session_hosts')
+          .select('id, customer_id')
+          .eq('venue_id', venueId)
+          .eq('activity_session_id', activitySessionId)
+          .eq('customer_id', entitlementCustomerId)
+          .eq('status', 'active')
+          .maybeSingle(),
+      );
 
       if (hostError) {
         console.error('playing host lookup failed', hostError.message);
@@ -493,16 +797,22 @@ export async function resolveActivityPricingDecision({
   if (pricingMode === 'fixed_ticket' && purchaseKind === 'activity_ticket') {
     if (!isPlayingHostReason(pricingReason)) pricingReason = 'session_fixed_ticket_price';
   } else if (userId && finalAmountSek > 0) {
-    const { data: dayAccess } = await client
-      .from('access_entitlements')
-      .select('id, funder')
-      .eq('user_id', userId)
-      .eq('venue_id', venueId)
-      .eq('entitlement_type', 'day_access')
-      .eq('status', 'active')
-      .eq('valid_date', sessionDate)
-      .limit(1)
-      .maybeSingle();
+    const { data: dayAccess } = await cachedPricingRead(
+      readCache,
+      readCache?.dayAccess,
+      'day_access',
+      `${userId}:${venueId}:${sessionDate}`,
+      () => client
+        .from('access_entitlements')
+        .select('id, funder')
+        .eq('user_id', userId)
+        .eq('venue_id', venueId)
+        .eq('entitlement_type', 'day_access')
+        .eq('status', 'active')
+        .eq('valid_date', sessionDate)
+        .limit(1)
+        .maybeSingle(),
+    );
 
     if (purchaseKind === 'activity_ticket' && dayPassIncluded && dayAccess?.id) {
       finalAmountSek = 0;
@@ -514,24 +824,44 @@ export async function resolveActivityPricingDecision({
       debug.day_access_entitlement_id = dayAccess.id;
     }
 
-    if (purchaseKind === 'activity_ticket' && pricingMode === 'member_discount' && finalAmountSek > 0) {
-      const { data: membership } = await client
-        .from('memberships')
-        .select('id, tier_id, venue_id')
-        .eq('user_id', userId)
-        .eq('venue_id', venueId)
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    const membership = finalAmountSek > 0
+      ? (await cachedPricingRead(
+        readCache,
+        readCache?.memberships,
+        'membership',
+        `${userId}:${venueId}`,
+        () => client
+          .from('memberships')
+          .select('id, tier_id, venue_id')
+          .eq('user_id', userId)
+          .eq('venue_id', venueId)
+          .eq('status', 'active')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      )).data
+      : null;
 
+    if (purchaseKind === 'activity_ticket' && pricingMode === 'member_discount' && finalAmountSek > 0) {
       if (membership?.tier_id) {
         membershipId = membership.id;
-        const { data: tier } = await client
-          .from('membership_tiers')
-          .select('name')
-          .eq('id', membership.tier_id)
-          .maybeSingle();
+        const [, { data: tier }] = await cachedPricingRead(
+          readCache,
+          readCache?.membershipBenefits,
+          'membership_benefits',
+          String(membership.tier_id),
+          () => Promise.all([
+            client
+              .from('membership_entitlements')
+              .select('entitlement_type, value, period, sport_type')
+              .eq('tier_id', membership.tier_id),
+            client
+              .from('membership_tiers')
+              .select('discount_percent, name')
+              .eq('id', membership.tier_id)
+              .maybeSingle(),
+          ]),
+        );
         membershipTierName = tier?.name || null;
         finalAmountSek = applyPercentDiscount(baseAmountSek, memberDiscountPercent);
         if (finalAmountSek <= 0) {
@@ -546,34 +876,40 @@ export async function resolveActivityPricingDecision({
     }
 
     if (finalAmountSek > 0) {
-      const { data: membership } = await client
-        .from('memberships')
-        .select('id, tier_id, venue_id')
-        .eq('user_id', userId)
-        .eq('venue_id', venueId)
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
       if (membership?.tier_id) {
         membershipId = membership.id;
-        const [{ data: entitlements }, { data: tierPricingRows }, { data: tier }] = await Promise.all([
-          client
-            .from('membership_entitlements')
-            .select('entitlement_type, value, period, sport_type')
-            .eq('tier_id', membership.tier_id),
-          client
-            .from('membership_tier_pricing')
-            .select('product_type, fixed_price, discount_percent')
-            .eq('tier_id', membership.tier_id)
-            .eq('product_type', productKey),
-          client
-            .from('membership_tiers')
-            .select('discount_percent, name')
-            .eq('id', membership.tier_id)
-            .maybeSingle(),
+        const [benefitsResult, tierPricingResult] = await Promise.all([
+          cachedPricingRead(
+            readCache,
+            readCache?.membershipBenefits,
+            'membership_benefits',
+            String(membership.tier_id),
+            () => Promise.all([
+              client
+                .from('membership_entitlements')
+                .select('entitlement_type, value, period, sport_type')
+                .eq('tier_id', membership.tier_id),
+              client
+                .from('membership_tiers')
+                .select('discount_percent, name')
+                .eq('id', membership.tier_id)
+                .maybeSingle(),
+            ]),
+          ),
+          cachedPricingRead(
+            readCache,
+            readCache?.tierPricing,
+            'tier_pricing',
+            `${membership.tier_id}:${productKey}`,
+            () => client
+              .from('membership_tier_pricing')
+              .select('product_type, fixed_price, discount_percent')
+              .eq('tier_id', membership.tier_id)
+              .eq('product_type', productKey),
+          ),
         ]);
+        const [{ data: entitlements }, { data: tier }] = benefitsResult;
+        const { data: tierPricingRows } = tierPricingResult;
         membershipTierName = tier?.name || null;
         debug.membership_tier_name = membershipTierName;
 
@@ -619,19 +955,25 @@ export async function resolveActivityPricingDecision({
   // make the occurrence free. Punch/partner behavior stays unchanged and only
   // replaces a positive payable amount.
   if (purchaseKind === 'activity_ticket' && userId) {
-    entitlementCustomerId ||= await resolveCustomerIdForUser(client, userId);
+    entitlementCustomerId ||= await resolvePricingCustomerId();
     if (entitlementCustomerId) {
       const occurrence = activitySessionOccurrenceInterval(sessionDate, session.start_time, session.end_time);
-      const { data: canonicalAccess, error: canonicalError } = await client.rpc('resolve_access_entitlement', {
-        p_venue_id: venueId,
-        p_customer_id: entitlementCustomerId,
-        p_user_id: userId,
-        p_activity_session_id: activitySessionId,
-        p_service_date: sessionDate,
-        p_at: occurrence?.startISO || new Date().toISOString(),
-        p_product_key: productKey,
-        p_access_context: { entitlement_types: ['series_access', 'punch_card', 'partner_access'] },
-      });
+      const { data: canonicalAccess, error: canonicalError } = await cachedPricingRead(
+        readCache,
+        readCache?.canonicalAccess,
+        'canonical_access',
+        `${venueId}:${entitlementCustomerId}:${activitySessionId}:${sessionDate}:${productKey}`,
+        () => client.rpc('resolve_access_entitlement', {
+          p_venue_id: venueId,
+          p_customer_id: entitlementCustomerId,
+          p_user_id: userId,
+          p_activity_session_id: activitySessionId,
+          p_service_date: sessionDate,
+          p_at: occurrence?.startISO || new Date().toISOString(),
+          p_product_key: productKey,
+          p_access_context: { entitlement_types: ['series_access', 'punch_card', 'partner_access'] },
+        }),
+      );
       if (canonicalError) {
         console.error('canonical activity entitlement lookup failed', canonicalError.message);
       } else if (
@@ -664,7 +1006,7 @@ export async function resolveActivityPricingDecision({
   }
 
   if (firstVisitEnabled && finalAmountSek > 0) {
-    entitlementCustomerId ||= customerId || (userId ? await resolveCustomerIdForUser(client, userId) : null);
+    entitlementCustomerId ||= await resolvePricingCustomerId();
     const eligibility = firstVisitEligibility ?? await firstVisitEligibilityForCustomer(client, entitlementCustomerId, userId);
     const firstVisit = firstVisitOfferDecision({
       enabled: true,

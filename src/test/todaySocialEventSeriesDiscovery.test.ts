@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { projectPublicTodaySocialEventOccurrence } from "../../supabase/functions/_shared/today_primary";
 
 const endpoint = readFileSync("supabase/functions/api-event-public/index.ts", "utf8");
+const todayProjection = readFileSync("supabase/functions/_shared/today_primary_projection.ts", "utf8");
 
 function parkerCandidate() {
   return {
@@ -129,12 +130,13 @@ describe("Today social-event Series occurrence projection", () => {
       endpoint.indexOf("path === 'today-primary'"),
       endpoint.indexOf("path === 'first-visit-offers'"),
     );
-    const seriesQuery = route.slice(
-      route.indexOf("'series_occurrences'"),
-      route.indexOf("measurePublicReadStage(readContext, 'events'"),
+    const seriesQuery = todayProjection.slice(
+      todayProjection.indexOf("'series_occurrences'"),
+      todayProjection.indexOf("measurePublicReadStage(readContext, 'events'"),
     );
 
-    expect(route).toContain("await Promise.all([");
+    expect(route).toContain("loadTodayPrimaryProjection");
+    expect(todayProjection).toContain("await Promise.all([");
     expect(seriesQuery).toContain("client.from('activity_sessions')");
     expect(seriesQuery).not.toContain("closed_to_public");
     expect(seriesQuery).toContain(".eq('activity_series.series_type', 'course')");
@@ -146,10 +148,10 @@ describe("Today social-event Series occurrence projection", () => {
     expect(seriesQuery).toContain(".gte('session_date', startDate)");
     expect(seriesQuery).toContain(".lte('session_date', endDate)");
     expect(seriesQuery).not.toMatch(/customer|participant|payer|auth_user|email|phone|membership/i);
-    expect(route).toContain(".eq('closed_to_public', false)");
-    expect(route).toContain("projectPublicTodaySocialEventOccurrence");
-    expect(route).toContain("seriesOccurrenceSessionIds");
-    expect(route).toContain("!seriesOccurrenceSessionIds.has(String(session.id))");
-    expect(route).not.toContain("/program/${series");
+    expect(todayProjection).toContain(".eq('closed_to_public', false)");
+    expect(todayProjection).toContain("projectPublicTodaySocialEventOccurrence");
+    expect(todayProjection).toContain("seriesOccurrenceSessionIds");
+    expect(todayProjection).toContain("!seriesOccurrenceSessionIds.has(String(session.id))");
+    expect(todayProjection).not.toContain("/program/${series");
   });
 });

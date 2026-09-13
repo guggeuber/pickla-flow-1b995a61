@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DateTime } from "luxon";
-import { ArrowRight, Check, Loader2, Share2 } from "lucide-react";
+import { ArrowRight, Check, Share2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -41,6 +41,14 @@ import { useCommittedTodaySecondary } from "@/hooks/useCommittedTodaySecondary";
 import {
   fetchTodaySecondary,
 } from "@/lib/todaySecondary";
+import {
+  fetchPersonalizedToday,
+  personalizedTodayQueryKey,
+  primePersonalizedPricingEntries,
+  selectTodayPricingForAccount,
+  usePersonalizedPricingGeneration,
+  type PersonalizedPricingBatchResponse,
+} from "@/lib/personalizedPricing";
 
 
 const PAGE_BG = "#fffaf7";
@@ -81,6 +89,7 @@ type FeedItem = {
   userRegistrationStatus?: string | null;
   priceSek?: number | null;
   priceResolved?: boolean;
+  priceError?: boolean;
   isSpecialPass?: boolean;
   firstVisitOffer?: {
     state: "conditional" | "eligible";
@@ -352,28 +361,50 @@ function seriesOccurrenceFeedItem(occurrence: SeriesOccurrenceRow, registrations
   };
 }
 
-function useTodayPrimaryFeed(slug: string, enabled: boolean) {
+function useTodayPrimaryFeed(input: {
+  slug: string;
+  venueEnabled: boolean;
+  accountState: ReturnType<typeof useVerifiedAccount>["state"];
+  userId?: string | null;
+  pricingGeneration: number;
+}) {
+  const now = DateTime.now().setZone("Europe/Stockholm");
+  const startDate = now.toISODate()!;
+  const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
+  const authenticated = input.accountState === "verified" && Boolean(input.userId);
+  const anonymous = input.accountState === "anonymous";
   return useQuery({
-    queryKey: ["today-primary", slug],
-    enabled,
-    staleTime: 30000,
-    retry: false,
-    queryFn: async ({ client, queryKey }) => {
-      const now = DateTime.now().setZone("Europe/Stockholm");
-      const startDate = now.toISODate()!;
-      const endDate = now.plus({ days: DAYS_AHEAD - 1 }).toISODate()!;
-      const response = await apiGet<TodayPrimaryResponse>("api-event-public", "today-primary", {
-        venueSlug: slug,
+    queryKey: authenticated
+      ? personalizedTodayQueryKey({
+        userId: input.userId!,
+        venueSlug: input.slug,
         startDate,
         endDate,
-      }, {
-        auth: "omit",
-        publicRead: {
-          maxRetries: 1,
-          retryDelayMs: 250,
-          staleRetained: Boolean(client.getQueryData(queryKey)),
-        },
-      });
+        generation: input.pricingGeneration,
+      })
+      : ["today-primary", input.slug],
+    enabled: input.venueEnabled && (authenticated || anonymous),
+    staleTime: authenticated ? 15_000 : 30_000,
+    retry: false,
+    queryFn: async ({ client, queryKey }) => {
+      const response = authenticated
+        ? await fetchPersonalizedToday<TodayPrimaryResponse>({
+          venueSlug: input.slug,
+          startDate,
+          endDate,
+        })
+        : await apiGet<TodayPrimaryResponse>("api-event-public", "today-primary", {
+          venueSlug: input.slug,
+          startDate,
+          endDate,
+        }, {
+          auth: "omit",
+          publicRead: {
+            maxRetries: 1,
+            retryDelayMs: 250,
+            staleRetained: Boolean(client.getQueryData(queryKey)),
+          },
+        });
       const sessionOccurrences = sessionOccurrencesForRange(response.sessions || [], now);
       const overrideMap = new Map((response.overrides || []).map((row) => [
         occurrenceOverrideKey(row.activity_session_id, row.session_date),
@@ -391,7 +422,7 @@ function useTodayPrimaryFeed(slug: string, enabled: boolean) {
       const sessionItems = visibleSessionOccurrences.map((session) => sessionFeedItem(
         session,
         primaryCounts.get(`${session.id}:${session.occurrence_date}`) || 0,
-        slug,
+        input.slug,
       ));
       const seriesItems = (response.seriesOccurrences || [])
         .filter((occurrence) => {
@@ -422,10 +453,23 @@ function useTodayPrimaryFeed(slug: string, enabled: boolean) {
         imageUrls: [event.background_url || event.logo_url].filter(Boolean) as string[],
       }));
 
+      const personalizedPricing = authenticated
+        ? (response as typeof response & { personalized_pricing: PersonalizedPricingBatchResponse }).personalized_pricing
+        : undefined;
+      if (personalizedPricing && input.userId && response.venue?.id) {
+        primePersonalizedPricingEntries(client, {
+          userId: input.userId,
+          venueId: response.venue.id,
+          venueSlug: input.slug,
+          generation: input.pricingGeneration,
+          response: personalizedPricing,
+        });
+      }
       return {
         venue: response.venue,
         sessionOccurrences: visibleSessionOccurrences,
         items: [...sessionItems, ...seriesItems, ...eventItems].sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)),
+        personalizedPricing,
       };
     },
   });
@@ -590,15 +634,6 @@ function enrichTodayItems(primaryItems: FeedItem[], enrichment?: TodayEnrichment
     .sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`));
 }
 
-function useVerifiedFirstVisitOffers(slug: string, userId: string | undefined, enabled: boolean) {
-  return useQuery({
-    queryKey: ["first-visit-offers", slug, userId],
-    enabled: enabled && Boolean(userId),
-    staleTime: 0,
-    queryFn: () => apiGet<ActivityDiscoveryPricingResponse>("api-event-public", "first-visit-offers", { venueSlug: slug }),
-  });
-}
-
 function hasFirstVisitBanner(offers: ActivityDiscoveryPricingResponse | undefined) {
   return Boolean(offers?.is_first_time && (offers.items?.length > 0 || !offers.has_configured_offer));
 }
@@ -626,7 +661,13 @@ function FeedRow({
   const isPast = !!end && end < now;
   const openItem = async () => {
     if (item.kind === "session") {
-      navigate(item.href, { state: { backgroundLocation: location, activitySession: item.activitySession } });
+      navigate(item.href, {
+        state: {
+          backgroundLocation: location,
+          activitySession: item.activitySession,
+          activityUserState: { interested: item.userIsInterested },
+        },
+      });
       return;
     }
 
@@ -701,7 +742,10 @@ function FeedRow({
           pricing:
             item.kind === "session"
               ? !item.priceResolved
-                ? null
+                ? {
+                  kind: "status",
+                  label: "Pris tillfälligt otillgängligt",
+                }
                 : Number(item.priceSek || 0) <= 0
                 ? { kind: "included", label: "Ingår", amountSek: 0 }
                 : { kind: "amount", amountSek: item.priceSek }
@@ -884,12 +928,19 @@ export default function TodayPage() {
   const location = useLocation();
   const { user } = useAuth();
   const verifiedAccount = useVerifiedAccount();
+  const pricingGeneration = usePersonalizedPricingGeneration();
   const [welcomeLine] = useState(() => consumeFirstRunWelcome() ? "Välkommen till Pickla" : null);
   const venueContext = resolveCustomerVenueContext(searchParams.get("v"));
   const slug = venueContext.slug;
   const { data: venue, isLoading: venueLoading, isError: venueError } = useVenueWithHours(slug);
   const primaryEnabled = venueContext.canUseBeforeRemoteValidation || venue?.slug === slug;
-  const primary = useTodayPrimaryFeed(slug, primaryEnabled);
+  const primary = useTodayPrimaryFeed({
+    slug,
+    venueEnabled: primaryEnabled,
+    accountState: verifiedAccount.state,
+    userId: verifiedAccount.verifiedUserId,
+    pricingGeneration,
+  });
   const primaryStatus = errorStatus(primary.error);
   const primaryVenueNotFound = primary.isError && primaryStatus === 404;
   const primaryRefreshFailed = Boolean(primary.data) && primary.isError && (
@@ -932,12 +983,12 @@ export default function TodayPage() {
     () => enrichTodayItems(primary.data?.items || [], enrichment.data),
     [enrichment.data, primary.data?.items],
   );
-  const { data: verifiedFirstVisitOffers } = useVerifiedFirstVisitOffers(
-    slug,
-    verifiedAccount.verifiedUserId || undefined,
-    Boolean(primary.data) && verifiedAccount.isVerified,
-  );
-  const firstVisitOffers = verifiedFirstVisitOffers || committedSecondary?.first_visit;
+  const verifiedFirstVisitOffers = primary.data?.personalizedPricing;
+  const firstVisitOffers = selectTodayPricingForAccount({
+    accountState: verifiedAccount.state,
+    personalized: verifiedFirstVisitOffers,
+    publicPricing: committedSecondary?.first_visit,
+  });
   const firstVisitSlotVisible = hasFirstVisitBanner(committedSecondary?.first_visit);
   const personalizedFirstVisitEligible = hasFirstVisitBanner(firstVisitOffers);
   const pricingByOccurrence = useMemo(() => new Map(
@@ -946,7 +997,11 @@ export default function TodayPage() {
   const items = useMemo(() => rawItems.map((item) => {
     if (item.kind !== "session" || !item.activitySession?.id) return item;
     const pricing = pricingByOccurrence.get(`${item.activitySession.id}:${item.date}`);
-    if (!pricing?.customer_presentation) return item;
+    if (!pricing?.customer_presentation) return {
+      ...item,
+      priceResolved: verifiedAccount.state === "anonymous",
+      priceError: verifiedAccount.isVerified,
+    };
     const customerPrice = pricing.customer_presentation;
     return {
       ...item,
@@ -959,7 +1014,7 @@ export default function TodayPage() {
         regularPriceSek: customerPrice.listPriceSek,
       } : null,
     };
-  }), [pricingByOccurrence, rawItems]);
+  }), [pricingByOccurrence, rawItems, verifiedAccount.isVerified, verifiedAccount.state]);
   const { data: coursePersonalization } = useQuery<CoursePersonalization>({
     queryKey: ["today-course-personalization", slug, publicCoursePromotion?.id || "fallback", verifiedAccount.verifiedUserId],
     enabled: Boolean(primary.data) && Boolean(committedSecondary) && verifiedAccount.isVerified,
@@ -1082,11 +1137,20 @@ export default function TodayPage() {
   const featuredIncluded = featuredPricing?.requires_checkout === false;
   const featuredPriceLabel = featuredIncluded
     ? null
-    : featuredPricing?.customer_presentation?.displayLabel || null;
+    : featuredPricing?.customer_presentation?.displayLabel
+      || (featuredItem?.kind === "session" && verifiedAccount.isVerified
+        ? "Pris tillfälligt otillgängligt"
+        : null);
   const openFeatured = () => {
     if (!featuredItem) return;
     if (featuredItem.kind === "session") {
-      navigate(featuredItem.href, { state: { backgroundLocation: location, activitySession: featuredItem.activitySession } });
+      navigate(featuredItem.href, {
+        state: {
+          backgroundLocation: location,
+          activitySession: featuredItem.activitySession,
+          activityUserState: { interested: featuredItem.userIsInterested },
+        },
+      });
       return;
     }
     navigate(featuredItem.href);
@@ -1101,6 +1165,10 @@ export default function TodayPage() {
     const result = await shareOrCopy({ title, text: title, url: canonicalAppUrl(path), copyText: canonicalAppUrl(path) });
     if (result === "copied") toast.success("Länk kopierad");
   };
+  const accountProjectionPending = verifiedAccount.state === "session_hydrating"
+    || verifiedAccount.state === "remote_validating";
+  const accountProjectionError = verifiedAccount.state === "validation_error"
+    || verifiedAccount.state === "terminal_failure";
 
   return (
     <div className="min-h-[100dvh] pb-10 pt-[calc(env(safe-area-inset-top,0px)+74px)]" style={{ background: PAGE_BG, color: TEXT }}>
@@ -1117,13 +1185,16 @@ export default function TodayPage() {
           <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2 text-center text-sm font-semibold text-neutral-500">
             Arenan kunde inte hittas.
           </section>
-        ) : primaryHardError ? (
+        ) : accountProjectionError || primaryHardError ? (
           <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2 text-center">
-            <div><p className="text-sm font-semibold text-neutral-500">Dagens schema kunde inte hämtas.</p><button type="button" onClick={() => void primary.refetch()} className="mt-4 rounded-full border border-black/15 px-4 py-2 text-sm font-black">Försök igen</button></div>
+            <div><p className="text-sm font-semibold text-neutral-500">{verifiedAccount.state === "verified" ? "Dagens personliga priser kunde inte hämtas." : "Dagens schema kunde inte hämtas."}</p><button type="button" onClick={() => void (accountProjectionError ? verifiedAccount.retry() : primary.refetch())} className="mt-4 rounded-full border border-black/15 px-4 py-2 text-sm font-black">Försök igen</button></div>
           </section>
-        ) : (!primaryEnabled && venueLoading) || primary.isLoading ? (
-          <section className="mx-auto grid min-h-[330px] max-w-md place-items-center px-5 pt-2">
-            <Loader2 className="h-6 w-6 animate-spin" style={{ color: PINK }} />
+        ) : accountProjectionPending || (!primaryEnabled && venueLoading) || primary.isLoading || !primary.data ? (
+          <section className="mx-auto min-h-[330px] max-w-md px-5 pt-2" data-testid="today-personalized-skeleton" aria-label="Laddar dagens aktiviteter och priser">
+            <div className="h-[310px] animate-pulse rounded-[28px] border border-black/[0.06] bg-white">
+              <div className="h-40 rounded-t-[28px] bg-neutral-100" />
+              <div className="space-y-3 px-5 pt-5"><div className="h-3 w-24 rounded bg-neutral-100" /><div className="h-8 w-3/4 rounded bg-neutral-100" /><div className="h-5 w-1/2 rounded bg-neutral-100" /></div>
+            </div>
           </section>
         ) : (
           <FeaturedTonightHero
@@ -1147,7 +1218,7 @@ export default function TodayPage() {
         ) : null}
 
         <section className="mx-auto max-w-md px-5 pt-7">
-          {(!primaryEnabled && venueLoading) || primary.isLoading || primaryHardError || primaryVenueNotFound || (!primaryEnabled && venueError) ? (
+          {accountProjectionPending || accountProjectionError || (!primaryEnabled && venueLoading) || primary.isLoading || !primary.data || primaryHardError || primaryVenueNotFound || (!primaryEnabled && venueError) ? (
             null
           ) : !secondaryRegionReady ? (
             null
