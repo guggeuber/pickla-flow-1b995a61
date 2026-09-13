@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ apiGet: mocks.apiGet }));
 vi.mock("@/components/operations/OperationsBookingDrawer", () => ({
-  OperationsBookingDrawer: (props: { booking?: { customer_email?: string | null } | null; readOnly?: boolean }) => {
+  OperationsBookingDrawer: (props: { booking?: { customer_email?: string | null } | null; readOnly?: boolean; showProtectedDetails?: boolean }) => {
     mocks.drawer(props);
     return <div data-testid="loaded-booking-detail">{props.booking?.customer_email}</div>;
   },
@@ -65,6 +65,6 @@ describe("authorized admin booking detail path", () => {
       bookingId: "11111111-1111-4111-8111-111111111111",
     }));
     expect(await screen.findByTestId("loaded-booking-detail")).toHaveTextContent("detail-only@example.com");
-    expect(mocks.drawer).toHaveBeenLastCalledWith(expect.objectContaining({ readOnly: true }));
+    expect(mocks.drawer).toHaveBeenLastCalledWith(expect.objectContaining({ readOnly: true, showProtectedDetails: true }));
   });
 });

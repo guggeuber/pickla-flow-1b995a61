@@ -213,11 +213,13 @@ export function OperationsBookingDrawer({
   onClose,
   booking,
   readOnly = false,
+  showProtectedDetails = !readOnly,
 }: {
   open: boolean;
   onClose: () => void;
   booking: OperationsBookingDetail | null;
   readOnly?: boolean;
+  showProtectedDetails?: boolean;
 }) {
   const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
   const [localCheckedInAt, setLocalCheckedInAt] = useState<string | null>(null);
@@ -346,7 +348,7 @@ export function OperationsBookingDrawer({
 
             <div className="space-y-4">
               <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-4">
-                {!readOnly && (
+                {showProtectedDetails && (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${statusTone(booking.payment_status)}`}>
                       {paymentLabel(booking.payment_status)}
@@ -387,9 +389,8 @@ export function OperationsBookingDrawer({
                 <Field icon={UserRound} label="Kund" value={booking.customer_name || "Okänd"} />
                 <Field icon={CalendarClock} label="Tid" value={formatTimeRange(booking)} />
                 <Field icon={MapPin} label="Bana" value={courts.map((court) => court.name).filter(Boolean).join(", ")} />
-                {readOnly ? (
-                  <Field icon={FileText} label="Status" value={booking.status || "Okänd"} />
-                ) : (
+                <Field icon={FileText} label="Status" value={booking.status || "Okänd"} />
+                {showProtectedDetails ? (
                   <>
                     <Field icon={Phone} label="Telefon" value={booking.customer_phone} />
                     <Field icon={Mail} label="E-post" value={booking.customer_email} />
@@ -397,10 +398,10 @@ export function OperationsBookingDrawer({
                     <Field icon={ReceiptText} label="Kvitto" value={booking.receipt_number} />
                     <Field icon={CheckCircle2} label="Check-in" value={effectiveCheckedIn ? `Ja${checkedAt ? `, ${checkedAt}` : ""}` : "Nej"} />
                   </>
-                )}
+                ) : null}
               </div>
 
-              {!readOnly && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              {showProtectedDetails && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
@@ -411,16 +412,18 @@ export function OperationsBookingDrawer({
                       <p className="mt-1 text-xs font-black text-white">{bookingParticipantSummaryLabel(participantSummary)}</p>
                     ) : null}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setManualOpen((current) => !current)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-black text-white"
-                  >
-                    <UserPlus className="h-3.5 w-3.5" />
-                    Lägg till spelare manuellt
-                  </button>
+                  {!readOnly ? (
+                    <button
+                      type="button"
+                      onClick={() => setManualOpen((current) => !current)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-black text-white"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      Lägg till spelare manuellt
+                    </button>
+                  ) : null}
                 </div>
-                {manualOpen ? (
+                {!readOnly && manualOpen ? (
                   <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-3">
                     <p className="text-xs font-semibold text-white/55">
                       Namnet blir en väntande plats. Kundprofil skapas först när spelaren identifierar sig.
@@ -562,7 +565,7 @@ export function OperationsBookingDrawer({
                 )}
               </div>}
 
-              {!readOnly && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              {showProtectedDetails && <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
                   <FileText className="h-3.5 w-3.5" />
                   Notes / references

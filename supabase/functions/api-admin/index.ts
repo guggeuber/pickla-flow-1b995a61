@@ -5,7 +5,7 @@ import {
   authorizeVenueScopedAdminRead,
   projectAdminBookingSummary,
 } from '../_shared/admin_read_security.ts';
-import { auditMutation, requireSuperAdmin, requireVenueRole, writeAuditLog } from '../_shared/authorization.ts';
+import { auditMutation, canOperateVenue, requireSuperAdmin, requireVenueRole, writeAuditLog } from '../_shared/authorization.ts';
 import { deriveCommerceCompatibilityFields, evaluateCommerceAvailability } from '../_shared/commerce_availability.ts';
 import {
   activitySessionOccurrenceInterval,
@@ -4235,12 +4235,37 @@ Deno.serve(async (req) => {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
 
-    const { ok, venueId: adminVenueId } = await isAdmin(userId);
-    if (!ok) return errorResponse('Forbidden: admin only', 403);
-
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(supabaseUrl, serviceKey);
+
+    // Booking detail is operational rather than configuration access. Active
+    // same-venue staff and venue admins may read it, but only after the shared
+    // venue-operation boundary has proven the caller's scope.
+    if (req.method === 'GET' && path === 'booking-detail') {
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      const bookingId = String(url.searchParams.get('bookingId') || '').trim();
+      if (!CAPACITY_UUID.test(venueId) || !CAPACITY_UUID.test(bookingId)) return errorResponse('Invalid booking detail target', 400);
+      try {
+        await authorizeVenueScopedAdminRead({
+          method: req.method,
+          path,
+          venueId,
+          authorizeVenue: async (requestedVenueId) => {
+            if (!await canOperateVenue(admin, userId, requestedVenueId)) throw new Error('Forbidden: venue staff required');
+          },
+        });
+      } catch {
+        return errorResponse('Forbidden', 403);
+      }
+      const detail = await groupedCourtBookingDetail(admin, venueId, bookingId);
+      if (!detail) return errorResponse('Booking not found', 404);
+      return jsonResponse(detail, 200, 0);
+    }
+
+    const { ok, venueId: adminVenueId } = await isAdmin(userId);
+    if (!ok) return errorResponse('Forbidden: admin only', 403);
+
     const isWriteMethod = ['POST', 'PATCH', 'DELETE'].includes(req.method);
     const mutationBody = isWriteMethod ? await req.clone().json().catch(() => ({})) : {};
     const bodyVenueId = mutationBody.venueId || mutationBody.venue_id || null;
@@ -5153,15 +5178,6 @@ Deno.serve(async (req) => {
       });
 
       return jsonResponse({ from: dates[0], to: dates[dates.length - 1], dates, items }, 200, 5);
-    }
-
-    // ── ADMIN BOOKING DETAIL (EXPLICIT, VENUE-AUTHORIZED) ──
-    if (req.method === 'GET' && path === 'booking-detail') {
-      const bookingId = String(url.searchParams.get('bookingId') || '').trim();
-      if (!CAPACITY_UUID.test(bookingId)) return errorResponse('Invalid bookingId', 400);
-      const detail = await groupedCourtBookingDetail(admin, venueId!, bookingId);
-      if (!detail) return errorResponse('Booking not found', 404);
-      return jsonResponse(detail, 200, 0);
     }
 
     // ── ADMIN OS ATTENTION SIGNALS ──

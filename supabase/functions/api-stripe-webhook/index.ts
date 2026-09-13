@@ -2038,6 +2038,26 @@ async function handleActivityTicket(
   const priceSek = Math.round((session.amount_total || 0) / 100);
   const paidSek = Math.round(((session.amount_total || 0) / 100) * 100) / 100;
   const kind = session_type || 'open_play';
+  const invitationId = String(meta.activity_participant_invitation_id || '').trim();
+
+  const markInvitationConfirmed = async (registrationId: string) => {
+    if (!invitationId) return;
+    const { error: invitationError } = await serviceClient
+      .from('activity_participant_invitations')
+      .update({
+        status: 'confirmed_paid',
+        registration_id: registrationId,
+        checkout_url: null,
+      })
+      .eq('id', invitationId)
+      .eq('venue_id', venue_id)
+      .eq('activity_session_id', activitySessionId)
+      .eq('session_date', date)
+      .eq('user_id', resolvedUserId)
+      .eq('stripe_session_id', session.id)
+      .in('status', ['payment_pending', 'action_required', 'confirmed_paid']);
+    if (invitationError) throw new Error(invitationError.message);
+  };
 
   const receipt = await createPurchaseReceipt({
     session,
@@ -2065,6 +2085,7 @@ async function handleActivityTicket(
         session_type: kind,
       },
     });
+    await markInvitationConfirmed(existing.id);
     return;
   }
 
@@ -2118,6 +2139,18 @@ async function handleActivityTicket(
       title: `Betald aktivitet kunde inte levereras: ${meta.session_name || 'Aktivitet'}`,
       metadata: { product_type: 'activity_ticket', session_type: kind },
     });
+    if (invitationId) {
+      const { error: invitationError } = await serviceClient
+        .from('activity_participant_invitations')
+        .update({ status: 'action_required', checkout_url: null })
+        .eq('id', invitationId)
+        .eq('venue_id', venue_id)
+        .eq('activity_session_id', activitySessionId)
+        .eq('session_date', date)
+        .eq('user_id', resolvedUserId)
+        .eq('stripe_session_id', session.id);
+      if (invitationError) throw new Error(invitationError.message);
+    }
     return;
   }
 
@@ -2138,6 +2171,8 @@ async function handleActivityTicket(
         scarcity_mode: meta.scarcity_mode || null,
       },
   });
+
+  if (commit.registration_id) await markInvitationConfirmed(commit.registration_id);
 
   if (commit.registration_id) {
     const { error: entitlementErr } = await serviceClient

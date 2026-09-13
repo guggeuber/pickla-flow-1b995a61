@@ -57,6 +57,28 @@ describe("Operations booking drawer read-only adapter", () => {
     expect(screen.queryByText("1234")).not.toBeInTheDocument();
   });
 
+  it("shows protected detail to an authorized read-only operator without enabling mutations", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <OperationsBookingDrawer
+          open
+          booking={booking}
+          onClose={vi.fn()}
+          readOnly
+          showProtectedDetails
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("private@example.com")).toBeInTheDocument();
+    expect(screen.getByText("0700000000")).toBeInTheDocument();
+    expect(screen.getByText("SECRET-RECEIPT")).toBeInTheDocument();
+    expect(screen.getByText("Accesskod: 1234")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Checka in kund" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Lägg till spelare manuellt" })).not.toBeInTheDocument();
+  });
+
   it("preserves the existing operational controls outside Capacity", () => {
     renderDrawer(false);
     expect(screen.getByRole("button", { name: "Checka in kund" })).toBeInTheDocument();

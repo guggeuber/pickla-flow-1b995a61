@@ -8,7 +8,18 @@ import { apiGet, apiPatch } from "@/lib/api";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
-import { activityRegistrationCheckinEligibility, addManualBookingParticipant, bookingParticipantCheckinEligibility, checkInActivityRegistration, checkInBookingParticipant, checkInDeskBooking, deskBookingCheckinEligibility } from "@/lib/deskOps";
+import {
+  activityRegistrationCheckinEligibility,
+  addActivityParticipant,
+  addManualBookingParticipant,
+  bookingParticipantCheckinEligibility,
+  checkInActivityRegistration,
+  checkInBookingParticipant,
+  checkInDeskBooking,
+  deskBookingCheckinEligibility,
+  fetchActivityParticipants,
+  resendActivityParticipantInvitation,
+} from "@/lib/deskOps";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import type { DeskFulfillmentItem, DeskFulfillmentResponse } from "@/lib/commerce";
@@ -19,6 +30,18 @@ interface Props {
   venueId: string | undefined;
   onOpenBooking: (booking: any, sortedRows: any[]) => void;
 }
+
+type DeskCustomerSearchResult = {
+  id?: string | null;
+  customer_id?: string | null;
+  auth_user_id?: string | null;
+  identity_title?: string | null;
+  display_name?: string | null;
+  full_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  active_membership_tier?: { name?: string | null } | null;
+};
 
 const STOCKHOLM_ZONE = "Europe/Stockholm";
 const DESK_LOOKAHEAD_DAYS = 7;
@@ -272,7 +295,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
   const activityGroups = useMemo(() => {
     const map = new Map<string, any>();
     for (const row of activityRows) {
-      const key = `${row.activity_session_id}:${row.session_date}:${row.start_time}`;
+      const key = `${row.activity_session_id}:${row.session_date}`;
       const current = map.get(key) || {
         ...row,
         key,
@@ -287,8 +310,24 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
       if (row.checked_in || row.consumed || row.status === "checked_in") current.checked_in_count += 1;
       map.set(key, current);
     }
+    for (const row of rows.filter((candidate) => candidate.kind === "activity_court_block" && candidate.status !== "cancelled")) {
+      const activitySessionId = row.activity_session_id || row.activity_session?.id;
+      if (!activitySessionId || !row.session_date) continue;
+      const key = `${activitySessionId}:${row.session_date}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          ...row,
+          activity_session_id: activitySessionId,
+          key,
+          participants: [],
+          registered_count: 0,
+          checked_in_count: 0,
+          playing_host_count: 0,
+        });
+      }
+    }
     return Array.from(map.values()).sort((a: any, b: any) => +new Date(a.start_time) - +new Date(b.start_time)).slice(0, 8);
-  }, [activityRows]);
+  }, [activityRows, rows]);
   const recentlyCollected = useMemo(() => (collectedFulfillment?.items || []).filter((line) => {
     if (!line.fulfilled_at) return false;
     return DateTime.fromISO(line.fulfilled_at, { zone: "utc" }).setZone(STOCKHOLM_ZONE).toISODate() === today;
@@ -505,6 +544,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
               {activityGroups.map((activity: any) => (
                 <ActivityRow
                   key={activity.key}
+                  venueId={venueId}
                   activity={activity}
                   expanded={expandedActivityKey === activity.key}
                   onToggle={() => setExpandedActivityKey((current) => (current === activity.key ? null : activity.key))}
@@ -875,6 +915,7 @@ function BookingActionRow({
 }
 
 function ActivityRow({
+  venueId,
   activity,
   expanded,
   onToggle,
@@ -886,6 +927,7 @@ function ActivityRow({
   collectingId,
   collecting,
 }: {
+  venueId?: string;
   activity: any;
   expanded: boolean;
   onToggle: () => void;
@@ -897,11 +939,68 @@ function ActivityRow({
   collectingId: string | null;
   collecting: boolean;
 }) {
-  const name = activity.activity_session?.name || activity.notes || "Aktivitet";
-  const participants = Array.isArray(activity.participants) ? activity.participants : [];
+  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
+  const [search, setSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState<DeskCustomerSearchResult | null>(null);
+  const activitySessionId = activity.activity_session_id || activity.activity_session?.id || "";
+  const sessionDate = activity.session_date || "";
+  const detailQuery = useQuery({
+    queryKey: ["desk-activity-participants", venueId, activitySessionId, sessionDate],
+    enabled: expanded && !!venueId && !!activitySessionId && !!sessionDate,
+    queryFn: () => fetchActivityParticipants(venueId!, activitySessionId, sessionDate),
+    staleTime: 10_000,
+  });
+  const customerQuery = useQuery<DeskCustomerSearchResult[]>({
+    queryKey: ["desk-activity-customer-search", venueId, search.trim()],
+    enabled: expanded && adding && !!venueId && search.trim().length >= 2,
+    queryFn: () => apiGet("api-customers", "list", { venueId: venueId!, search: search.trim(), limit: "8" }),
+    staleTime: 15_000,
+  });
+  const refresh = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["desk-activity-participants", venueId, activitySessionId, sessionDate] }),
+      qc.invalidateQueries({ queryKey: ["today-bookings", venueId] }),
+      qc.invalidateQueries({ queryKey: ["customer-360"] }),
+    ]);
+  };
+  const addMutation = useMutation({
+    mutationFn: (customerId: string) => addActivityParticipant(venueId!, activitySessionId, sessionDate, customerId),
+    onSuccess: async (result) => {
+      const participant = result.participant;
+      if (participant.has_place) toast.success("Spelaren har plats");
+      else if (participant.reserved && result.email_sent) toast.success("Betalningslänk skickad · platsen är reserverad, inte bekräftad");
+      else toast.warning("Spelaren har inte plats ännu · åtgärd krävs");
+      setSearch("");
+      setSelectedCustomer(null);
+      setAdding(false);
+      await refresh();
+    },
+    onError: (error: unknown) => toast.error(error instanceof Error ? error.message : "Kunde inte lägga till spelaren"),
+  });
+  const resendMutation = useMutation({
+    mutationFn: (invitationId: string) => resendActivityParticipantInvitation(venueId!, activitySessionId, sessionDate, invitationId),
+    onSuccess: async () => {
+      toast.success("Samma betalningslänk skickades igen");
+      await refresh();
+    },
+    onError: (error: unknown) => toast.error(error instanceof Error ? error.message : "Kunde inte skicka betalningslänken igen"),
+  });
+  const occurrence = detailQuery.data?.occurrence;
+  const fallbackParticipants = Array.isArray(activity.participants) ? activity.participants : [];
+  const participants = detailQuery.data
+    ? detailQuery.data.participants.map((participant) => ({
+        ...participant,
+        start_time: occurrence?.starts_at || activity.start_time,
+        end_time: occurrence?.ends_at || activity.end_time,
+      }))
+    : fallbackParticipants;
+  const name = occurrence?.name || activity.activity_session?.name || activity.notes || "Aktivitet";
   const playingHosts = participants.filter(isPlayingHostParticipant);
-  const playerCount = Math.max(Number(activity.registered_count || 0) - playingHosts.length, 0);
-  const capacity = Number(activity.activity_session?.capacity || activity.capacity || 0);
+  const committedCount = occurrence?.committed_count ?? Number(activity.registered_count || 0);
+  const reservedCount = occurrence?.reserved_count ?? 0;
+  const playerCount = Math.max(committedCount - playingHosts.length, 0);
+  const capacity = Number(occurrence?.capacity || activity.activity_session?.capacity || activity.capacity || 0);
   const hostNames = playingHosts.map(participantName).filter(Boolean);
   return (
     <AxCard pad="row">
@@ -914,7 +1013,7 @@ function ActivityRow({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-black text-white">{name}</p>
           <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
-            Players: {playerCount}/{capacity || Number(activity.registered_count || 0)}
+            Players: {playerCount}/{capacity || committedCount}
           </p>
           {hostNames.length > 0 ? (
             <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
@@ -922,7 +1021,8 @@ function ActivityRow({
             </p>
           ) : null}
           <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
-            {activity.checked_in_count}/{activity.registered_count} incheckade totalt
+            {participants.filter((participant) => participant.checked_in || participant.status === "checked_in").length}/{committedCount} incheckade totalt
+            {reservedCount > 0 ? ` · ${reservedCount} reserverade` : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -932,9 +1032,91 @@ function ActivityRow({
       </button>
       {expanded && (
         <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: ax("borderSoft") }}>
-          {activity.participants.map((participant: any) => (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
+              {occurrence?.available_count == null ? "Kapacitet laddas" : `${occurrence.available_count} lediga platser`}
+            </p>
+            <button
+              type="button"
+              onClick={() => setAdding((current) => !current)}
+              className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black"
+              style={{ background: ax("magenta", 0.18), color: ax("magentaSoft") }}
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Lägg till spelare
+            </button>
+          </div>
+          {adding ? (
+            <div className="rounded-xl border p-3" style={{ background: ax("surfaceHi"), borderColor: ax("borderSoft") }}>
+              <p className="text-xs font-semibold" style={{ color: ax("muted") }}>
+                Sök en befintlig kund. Deltagarens egen behörighet och serverpris avgör om platsen ingår eller kräver betalning.
+              </p>
+              <input
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setSelectedCustomer(null);
+                }}
+                placeholder="Namn, e-post eller telefon"
+                className="mt-3 h-10 w-full rounded-xl border border-white bg-white px-3 text-sm font-bold text-neutral-950 caret-neutral-950 outline-none placeholder:text-neutral-400"
+                aria-label="Sök kund för aktivitet"
+              />
+              {selectedCustomer ? (
+                <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-white">{customerSuggestionTitle(selectedCustomer)}</p>
+                    <p className="truncate text-[11px] text-white/50">{customerSuggestionMeta(selectedCustomer)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addMutation.mutate(selectedCustomer.customer_id!)}
+                    disabled={addMutation.isPending}
+                    className="shrink-0 rounded-xl bg-emerald-400 px-3 py-2 text-xs font-black text-neutral-950 disabled:opacity-50"
+                  >
+                    {addMutation.isPending ? "Kontrollerar…" : "Fortsätt"}
+                  </button>
+                </div>
+              ) : search.trim().length >= 2 ? (
+                <div className="mt-2 space-y-1 rounded-xl border border-white/10 bg-black/10 p-1.5">
+                  {customerQuery.isFetching ? (
+                    <p className="flex items-center gap-2 px-2 py-2 text-xs font-bold text-white/50"><Loader2 className="h-3.5 w-3.5 animate-spin" />Söker…</p>
+                  ) : customerQuery.data?.length ? customerQuery.data.map((customer) => {
+                    const selectable = Boolean(customer.customer_id && customer.auth_user_id);
+                    return (
+                      <button
+                        key={customer.customer_id || customer.id}
+                        type="button"
+                        onClick={() => selectable && setSelectedCustomer(customer)}
+                        disabled={!selectable}
+                        className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/5 disabled:opacity-45"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-black text-white">{customerSuggestionTitle(customer)}</span>
+                          <span className="block truncate text-[11px] text-white/45">{customerSuggestionMeta(customer)}</span>
+                        </span>
+                        <span className="shrink-0 text-[10px] font-black uppercase tracking-wider" style={{ color: selectable ? ax("electricSoft") : ax("muted") }}>
+                          {selectable ? "Välj" : "Kräver konto"}
+                        </span>
+                      </button>
+                    );
+                  }) : (
+                    <p className="px-2 py-2 text-xs font-bold text-white/45">Ingen kopplad kund hittades. Oidentifierade gäster stöds inte säkert i detta flöde.</p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {detailQuery.isFetching && !detailQuery.data ? (
+            <p className="flex items-center gap-2 py-3 text-xs font-bold text-white/50"><Loader2 className="h-4 w-4 animate-spin" />Laddar skyddad deltagardetalj…</p>
+          ) : null}
+          {detailQuery.isError ? (
+            <p className="rounded-xl border border-red-500/25 bg-red-500/10 p-3 text-xs font-bold text-red-300">
+              {detailQuery.error instanceof Error ? detailQuery.error.message : "Deltagarna kunde inte läsas"}
+            </p>
+          ) : null}
+          {participants.map((participant) => (
             <ActivityParticipantRow
-              key={participant.session_registration_id || participant.registration_id}
+              key={participant.invitation_id || participant.session_registration_id || participant.registration_id || participant.id}
               participant={participant}
               onCheckIn={() => onCheckIn(participant)}
               checking={checking && checkingId === (participant.session_registration_id || participant.registration_id)}
@@ -942,8 +1124,14 @@ function ActivityRow({
               onCollect={onCollect}
               collectingId={collectingId}
               collecting={collecting}
+              onResend={participant.can_resend && participant.invitation_id ? () => resendMutation.mutate(participant.invitation_id) : undefined}
+              onRetry={participant.can_retry && participant.customer_id ? () => addMutation.mutate(participant.customer_id) : undefined}
+              actionPending={addMutation.isPending || resendMutation.isPending}
             />
           ))}
+          {!detailQuery.isFetching && participants.length === 0 ? (
+            <p className="py-3 text-sm font-semibold text-white/45">Inga deltagare är kopplade till tillfället ännu.</p>
+          ) : null}
         </div>
       )}
     </AxCard>
@@ -958,6 +1146,9 @@ function ActivityParticipantRow({
   onCollect,
   collectingId,
   collecting,
+  onResend,
+  onRetry,
+  actionPending,
 }: {
   participant: any;
   onCheckIn: () => void;
@@ -966,13 +1157,16 @@ function ActivityParticipantRow({
   onCollect: (line: any) => void;
   collectingId: string | null;
   collecting: boolean;
+  onResend?: () => void;
+  onRetry?: () => void;
+  actionPending?: boolean;
 }) {
   const eligibility = activityRegistrationCheckinEligibility(participant);
   const checkedIn = participant.checked_in || participant.consumed || participant.status === "checked_in";
   const playingHost = isPlayingHostParticipant(participant);
   const paymentStatus = String(participant.payment_status || "").toLowerCase();
   const accessReason = String(participant.access_reason || participant.metadata?.access_reason || "").trim();
-  const paymentLabel = playingHost ? "0 kr · playing_host" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "confirmed" ? "Betald" : "Okänd";
+  const paymentLabel = participant.secondary_label || (playingHost ? "0 kr · playing_host" : paymentStatus === "paid" ? "Betald" : paymentStatus === "free" ? "Gratis" : paymentStatus === "confirmed" ? "Betald" : "Okänd");
   const receiptRef = participant.receipt_number || participant.receipt?.receipt_number || null;
   const hasCustomer = Boolean(participant.customer_id || participant.user_id);
 
@@ -996,6 +1190,7 @@ function ActivityParticipantRow({
             )}
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
+            {participant.headline ? <AxChip tone={participant.has_place ? "lime" : participant.reserved ? "sun" : "neutral"}>{participant.headline}</AxChip> : null}
             <AxChip tone={paymentStatus === "paid" || paymentStatus === "free" || paymentStatus === "confirmed" ? "lime" : "sun"}>{paymentLabel}</AxChip>
             {accessReason && <AxChip tone="electric">{accessReason}</AxChip>}
             {playingHost && <AxChip tone="electric">Playing host</AxChip>}
@@ -1016,6 +1211,17 @@ function ActivityParticipantRow({
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2 md:justify-end">
+          {onResend ? (
+            <button type="button" onClick={onResend} disabled={actionPending} className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50" style={{ background: ax("electric", 0.2), color: ax("electricSoft") }}>
+              <Mail className="h-3.5 w-3.5" />
+              Skicka länken igen
+            </button>
+          ) : null}
+          {onRetry ? (
+            <button type="button" onClick={onRetry} disabled={actionPending} className="inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50" style={{ background: ax("sun", 0.18), color: ax("sun") }}>
+              Försök igen
+            </button>
+          ) : null}
           {checkedIn ? (
             <span className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-black" style={{ background: ax("lime", 0.16), color: ax("lime") }}>
               Använd

@@ -12,7 +12,7 @@ import {
   isVenueScopedAdminRead,
   projectAdminBookingSummary,
 } from "../../supabase/functions/_shared/admin_read_security";
-import { requireVenueRole } from "../../supabase/functions/_shared/authorization";
+import { canOperateVenue, requireVenueRole } from "../../supabase/functions/_shared/authorization";
 
 const VENUE_SCOPED_READ_PATHS = [
   "stats",
@@ -107,7 +107,14 @@ describe("api-admin tenant boundary", () => {
     })).rejects.toThrow("Forbidden: venue role required");
   });
 
-  it("places the central guard before every venue-scoped route and reuses requireVenueRole", () => {
+  it("allows operational staff only inside their own venue for protected booking detail", async () => {
+    const admin = authorizationAdmin({ "desk-a": ["venue-a"] });
+    await expect(canOperateVenue(admin, "desk-a", "venue-a")).resolves.toBe(true);
+    await expect(canOperateVenue(admin, "desk-a", "venue-b")).resolves.toBe(false);
+    await expect(canOperateVenue(admin, "authenticated-outsider", "venue-a")).resolves.toBe(false);
+  });
+
+  it("places a shared guard before every venue-scoped route and reuses the correct venue role", () => {
     const source = readFileSync("supabase/functions/api-admin/index.ts", "utf8");
     const handler = source.slice(source.indexOf("Deno.serve"));
     const guardIndex = handler.indexOf("await authorizeVenueScopedAdminRead({");
@@ -118,10 +125,17 @@ describe("api-admin tenant boundary", () => {
     );
     expect(handler).toContain("if (message.startsWith('Forbidden')) return errorResponse(message, 403)");
 
-    for (const path of VENUE_SCOPED_READ_PATHS) {
+    for (const path of VENUE_SCOPED_READ_PATHS.filter((candidate) => candidate !== "booking-detail")) {
       const routeIndex = handler.indexOf(`req.method === 'GET' && path === '${path}'`);
       expect(routeIndex, path).toBeGreaterThan(guardIndex);
     }
+
+    const bookingDetailIndex = handler.indexOf("req.method === 'GET' && path === 'booking-detail'");
+    const bookingDetail = handler.slice(bookingDetailIndex, bookingDetailIndex + 2_000);
+    expect(bookingDetailIndex).toBeGreaterThan(handler.indexOf("await getAuthenticatedClient(req)"));
+    expect(bookingDetail).toContain("authorizeVenueScopedAdminRead");
+    expect(bookingDetail).toContain("canOperateVenue(admin, userId, requestedVenueId)");
+    expect(bookingDetail).toContain("return errorResponse('Forbidden', 403)");
   });
 });
 
@@ -194,7 +208,7 @@ describe("admin calendar least-privilege booking summary", () => {
     expect(detailSource).toMatch(/customer_phone|customer_email|access_code|payment_status|receipt_number/);
     expect(detailSource).toContain(".eq('id', bookingId)");
     expect(detailSource).toContain(".eq('venue_id', venueId)");
-    expect(detailRoute).toContain("groupedCourtBookingDetail(admin, venueId!, bookingId)");
+    expect(detailRoute).toContain("groupedCourtBookingDetail(admin, venueId, bookingId)");
     expect(detailRoute).toContain("Booking not found");
     expect(detailRoute).toContain("jsonResponse(detail, 200, 0)");
   });

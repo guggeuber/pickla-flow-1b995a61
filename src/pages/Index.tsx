@@ -13,12 +13,7 @@ import DeskToday from "@/components/desk/shell/DeskToday";
 import DeskLive from "@/components/desk/shell/DeskLive";
 import DeskQueue from "@/components/desk/shell/DeskQueue";
 import DeskCommandBar from "@/components/desk/shell/DeskCommandBar";
-import {
-  OperationsBookingDrawer,
-  bookingRowsForGroup,
-  buildOperationsBookingDetailFromRows,
-  type OperationsBookingDetail,
-} from "@/components/operations/OperationsBookingDrawer";
+import { AdminBookingDetailDrawer } from "@/components/operations/AdminBookingDetailDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 function useClock() {
@@ -38,7 +33,7 @@ const Index = () => {
   const venueId = staffVenue?.venue_id;
 
   const [active, setActive] = useState<DeskSurfaceId>("arrivals");
-  const [openBooking, setOpenBooking] = useState<OperationsBookingDetail | null>(null);
+  const [openBookingId, setOpenBookingId] = useState<string | null>(null);
   const now = useClock();
 
   const { data: bookings } = useTodayBookings(venueId);
@@ -53,9 +48,9 @@ const Index = () => {
     [courtRows]
   );
 
-  const openBookingFromRow = (booking: any, sourceRows: any[] = courtRows) => {
-    const detail = buildOperationsBookingDetailFromRows(bookingRowsForGroup(sourceRows, booking));
-    if (detail) setOpenBooking(detail);
+  const openBookingFromRow = (booking: any, _sourceRows: any[] = courtRows) => {
+    const bookingId = booking?.source_ids?.[0] || booking?.source_id || booking?.id;
+    if (bookingId) setOpenBookingId(bookingId);
   };
 
   const surfaces: DeskSurfaceDef[] = [
@@ -197,10 +192,11 @@ const Index = () => {
         </AnimatePresence>
       </main>
 
-      <OperationsBookingDrawer
-        open={!!openBooking}
-        booking={openBooking}
-        onClose={() => setOpenBooking(null)}
+      <AdminBookingDetailDrawer
+        open={!!openBookingId}
+        venueId={venueId}
+        bookingId={openBookingId}
+        onClose={() => setOpenBookingId(null)}
       />
     </div>
   );

@@ -4,7 +4,10 @@ import { findAuthUserByEmail, generateAccessCode, getOrCreatePublicBookingUserId
 import { resolveCustomerIdForUser, resolveOrCreateCustomerIdForUser } from '../_shared/customers.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
-import { resolveActivityPricingDecision } from '../_shared/activity_pricing.ts';
+import {
+  resolveActivityPricingDecision,
+  type ActivityPricingDecision,
+} from '../_shared/activity_pricing.ts';
 import { auditMutation, canOperateVenue } from '../_shared/authorization.ts';
 import { canonicalPublicOrigin, canonicalPublicUrl } from '../_shared/canonical_origin.ts';
 import { activitySessionOccurrenceInterval } from '../_shared/activity_session_time.ts';
@@ -37,6 +40,16 @@ import {
   reconcileBookingParticipantRetry,
 } from '../_shared/booking_participant_retry.ts';
 import {
+  expireStripeCheckoutSession,
+  retrieveStripeCheckoutSession,
+  stripeCheckoutLifecycleState,
+} from '../_shared/commerce_checkout_expiry.ts';
+import {
+  activityParticipantInvitationState,
+  activityParticipantInviteEmailIdempotencyKey,
+  activityParticipantInviteIdempotencyKey,
+} from '../_shared/activity_participant_invitation.ts';
+import {
   bookingParticipantReservedCount,
   loadBookingParticipantHoldTruth,
   projectBookingParticipantOperationalState,
@@ -61,10 +74,122 @@ const PARTICIPANT_TICKET_INVITE_SOURCE = 'booking_participant_ticket';
 const OPEN_BOOKING_INVITE_SOURCE = 'open_booking_slot';
 const OPEN_BOOKING_PACES = ['all_levels', 'calm_pace', 'familiar_pace', 'high_pace'];
 const OPEN_BOOKING_OPERATIONAL_MAX_CAPACITY = 32;
+const ACTIVITY_PARTICIPANT_INVITE_SOURCE = 'activity_participant_invitation';
+const ACTIVITY_PARTICIPANT_INVITE_TTL_SECONDS = 31 * 60;
+const ACTIVITY_PARTICIPANT_PREPARING_STALE_SECONDS = 35 * 60;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
 const STRIPE_API_BASE = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
 
 type StripeCheckoutSession = { id: string; url: string | null };
+
+class StripeCheckoutCreationError extends Error {
+  readonly uncertain: boolean;
+
+  constructor(message: string, uncertain: boolean) {
+    super(message);
+    this.name = 'StripeCheckoutCreationError';
+    this.uncertain = uncertain;
+  }
+}
+
+type ActivityParticipantInvitation = {
+  id: string;
+  venue_id: string;
+  activity_session_id: string;
+  session_date: string;
+  customer_id: string;
+  user_id: string;
+  token: string;
+  status: string;
+  canonical_price_minor: number;
+  currency: string;
+  pricing_reason?: string | null;
+  entitlement_type?: string | null;
+  access_reason?: string | null;
+  capacity_hold_id?: string | null;
+  stripe_session_id?: string | null;
+  checkout_url?: string | null;
+  registration_id?: string | null;
+  attempt_count: number;
+  email_sent_at?: string | null;
+  email_send_count: number;
+  expires_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type ServiceClient = ReturnType<typeof getServiceClient>;
+
+type EffectiveActivityOccurrence = {
+  id: string;
+  venue_id: string;
+  name: string;
+  session_type?: string | null;
+  start_time: string;
+  end_time: string;
+  price_sek?: number | null;
+  capacity?: number | null;
+  product_key?: string | null;
+  access_policy?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  early_bird_price_minor?: number | null;
+  early_bird_slots?: number | null;
+  scarcity_mode?: string | null;
+  first_visit_offer_enabled?: boolean | null;
+  first_visit_price_minor?: number | null;
+  first_visit_only?: boolean | null;
+};
+
+type ActivityInvitationActivityAnchor = {
+  id: string;
+  venue_id: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+};
+
+type ActivityInvitationVenue = {
+  id: string;
+  name?: string | null;
+  slug?: string | null;
+};
+
+type ActivityInvitationWithRelations = ActivityParticipantInvitation & {
+  activity_sessions?: ActivityInvitationActivityAnchor | ActivityInvitationActivityAnchor[] | null;
+  venues?: ActivityInvitationVenue | ActivityInvitationVenue[] | null;
+};
+
+type ActivityParticipantRegistrationRow = {
+  id: string;
+  venue_id: string;
+  activity_session_id: string;
+  session_date: string;
+  user_id: string;
+  customer_id?: string | null;
+  status?: string | null;
+  price_paid_sek?: number | null;
+  stripe_session_id?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  metadata?: Record<string, unknown> | null;
+  registered_at?: string | null;
+};
+
+type ActivityParticipantCustomerRow = {
+  id: string;
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  primary_email?: string | null;
+  primary_phone?: string | null;
+};
+
+type ActivityParticipantCheckinRow = {
+  entitlement_id: string;
+  checked_in_at?: string | null;
+};
 
 function physicalAvailabilityErrorResponse(error: unknown) {
   if (error instanceof PhysicalAvailabilityConflictError) {
@@ -109,20 +234,55 @@ function appendStripeFormValue(body: URLSearchParams, key: string, value: unknow
 async function createStripeCheckoutSession(stripeKey: string, data: Record<string, unknown>, idempotencyKey = '') {
   const body = new URLSearchParams();
   Object.entries(data).forEach(([key, value]) => appendStripeFormValue(body, key, value));
-  const response = await fetch(`${STRIPE_API_BASE}/checkout/sessions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${stripeKey}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Stripe-Version': '2023-10-16',
-      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey.slice(0, 255) } : {}),
-    },
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${STRIPE_API_BASE}/checkout/sessions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${stripeKey}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Stripe-Version': '2023-10-16',
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey.slice(0, 255) } : {}),
+      },
+      body,
+    });
+  } catch (error) {
+    throw new StripeCheckoutCreationError(
+      error instanceof Error ? error.message : 'Stripe Checkout request failed',
+      true,
+    );
+  }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message || `Stripe API error ${response.status}`);
-  if (!payload?.id) throw new Error('Stripe Checkout response missing session id');
+  if (!response.ok) throw new StripeCheckoutCreationError(payload?.error?.message || `Stripe API error ${response.status}`, false);
+  if (!payload?.id) throw new StripeCheckoutCreationError('Stripe Checkout response missing session id', true);
   return payload as StripeCheckoutSession;
+}
+
+async function retireUnpaidStripeCheckout(
+  stripeKey: string,
+  sessionId: string,
+  expected: { invitationId: string; holdId?: string | null },
+) {
+  let session = await retrieveStripeCheckoutSession(stripeKey, STRIPE_API_BASE, sessionId);
+  const metadata = session.metadata || {};
+  if (String(metadata.activity_participant_invitation_id || '') !== expected.invitationId
+    || (expected.holdId && String(metadata.capacity_hold_id || '') !== expected.holdId)) {
+    throw new Error('Stripe Checkout identity mismatch');
+  }
+  let state = stripeCheckoutLifecycleState(session);
+  if (state === 'open') {
+    session = await expireStripeCheckoutSession(stripeKey, STRIPE_API_BASE, sessionId);
+    state = stripeCheckoutLifecycleState(session);
+  }
+  return { session, releasable: state === 'expired_unpaid', state };
+}
+
+function newActivityParticipantInviteToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = '';
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 function nameFromBookingNotes(notes?: string | null) {
@@ -381,6 +541,25 @@ async function cancelBookingParticipantCapacity(admin: any, participantId: strin
 
 function minorToSek(minor: number) {
   return Math.round(Number(minor || 0)) / 100;
+}
+
+function includedActivityRegistrationSource(
+  pricing: ActivityPricingDecision,
+  invitationId: string,
+) {
+  if (isPlayingHostReason(pricing.entitlementType)) {
+    return { sourceType: PLAYING_HOST_ROLE, sourceId: pricing.sourceId };
+  }
+  if (['open_play_unlimited', 'session_member_discount'].includes(pricing.entitlementType)) {
+    return { sourceType: 'membership', sourceId: pricing.membershipId };
+  }
+  if (pricing.entitlementType === 'day_access') {
+    return { sourceType: 'access_entitlement', sourceId: pricing.sourceId };
+  }
+  if (['series_access', 'punch_card', 'partner_access'].includes(pricing.entitlementType)) {
+    return { sourceType: pricing.entitlementType, sourceId: pricing.sourceId };
+  }
+  return { sourceType: ACTIVITY_PARTICIPANT_INVITE_SOURCE, sourceId: invitationId };
 }
 
 function bookingParticipantPriceMinor(hours: number) {
@@ -875,6 +1054,244 @@ async function sendParticipantTicketEmail(to: string, ticketUrl: string, booking
   } catch (err) {
     console.error('booking participant ticket email failed', err);
   }
+}
+
+async function sendActivityParticipantPaymentEmail(input: {
+  invitation: ActivityParticipantInvitation;
+  to: string;
+  paymentUrl: string;
+  activityName: string;
+  startTime: string;
+  endTime: string;
+}) {
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  if (!resendKey) return { ok: false, error: 'Resend is not configured' };
+  const start = DateTime.fromISO(`${input.invitation.session_date}T${String(input.startTime).slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+  const end = DateTime.fromISO(`${input.invitation.session_date}T${String(input.endTime).slice(0, 8)}`, { zone: 'Europe/Stockholm' });
+  if (!start.isValid || !end.isValid) return { ok: false, error: 'Activity time is invalid' };
+  const price = `${minorToSek(input.invitation.canonical_price_minor).toLocaleString('sv-SE')} kr`;
+  const text = [
+    `Du är inbjuden till ${input.activityName}.`,
+    `${start.setLocale('sv').toFormat('cccc d MMMM')} ${start.toFormat('HH:mm')}–${end.toFormat('HH:mm')}`,
+    `Pris: ${price}`,
+    '',
+    'Slutför betalningen för att säkra din plats.',
+    input.paymentUrl,
+    '',
+    'Platsen är inte bekräftad förrän betalningen är klar.',
+  ].join('\n');
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': activityParticipantInviteEmailIdempotencyKey(input.invitation.id, Number(input.invitation.email_send_count || 0)),
+      },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to: input.to,
+        subject: `Slutför din plats till ${input.activityName}`,
+        text,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error('activity participant payment email failed', response.status, payload?.message || payload?.error || 'unknown');
+      return { ok: false, error: payload?.message || `Resend error ${response.status}` };
+    }
+    return { ok: true, messageId: String(payload?.id || '') || null };
+  } catch (error) {
+    console.error('activity participant payment email failed', error);
+    return { ok: false, error: error instanceof Error ? error.message : 'Email delivery failed' };
+  }
+}
+
+async function loadEffectiveActivityOccurrence(admin: ServiceClient, venueId: string, activitySessionId: string, sessionDate: string): Promise<EffectiveActivityOccurrence | null> {
+  const { data: session, error: sessionError } = await admin
+    .from('activity_sessions')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, schedule_effective_from, series_id')
+    .eq('id', activitySessionId)
+    .eq('venue_id', venueId)
+    .maybeSingle();
+  if (sessionError) throw new Error(sessionError.message);
+  if (!session) return null;
+  const { data: versionRows, error: versionError } = await admin
+    .from('activity_session_schedule_versions')
+    .select('id, activity_session_id, effective_from, effective_until, series_id, series_start_date, series_end_date, series_total_sessions, session_date, recurrence_days, start_time, end_time, court_ids, is_active, publish_status')
+    .eq('venue_id', venueId)
+    .eq('activity_session_id', activitySessionId)
+    .lte('effective_from', sessionDate)
+    .or(`effective_until.is.null,effective_until.gt.${sessionDate}`);
+  if (versionError) throw new Error(versionError.message);
+  const versions = activityScheduleVersionsBySession((versionRows || []) as ActivityScheduleVersion[]);
+  const effective = effectiveActivityOccurrenceForDate(session, sessionDate, versions);
+  if (!effective || await isActivityOccurrenceBlocked(admin, venueId, activitySessionId, sessionDate)) return null;
+  return effective as EffectiveActivityOccurrence;
+}
+
+async function activityInvitationContact(admin: ServiceClient, invitation: ActivityParticipantInvitation) {
+  const [{ data: customer, error: customerError }, authResult] = await Promise.all([
+    admin.from('customers')
+      .select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, status, merged_into_id')
+      .eq('id', invitation.customer_id)
+      .maybeSingle(),
+    admin.auth.admin.getUserById(invitation.user_id),
+  ]);
+  if (customerError) throw new Error(customerError.message);
+  if (!customer || customer.status !== 'active' || customer.merged_into_id || customer.auth_user_id !== invitation.user_id) {
+    throw new Error('Participant identity is no longer valid');
+  }
+  const email = normalizeParticipantEmail(customer.primary_email || authResult?.data?.user?.email);
+  return {
+    displayName: customerDisplayName(customer),
+    email,
+    phone: customer.primary_phone || null,
+    emailVerified: Boolean(authResult?.data?.user?.email_confirmed_at),
+  };
+}
+
+async function activityInvitationTruth(admin: ServiceClient, invitation: ActivityParticipantInvitation) {
+  const [{ data: hold, error: holdError }, { data: registration, error: registrationError }] = await Promise.all([
+    invitation.capacity_hold_id
+      ? admin.from('capacity_holds').select('id, status, expires_at, stripe_session_id').eq('id', invitation.capacity_hold_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    admin.from('session_registrations')
+      .select('id, status, price_paid_sek, stripe_session_id, metadata')
+      .eq('activity_session_id', invitation.activity_session_id)
+      .eq('session_date', invitation.session_date)
+      .eq('user_id', invitation.user_id)
+      .maybeSingle(),
+  ]);
+  if (holdError || registrationError) throw new Error(holdError?.message || registrationError?.message);
+  const { data: checkin, error: checkinError } = registration?.id
+    ? await admin.from('venue_checkins')
+      .select('id, checked_in_at')
+      .eq('venue_id', invitation.venue_id)
+      .eq('entitlement_id', registration.id)
+      .in('entry_type', ['session_ticket', 'activity_registration'])
+      .is('checked_out_at', null)
+      .order('checked_in_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null, error: null };
+  if (checkinError) throw new Error(checkinError.message);
+  const state = activityParticipantInvitationState({
+    status: invitation.status,
+    registrationStatus: registration?.status,
+    registrationPriceSek: registration?.price_paid_sek,
+    canonicalPriceMinor: invitation.canonical_price_minor,
+    holdStatus: hold?.status,
+    holdExpiresAt: hold?.expires_at || invitation.expires_at,
+  });
+  // Local time is enough to stop presenting a hold as capacity, but never
+  // enough to retire a Checkout. Stripe's expired event or the authenticated
+  // retry reconciliation must prove expired_unpaid before the hold is released.
+  return { hold, registration, checkin, state };
+}
+
+async function projectActivityInvitationForStaff(admin: ServiceClient, invitation: ActivityParticipantInvitation) {
+  const [{ hold, registration, checkin, state }, contact] = await Promise.all([
+    activityInvitationTruth(admin, invitation),
+    activityInvitationContact(admin, invitation),
+  ]);
+  const secondary = state.operational_state === 'confirmed_paid'
+    ? 'BETALD'
+    : state.operational_state === 'confirmed_included'
+    ? `INGÅR${invitation.access_reason ? ` · ${invitation.access_reason}` : invitation.entitlement_type ? ` · ${invitation.entitlement_type}` : ''}`
+    : state.operational_state === 'payment_pending'
+    ? invitation.email_sent_at ? 'Betalningslänk skickad' : 'Betalningslänk ej skickad'
+    : state.operational_state === 'payment_expired'
+    ? 'Betalning utgången'
+    : state.operational_state === 'cancelled'
+    ? 'Avbokad'
+    : invitation.email_sent_at
+    ? 'E-post behöver kontrolleras'
+    : 'Betalningslänk ej skickad';
+  return {
+    id: invitation.id,
+    invitation_id: invitation.id,
+    venue_id: invitation.venue_id,
+    activity_session_id: invitation.activity_session_id,
+    session_date: invitation.session_date,
+    customer_id: invitation.customer_id,
+    user_id: invitation.user_id,
+    customer_name: contact.displayName,
+    customer_email: contact.email,
+    customer_phone: contact.phone,
+    status: registration?.status || invitation.status,
+    checked_in: registration?.status === 'checked_in' || Boolean(checkin?.checked_in_at),
+    checked_in_at: checkin?.checked_in_at || null,
+    session_registration_id: registration?.id || invitation.registration_id || null,
+    registration_id: registration?.id || invitation.registration_id || null,
+    payment_status: state.operational_state === 'confirmed_paid'
+      ? 'paid'
+      : state.operational_state === 'confirmed_included'
+      ? 'free'
+      : 'pending',
+    operational_state: state.operational_state,
+    headline: state.headline,
+    secondary_label: secondary,
+    has_place: state.has_place,
+    reserved: state.reserved,
+    can_resend: state.can_resend && Boolean(invitation.stripe_session_id && invitation.checkout_url),
+    can_retry: state.can_retry,
+    canonical_price_minor: Number(invitation.canonical_price_minor || 0),
+    amount_sek: minorToSek(invitation.canonical_price_minor),
+    pricing_reason: invitation.pricing_reason || null,
+    entitlement_type: invitation.entitlement_type || null,
+    access_reason: invitation.access_reason || null,
+    reservation_expires_at: hold?.expires_at || invitation.expires_at || null,
+    email_sent_at: invitation.email_sent_at || null,
+    email_send_count: Number(invitation.email_send_count || 0),
+    payment_link: canonicalPublicUrl(`/activity/invite/${encodeURIComponent(invitation.token)}`),
+  };
+}
+
+async function claimActivityInvitationEmailAttempt(admin: ServiceClient, invitation: ActivityParticipantInvitation) {
+  const nextCount = Number(invitation.email_send_count || 0) + 1;
+  const { data, error } = await admin.from('activity_participant_invitations')
+    .update({ email_send_count: nextCount })
+    .eq('id', invitation.id)
+    .eq('email_send_count', Number(invitation.email_send_count || 0))
+    .select('*')
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as ActivityParticipantInvitation | null;
+}
+
+async function deliverActivityInvitationEmail(admin: ServiceClient, req: Request, invitation: ActivityParticipantInvitation, activity: EffectiveActivityOccurrence) {
+  const claimed = await claimActivityInvitationEmailAttempt(admin, invitation);
+  if (!claimed) return { ok: true, converged: true };
+  const contact = await activityInvitationContact(admin, claimed);
+  if (!contact.email) return { ok: false, error: 'Kunden saknar e-postadress' };
+  const stableUrl = canonicalPublicUrl(`/activity/invite/${encodeURIComponent(claimed.token)}`, req);
+  const delivered = await sendActivityParticipantPaymentEmail({
+    invitation: claimed,
+    to: contact.email,
+    paymentUrl: stableUrl,
+    activityName: activity.name || 'aktiviteten',
+    startTime: activity.start_time,
+    endTime: activity.end_time,
+  });
+  const sentAt = delivered.ok ? new Date().toISOString() : null;
+  const { error: deliveryStateError } = await admin.from('activity_participant_invitations').update({
+    status: delivered.ok ? 'payment_pending' : 'action_required',
+    ...(sentAt ? { email_sent_at: sentAt } : {}),
+    metadata: {
+      ...(claimed.metadata || {}),
+      email_provider: 'resend',
+      email_last_attempt_at: new Date().toISOString(),
+      email_last_result: delivered.ok ? 'sent' : 'failed',
+      email_message_id: delivered.messageId || null,
+    },
+  }).eq('id', claimed.id).in('status', ['payment_pending', 'action_required']);
+  if (deliveryStateError) {
+    // Do not claim that the external send failed (and risk a duplicate send),
+    // but retain an observable server-side signal for operator reconciliation.
+    console.error('activity participant email state update failed', deliveryStateError.message);
+  }
+  return delivered;
 }
 
 async function completeBookingParticipantClaim(
@@ -1593,6 +2010,57 @@ Deno.serve(async (req) => {
 
   const url = new URL(req.url);
   const path = url.pathname.split('/').pop() || '';
+
+  // GET /activity-participant-invite?token=... — capability-scoped, minimal
+  // payment invitation state. The token reveals no customer contact details.
+  if (req.method === 'GET' && path === 'activity-participant-invite') {
+    const token = String(url.searchParams.get('token') || '').trim();
+    if (token.length < 32) return errorResponse('Invalid invitation', 400);
+    const admin = getServiceClient();
+    const { data, error } = await admin.from('activity_participant_invitations')
+      .select('*, activity_sessions(id, venue_id, name, start_time, end_time), venues(id, name, slug)')
+      .eq('token', token)
+      .maybeSingle();
+    if (error) return errorResponse(error.message, 500);
+    if (!data) return errorResponse('Invitation not found', 404);
+    const invitation = data as ActivityInvitationWithRelations;
+    const activityAnchor = Array.isArray(invitation.activity_sessions) ? invitation.activity_sessions[0] : invitation.activity_sessions;
+    const venue = Array.isArray(invitation.venues) ? invitation.venues[0] : invitation.venues;
+    if (!activityAnchor || activityAnchor.venue_id !== invitation.venue_id) return errorResponse('Invitation not found', 404);
+    const activity = await loadEffectiveActivityOccurrence(
+      admin,
+      invitation.venue_id,
+      invitation.activity_session_id,
+      invitation.session_date,
+    );
+    if (!activity) return errorResponse('Activity occurrence not found', 410);
+    const { state } = await activityInvitationTruth(admin, invitation);
+    return jsonResponse({
+      invitation: {
+        id: invitation.id,
+        status: state.operational_state,
+        headline: state.headline,
+        has_place: state.has_place,
+        reserved: state.reserved,
+        can_retry: state.can_retry,
+        canonical_price_minor: Number(invitation.canonical_price_minor || 0),
+        currency: invitation.currency || 'SEK',
+        expires_at: state.reserved ? invitation.expires_at || null : null,
+        payment_url: state.reserved ? invitation.checkout_url || null : null,
+      },
+      activity: {
+        id: activity.id,
+        name: activity.name,
+        session_date: invitation.session_date,
+        start_time: activity.start_time,
+        end_time: activity.end_time,
+      },
+      venue: {
+        name: venue?.name || null,
+        slug: venue?.slug || null,
+      },
+    }, 200, 0);
+  }
 
   // ── GET /booking-participant-ticket?token=xxx — minimal personal ticket view ──
   if (req.method === 'GET' && path === 'booking-participant-ticket') {
@@ -3940,6 +4408,600 @@ Deno.serve(async (req) => {
   try {
     const { client, userId, error } = await getAuthenticatedClient(req);
     if (error || !client || !userId) return errorResponse(error || 'Unauthorized', 401);
+
+    // GET /api-bookings/activity-participants — protected operational detail
+    // for one occurrence. It is intentionally separate from broad Week/Desk
+    // summary payloads because it contains participant contact details.
+    if (req.method === 'GET' && path === 'activity-participants') {
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      const activitySessionId = String(url.searchParams.get('activitySessionId') || '').trim();
+      const sessionDate = String(url.searchParams.get('sessionDate') || '').slice(0, 10);
+      if (!venueId || !UUID_PATTERN.test(activitySessionId) || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
+        return errorResponse('Invalid activity occurrence', 400);
+      }
+      const admin = getServiceClient();
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const activity = await loadEffectiveActivityOccurrence(admin, venueId, activitySessionId, sessionDate);
+      if (!activity) return errorResponse('Activity occurrence not found', 404);
+
+      const [{ data: invitationRows, error: invitationError }, { data: registrationRows, error: registrationError }, { data: fillRows, error: fillError }] = await Promise.all([
+        admin.from('activity_participant_invitations')
+          .select('*')
+          .eq('venue_id', venueId)
+          .eq('activity_session_id', activitySessionId)
+          .eq('session_date', sessionDate)
+          .order('created_at'),
+        admin.from('session_registrations')
+          .select('id, venue_id, activity_session_id, session_date, user_id, customer_id, status, price_paid_sek, stripe_session_id, source_type, source_id, metadata, registered_at')
+          .eq('venue_id', venueId)
+          .eq('activity_session_id', activitySessionId)
+          .eq('session_date', sessionDate)
+          .neq('status', 'cancelled')
+          .order('registered_at'),
+        admin.rpc('capacity_fill', {
+          p_venue_id: venueId,
+          p_scope_type: 'activity_session',
+          p_scope_id: activitySessionId,
+          p_session_date: sessionDate,
+        }),
+      ]);
+      if (invitationError || registrationError || fillError) {
+        return errorResponse(invitationError?.message || registrationError?.message || fillError?.message, 500);
+      }
+      const invitations = (invitationRows || []) as ActivityParticipantInvitation[];
+      const projectedInvites = await Promise.all(invitations.map((row) => projectActivityInvitationForStaff(admin, row)));
+      const invitedUserIds = new Set(invitations.map((row) => row.user_id));
+      const otherRegistrations = ((registrationRows || []) as ActivityParticipantRegistrationRow[])
+        .filter((row) => !invitedUserIds.has(row.user_id));
+      const customerIds = Array.from(new Set(otherRegistrations
+        .map((row) => row.customer_id)
+        .filter((customerId): customerId is string => Boolean(customerId))));
+      const registrationIds = otherRegistrations.map((row) => row.id).filter(Boolean);
+      const [{ data: customerRows, error: customerError }, { data: checkinRows, error: checkinError }] = await Promise.all([
+        customerIds.length
+          ? admin.from('customers').select('id, display_name, first_name, last_name, primary_email, primary_phone').in('id', customerIds)
+          : Promise.resolve({ data: [], error: null }),
+        registrationIds.length
+          ? admin.from('venue_checkins')
+            .select('entitlement_id, checked_in_at')
+            .eq('venue_id', venueId)
+            .in('entitlement_id', registrationIds)
+            .in('entry_type', ['session_ticket', 'activity_registration'])
+            .is('checked_out_at', null)
+            .order('checked_in_at', { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (customerError || checkinError) return errorResponse(customerError?.message || checkinError?.message, 500);
+      const customerById = new Map<string, ActivityParticipantCustomerRow>(
+        ((customerRows || []) as ActivityParticipantCustomerRow[]).map((row) => [row.id, row]),
+      );
+      const checkinByRegistrationId = new Map<string, ActivityParticipantCheckinRow>();
+      for (const row of (checkinRows || []) as ActivityParticipantCheckinRow[]) {
+        if (!checkinByRegistrationId.has(row.entitlement_id)) checkinByRegistrationId.set(row.entitlement_id, row);
+      }
+      const projectedRegistrations = otherRegistrations.map((registration) => {
+        const customer = registration.customer_id ? customerById.get(registration.customer_id) : null;
+        const checkin = checkinByRegistrationId.get(registration.id);
+        const accessReason = String(registration.metadata?.access_reason || registration.metadata?.pricing_reason || '').trim();
+        const paid = Number(registration.price_paid_sek || 0) > 0;
+        return {
+          id: registration.id,
+          venue_id: registration.venue_id,
+          activity_session_id: registration.activity_session_id,
+          session_date: registration.session_date,
+          customer_id: registration.customer_id,
+          user_id: registration.user_id,
+          customer_name: customer ? customerDisplayName(customer) : 'Deltagare',
+          customer_email: customer?.primary_email || null,
+          customer_phone: customer?.primary_phone || null,
+          status: registration.status,
+          checked_in: registration.status === 'checked_in' || Boolean(checkin?.checked_in_at),
+          checked_in_at: checkin?.checked_in_at || null,
+          session_registration_id: registration.id,
+          registration_id: registration.id,
+          payment_status: paid ? 'paid' : 'free',
+          operational_state: paid ? 'confirmed_paid' : 'confirmed_included',
+          headline: 'HAR PLATS',
+          secondary_label: paid ? 'BETALD' : `INGÅR${accessReason ? ` · ${accessReason}` : ''}`,
+          has_place: true,
+          reserved: false,
+          can_resend: false,
+          can_retry: false,
+          canonical_price_minor: Math.round(Number(registration.price_paid_sek || 0) * 100),
+          amount_sek: Number(registration.price_paid_sek || 0),
+          access_reason: accessReason || null,
+          metadata: registration.metadata || {},
+        };
+      });
+      const fill = Array.isArray(fillRows) ? fillRows[0] : fillRows;
+      const occurrenceInterval = activitySessionOccurrenceInterval(sessionDate, activity.start_time, activity.end_time);
+      return jsonResponse({
+        occurrence: {
+          activity_session_id: activitySessionId,
+          session_date: sessionDate,
+          name: activity.name,
+          start_time: activity.start_time,
+          end_time: activity.end_time,
+          starts_at: occurrenceInterval.start.toUTC().toISO(),
+          ends_at: occurrenceInterval.end.toUTC().toISO(),
+          capacity: fill?.capacity == null ? Number(activity.capacity || 0) || null : Number(fill.capacity),
+          committed_count: Number(fill?.committed_count || 0),
+          reserved_count: Number(fill?.active_holds_count || 0),
+          available_count: fill?.available_count == null ? null : Number(fill.available_count),
+        },
+        participants: [...projectedRegistrations, ...projectedInvites],
+      }, 200, 0);
+    }
+
+    // POST /api-bookings/activity-participant-invite — venue staff creates or
+    // resumes one identified participant's canonical occurrence purchase.
+    if (req.method === 'POST' && path === 'activity-participant-invite') {
+      const body = await req.json();
+      const venueId = String(body.venueId || body.venue_id || '').trim();
+      const activitySessionId = String(body.activitySessionId || body.activity_session_id || '').trim();
+      const sessionDate = String(body.sessionDate || body.session_date || '').slice(0, 10);
+      const customerId = String(body.customerId || body.customer_id || '').trim();
+      const action = String(body.action || 'add').trim();
+      if (!venueId || !UUID_PATTERN.test(activitySessionId) || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
+        return errorResponse('Invalid activity occurrence', 400);
+      }
+      const admin = getServiceClient();
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const activity = await loadEffectiveActivityOccurrence(admin, venueId, activitySessionId, sessionDate);
+      if (!activity) return errorResponse('Activity occurrence not found', 404);
+
+      if (action === 'resend') {
+        const invitationId = String(body.invitationId || body.invitation_id || '').trim();
+        if (!UUID_PATTERN.test(invitationId)) return errorResponse('Invalid invitation', 400);
+        const { data: invitation, error: invitationError } = await admin.from('activity_participant_invitations')
+          .select('*')
+          .eq('id', invitationId)
+          .eq('venue_id', venueId)
+          .eq('activity_session_id', activitySessionId)
+          .eq('session_date', sessionDate)
+          .maybeSingle();
+        if (invitationError) return errorResponse(invitationError.message, 500);
+        if (!invitation) return errorResponse('Invitation not found', 404);
+        const truth = await activityInvitationTruth(admin, invitation as ActivityParticipantInvitation);
+        if (!truth.state.can_resend || !invitation.stripe_session_id || !invitation.checkout_url) {
+          return errorResponse('Betalningslänken kan inte skickas igen i nuvarande läge', 409);
+        }
+        const delivered = await deliverActivityInvitationEmail(admin, req, invitation as ActivityParticipantInvitation, activity);
+        try {
+          await auditMutation(admin, {
+            req, userId, action: 'activity_participant_invitation.email_resend',
+            entityTable: 'activity_participant_invitations', entityId: invitation.id, venueId,
+            metadata: { activity_session_id: activitySessionId, session_date: sessionDate, delivered: delivered.ok },
+          });
+        } catch (auditError) {
+          console.error('activity invitation resend audit failed', auditError);
+        }
+        const { data: refreshed } = await admin.from('activity_participant_invitations').select('*').eq('id', invitation.id).single();
+        return jsonResponse({
+          ok: delivered.ok,
+          email_sent: delivered.ok,
+          participant: await projectActivityInvitationForStaff(admin, refreshed as ActivityParticipantInvitation),
+        }, delivered.ok ? 200 : 502, 0);
+      }
+      if (action !== 'add') return errorResponse('Invalid action', 400);
+      if (!UUID_PATTERN.test(customerId)) return errorResponse('Välj en befintlig kund', 400);
+
+      const customer = await resolveExistingCustomerById(admin, venueId, customerId);
+      if (!customer) return errorResponse('Kunden kunde inte kopplas till den här anläggningen', 404);
+      const { data: venueProfile, error: venueProfileError } = await admin.from('customer_venue_profiles')
+        .select('customer_id')
+        .eq('venue_id', venueId)
+        .eq('customer_id', customerId)
+        .maybeSingle();
+      if (venueProfileError) return errorResponse(venueProfileError.message, 500);
+      if (!venueProfile) return errorResponse('Kunden tillhör inte den här anläggningen', 403);
+      if (!customer.user_id) {
+        return errorResponse('Aktivitetsinbjudan kräver en kund med kopplat Pickla-konto', 409);
+      }
+      const occurrence = activitySessionOccurrenceInterval(sessionDate, activity.start_time, activity.end_time);
+      if (!occurrence || DateTime.now().setZone('Europe/Stockholm') >= occurrence.start) {
+        return errorResponse('Det går inte att lägga till en spelare efter aktivitetens start', 409);
+      }
+
+      const { data: committedRegistration, error: committedError } = await admin.from('session_registrations')
+        .select('id, status, price_paid_sek')
+        .eq('activity_session_id', activitySessionId)
+        .eq('session_date', sessionDate)
+        .eq('user_id', customer.user_id)
+        .in('status', ['confirmed', 'checked_in', 'no_show'])
+        .maybeSingle();
+      if (committedError) return errorResponse(committedError.message, 500);
+      if (committedRegistration) {
+        return jsonResponse({
+          ok: true,
+          already_exists: true,
+          participant: {
+            registration_id: committedRegistration.id,
+            operational_state: Number(committedRegistration.price_paid_sek || 0) > 0 ? 'confirmed_paid' : 'confirmed_included',
+            headline: 'HAR PLATS',
+            has_place: true,
+          },
+        }, 200, 0);
+      }
+
+      const [quotedPricing, regularPricing] = await Promise.all([
+        resolveActivityPricingDecision({
+          client: admin, venueId, userId: customer.user_id, customerId: customer.customer_id,
+          activitySessionId, sessionDate, requestedProductKey: activity.product_key || null,
+          requestedAmountSek: Number(activity.price_sek || 0), purchaseKind: 'activity_ticket',
+          salesChannel: 'desk', session: activity,
+        }),
+        resolveActivityPricingDecision({
+          client: admin, venueId, userId: customer.user_id, customerId: customer.customer_id,
+          activitySessionId, sessionDate, requestedProductKey: activity.product_key || null,
+          requestedAmountSek: Number(activity.price_sek || 0), purchaseKind: 'activity_ticket',
+          salesChannel: 'desk', session: activity, applyEarlyBird: false, applyFirstVisit: false,
+        }),
+      ]);
+
+      const invitationResult = await admin.from('activity_participant_invitations')
+        .select('*')
+        .eq('activity_session_id', activitySessionId)
+        .eq('session_date', sessionDate)
+        .eq('user_id', customer.user_id)
+        .maybeSingle();
+      let invitation = invitationResult.data;
+      const invitationError = invitationResult.error;
+      if (invitationError) return errorResponse(invitationError.message, 500);
+      if (invitation) {
+        const preparingStartedAt = new Date(invitation.updated_at || invitation.created_at || 0).getTime();
+        if (invitation.status === 'preparing'
+          && Number.isFinite(preparingStartedAt)
+          && preparingStartedAt > Date.now() - ACTIVITY_PARTICIPANT_PREPARING_STALE_SECONDS * 1000) {
+          return errorResponse('En annan operatör hanterar redan spelaren', 409);
+        }
+        const truth = await activityInvitationTruth(admin, invitation as ActivityParticipantInvitation);
+        if (truth.state.has_place || truth.state.reserved) {
+          return jsonResponse({
+            ok: true,
+            already_exists: true,
+            participant: await projectActivityInvitationForStaff(admin, invitation as ActivityParticipantInvitation),
+          }, 200, 0);
+        }
+        if (invitation.metadata?.stripe_session_unknown === true && !invitation.stripe_session_id) {
+          return errorResponse('Tidigare betalningsförsök är tvetydigt och kräver manuell kontroll innan nytt försök.', 409);
+        }
+        const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+        if (invitation.stripe_session_id) {
+          if (!stripeKey) return errorResponse('Stripe not configured', 500);
+          let retired;
+          try {
+            retired = await retireUnpaidStripeCheckout(stripeKey, invitation.stripe_session_id, {
+              invitationId: invitation.id,
+              holdId: invitation.capacity_hold_id,
+            });
+          } catch {
+            return errorResponse('Tidigare betalningsförsök kunde inte verifieras. Försök igen senare.', 503);
+          }
+          if (retired.state === 'paid' || retired.state === 'unknown') {
+            return errorResponse('Betalningen behandlas. Skapa inte en ny betalning.', 409);
+          }
+          if (!retired.releasable) {
+            return errorResponse('Tidigare betalningsförsök kunde inte avslutas. Försök igen senare.', 503);
+          }
+        }
+        await releaseCapacityHold(admin, invitation.capacity_hold_id, 'activity_participant_invitation_retry');
+        const nextAttempt = Number(invitation.attempt_count || 0) + 1;
+        const { data: claimed, error: claimError } = await admin.from('activity_participant_invitations')
+          .update({
+            status: 'preparing', attempt_count: nextAttempt,
+            canonical_price_minor: Math.round(quotedPricing.finalAmountSek * 100),
+            pricing_reason: quotedPricing.pricingReason,
+            entitlement_type: quotedPricing.entitlementType || null,
+            access_reason: quotedPricing.accessReason || quotedPricing.checkoutLabel || null,
+            capacity_hold_id: null, stripe_session_id: null, checkout_url: null,
+            registration_id: null, expires_at: null,
+            metadata: {
+              ...(invitation.metadata || {}),
+              stripe_session_unknown: false,
+              retry_started_at: new Date().toISOString(),
+            },
+          })
+          .eq('id', invitation.id)
+          .eq('updated_at', invitation.updated_at)
+          .select('*')
+          .maybeSingle();
+        if (claimError) return errorResponse(claimError.message, 500);
+        if (!claimed) return errorResponse('En annan operatör hanterar redan spelaren', 409);
+        invitation = claimed;
+      } else {
+        const { data: inserted, error: insertError } = await admin.from('activity_participant_invitations').insert({
+          venue_id: venueId,
+          activity_session_id: activitySessionId,
+          session_date: sessionDate,
+          customer_id: customer.customer_id,
+          user_id: customer.user_id,
+          created_by_user_id: userId,
+          token: newActivityParticipantInviteToken(),
+          status: 'preparing',
+          canonical_price_minor: Math.round(quotedPricing.finalAmountSek * 100),
+          pricing_reason: quotedPricing.pricingReason,
+          entitlement_type: quotedPricing.entitlementType || null,
+          access_reason: quotedPricing.accessReason || quotedPricing.checkoutLabel || null,
+          attempt_count: 1,
+          metadata: { source: 'desk', participant_identity: 'existing_customer' },
+        }).select('*').single();
+        if (insertError?.code === '23505') return errorResponse('En annan operatör hanterar redan spelaren', 409);
+        if (insertError) return errorResponse(insertError.message, 500);
+        invitation = inserted;
+      }
+      const typedInvitation = invitation as ActivityParticipantInvitation;
+
+      if (quotedPricing.finalAmountSek <= 0) {
+        const registrationSource = includedActivityRegistrationSource(quotedPricing, typedInvitation.id);
+        let committed: CapacityRpcResult;
+        try {
+          committed = await commitActivityRegistrationCapacity(admin, {
+            p_venue_id: venueId,
+            p_activity_session_id: activitySessionId,
+            p_session_date: sessionDate,
+            p_user_id: customer.user_id,
+            p_customer_id: customer.customer_id,
+            p_status: 'confirmed',
+            p_price_paid_sek: 0,
+            p_source_type: registrationSource.sourceType,
+            p_source_id: UUID_PATTERN.test(String(registrationSource.sourceId || ''))
+              ? registrationSource.sourceId
+              : typedInvitation.id,
+            p_metadata: {
+              activity_participant_invitation_id: typedInvitation.id,
+              pricing_reason: quotedPricing.pricingReason,
+              entitlement_type: quotedPricing.entitlementType || null,
+              access_reason: quotedPricing.accessReason || quotedPricing.checkoutLabel || null,
+              funding_type: quotedPricing.fundingType || null,
+              funder: quotedPricing.funder || null,
+              consumption_required: quotedPricing.consumptionRequired,
+            },
+          });
+        } catch (capacityError) {
+          await admin.from('activity_participant_invitations').update({
+            status: 'action_required',
+            metadata: { ...(typedInvitation.metadata || {}), failure_reason: 'capacity_full', failed_at: new Date().toISOString() },
+          }).eq('id', typedInvitation.id).eq('status', 'preparing');
+          return errorResponse('Platsen hann tas — aktiviteten är full.', 409);
+        }
+        const { data: confirmed, error: updateError } = await admin.from('activity_participant_invitations')
+          .update({ status: 'confirmed_free', registration_id: committed.registration_id || null, checkout_url: null })
+          .eq('id', typedInvitation.id)
+          .select('*')
+          .single();
+        if (updateError || !confirmed) {
+          console.error('included activity invitation projection update failed', updateError?.message || 'missing row');
+          return jsonResponse({
+            ok: true,
+            email_sent: false,
+            participant: {
+              registration_id: committed.registration_id || null,
+              operational_state: 'confirmed_included',
+              headline: 'HAR PLATS',
+              secondary_label: `INGÅR${quotedPricing.accessReason ? ` · ${quotedPricing.accessReason}` : ''}`,
+              has_place: true,
+              reserved: false,
+            },
+          }, 201, 0);
+        }
+        try {
+          await auditMutation(admin, {
+            req, userId, action: 'activity_participant_invitation.confirm_included',
+            entityTable: 'activity_participant_invitations', entityId: typedInvitation.id, venueId,
+            metadata: { activity_session_id: activitySessionId, session_date: sessionDate, pricing_reason: quotedPricing.pricingReason },
+          });
+        } catch (auditError) {
+          console.error('included activity invitation audit failed', auditError);
+        }
+        return jsonResponse({
+          ok: true, email_sent: false,
+          participant: await projectActivityInvitationForStaff(admin, confirmed as ActivityParticipantInvitation),
+        }, 201, 0);
+      }
+
+      const contact = await activityInvitationContact(admin, typedInvitation);
+      if (!contact.email) {
+        await admin.from('activity_participant_invitations').update({
+          status: 'action_required',
+          metadata: { ...(typedInvitation.metadata || {}), failure_reason: 'missing_email', failed_at: new Date().toISOString() },
+        }).eq('id', typedInvitation.id).eq('status', 'preparing');
+        return errorResponse('Kunden saknar e-postadress för betalningslänken', 409);
+      }
+      const holdKey = activityParticipantInviteIdempotencyKey(typedInvitation.id, typedInvitation.attempt_count);
+      const { data: holdData, error: holdError } = await admin.rpc('acquire_first_visit_activity_pricing_hold', {
+        p_venue_id: venueId,
+        p_activity_session_id: activitySessionId,
+        p_session_date: sessionDate,
+        p_user_id: customer.user_id,
+        p_customer_id: customer.customer_id,
+        p_source_type: ACTIVITY_PARTICIPANT_INVITE_SOURCE,
+        p_source_id: typedInvitation.id,
+        p_idempotency_key: holdKey,
+        p_regular_price_minor: Math.round(regularPricing.finalAmountSek * 100),
+        p_regular_price_type: regularPricing.pricingReason,
+        p_quoted_price_minor: Math.round(quotedPricing.finalAmountSek * 100),
+        p_metadata: {
+          activity_participant_invitation_id: typedInvitation.id,
+          purchase_kind: 'activity_ticket',
+          sales_channel: 'desk',
+        },
+        p_ttl_seconds: ACTIVITY_PARTICIPANT_INVITE_TTL_SECONDS,
+      }).maybeSingle();
+      if (holdError) {
+        await admin.from('activity_participant_invitations').update({
+          status: 'action_required',
+          metadata: { ...(typedInvitation.metadata || {}), failure_reason: 'hold_error', failed_at: new Date().toISOString() },
+        }).eq('id', typedInvitation.id).eq('status', 'preparing');
+        return errorResponse(holdError.message, holdError.code === '23505' ? 409 : 500);
+      }
+      if (!holdData?.ok || !holdData.hold_id) {
+        await admin.from('activity_participant_invitations').update({
+          status: 'action_required',
+          metadata: { ...(typedInvitation.metadata || {}), failure_reason: holdData?.reason || 'capacity_full', failed_at: new Date().toISOString() },
+        }).eq('id', typedInvitation.id).eq('status', 'preparing');
+        return errorResponse('Platsen hann tas — aktiviteten är full.', 409);
+      }
+      const canonicalPriceMinor = Number(holdData.final_price_minor || Math.round(quotedPricing.finalAmountSek * 100));
+      const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+      if (!stripeKey) {
+        await releaseCapacityHold(admin, holdData.hold_id, 'activity_participant_invitation_stripe_unconfigured');
+        await admin.from('activity_participant_invitations').update({
+          status: 'action_required',
+          capacity_hold_id: null,
+          metadata: { ...(typedInvitation.metadata || {}), failure_reason: 'stripe_unconfigured', failed_at: new Date().toISOString() },
+        }).eq('id', typedInvitation.id).eq('status', 'preparing');
+        return errorResponse('Stripe not configured', 500);
+      }
+      const stablePath = `/activity/invite/${encodeURIComponent(typedInvitation.token)}`;
+      let stripeSession: StripeCheckoutSession | null = null;
+      try {
+        stripeSession = await createStripeCheckoutSession(stripeKey, {
+          payment_method_types: ['card'],
+          mode: 'payment',
+          customer_email: contact.email,
+          expires_at: Math.floor(Date.now() / 1000) + ACTIVITY_PARTICIPANT_INVITE_TTL_SECONDS,
+          line_items: [{
+            price_data: {
+              currency: 'sek',
+              product_data: { name: `Aktivitetsbiljett · ${activity.name || 'Aktivitet'}` },
+              unit_amount: canonicalPriceMinor,
+              tax_behavior: 'inclusive',
+            },
+            quantity: 1,
+          }],
+          metadata: {
+            product_type: 'activity_ticket',
+            venue_id: venueId,
+            slug: '',
+            date: sessionDate,
+            user_id: customer.user_id,
+            customer_name: contact.displayName,
+            customer_email: contact.email,
+            customer_phone: contact.phone || '',
+            base_amount_sek: String(regularPricing.baseAmountSek),
+            billed_amount_sek: String(canonicalPriceMinor / 100),
+            pricing_reason: String(holdData.applied_price_type || quotedPricing.pricingReason),
+            product_key: quotedPricing.productKey,
+            product_kind: quotedPricing.productKind || '',
+            activity_session_id: activitySessionId,
+            session_name: activity.name || '',
+            session_type: activity.session_type || 'open_play',
+            capacity_hold_id: holdData.hold_id,
+            activity_participant_invitation_id: typedInvitation.id,
+          },
+          success_url: `${canonicalPublicOrigin(req)}${stablePath}?session={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${canonicalPublicOrigin(req)}${stablePath}?checkout=cancelled`,
+        }, holdKey);
+        if (!stripeSession.id || !stripeSession.url) throw new Error('Stripe Checkout response missing payment URL');
+        if (!await attachCapacityHoldStripeSession(admin, holdData.hold_id, stripeSession.id)) {
+          throw new Error('Capacity hold could not be attached to Stripe Checkout');
+        }
+      } catch (stripeError) {
+        const checkoutCreationUncertain = !stripeSession && (
+          !(stripeError instanceof StripeCheckoutCreationError) || stripeError.uncertain
+        );
+        let checkoutRetired = !stripeSession && !checkoutCreationUncertain;
+        if (stripeSession?.id) {
+          try {
+            checkoutRetired = (await retireUnpaidStripeCheckout(stripeKey, stripeSession.id, {
+              invitationId: typedInvitation.id,
+              holdId: holdData.hold_id,
+            })).releasable;
+          } catch {
+            checkoutRetired = false;
+          }
+        }
+        if (checkoutRetired) {
+          await releaseCapacityHold(admin, holdData.hold_id, 'activity_participant_invitation_stripe_failed');
+        }
+        await admin.from('activity_participant_invitations').update({
+          status: 'action_required',
+          capacity_hold_id: checkoutRetired ? null : holdData.hold_id,
+          stripe_session_id: checkoutRetired ? null : stripeSession?.id || null,
+          checkout_url: checkoutRetired ? null : stripeSession?.url || null,
+          expires_at: checkoutRetired ? null : new Date(Date.now() + ACTIVITY_PARTICIPANT_INVITE_TTL_SECONDS * 1000).toISOString(),
+          metadata: {
+            ...(typedInvitation.metadata || {}),
+            stripe_session_unknown: checkoutCreationUncertain,
+            stripe_error_at: new Date().toISOString(),
+          },
+        }).eq('id', typedInvitation.id);
+        return errorResponse('Betalningsförsöket kunde inte skapas. Ingen plats bekräftades.', 502);
+      }
+      if (!stripeSession) return errorResponse('Betalningsförsöket kunde inte skapas. Ingen plats bekräftades.', 502);
+      const { data: holdRow } = await admin.from('capacity_holds').select('expires_at').eq('id', holdData.hold_id).single();
+      const { data: pending, error: pendingError } = await admin.from('activity_participant_invitations').update({
+        status: 'payment_pending',
+        canonical_price_minor: canonicalPriceMinor,
+        pricing_reason: String(holdData.applied_price_type || quotedPricing.pricingReason),
+        capacity_hold_id: holdData.hold_id,
+        stripe_session_id: stripeSession.id,
+        checkout_url: stripeSession.url,
+        expires_at: holdRow?.expires_at || new Date(Date.now() + ACTIVITY_PARTICIPANT_INVITE_TTL_SECONDS * 1000).toISOString(),
+        metadata: {
+          ...(typedInvitation.metadata || {}),
+          quote_changed: holdData.quote_changed === true,
+          payment_attempt_created_at: new Date().toISOString(),
+        },
+      }).eq('id', typedInvitation.id).eq('status', 'preparing').select('*').single();
+      if (pendingError) {
+        let checkoutRetired = false;
+        try {
+          checkoutRetired = (await retireUnpaidStripeCheckout(stripeKey, stripeSession.id, {
+            invitationId: typedInvitation.id,
+            holdId: holdData.hold_id,
+          })).releasable;
+        } catch {
+          checkoutRetired = false;
+        }
+        if (checkoutRetired) {
+          await releaseCapacityHold(admin, holdData.hold_id, 'activity_participant_invitation_attach_failed');
+          await admin.from('activity_participant_invitations').update({
+            status: 'action_required',
+            capacity_hold_id: null,
+            stripe_session_id: null,
+            checkout_url: null,
+            expires_at: null,
+            metadata: { ...(typedInvitation.metadata || {}), attach_error_at: new Date().toISOString() },
+          }).eq('id', typedInvitation.id).eq('status', 'preparing');
+        } else {
+          await admin.from('activity_participant_invitations').update({
+            status: 'action_required',
+            capacity_hold_id: holdData.hold_id,
+            stripe_session_id: stripeSession.id,
+            checkout_url: stripeSession.url,
+            expires_at: holdRow?.expires_at || null,
+            metadata: { ...(typedInvitation.metadata || {}), attach_error_at: new Date().toISOString() },
+          }).eq('id', typedInvitation.id).eq('status', 'preparing');
+        }
+        return errorResponse(
+          checkoutRetired
+            ? 'Betalningsförsöket kunde inte kopplas. Ingen plats bekräftades.'
+            : 'Betalningsförsöket måste verifieras innan ett nytt kan skapas.',
+          checkoutRetired ? 502 : 409,
+        );
+      }
+      const delivered = await deliverActivityInvitationEmail(admin, req, pending as ActivityParticipantInvitation, activity);
+      try {
+        await auditMutation(admin, {
+          req, userId, action: 'activity_participant_invitation.create',
+          entityTable: 'activity_participant_invitations', entityId: typedInvitation.id, venueId,
+          metadata: {
+            activity_session_id: activitySessionId, session_date: sessionDate,
+            canonical_price_minor: canonicalPriceMinor, email_sent: delivered.ok,
+          },
+        });
+      } catch (auditError) {
+        console.error('activity invitation create audit failed', auditError);
+      }
+      const { data: refreshed } = await admin.from('activity_participant_invitations').select('*').eq('id', typedInvitation.id).single();
+      return jsonResponse({
+        ok: true,
+        email_sent: delivered.ok,
+        participant: await projectActivityInvitationForStaff(admin, refreshed as ActivityParticipantInvitation),
+      }, 201, 0);
+    }
 
     // GET /api-bookings/my-bookings — owned bookings plus claimed participant places for My Page.
     if (req.method === 'GET' && path === 'my-bookings') {

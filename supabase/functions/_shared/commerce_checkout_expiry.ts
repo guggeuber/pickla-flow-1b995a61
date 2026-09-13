@@ -58,8 +58,23 @@ export async function finalizeExpiredCommerceCheckout(
     if (directReleaseError) throw new Error(directReleaseError.message);
   }
 
+  const activityInvitationId = String(session?.metadata?.activity_participant_invitation_id || '').trim();
+  if (activityInvitationId && session.id) {
+    const { error: invitationError } = await serviceClient
+      .from('activity_participant_invitations')
+      .update({
+        status: 'payment_expired',
+        checkout_url: null,
+        expires_at: new Date().toISOString(),
+      })
+      .eq('id', activityInvitationId)
+      .eq('stripe_session_id', session.id)
+      .in('status', ['payment_pending', 'action_required']);
+    if (invitationError) throw new Error(invitationError.message);
+  }
+
   const orderId = String(session?.metadata?.commerce_order_id || '').trim();
-  if (!orderId || !session.id) return { released: Boolean(directHoldId), orderId: orderId || null };
+  if (!orderId || !session.id) return { released: Boolean(directHoldId || activityInvitationId), orderId: orderId || null };
   const { data: order, error: orderError } = await serviceClient.from('commerce_orders')
     .select('id, venue_id, status, stripe_session_id, metadata')
     .eq('id', orderId)

@@ -1,5 +1,85 @@
 import { DateTime } from "luxon";
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+
+export type ActivityParticipantOperationalState =
+  | "confirmed_paid"
+  | "confirmed_included"
+  | "payment_pending"
+  | "payment_expired"
+  | "action_required"
+  | "cancelled";
+
+export type ActivityParticipantDetail = {
+  id: string;
+  invitation_id?: string | null;
+  venue_id: string;
+  activity_session_id: string;
+  session_date: string;
+  customer_id?: string | null;
+  user_id?: string | null;
+  customer_name: string;
+  customer_email?: string | null;
+  customer_phone?: string | null;
+  session_registration_id?: string | null;
+  registration_id?: string | null;
+  status: string;
+  payment_status: string;
+  operational_state: ActivityParticipantOperationalState;
+  headline: string;
+  secondary_label: string;
+  has_place: boolean;
+  reserved: boolean;
+  can_resend: boolean;
+  can_retry: boolean;
+  checked_in?: boolean;
+  checked_in_at?: string | null;
+  canonical_price_minor: number;
+  amount_sek: number;
+  access_reason?: string | null;
+  expires_at?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type ActivityParticipantsResponse = {
+  occurrence: {
+    activity_session_id: string;
+    session_date: string;
+    name: string;
+    start_time: string;
+    end_time: string;
+    starts_at: string;
+    ends_at: string;
+    capacity: number | null;
+    committed_count: number;
+    reserved_count: number;
+    available_count: number | null;
+  };
+  participants: ActivityParticipantDetail[];
+};
+
+export function fetchActivityParticipants(venueId: string, activitySessionId: string, sessionDate: string) {
+  return apiGet<ActivityParticipantsResponse>("api-bookings", "activity-participants", {
+    venueId,
+    activitySessionId,
+    sessionDate,
+  });
+}
+
+export function addActivityParticipant(venueId: string, activitySessionId: string, sessionDate: string, customerId: string) {
+  return apiPost<{ ok: boolean; already_exists?: boolean; email_sent?: boolean; participant: ActivityParticipantDetail }>(
+    "api-bookings",
+    "activity-participant-invite",
+    { venueId, activitySessionId, sessionDate, customerId, action: "add" },
+  );
+}
+
+export function resendActivityParticipantInvitation(venueId: string, activitySessionId: string, sessionDate: string, invitationId: string) {
+  return apiPost<{ ok: boolean; email_sent: boolean; participant: ActivityParticipantDetail }>(
+    "api-bookings",
+    "activity-participant-invite",
+    { venueId, activitySessionId, sessionDate, invitationId, action: "resend" },
+  );
+}
 
 export function deskBookingCheckinEligibility(booking: any) {
   if (!booking?.venue_id) return { ok: false, reason: "Bokningsdata saknas" };

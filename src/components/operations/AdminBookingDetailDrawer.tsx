@@ -83,6 +83,7 @@ function LoadedAdminBookingDetailDrawer({
       booking={detailQuery.data || null}
       onClose={onClose}
       readOnly={readOnly}
+      showProtectedDetails
     />
   );
 }
