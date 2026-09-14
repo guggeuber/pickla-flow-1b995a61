@@ -15,6 +15,86 @@ export type CorporateParticipationProjection = {
   cta: { label: string; url: string } | null;
 };
 
+export type CorporatePublicPageContentInput = {
+  hero_headline?: unknown;
+  short_intro?: unknown;
+  hero_image_path?: unknown;
+  gallery_image_paths?: unknown;
+  pickleball_heading?: unknown;
+  pickleball_body?: unknown;
+  pickla_heading?: unknown;
+  pickla_body?: unknown;
+  practical_information?: unknown;
+  help_contact_text?: unknown;
+};
+
+export type CorporatePublicPageContent = {
+  hero_headline: string | null;
+  short_intro: string | null;
+  hero_image_path: string | null;
+  gallery_image_paths: string[];
+  pickleball_heading: string | null;
+  pickleball_body: string | null;
+  pickla_heading: string | null;
+  pickla_body: string | null;
+  practical_information: string | null;
+  help_contact_text: string | null;
+};
+
+const CORPORATE_PAGE_IMAGE_PATH = /^corporate-accounts\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/(hero|gallery-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.webp$/;
+
+function normalizeCorporatePageText(value: unknown, maxLength: number, label: string) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (text.length > maxLength) throw new Error(`${label} may contain at most ${maxLength} characters`);
+  return text;
+}
+
+export function normalizeCorporatePageImagePath(value: unknown, accountId: string) {
+  const path = String(value ?? '').trim();
+  if (!path) return null;
+  const match = path.match(CORPORATE_PAGE_IMAGE_PATH);
+  if (!match || match[1] !== accountId.toLowerCase()) {
+    throw new Error('Corporate page image must use the approved account-owned storage path');
+  }
+  return path;
+}
+
+export function normalizeCorporatePageGallery(value: unknown, accountId: string) {
+  if (!Array.isArray(value)) return [];
+  if (value.length > 6) throw new Error('A corporate page may contain at most 6 gallery images');
+  return [...new Set(value.map((path) => normalizeCorporatePageImagePath(path, accountId)).filter((path): path is string => Boolean(path)))];
+}
+
+export function normalizeCorporatePublicPageContent(input: CorporatePublicPageContentInput, accountId: string): CorporatePublicPageContent {
+  return {
+    hero_headline: normalizeCorporatePageText(input.hero_headline, 160, 'Hero headline'),
+    short_intro: normalizeCorporatePageText(input.short_intro, 600, 'Short intro'),
+    hero_image_path: normalizeCorporatePageImagePath(input.hero_image_path, accountId),
+    gallery_image_paths: normalizeCorporatePageGallery(input.gallery_image_paths, accountId),
+    pickleball_heading: normalizeCorporatePageText(input.pickleball_heading, 160, 'Pickleball heading'),
+    pickleball_body: normalizeCorporatePageText(input.pickleball_body, 1600, 'Pickleball body'),
+    pickla_heading: normalizeCorporatePageText(input.pickla_heading, 160, 'Pickla heading'),
+    pickla_body: normalizeCorporatePageText(input.pickla_body, 1600, 'Pickla body'),
+    practical_information: normalizeCorporatePageText(input.practical_information, 1600, 'Practical information'),
+    help_contact_text: normalizeCorporatePageText(input.help_contact_text, 1200, 'Help/contact text'),
+  };
+}
+
+export function defaultCorporatePublicPageContent(companyName: unknown): Omit<CorporatePublicPageContent, 'hero_image_path' | 'gallery_image_paths'> {
+  const company = String(companyName ?? '').trim() || 'Your company';
+  return {
+    hero_headline: `${company} × Pickla`,
+    short_intro: 'Your weekly pickleball hour — easy to join, social from the first rally.',
+    pickleball_heading: 'NEW TO PICKLEBALL? PERFECT.',
+    pickleball_body: 'Pickleball is a mix of tennis, badminton and table tennis. It is social, easy to start and takes about five minutes to learn. The sport has become huge in the United States and is growing rapidly across Asia.',
+    pickla_heading: 'WELCOME TO PICKLA',
+    pickla_body: "Pickla is one of Europe’s leading dedicated pickleball communities, with eight indoor courts in Solna Business Park. Pickla combines sport, community and social experiences — whether you’re playing for the first time or already hooked.",
+    practical_information: 'Come as you are. Rackets and balls are ready at the venue. Indoor shoes and comfortable sportswear are recommended.',
+    help_contact_text: null,
+  };
+}
+
 export function normalizeCorporateSlug(value: unknown): string | null {
   const slug = String(value ?? '').trim().toLowerCase();
   if (!slug) return null;

@@ -10,9 +10,16 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Building2, CheckCircle2, Clock, Copy, FileText, Link2, Loader2, Plus, ShoppingCart } from "lucide-react";
+import { ArrowDown, ArrowUp, Building2, CheckCircle2, Clock, Copy, Eye, FileText, ImagePlus, Link2, Loader2, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
+import {
+  corporatePageImagePublicUrl,
+  CorporatePublicPageContent,
+  MAX_CORPORATE_GALLERY_IMAGES,
+  removeCorporatePageImage,
+  uploadCorporatePageImage,
+} from "@/lib/corporatePublicPage";
 
 interface Props { venueId: string }
 
@@ -104,6 +111,170 @@ function AccountEditor({ account, onSaved }: { account: any; onSaved: () => void
     </div>
     <Button size="sm" onClick={save} disabled={saving} className="justify-self-end">{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Spara företag</Button>
   </div>;
+}
+
+type CorporatePageDraft = {
+  hero_headline: string;
+  short_intro: string;
+  hero_image_path: string | null;
+  gallery_image_paths: string[];
+  pickleball_heading: string;
+  pickleball_body: string;
+  pickla_heading: string;
+  pickla_body: string;
+  practical_information: string;
+  help_contact_text: string;
+};
+
+function pageDraft(account: any): CorporatePageDraft {
+  const page = account.public_page || {};
+  return {
+    hero_headline: page.hero_headline || `${account.company_name} × Pickla`,
+    short_intro: page.short_intro || "",
+    hero_image_path: page.hero_image_path || null,
+    gallery_image_paths: Array.isArray(page.gallery_image_paths) ? page.gallery_image_paths : [],
+    pickleball_heading: page.pickleball_heading || "",
+    pickleball_body: page.pickleball_body || "",
+    pickla_heading: page.pickla_heading || "",
+    pickla_body: page.pickla_body || "",
+    practical_information: page.practical_information || "",
+    help_contact_text: page.help_contact_text || "",
+  };
+}
+
+export function CorporatePublicPageEditor({ account, onSaved }: { account: any; onSaved: () => void }) {
+  const [draft, setDraft] = useState<CorporatePageDraft>(() => pageDraft(account));
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState<"hero" | "gallery" | null>(null);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+
+  useEffect(() => { setDraft(pageDraft(account)); }, [account]);
+  useEffect(() => {
+    let cancelled = false;
+    const paths = [draft.hero_image_path, ...draft.gallery_image_paths].filter((path): path is string => Boolean(path));
+    Promise.all(paths.map(async (path) => [path, await corporatePageImagePublicUrl(path)] as const))
+      .then((entries) => { if (!cancelled) setImageUrls(Object.fromEntries(entries)); })
+      .catch(() => { if (!cancelled) setImageUrls({}); });
+    return () => { cancelled = true; };
+  }, [draft.hero_image_path, draft.gallery_image_paths]);
+
+  const persist = async (next: CorporatePageDraft, successMessage: string) => {
+    setSaving(true);
+    try {
+      const saved = await apiPatch<CorporatePublicPageContent>("api-corporate", "admin-page-content", {
+        account_id: account.id,
+        ...next,
+      });
+      setDraft({
+        hero_headline: saved.hero_headline,
+        short_intro: saved.short_intro,
+        hero_image_path: saved.hero_image_path || null,
+        gallery_image_paths: saved.gallery_image_paths || [],
+        pickleball_heading: saved.pickleball_heading,
+        pickleball_body: saved.pickleball_body,
+        pickla_heading: saved.pickla_heading,
+        pickla_body: saved.pickla_body,
+        practical_information: saved.practical_information,
+        help_contact_text: saved.help_contact_text || "",
+      });
+      toast.success(successMessage);
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveText = async () => {
+    try { await persist(draft, "Den publika sidan sparades"); }
+    catch (error) { toast.error(errorMessage(error)); }
+  };
+
+  const uploadImage = async (role: "hero" | "gallery", file?: File) => {
+    if (!file) return;
+    if (role === "gallery" && draft.gallery_image_paths.length >= MAX_CORPORATE_GALLERY_IMAGES) {
+      toast.error(`Max ${MAX_CORPORATE_GALLERY_IMAGES} galleribilder`);
+      return;
+    }
+    setUploading(role);
+    let uploadedPath: string | null = null;
+    try {
+      uploadedPath = await uploadCorporatePageImage({ accountId: account.id, role, file });
+      const next = role === "hero"
+        ? { ...draft, hero_image_path: uploadedPath }
+        : { ...draft, gallery_image_paths: [...draft.gallery_image_paths, uploadedPath] };
+      await persist(next, role === "hero" ? "Hero-bilden uppdaterades" : "Bilden lades till");
+    } catch (error) {
+      if (uploadedPath && role === "gallery") await removeCorporatePageImage(account.id, uploadedPath).catch(() => undefined);
+      toast.error(errorMessage(error));
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const removeImage = async (path: string, role: "hero" | "gallery") => {
+    const next = role === "hero"
+      ? { ...draft, hero_image_path: null }
+      : { ...draft, gallery_image_paths: draft.gallery_image_paths.filter((item) => item !== path), hero_image_path: draft.hero_image_path === path ? null : draft.hero_image_path };
+    try {
+      await persist(next, "Bilden togs bort");
+      const remainsReferenced = next.hero_image_path === path || next.gallery_image_paths.includes(path);
+      if (!remainsReferenced) await removeCorporatePageImage(account.id, path);
+    } catch (error) { toast.error(errorMessage(error)); }
+  };
+
+  const moveGalleryImage = async (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= draft.gallery_image_paths.length) return;
+    const reordered = [...draft.gallery_image_paths];
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+    try { await persist({ ...draft, gallery_image_paths: reordered }, "Bildordningen uppdaterades"); }
+    catch (error) { toast.error(errorMessage(error)); }
+  };
+
+  const setGalleryImageAsHero = async (path: string) => {
+    try { await persist({ ...draft, hero_image_path: path }, "Hero-bilden valdes"); }
+    catch (error) { toast.error(errorMessage(error)); }
+  };
+
+  const previewEnabled = Boolean(account.slug) && ["unlisted", "listed"].includes(account.public_visibility);
+  const previewHref = account.slug ? canonicalAppUrl(`/foretag/${encodeURIComponent(account.slug)}`) : "#";
+
+  return <details className="rounded-xl border border-border bg-muted/20 p-4">
+    <summary className="cursor-pointer text-sm font-bold">Publik företagssida</summary>
+    <div className="mt-4 grid gap-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background p-3">
+        <div><p className="text-sm font-bold">Innehåll för medarbetare</p><p className="text-xs text-muted-foreground">Schema, venue, bana och deltagande hämtas alltid från live-data.</p></div>
+        <Button asChild={previewEnabled} type="button" size="sm" variant="outline" disabled={!previewEnabled}>
+          {previewEnabled ? <a href={previewHref} target="_blank" rel="noopener noreferrer"><Eye className="mr-2 h-4 w-4" />Förhandsvisa publik sida</a> : <span><Eye className="mr-2 h-4 w-4" />Förhandsvisa publik sida</span>}
+        </Button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-xs font-semibold">Hero-rubrik<Input maxLength={160} value={draft.hero_headline} onChange={(event) => setDraft({ ...draft, hero_headline: event.target.value })} /></label>
+        <label className="grid gap-1 text-xs font-semibold sm:col-span-2">Kort introduktion<Textarea maxLength={600} value={draft.short_intro} onChange={(event) => setDraft({ ...draft, short_intro: event.target.value })} /></label>
+        <label className="grid gap-1 text-xs font-semibold">Pickleball-rubrik<Input maxLength={160} value={draft.pickleball_heading} onChange={(event) => setDraft({ ...draft, pickleball_heading: event.target.value })} /></label>
+        <label className="grid gap-1 text-xs font-semibold sm:col-span-2">Om pickleball<Textarea maxLength={1600} rows={4} value={draft.pickleball_body} onChange={(event) => setDraft({ ...draft, pickleball_body: event.target.value })} /></label>
+        <label className="grid gap-1 text-xs font-semibold">Pickla-rubrik<Input maxLength={160} value={draft.pickla_heading} onChange={(event) => setDraft({ ...draft, pickla_heading: event.target.value })} /></label>
+        <label className="grid gap-1 text-xs font-semibold sm:col-span-2">Om Pickla<Textarea maxLength={1600} rows={4} value={draft.pickla_body} onChange={(event) => setDraft({ ...draft, pickla_body: event.target.value })} /></label>
+        <label className="grid gap-1 text-xs font-semibold sm:col-span-2">Praktisk information<Textarea maxLength={1600} rows={4} value={draft.practical_information} onChange={(event) => setDraft({ ...draft, practical_information: event.target.value })} /></label>
+        <label className="grid gap-1 text-xs font-semibold sm:col-span-2">Hjälp/kontakt (valfri)<Textarea maxLength={1200} rows={3} value={draft.help_contact_text} onChange={(event) => setDraft({ ...draft, help_contact_text: event.target.value })} /></label>
+      </div>
+
+      <section className="grid gap-3 rounded-lg border border-border bg-background p-3">
+        <div><p className="text-sm font-bold">Hero-bild</p><p className="text-xs text-muted-foreground">JPG, PNG eller WebP · max 5 MB. Bilden skalas ned och sparas som WebP.</p></div>
+        {draft.hero_image_path && <div className="flex items-center gap-3"><img src={imageUrls[draft.hero_image_path]} alt="Vald hero" className="h-20 w-28 rounded-lg bg-muted object-cover" /><Button type="button" size="sm" variant="outline" onClick={() => removeImage(draft.hero_image_path!, "hero")} disabled={saving}><Trash2 className="mr-2 h-4 w-4" />Ta bort</Button></div>}
+        <label className="inline-flex w-fit cursor-pointer items-center rounded-md border border-border px-3 py-2 text-xs font-bold"><ImagePlus className="mr-2 h-4 w-4" />{uploading === "hero" ? "Laddar upp…" : draft.hero_image_path ? "Byt hero-bild" : "Ladda upp hero-bild"}<input aria-label="Ladda upp hero-bild" type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={Boolean(uploading) || saving} onChange={(event) => { void uploadImage("hero", event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+      </section>
+
+      <section className="grid gap-3 rounded-lg border border-border bg-background p-3">
+        <div><p className="text-sm font-bold">Galleri</p><p className="text-xs text-muted-foreground">Upp till {MAX_CORPORATE_GALLERY_IMAGES} bilder. Ordningen används på den publika sidan.</p></div>
+        <ul className="grid gap-2 sm:grid-cols-2">{draft.gallery_image_paths.map((path, index) => <li key={path} className="grid grid-cols-[5rem_1fr] gap-3 rounded-lg border border-border p-2"><img src={imageUrls[path]} alt={`Galleribild ${index + 1}`} className="h-20 w-20 rounded-md bg-muted object-cover" /><div className="flex flex-wrap content-center gap-1"><Button type="button" size="sm" variant="outline" onClick={() => setGalleryImageAsHero(path)} disabled={saving || draft.hero_image_path === path}>Välj som hero</Button><Button type="button" size="icon" variant="outline" aria-label={`Flytta bild ${index + 1} upp`} onClick={() => moveGalleryImage(index, -1)} disabled={saving || index === 0}><ArrowUp className="h-4 w-4" /></Button><Button type="button" size="icon" variant="outline" aria-label={`Flytta bild ${index + 1} ned`} onClick={() => moveGalleryImage(index, 1)} disabled={saving || index === draft.gallery_image_paths.length - 1}><ArrowDown className="h-4 w-4" /></Button><Button type="button" size="icon" variant="outline" aria-label={`Ta bort bild ${index + 1}`} onClick={() => removeImage(path, "gallery")} disabled={saving}><Trash2 className="h-4 w-4" /></Button></div></li>)}</ul>
+        <label className={`inline-flex w-fit items-center rounded-md border border-border px-3 py-2 text-xs font-bold ${draft.gallery_image_paths.length >= MAX_CORPORATE_GALLERY_IMAGES ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}><ImagePlus className="mr-2 h-4 w-4" />{uploading === "gallery" ? "Laddar upp…" : "Lägg till galleribild"}<input aria-label="Lägg till galleribild" type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={Boolean(uploading) || saving || draft.gallery_image_paths.length >= MAX_CORPORATE_GALLERY_IMAGES} onChange={(event) => { void uploadImage("gallery", event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+      </section>
+
+      <Button type="button" onClick={saveText} disabled={saving || Boolean(uploading)} className="justify-self-end">{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Spara publik sida</Button>
+    </div>
+  </details>;
 }
 
 function SessionCourtRow({ session, seriesDefaultCourtId, courts, onSaved }: { session: any; seriesDefaultCourtId: string | null; courts: any[]; onSaved: () => void }) {
@@ -278,7 +449,7 @@ export default function AdminCorporate({ venueId }: Props) {
     <TabsContent value="accounts" className="space-y-4">
       <div className="flex items-center justify-between"><p className="text-sm text-muted-foreground">{overview.accounts.length} företagskonton</p><Dialog open={showCreate} onOpenChange={setShowCreate}><DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" /> Nytt företag</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Skapa företagskonto</DialogTitle></DialogHeader><div className="grid gap-3"><Input placeholder="Företagsnamn *" value={form.company_name} onChange={(event) => setForm({ ...form, company_name: event.target.value })} /><Input placeholder="Slug" value={form.slug} onChange={(event) => setForm({ ...form, slug: event.target.value })} /><Textarea placeholder="Publik introduktion" value={form.public_intro} onChange={(event) => setForm({ ...form, public_intro: event.target.value })} /><Select value={form.public_visibility} onValueChange={(value) => setForm({ ...form, public_visibility: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="private">Privat</SelectItem><SelectItem value="unlisted">Olistad</SelectItem><SelectItem value="listed">Listad</SelectItem></SelectContent></Select><Input placeholder="Kontaktperson" value={form.contact_name} onChange={(event) => setForm({ ...form, contact_name: event.target.value })} /><Input type="email" placeholder="E-post" value={form.contact_email} onChange={(event) => setForm({ ...form, contact_email: event.target.value })} /><Input placeholder="Telefon" value={form.contact_phone} onChange={(event) => setForm({ ...form, contact_phone: event.target.value })} /><Input type="number" min="0" max="100" placeholder="Rabatt %" value={form.discount_percent} onChange={(event) => setForm({ ...form, discount_percent: event.target.value })} /><p className="text-xs text-muted-foreground">Ingen timbank skapas automatiskt. Skapa en timorder separat om produkten ska användas.</p><Button onClick={createAccount} disabled={creating}>{creating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Skapa"}</Button></div></DialogContent></Dialog></div>
 
-      {overview.accounts.map((account) => { const packages = overview.packages.filter((pkg) => pkg.corporate_account_id === account.id); return <Card key={account.id}><CardHeader className="pb-2"><div className="flex flex-wrap items-center justify-between gap-2"><CardTitle className="flex items-center gap-2 text-base"><Building2 className="h-4 w-4" />{account.company_name}</CardTitle><div className="flex gap-2"><Badge variant={account.is_active ? "default" : "secondary"}>{account.is_active ? "Aktiv" : "Inaktiv"}</Badge><Badge variant="outline">{account.public_visibility || "private"}</Badge></div></div></CardHeader><CardContent className="grid gap-3">{packages.map((pkg) => <p key={pkg.id} className="flex items-center gap-2 text-xs text-muted-foreground"><Clock className="h-3.5 w-3.5" />Timbank: {Number(pkg.total_hours) - Number(pkg.used_hours)}h / {pkg.total_hours}h</p>)}<Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(canonicalAppUrl(`/corp/join?token=${account.invite_token}`)); toast.success("Inbjudningslänk kopierad"); }}><Copy className="mr-2 h-3.5 w-3.5" />Kopiera medlemsinbjudan</Button><AccountEditor account={account} onSaved={refetch} /></CardContent></Card>; })}
+      {overview.accounts.map((account) => { const packages = overview.packages.filter((pkg) => pkg.corporate_account_id === account.id); return <Card key={account.id}><CardHeader className="pb-2"><div className="flex flex-wrap items-center justify-between gap-2"><CardTitle className="flex items-center gap-2 text-base"><Building2 className="h-4 w-4" />{account.company_name}</CardTitle><div className="flex gap-2"><Badge variant={account.is_active ? "default" : "secondary"}>{account.is_active ? "Aktiv" : "Inaktiv"}</Badge><Badge variant="outline">{account.public_visibility || "private"}</Badge></div></div></CardHeader><CardContent className="grid gap-3">{packages.map((pkg) => <p key={pkg.id} className="flex items-center gap-2 text-xs text-muted-foreground"><Clock className="h-3.5 w-3.5" />Timbank: {Number(pkg.total_hours) - Number(pkg.used_hours)}h / {pkg.total_hours}h</p>)}<Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(canonicalAppUrl(`/corp/join?token=${account.invite_token}`)); toast.success("Inbjudningslänk kopierad"); }}><Copy className="mr-2 h-3.5 w-3.5" />Kopiera medlemsinbjudan</Button><AccountEditor account={account} onSaved={refetch} /><CorporatePublicPageEditor account={account} onSaved={refetch} /></CardContent></Card>; })}
 
       <Card><CardHeader><CardTitle className="text-base">Länka en befintlig Series till en företagsorder</CardTitle></CardHeader><CardContent className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]"><Select value={linkOrderId} onValueChange={setLinkOrderId}><SelectTrigger><SelectValue placeholder="Välj order" /></SelectTrigger><SelectContent>{overview.orders.filter((order) => order.order_type === "recurring" && order.status !== "cancelled").map((order) => <SelectItem key={order.id} value={order.id}>{accountById.get(order.corporate_account_id)?.company_name} · {order.order_number}</SelectItem>)}</SelectContent></Select><Select value={linkSeriesId} onValueChange={setLinkSeriesId}><SelectTrigger><SelectValue placeholder="Välj olänkad Series" /></SelectTrigger><SelectContent>{overview.series_options.filter((series) => !series.corporate_order_id && series.linkable_for_corporate_phase_1).map((series) => <SelectItem key={series.id} value={series.id}>{series.name}</SelectItem>)}</SelectContent></Select><Button onClick={linkSeries} disabled={!linkOrderId || !linkSeriesId}><Link2 className="mr-2 h-4 w-4" />Länka</Button></CardContent></Card>
 

@@ -7,13 +7,17 @@ import {
   CORPORATE_PARTICIPATION_MODES,
   canListPublicCorporateAccount,
   canResolvePublicCorporateAccount,
+  defaultCorporatePublicPageContent,
   deriveCorporateParticipation,
   normalizeCorporateSlug,
   normalizeExternalBookingLabel,
   normalizeExternalBookingUrl,
   normalizeIncludedItems,
+  normalizeCorporatePublicPageContent,
   normalizePublicIntro,
 } from '../_shared/corporate.ts';
+
+const CORPORATE_PAGE_IMAGE_BUCKET = 'event-logos';
 
 function generateOrderNumber(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -42,16 +46,24 @@ function activeCorporateSessions(sessions: any[], excludedSessionDates: Set<stri
 }
 
 async function loadPublicCorporateContext(serviceClient: any, account: any) {
-  const [{ data: venue, error: venueError }, { data: orders, error: orderError }] = await Promise.all([
+  const [
+    { data: venue, error: venueError },
+    { data: orders, error: orderError },
+    { data: pageContent, error: pageContentError },
+  ] = await Promise.all([
     serviceClient.from('venues')
       .select('id, name, slug, address, city, postal_code, country, latitude, longitude, timezone')
       .eq('id', account.venue_id).eq('is_public', true).eq('status', 'active').maybeSingle(),
     serviceClient.from('corporate_orders')
       .select('id, included_items, status')
       .eq('corporate_account_id', account.id).neq('status', 'cancelled'),
+    serviceClient.from('corporate_public_page_content')
+      .select('corporate_account_id, hero_headline, short_intro, hero_image_path, gallery_image_paths, pickleball_heading, pickleball_body, pickla_heading, pickla_body, practical_information, help_contact_text, updated_at')
+      .eq('corporate_account_id', account.id).maybeSingle(),
   ]);
   if (venueError) throw new Error(venueError.message);
   if (orderError) throw new Error(orderError.message);
+  if (pageContentError) throw new Error(pageContentError.message);
   if (!venue) return null;
 
   const orderIds = (orders || []).map((order: any) => order.id);
@@ -90,10 +102,53 @@ async function loadPublicCorporateContext(serviceClient: any, account: any) {
     : { data: [], error: null };
   if (courtError) throw new Error(courtError.message);
 
-  return { venue, orders: orders || [], seriesRows, sessions: visibleSessions, courts: courts || [] };
+  return { venue, orders: orders || [], seriesRows, sessions: visibleSessions, courts: courts || [], pageContent };
 }
 
-function projectPublicCompany(account: any, context: any) {
+function corporatePageImageUrl(serviceClient: any, path: string | null, version: string | null) {
+  if (!path) return null;
+  const { data } = serviceClient.storage.from(CORPORATE_PAGE_IMAGE_BUCKET).getPublicUrl(path);
+  if (!data?.publicUrl) return null;
+  return version ? `${data.publicUrl}?v=${encodeURIComponent(version)}` : data.publicUrl;
+}
+
+function projectCorporatePageContent(serviceClient: any, account: any, row: any) {
+  const defaults = defaultCorporatePublicPageContent(account.company_name);
+  const version = row?.updated_at || null;
+  return {
+    hero_headline: row?.hero_headline || defaults.hero_headline,
+    short_intro: row?.short_intro || defaults.short_intro,
+    hero_image_url: corporatePageImageUrl(serviceClient, row?.hero_image_path || null, version),
+    gallery_image_urls: Array.isArray(row?.gallery_image_paths)
+      ? row.gallery_image_paths.map((path: string) => corporatePageImageUrl(serviceClient, path, version)).filter(Boolean)
+      : [],
+    pickleball_heading: row?.pickleball_heading || defaults.pickleball_heading,
+    pickleball_body: row?.pickleball_body || defaults.pickleball_body,
+    pickla_heading: row?.pickla_heading || defaults.pickla_heading,
+    pickla_body: row?.pickla_body || defaults.pickla_body,
+    practical_information: row?.practical_information || defaults.practical_information,
+    help_contact_text: row?.help_contact_text || defaults.help_contact_text,
+  };
+}
+
+function projectAdminCorporatePageContent(account: any, row: any) {
+  const defaults = defaultCorporatePublicPageContent(account.company_name);
+  return {
+    hero_headline: row?.hero_headline || defaults.hero_headline,
+    short_intro: row?.short_intro || defaults.short_intro,
+    hero_image_path: row?.hero_image_path || null,
+    gallery_image_paths: Array.isArray(row?.gallery_image_paths) ? row.gallery_image_paths : [],
+    pickleball_heading: row?.pickleball_heading || defaults.pickleball_heading,
+    pickleball_body: row?.pickleball_body || defaults.pickleball_body,
+    pickla_heading: row?.pickla_heading || defaults.pickla_heading,
+    pickla_body: row?.pickla_body || defaults.pickla_body,
+    practical_information: row?.practical_information || defaults.practical_information,
+    help_contact_text: row?.help_contact_text || defaults.help_contact_text,
+    updated_at: row?.updated_at || null,
+  };
+}
+
+function projectPublicCompany(serviceClient: any, account: any, context: any) {
   const orderById = new Map(context.orders.map((order: any) => [String(order.id), order]));
   const courtById = new Map(context.courts.map((court: any) => [String(court.id), court]));
   const series = context.seriesRows.map((row: any) => {
@@ -130,6 +185,7 @@ function projectPublicCompany(account: any, context: any) {
       public_intro: account.public_intro || null,
     },
     venue: publicVenueProjection(context.venue),
+    content: projectCorporatePageContent(serviceClient, account, context.pageContent),
     series,
   };
 }
@@ -144,7 +200,7 @@ async function publicCompanyBySlug(serviceClient: any, rawSlug: unknown) {
   if (error) throw new Error(error.message);
   if (!account || !canResolvePublicCorporateAccount(account)) return null;
   const context = await loadPublicCorporateContext(serviceClient, account);
-  return context ? projectPublicCompany(account, context) : null;
+  return context ? projectPublicCompany(serviceClient, account, context) : null;
 }
 
 async function requireCorporateSeriesVenue(serviceClient: any, userId: string, seriesId: string) {
@@ -195,7 +251,7 @@ Deno.serve(async (req) => {
       for (const account of accounts || []) {
         if (!canListPublicCorporateAccount(account)) continue;
         const context = await loadPublicCorporateContext(serviceClient, account);
-        const projected = context ? projectPublicCompany(account, context) : null;
+        const projected = context ? projectPublicCompany(serviceClient, account, context) : null;
         if (!projected) continue;
         const firstSession = projected.series.flatMap((series: any) => series.sessions)[0] || null;
         companies.push({
@@ -298,6 +354,18 @@ Deno.serve(async (req) => {
       }
 
       const accounts = accountsResult.data || [];
+      const accountIds = accounts.map((account: any) => account.id);
+      const { data: pageContentRows, error: pageContentError } = accountIds.length
+        ? await serviceClient.from('corporate_public_page_content')
+          .select('corporate_account_id, hero_headline, short_intro, hero_image_path, gallery_image_paths, pickleball_heading, pickleball_body, pickla_heading, pickla_body, practical_information, help_contact_text, updated_at')
+          .in('corporate_account_id', accountIds)
+        : { data: [], error: null };
+      if (pageContentError) return errorResponse(pageContentError.message, 500);
+      const pageContentByAccount = new Map((pageContentRows || []).map((row: any) => [String(row.corporate_account_id), row]));
+      const projectedAccounts = accounts.map((account: any) => ({
+        ...account,
+        public_page: projectAdminCorporatePageContent(account, pageContentByAccount.get(String(account.id))),
+      }));
       const orders = ordersResult.data || [];
       const allSeries = seriesResult.data || [];
       const linkedSeriesIds = allSeries.filter((series: any) => series.corporate_order_id).map((series: any) => series.id);
@@ -308,7 +376,7 @@ Deno.serve(async (req) => {
         : { data: [], error: null };
       if (sessionsError) return errorResponse(sessionsError.message, 500);
 
-      const accountById = new Map(accounts.map((account: any) => [String(account.id), account]));
+      const accountById = new Map(projectedAccounts.map((account: any) => [String(account.id), account]));
       const orderById = new Map(orders.map((order: any) => [String(order.id), order]));
       const linked_series = allSeries.filter((series: any) => series.corporate_order_id).map((series: any) => {
         const order: any = orderById.get(String(series.corporate_order_id)) || {};
@@ -335,7 +403,7 @@ Deno.serve(async (req) => {
       });
 
       return jsonResponse({
-        accounts,
+        accounts: projectedAccounts,
         packages: packagesResult.data || [],
         orders,
         series_options: allSeries.map((series: any) => ({
@@ -417,6 +485,31 @@ Deno.serve(async (req) => {
       const { data, error } = await serviceClient.from('corporate_accounts').update(allowed).eq('id', accountId).select('*').single();
       if (error) return errorResponse(error.message, error.code === '23505' ? 409 : 400);
       return jsonResponse(data);
+    }
+
+    if (req.method === 'PATCH' && path === 'admin-page-content') {
+      const body = await req.json();
+      const accountId = String(body.account_id || '').trim();
+      const serviceClient = getServiceClient();
+      const { data: account, error: accountError } = await serviceClient.from('corporate_accounts')
+        .select('id, venue_id, company_name').eq('id', accountId).maybeSingle();
+      if (accountError) return errorResponse(accountError.message, 500);
+      if (!account) return errorResponse('Corporate account not found', 404);
+      await requireVenueRole(serviceClient, userId, account.venue_id);
+
+      let content;
+      try {
+        content = normalizeCorporatePublicPageContent(body, account.id);
+      } catch (contentError) {
+        return errorResponse(contentError instanceof Error ? contentError.message : 'Invalid corporate page content');
+      }
+      const { data, error } = await serviceClient.from('corporate_public_page_content').upsert({
+        corporate_account_id: account.id,
+        ...content,
+        updated_by: userId,
+      }, { onConflict: 'corporate_account_id' }).select('*').single();
+      if (error) return errorResponse(error.message, 400);
+      return jsonResponse(projectAdminCorporatePageContent(account, data));
     }
 
     if (req.method === 'POST' && path === 'admin-orders') {

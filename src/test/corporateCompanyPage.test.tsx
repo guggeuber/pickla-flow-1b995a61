@@ -11,6 +11,18 @@ vi.mock("@/lib/api", () => ({ apiGet: vi.fn() }));
 const response = {
   company: { company_name: "Ericsson", slug: "ericsson", public_intro: "Ett erbjudande för Ericsson-medarbetare." },
   venue: { name: "Pickla Solna", slug: "solna", address: "Gatan 1", city: "Solna", postal_code: "171 00", country: "SE", latitude: null, longitude: null },
+  content: {
+    hero_headline: "Ericsson × Pickla",
+    short_intro: "Your weekly pickleball hour.",
+    hero_image_url: "https://project.test/hero.webp",
+    gallery_image_urls: ["https://project.test/gallery-1.webp", "https://project.test/gallery-2.webp"],
+    pickleball_heading: "NEW TO PICKLEBALL? PERFECT.",
+    pickleball_body: "Easy to learn in five minutes.",
+    pickla_heading: "WELCOME TO PICKLA",
+    pickla_body: "Eight indoor courts and a welcoming community.",
+    practical_information: "Bring indoor shoes. Rackets and balls are ready.",
+    help_contact_text: "Ask your Ericsson coordinator if you need help.",
+  },
   series: [{
     id: "series-1", name: "Ericsson höstspel", description: null, start_date: "2026-09-21", end_date: "2026-12-30", included_items: ["Rack", "Bollar"],
     participation: { mode: "external", state: "external_pending", message: "Deltagandet hanteras av Ericsson. Mer bokningsinformation kommer snart.", cta: null },
@@ -29,17 +41,24 @@ function renderPage() {
 describe("public corporate company page", () => {
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-  it("derives the visible schedule, court and inclusions from the API Sessions", async () => {
+  it("derives a human schedule, address, court and inclusions from the API Sessions", async () => {
     vi.mocked(apiGet).mockResolvedValue(response);
     renderPage();
     expect(await screen.findByRole("heading", { name: /Ericsson/ })).toBeInTheDocument();
-    expect(screen.getByText(/Måndagar 17:00–18:00/)).toBeInTheDocument();
-    expect(screen.getByText(/Onsdagar 17:00–18:00/)).toBeInTheDocument();
-    expect(screen.getByText("Bana B1")).toBeInTheDocument();
-    expect(screen.getByText("Rack")).toBeInTheDocument();
-    expect(screen.getByText("Bollar")).toBeInTheDocument();
+    expect(screen.getAllByText("Mondays & Wednesdays").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("17:00–18:00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("21 September – 23 September").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Bana B1").length).toBeGreaterThan(0);
+    expect(screen.getByText("Rackets")).toBeInTheDocument();
+    expect(screen.getByText("Balls")).toBeInTheDocument();
+    expect(screen.getAllByText("Gatan 1, 171 00 Solna").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/×\s*1/)).not.toBeInTheDocument();
     expect(screen.getByText(/Deltagandet hanteras av Ericsson/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Gå till bokning/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "NEW TO PICKLEBALL? PERFECT." })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "WELCOME TO PICKLA" })).toBeInTheDocument();
+    expect(screen.getByText(/Bring indoor shoes/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open in maps/ })).toHaveAttribute("target", "_blank");
   });
 
   it("renders a valid external CTA with safe navigation attributes", async () => {
