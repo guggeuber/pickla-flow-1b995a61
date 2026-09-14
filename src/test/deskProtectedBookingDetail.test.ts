@@ -5,13 +5,16 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf
 
 describe("Desk protected booking detail", () => {
   const desk = read("../pages/Index.tsx");
+  const operationalDetail = read("../components/operations/DeskOperationalDetailDrawer.tsx");
   const detail = read("../components/operations/AdminBookingDetailDrawer.tsx");
   const adminApi = read("../../supabase/functions/api-admin/index.ts");
   const readSecurity = read("../../supabase/functions/_shared/admin_read_security.ts");
 
   it("opens the existing venue-authorized detail path instead of rebuilding PII from summary rows", () => {
-    expect(desk).toContain("<AdminBookingDetailDrawer");
-    expect(desk).toContain("bookingId={openBookingId}");
+    expect(desk).toContain("<DeskOperationalDetailDrawer");
+    expect(desk).toContain("target={openDetail?.target}");
+    expect(operationalDetail).toContain("<AdminBookingDetailDrawer");
+    expect(operationalDetail).toContain("bookingId={parsed.target.booking_id}");
     expect(desk).not.toContain("buildOperationsBookingDetailFromRows");
     expect(detail).toContain('apiGet<OperationsBookingDetail>("api-admin", "booking-detail"');
     expect(detail).toContain("showProtectedDetails");

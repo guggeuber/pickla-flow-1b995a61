@@ -129,6 +129,7 @@ type EffectiveActivityOccurrence = {
   session_type?: string | null;
   start_time: string;
   end_time: string;
+  court_ids?: string[] | null;
   price_sek?: number | null;
   capacity?: number | null;
   product_key?: string | null;
@@ -1110,7 +1111,7 @@ async function sendActivityParticipantPaymentEmail(input: {
 async function loadEffectiveActivityOccurrence(admin: ServiceClient, venueId: string, activitySessionId: string, sessionDate: string): Promise<EffectiveActivityOccurrence | null> {
   const { data: session, error: sessionError } = await admin
     .from('activity_sessions')
-    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, schedule_effective_from, series_id')
+    .select('id, venue_id, name, session_type, session_date, recurrence_days, start_time, end_time, court_ids, price_sek, capacity, product_key, access_policy, metadata, early_bird_price_minor, early_bird_slots, scarcity_mode, first_visit_offer_enabled, first_visit_price_minor, first_visit_only, is_active, publish_status, schedule_effective_from, series_id')
     .eq('id', activitySessionId)
     .eq('venue_id', venueId)
     .maybeSingle();
@@ -4514,6 +4515,17 @@ Deno.serve(async (req) => {
         };
       });
       const fill = Array.isArray(fillRows) ? fillRows[0] : fillRows;
+      const occurrenceCourtIds = Array.isArray(activity.court_ids)
+        ? activity.court_ids.map((courtId) => String(courtId)).filter(Boolean)
+        : [];
+      const { data: occurrenceCourtRows, error: occurrenceCourtError } = occurrenceCourtIds.length
+        ? await admin.from('venue_courts')
+          .select('id, name, court_number, sport_type')
+          .eq('venue_id', venueId)
+          .in('id', occurrenceCourtIds)
+        : { data: [], error: null };
+      if (occurrenceCourtError) return errorResponse(occurrenceCourtError.message, 500);
+      const occurrenceCourtById = new Map((occurrenceCourtRows || []).map((court: any) => [court.id, court]));
       const occurrenceInterval = activitySessionOccurrenceInterval(sessionDate, activity.start_time, activity.end_time);
       return jsonResponse({
         occurrence: {
@@ -4528,6 +4540,7 @@ Deno.serve(async (req) => {
           committed_count: Number(fill?.committed_count || 0),
           reserved_count: Number(fill?.active_holds_count || 0),
           available_count: fill?.available_count == null ? null : Number(fill.available_count),
+          courts: occurrenceCourtIds.map((courtId) => occurrenceCourtById.get(courtId)).filter(Boolean),
         },
         participants: [...projectedRegistrations, ...projectedInvites],
       }, 200, 0);
@@ -5834,6 +5847,7 @@ Deno.serve(async (req) => {
       const courtBookings = (data || []).map((booking: any) => ({
         ...booking,
         kind: 'court_booking',
+        detail_target: { kind: 'booking', booking_id: booking.id },
         booking_type: 'Banbokning',
         customer_contact: bookingContactFromNotes(booking.notes),
         receipt: booking.stripe_session_id ? receiptByStripe.get(booking.stripe_session_id) || null : null,
@@ -5868,6 +5882,11 @@ Deno.serve(async (req) => {
         activityCourtBlocks = activityBlocks.map((block: any) => ({
           id: `activity_block:${block.activity_session_id}:${date}:${block.court_id}`,
           kind: 'activity_court_block',
+          detail_target: {
+            kind: 'activity_occurrence',
+            activity_session_id: block.activity_session_id,
+            occurrence_date: date,
+          },
           booking_type: 'Aktivitetsblock',
           activity_session_id: block.activity_session_id,
           session_date: date,
@@ -6044,6 +6063,11 @@ Deno.serve(async (req) => {
           return {
             id: `session_registration:${registration.id}`,
             kind: 'activity_registration',
+            detail_target: {
+              kind: 'activity_occurrence',
+              activity_session_id: registration.activity_session_id,
+              occurrence_date: registration.session_date,
+            },
             booking_type: 'Aktivitet',
             registration_id: registration.id,
             session_id: registration.activity_session_id,

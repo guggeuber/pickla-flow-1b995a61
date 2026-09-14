@@ -53,6 +53,12 @@ export type ActivityParticipantsResponse = {
     committed_count: number;
     reserved_count: number;
     available_count: number | null;
+    courts: Array<{
+      id: string;
+      name: string;
+      court_number?: number | null;
+      sport_type?: string | null;
+    }>;
   };
   participants: ActivityParticipantDetail[];
 };

@@ -28,7 +28,7 @@ import { bookingParticipantStateView, bookingParticipantSummaryLabel } from "@/l
 
 interface Props {
   venueId: string | undefined;
-  onOpenBooking: (booking: any, sortedRows: any[]) => void;
+  onOpenDetail: (item: any, sortedRows: any[]) => void;
 }
 
 type DeskCustomerSearchResult = {
@@ -198,7 +198,7 @@ function customerSuggestionMeta(row: any) {
   return [row?.phone, row?.email, row?.active_membership_tier?.name].filter(Boolean).join(" · ") || "Kund";
 }
 
-export default function DeskToday({ venueId, onOpenBooking }: Props) {
+export default function DeskToday({ venueId, onOpenDetail }: Props) {
   const qc = useQueryClient();
   const today = useMemo(() => todayStockholm(), []);
   const [expandedActivityKey, setExpandedActivityKey] = useState<string | null>(null);
@@ -466,7 +466,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
                 <AttentionCard
                   key={item.id}
                   item={item}
-                  onOpenBooking={() => item.booking && onOpenBooking(item.booking, courtRows)}
+                  onOpenBooking={() => item.booking && onOpenDetail(item.booking, courtRows)}
                   onOpenActivity={() => {
                     if (item.activityKey) setExpandedActivityKey(item.activityKey);
                   }}
@@ -519,7 +519,7 @@ export default function DeskToday({ venueId, onOpenBooking }: Props) {
                   key={booking.id}
                   booking={booking}
                   rows={courtRows}
-                  onOpen={() => onOpenBooking(booking, courtRows)}
+                  onOpen={() => onOpenDetail(booking, courtRows)}
                   onCheckIn={() => checkinMutation.mutate(booking)}
                   checking={checkinMutation.isPending}
                   onParticipantCheckIn={(participant) => participantCheckinMutation.mutate({ participant, booking })}
@@ -914,7 +914,7 @@ function BookingActionRow({
   );
 }
 
-function ActivityRow({
+export function ActivityRow({
   venueId,
   activity,
   expanded,
@@ -1002,12 +1002,15 @@ function ActivityRow({
   const playerCount = Math.max(committedCount - playingHosts.length, 0);
   const capacity = Number(occurrence?.capacity || activity.activity_session?.capacity || activity.capacity || 0);
   const hostNames = playingHosts.map(participantName).filter(Boolean);
+  const occurrenceStart = occurrence?.starts_at || activity.start_time;
+  const occurrenceEnd = occurrence?.ends_at || activity.end_time;
+  const occurrenceCourts = occurrence?.courts || [];
   return (
     <AxCard pad="row">
       <button type="button" onClick={onToggle} className="flex w-full items-center gap-3 text-left">
         <div className="min-w-[52px]">
           <p className="font-mono text-lg font-black tabular-nums" style={{ color: ax("magenta") }}>
-            {timeLabel(activity.start_time)}
+            {timeLabel(occurrenceStart)}
           </p>
         </div>
         <div className="min-w-0 flex-1">
@@ -1032,6 +1035,24 @@ function ActivityRow({
       </button>
       {expanded && (
         <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: ax("borderSoft") }}>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-xl border p-3" style={{ background: ax("surfaceHi"), borderColor: ax("borderSoft") }}>
+              <p className={AX_TYPE.microSoft} style={{ color: ax("muted") }}>Tillfälle</p>
+              <p className="mt-1 text-sm font-black text-white">{sessionDate || "Datum saknas"}</p>
+              <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>{timeLabel(occurrenceStart)}–{timeLabel(occurrenceEnd)}</p>
+            </div>
+            <div className="rounded-xl border p-3" style={{ background: ax("surfaceHi"), borderColor: ax("borderSoft") }}>
+              <p className={AX_TYPE.microSoft} style={{ color: ax("muted") }}>Banor</p>
+              <p className="mt-1 text-sm font-black text-white">
+                {occurrenceCourts.length ? occurrenceCourts.map((court) => court.name).join(", ") : activity.activity_court_label || "Laddas"}
+              </p>
+            </div>
+            <div className="rounded-xl border p-3" style={{ background: ax("surfaceHi"), borderColor: ax("borderSoft") }}>
+              <p className={AX_TYPE.microSoft} style={{ color: ax("muted") }}>Kapacitet</p>
+              <p className="mt-1 text-sm font-black text-white">{committedCount}/{capacity || committedCount}</p>
+              <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>{reservedCount} reserverade</p>
+            </div>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
               {occurrence?.available_count == null ? "Kapacitet laddas" : `${occurrence.available_count} lediga platser`}

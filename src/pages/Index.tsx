@@ -13,7 +13,7 @@ import DeskToday from "@/components/desk/shell/DeskToday";
 import DeskLive from "@/components/desk/shell/DeskLive";
 import DeskQueue from "@/components/desk/shell/DeskQueue";
 import DeskCommandBar from "@/components/desk/shell/DeskCommandBar";
-import { AdminBookingDetailDrawer } from "@/components/operations/AdminBookingDetailDrawer";
+import { DeskOperationalDetailDrawer } from "@/components/operations/DeskOperationalDetailDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
 
 type DeskBookingRow = {
@@ -23,6 +23,7 @@ type DeskBookingRow = {
   source_id?: string | null;
   source_ids?: string[] | null;
   status?: string | null;
+  detail_target?: unknown;
   [key: string]: unknown;
 };
 
@@ -49,11 +50,13 @@ const Index = () => {
   const venueId = staffVenue?.venue_id;
 
   const [active, setActive] = useState<DeskSurfaceId>("arrivals");
-  const [openBookingId, setOpenBookingId] = useState<string | null>(deepLinkedBookingId || null);
+  const [openDetail, setOpenDetail] = useState<{ target: unknown; sourceItem?: DeskBookingRow | null } | null>(
+    deepLinkedBookingId ? { target: { kind: "booking", booking_id: deepLinkedBookingId } } : null,
+  );
   const now = useClock();
 
   useEffect(() => {
-    setOpenBookingId(deepLinkedBookingId || null);
+    setOpenDetail(deepLinkedBookingId ? { target: { kind: "booking", booking_id: deepLinkedBookingId } } : null);
   }, [deepLinkedBookingId]);
 
   const { data: bookings } = useTodayBookings(venueId);
@@ -70,9 +73,8 @@ const Index = () => {
     [courtRows]
   );
 
-  const openBookingFromRow = (booking: DeskBookingRow, _sourceRows: DeskBookingRow[] = courtRows) => {
-    const bookingId = booking?.source_ids?.[0] || booking?.source_id || booking?.id;
-    if (bookingId) setOpenBookingId(bookingId);
+  const openDetailFromRow = (booking: DeskBookingRow, _sourceRows: DeskBookingRow[] = courtRows) => {
+    setOpenDetail({ target: booking.detail_target, sourceItem: booking });
   };
 
   const surfaces: DeskSurfaceDef[] = [
@@ -186,7 +188,7 @@ const Index = () => {
               venueId={venueId}
               venueSlug={venue?.slug || "solna"}
               bookings={courtRows}
-              onOpenBooking={openBookingFromRow}
+              onOpenBooking={openDetailFromRow}
             />
           </div>
         </div>
@@ -208,19 +210,20 @@ const Index = () => {
             transition={{ duration: 0.2 }}
           >
             {active === "arrivals" && <DeskArrivals venueId={venueId} />}
-            {active === "today" && <DeskToday venueId={venueId} onOpenBooking={openBookingFromRow} />}
+            {active === "today" && <DeskToday venueId={venueId} onOpenDetail={openDetailFromRow} />}
             {active === "live" && <DeskLive venueId={venueId} />}
-            {active === "queue" && <DeskQueue venueId={venueId} onOpenBooking={openBookingFromRow} />}
+            {active === "queue" && <DeskQueue venueId={venueId} onOpenBooking={openDetailFromRow} />}
           </motion.div>
         </AnimatePresence>
       </main>
 
-      <AdminBookingDetailDrawer
-        open={!!openBookingId}
+      <DeskOperationalDetailDrawer
+        open={!!openDetail}
         venueId={venueId}
-        bookingId={openBookingId}
+        target={openDetail?.target}
+        sourceItem={openDetail?.sourceItem}
         onClose={() => {
-          setOpenBookingId(null);
+          setOpenDetail(null);
           if (deepLinkedBookingId) navigate("/desk", { replace: true });
         }}
       />
