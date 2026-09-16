@@ -42,6 +42,7 @@ describe("customer upcoming projection", () => {
       ["series_occurrence", "Parker Brunch"],
       ["series_occurrence", "Pickla 101 · Höst 2026"],
     ]);
+    expect(result[1].destinationUrl).toBe("/program/open-play?date=2026-08-24&v=pickla-arena-sthlm");
     expect(result[2].destinationUrl).toBe("/course/parker?v=pickla-arena-sthlm");
     expect(result.filter((item) => item.id === "series:pickla-101")).toHaveLength(1);
   });

@@ -6,6 +6,7 @@ function read(path: string) {
 }
 
 const migrationPath = "supabase/migrations/20260826120000_series_open_play_benefit.sql";
+const occurrenceCommitRepairPath = "supabase/migrations/20260916120000_scope_activity_registration_idempotency_to_occurrence.sql";
 
 describe("managed-Series Open Play benefit contract", () => {
   it("owns configuration on the existing access product and issues canonical access", () => {
@@ -59,6 +60,18 @@ describe("managed-Series Open Play benefit contract", () => {
     expect(pricing.indexOf("entitlement_types: ['series_access', 'punch_card', 'partner_access']"))
       .toBeLessThan(pricing.indexOf("if (firstVisitEnabled && finalAmountSek > 0)"));
     expect(commerce).toContain("['series_access', 'punch_card', 'partner_access']");
+  });
+
+  it("scopes reusable entitlement registration idempotency to the exact occurrence", () => {
+    const migration = read(occurrenceCommitRepairPath);
+    const commerce = read("supabase/functions/api-commerce/index.ts");
+    expect(migration).toContain("AND activity_session_id = p_activity_session_id");
+    expect(migration).toContain("AND session_date = p_session_date");
+    expect(migration).toContain("jsonb_build_object('registration_id', v_existing.id)");
+    expect(migration).not.toContain("WHERE source_type = p_source_type AND source_id = p_source_id\n    LIMIT 1");
+    expect(commerce).toContain(".eq('activity_session_id', line.activity_session_id)");
+    expect(commerce).toContain(".eq('session_date', line.session_date)");
+    expect(commerce).toContain("registration_occurrence_mismatch");
   });
 
   it("exposes only the small managed-Series control and actual Session projection", () => {

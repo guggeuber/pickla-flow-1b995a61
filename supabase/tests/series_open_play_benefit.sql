@@ -77,6 +77,10 @@ DECLARE
   v_paid RECORD;
   v_comp RECORD;
   v_comp_cancel RECORD;
+  v_first_open_play RECORD;
+  v_second_open_play RECORD;
+  v_second_open_play_retry RECORD;
+  v_series_entitlement_id UUID;
   v_result JSONB;
   v_orders INTEGER := (SELECT COUNT(*) FROM public.commerce_orders);
   v_receipts INTEGER := (SELECT COUNT(*) FROM public.booking_receipts);
@@ -151,6 +155,79 @@ BEGIN
     'open_play_slot', '{"entitlement_types":["series_access"]}'
   ) INTO v_result;
   IF COALESCE((v_result->>'covered')::BOOLEAN, false) THEN RAISE EXCEPTION 'non-participant received Course benefit'; END IF;
+
+  SELECT id INTO v_series_entitlement_id
+  FROM public.access_entitlements
+  WHERE source_type = 'series_benefit'
+    AND source_id = v_paid.commitment_id
+    AND entitlement_type = 'series_access';
+
+  SELECT * INTO v_first_open_play FROM public.commit_activity_registration_capacity(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_activity_session_id => 'a2600000-0000-4000-8000-000000000062',
+    p_session_date => '2027-09-09',
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id
+  );
+  SELECT * INTO v_second_open_play FROM public.commit_activity_registration_capacity(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_activity_session_id => 'a2600000-0000-4000-8000-000000000063',
+    p_session_date => '2027-09-15',
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id
+  );
+  SELECT * INTO v_second_open_play_retry FROM public.commit_activity_registration_capacity(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_activity_session_id => 'a2600000-0000-4000-8000-000000000063',
+    p_session_date => '2027-09-15',
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id
+  );
+
+  IF NOT v_first_open_play.ok OR NOT v_second_open_play.ok
+     OR v_first_open_play.registration_id = v_second_open_play.registration_id THEN
+    RAISE EXCEPTION 'reusable Series access did not commit one registration per occurrence';
+  END IF;
+  IF NOT v_second_open_play_retry.ok
+     OR v_second_open_play_retry.registration_id <> v_second_open_play.registration_id
+     OR v_second_open_play_retry.reason <> 'already_committed' THEN
+    RAISE EXCEPTION 'same-occurrence Series access retry was not idempotent';
+  END IF;
+  IF (SELECT COUNT(*) FROM public.session_registrations
+      WHERE source_type = 'series_access' AND source_id = v_series_entitlement_id) <> 2 THEN
+    RAISE EXCEPTION 'Series access registration provenance was not preserved per occurrence';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.session_registrations
+    WHERE id = v_first_open_play.registration_id
+      AND activity_session_id = 'a2600000-0000-4000-8000-000000000062'
+      AND session_date = '2027-09-09'
+      AND customer_id = 'a2600000-0000-4000-8000-000000000011'
+      AND status = 'confirmed'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM public.session_registrations
+    WHERE id = v_second_open_play.registration_id
+      AND activity_session_id = 'a2600000-0000-4000-8000-000000000063'
+      AND session_date = '2027-09-15'
+      AND customer_id = 'a2600000-0000-4000-8000-000000000011'
+      AND status = 'confirmed'
+  ) THEN
+    RAISE EXCEPTION 'Series access ticket identity diverged from canonical occurrence truth';
+  END IF;
+  IF COALESCE((public.get_session_public_context(
+      'a2600000-0000-4000-8000-000000000062', '2027-09-09'
+    )->>'attendee_count')::INTEGER, 0) <> 1
+     OR COALESCE((public.get_session_public_context(
+      'a2600000-0000-4000-8000-000000000063', '2027-09-15'
+    )->>'attendee_count')::INTEGER, 0) <> 1 THEN
+    RAISE EXCEPTION 'canonical participant projection diverged from committed registrations';
+  END IF;
 
   SELECT * INTO v_comp FROM public.grant_series_staff_place(
     'a2600000-0000-4000-8000-000000000002', 'a2600000-0000-4000-8000-000000000041',

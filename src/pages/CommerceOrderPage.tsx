@@ -120,9 +120,7 @@ export default function CommerceOrderPage() {
   const checkedIn = activity?.registration_status === "checked_in";
   const cancellationPending = Boolean(order.cancellation_pending);
   const requiresGuestClaim = order.requires_guest_claim === true;
-  const managementRegistrationId = activity?.registration_id
-    || lines.find((line) => line.commerce_kind === "participation")?.session_registration_id
-    || null;
+  const managementRegistrationId = activity?.registration_id || null;
   const managementPath = managementRegistrationId
     ? `/my?registration=${encodeURIComponent(managementRegistrationId)}${activity?.venue_slug ? `&v=${encodeURIComponent(activity.venue_slug)}` : ""}`
     : null;

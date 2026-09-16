@@ -495,6 +495,8 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
             .select('id, status')
             .eq('id', participation.session_registration_id)
             .eq('customer_id', order.customer_id)
+            .eq('activity_session_id', participation.activity_session_id)
+            .eq('session_date', participation.session_date)
             .maybeSingle()
         : Promise.resolve({ data: null }),
       admin.from('venues').select('name, slug').eq('id', order.venue_id).maybeSingle(),
@@ -1410,7 +1412,23 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
   if (error) throw new Error(error.message);
   const committed = (data || {}) as { ok?: boolean; registration_id?: string; reason?: string };
   if (!committed.ok || !committed.registration_id) throw new Error(committed.reason || 'capacity_full');
-  await admin.from('commerce_order_lines').update({ session_registration_id: committed.registration_id }).eq('id', line.id);
+  let committedRegistrationQuery = admin.from('session_registrations')
+    .select('id')
+    .eq('id', committed.registration_id)
+    .eq('venue_id', order.venue_id)
+    .eq('activity_session_id', line.activity_session_id)
+    .eq('session_date', line.session_date);
+  committedRegistrationQuery = userId
+    ? committedRegistrationQuery.eq('user_id', userId)
+    : committedRegistrationQuery.eq('customer_id', customerId);
+  const { data: committedRegistration, error: committedRegistrationError } = await committedRegistrationQuery.maybeSingle();
+  if (committedRegistrationError || !committedRegistration?.id) {
+    throw new Error(committedRegistrationError?.message || 'registration_occurrence_mismatch');
+  }
+  const { error: registrationLinkError } = await admin.from('commerce_order_lines')
+    .update({ session_registration_id: committedRegistration.id })
+    .eq('id', line.id);
+  if (registrationLinkError) throw new Error(registrationLinkError.message);
   const purchaseKind = String(resolvedLine?.resolver_snapshot?.purchase_kind || 'activity_ticket');
   let sourceType = 'session_ticket';
   let sourceId = committed.registration_id;
@@ -1494,14 +1512,15 @@ async function commitFreeParticipation(admin: AdminClient, order: any, line: any
         : 'source_type,source_id,customer_id,entitlement_type',
     });
   }
-  await admin.from('commerce_orders').update({
+  const { error: orderCommitError } = await admin.from('commerce_orders').update({
     status: 'paid',
     paid_at: new Date().toISOString(),
     customer_id: customerId,
     user_id: userId,
     claim_expires_at: userId ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
   }).eq('id', order.id);
-  return committed.registration_id;
+  if (orderCommitError) throw new Error(orderCommitError.message);
+  return committedRegistration.id;
 }
 
 function deskOrderReference(order: DeskFulfillmentOrderRow) {

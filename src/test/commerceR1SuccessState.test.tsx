@@ -225,6 +225,27 @@ describe("Commerce R1 confirmed purchase state", () => {
     expect(screen.queryByRole("button", { name: "Avboka" })).not.toBeInTheDocument();
   });
 
+  it("does not turn a cross-occurrence line pointer into a ticket or booking route", async () => {
+    mocks.auth.user = { id: "member-1" };
+    const response = orderResponse({
+      requires_guest_claim: false,
+      account_claimed: true,
+    }, [{ ...participationLine, session_registration_id: "registration-from-other-occurrence" }]);
+    response.activity_access = {
+      ...response.activity_access,
+      registration_id: null,
+      registration_status: null,
+    };
+    mocks.fetchOrder.mockResolvedValue(response);
+    renderOrder();
+
+    expect(await screen.findByRole("heading", { name: "Vi kontrollerar ditt köp" })).toBeInTheDocument();
+    expect(screen.getByText("Vi behöver kontrollera köpet innan plats eller uthämtning kan bekräftas.")).toBeInTheDocument();
+    expect(screen.queryByText("Din biljett")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Visa bokning" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Checka in" })).not.toBeInTheDocument();
+  });
+
   it("checks in an account-owned purchase through durable registration truth", async () => {
     mocks.auth.user = { id: "member-1" };
     mocks.checkInAvailable = true;
