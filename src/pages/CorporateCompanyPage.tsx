@@ -6,6 +6,7 @@ import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { Button } from "@/components/ui/button";
 import { apiGet } from "@/lib/api";
 import {
+  buildCorporatePublicMedia,
   buildCorporateSchedulePresentation,
   corporateMapsUrl,
   CorporatePublicPageContent,
@@ -82,8 +83,11 @@ export default function CorporateCompanyPage() {
   const content = data.content || fallbackContent(data.company.company_name, data.company.public_intro);
   const address = formatCorporateAddress(data.venue);
   const mapUrl = corporateMapsUrl(data.venue);
-  const heroImage = content.hero_image_url || communityImage;
-  const galleryImages = (content.gallery_image_urls || []).filter((url) => url && url !== content.hero_image_url);
+  const { heroImage, introImage, galleryImages } = buildCorporatePublicMedia(
+    content.hero_image_url,
+    content.gallery_image_urls,
+    communityImage,
+  );
   const upcoming = [...sessions].sort((a, b) => `${a.session_date} ${a.start_time}`.localeCompare(`${b.session_date} ${b.start_time}`)).slice(0, 8);
 
   return <div className="min-h-[100dvh] overflow-x-hidden bg-[#fffaf7] text-neutral-950">
@@ -105,7 +109,7 @@ export default function CorporateCompanyPage() {
               {includedItems.length > 0 && <p className="mt-7 flex items-center gap-2 text-sm font-bold text-white"><Check className="h-4 w-4 text-[#ff8fbe]" />{includedItems.join(" and ")} included.</p>}
             </div>
             <div className="relative min-h-[280px] sm:min-h-[380px] lg:min-h-[600px]">
-              <img src={heroImage} alt={`Pickleball at ${data.venue.name}`} className="absolute inset-0 h-full w-full object-cover" sizes="(max-width: 1023px) 100vw, 48vw" />
+              <img data-testid="corporate-hero-image" src={heroImage} alt={`Pickleball at ${data.venue.name}`} className="absolute inset-0 h-full w-full object-cover" sizes="(max-width: 1023px) 100vw, 48vw" />
               <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-[#111a35]/60 via-transparent to-transparent lg:bg-gradient-to-r lg:from-[#111a35]/20 lg:to-transparent" />
             </div>
           </div>
@@ -120,17 +124,17 @@ export default function CorporateCompanyPage() {
         </div>
       </section>
 
-      <section className="mx-auto grid w-full max-w-5xl gap-8 px-5 py-10 sm:grid-cols-[0.9fr_1.1fr] sm:items-center sm:py-16">
+      <section className={`mx-auto grid w-full max-w-5xl gap-8 px-5 py-10 sm:items-center sm:py-16 ${introImage ? "sm:grid-cols-[0.9fr_1.1fr]" : ""}`}>
         <div><p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#147a45]">Start here</p><h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">{content.pickleball_heading}</h2><p className="mt-5 whitespace-pre-line text-base leading-7 text-neutral-600">{content.pickleball_body}</p></div>
-        <div className="overflow-hidden rounded-[30px] bg-[#f2e9e5]"><img src={heroImage} alt="A social game of pickleball" className="aspect-[4/3] w-full object-cover" loading="lazy" sizes="(max-width: 639px) 100vw, 55vw" /></div>
+        {introImage && <div className="overflow-hidden rounded-[30px] bg-[#f2e9e5]"><img data-testid="corporate-intro-image" src={introImage} alt="A social game of pickleball" className="aspect-[4/3] w-full object-cover" loading="lazy" sizes="(max-width: 639px) 100vw, 55vw" /></div>}
       </section>
 
       <section className="bg-[#f2ece8] py-14 sm:py-20">
-        <div className="mx-auto grid w-full max-w-5xl gap-8 px-5 sm:grid-cols-[1.1fr_0.9fr] sm:items-center">
-          <div className="order-2 sm:order-1"><p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#b62068]">The Pickla feeling</p><h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">{content.pickla_heading}</h2><p className="mt-5 whitespace-pre-line text-base leading-7 text-neutral-600">{content.pickla_body}</p></div>
-          <div className="order-1 grid grid-cols-2 gap-3 sm:order-2">
-            {(galleryImages.length ? galleryImages.slice(0, 4) : [communityImage]).map((image, index) => <img key={image} src={image} alt={`Pickla community ${index + 1}`} className={`${galleryImages.length === 1 || !galleryImages.length ? "col-span-2" : ""} aspect-[4/3] h-full w-full rounded-[22px] object-cover`} loading="lazy" sizes="(max-width: 639px) 50vw, 24vw" />)}
-          </div>
+        <div className={`mx-auto grid w-full max-w-5xl gap-8 px-5 sm:items-center ${galleryImages.length ? "sm:grid-cols-[1.1fr_0.9fr]" : ""}`}>
+          {galleryImages.length > 0 && <div data-testid="corporate-gallery" className="grid grid-cols-1 gap-5 sm:order-2 sm:grid-cols-2 sm:gap-3">
+            {galleryImages.slice(0, 4).map((image, index) => <img key={image} data-corporate-gallery-image src={image} alt={`Pickla community ${index + 1}`} className={`${galleryImages.length === 1 ? "sm:col-span-2" : ""} aspect-[4/3] w-full rounded-[22px] object-cover`} loading="lazy" sizes="(max-width: 639px) calc(100vw - 2.5rem), 24vw" />)}
+          </div>}
+          <div data-testid="corporate-gallery-copy" className={galleryImages.length ? "sm:order-1" : ""}><p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#b62068]">The Pickla feeling</p><h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">{content.pickla_heading}</h2><p className="mt-5 whitespace-pre-line text-base leading-7 text-neutral-600">{content.pickla_body}</p></div>
         </div>
       </section>
 

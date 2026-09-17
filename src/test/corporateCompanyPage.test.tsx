@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import CorporateCompanyPage from "@/pages/CorporateCompanyPage";
@@ -71,5 +71,50 @@ describe("public corporate company page", () => {
     expect(cta).toHaveAttribute("href", "https://booking.example.test/ericsson");
     expect(cta).toHaveAttribute("target", "_blank");
     expect(cta).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("renders the active hero once and keeps the remaining gallery in CMS order", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      ...response,
+      content: {
+        ...response.content,
+        hero_image_url: "https://project.test/hero.webp?v=current",
+        gallery_image_urls: [
+          "https://project.test/hero.webp?v=older",
+          "https://project.test/tall.webp",
+          "https://project.test/wide.webp",
+        ],
+      },
+    });
+    renderPage();
+
+    await screen.findByRole("heading", { name: /Ericsson/ });
+    const heroPathImages = screen.getAllByRole("img").filter((image) => new URL(image.getAttribute("src")!, window.location.href).pathname === "/hero.webp");
+    expect(heroPathImages).toHaveLength(1);
+    expect(screen.getByTestId("corporate-hero-image")).toHaveAttribute("src", "https://project.test/hero.webp?v=current");
+
+    const gallery = screen.getByTestId("corporate-gallery");
+    const galleryImages = within(gallery).getAllByRole("img");
+    expect(galleryImages.map((image) => image.getAttribute("src"))).toEqual([
+      "https://project.test/tall.webp",
+      "https://project.test/wide.webp",
+    ]);
+  });
+
+  it("uses a stable one-image-wide mobile flow before the following content and preserves the desktop grid", async () => {
+    vi.mocked(apiGet).mockResolvedValue(response);
+    renderPage();
+
+    const gallery = await screen.findByTestId("corporate-gallery");
+    const copy = screen.getByTestId("corporate-gallery-copy");
+    expect(gallery).toHaveClass("grid-cols-1", "sm:grid-cols-2", "sm:order-2");
+    expect(copy).toHaveClass("sm:order-1");
+    expect(gallery.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    for (const image of within(gallery).getAllByRole("img")) {
+      expect(image).toHaveClass("aspect-[4/3]", "w-full", "object-cover");
+      expect(image).not.toHaveClass("h-full");
+      expect(image).toHaveAttribute("sizes", "(max-width: 639px) calc(100vw - 2.5rem), 24vw");
+    }
   });
 });

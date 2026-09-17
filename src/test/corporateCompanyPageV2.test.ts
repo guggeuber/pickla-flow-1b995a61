@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  buildCorporatePublicMedia,
   buildCorporateSchedulePresentation,
   corporatePageImagePath,
   formatCorporateAddress,
@@ -69,6 +70,25 @@ describe("Corporate company page V2 employee presentation", () => {
 });
 
 describe("Corporate page CMS and image boundaries", () => {
+  it("projects hero-only semantics while preserving non-hero gallery order", () => {
+    const media = buildCorporatePublicMedia(
+      "https://project.test/storage/gallery-hero.webp?v=current",
+      [
+        "https://project.test/storage/gallery-1.webp?v=one",
+        "https://project.test/storage/gallery-hero.webp?v=legacy",
+        "https://project.test/storage/gallery-2.webp?v=two",
+        "https://project.test/storage/gallery-1.webp?v=newer",
+      ],
+      "/assets/default-community.jpg",
+    );
+
+    expect(media.heroImage).toBe("https://project.test/storage/gallery-hero.webp?v=current");
+    expect(media.galleryImages).toEqual([
+      "https://project.test/storage/gallery-1.webp?v=one",
+      "https://project.test/storage/gallery-2.webp?v=two",
+    ]);
+  });
+
   it("keeps structured editorial fields separate from schedule and participation truth", () => {
     const path = corporatePageImagePath(ACCOUNT_ID, "gallery", "11111111-1111-4111-8111-111111111111");
     const normalized = normalizeCorporatePublicPageContent({

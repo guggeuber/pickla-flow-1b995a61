@@ -40,6 +40,47 @@ export type CorporateSchedulePresentation = {
   hasExceptions: boolean;
 };
 
+export type CorporatePublicMedia = {
+  heroImage: string;
+  introImage: string | null;
+  galleryImages: string[];
+};
+
+function corporateImageIdentity(value: string) {
+  const trimmed = value.trim();
+  try {
+    const url = new URL(trimmed, "https://pickla.invalid");
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return trimmed.split(/[?#]/, 1)[0];
+  }
+}
+
+export function buildCorporatePublicMedia(
+  heroImageUrl: string | null | undefined,
+  galleryImageUrls: string[] | null | undefined,
+  fallbackImage: string,
+): CorporatePublicMedia {
+  const heroImage = heroImageUrl?.trim() || fallbackImage;
+  const seen = new Set([corporateImageIdentity(heroImage)]);
+  const galleryImages: string[] = [];
+
+  for (const value of galleryImageUrls || []) {
+    const image = value?.trim();
+    if (!image) continue;
+    const identity = corporateImageIdentity(image);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    galleryImages.push(image);
+  }
+
+  return {
+    heroImage,
+    introImage: corporateImageIdentity(heroImage) === corporateImageIdentity(fallbackImage) ? null : fallbackImage,
+    galleryImages,
+  };
+}
+
 function timeRange(session: CorporatePublicSession) {
   return `${session.start_time.slice(0, 5)}–${session.end_time.slice(0, 5)}`;
 }
