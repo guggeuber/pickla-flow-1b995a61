@@ -74,6 +74,22 @@ describe("managed-Series Open Play benefit contract", () => {
     expect(commerce).toContain("registration_occurrence_mismatch");
   });
 
+  it("verifies exact canonical registration truth before linking or paying the order", () => {
+    const commerce = read("supabase/functions/api-commerce/index.ts");
+    const orderPage = read("src/pages/CommerceOrderPage.tsx");
+    const verification = commerce.indexOf("let committedRegistrationQuery");
+    const lineLink = commerce.indexOf("admin.from('commerce_order_lines')", verification);
+    const paidOrder = commerce.indexOf("admin.from('commerce_orders').update", verification);
+
+    expect(verification).toBeGreaterThan(-1);
+    expect(lineLink).toBeGreaterThan(verification);
+    expect(paidOrder).toBeGreaterThan(lineLink);
+    expect(commerce.slice(verification, lineLink)).toContain(".eq('activity_session_id', line.activity_session_id)");
+    expect(commerce.slice(verification, lineLink)).toContain(".eq('session_date', line.session_date)");
+    expect(orderPage).toContain("const managementRegistrationId = activity?.registration_id || null");
+    expect(orderPage).not.toContain("lines.find((line) => line.commerce_kind === \"participation\")?.session_registration_id");
+  });
+
   it("exposes only the small managed-Series control and actual Session projection", () => {
     const api = read("supabase/functions/api-courses/index.ts");
     const admin = read("src/components/admin/AdminCourses.tsx");

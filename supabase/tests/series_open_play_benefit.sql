@@ -70,16 +70,33 @@ INSERT INTO public.activity_sessions (
   ('a2600000-0000-4000-8000-000000000063', 'a2600000-0000-4000-8000-000000000002', NULL, 'Open Play mitten', 'open_play', 'pickleball', '2027-09-15', '12:00', '14:00', 165, 20, '{}'::UUID[], '{}', true, 'published', false, NULL),
   ('a2600000-0000-4000-8000-000000000064', 'a2600000-0000-4000-8000-000000000002', NULL, 'Open Play slutdag', 'open_play', 'pickleball', '2027-09-30', '20:00', '22:00', 165, 20, '{}'::UUID[], '{}', true, 'published', false, NULL),
   ('a2600000-0000-4000-8000-000000000065', 'a2600000-0000-4000-8000-000000000002', NULL, 'Open Play efter', 'open_play', 'pickleball', '2027-10-01', '08:00', '10:00', 165, 20, '{}'::UUID[], '{}', true, 'published', false, NULL),
-  ('a2600000-0000-4000-8000-000000000066', 'a2600000-0000-4000-8000-000000000002', NULL, 'Premium event', 'event', 'pickleball', '2027-09-15', '18:00', '20:00', 399, 20, '{}'::UUID[], '{}', true, 'published', false, NULL);
+  ('a2600000-0000-4000-8000-000000000066', 'a2600000-0000-4000-8000-000000000002', NULL, 'Premium event', 'event', 'pickleball', '2027-09-15', '18:00', '20:00', 399, 20, '{}'::UUID[], '{}', true, 'published', false, NULL),
+  ('a2600000-0000-4000-8000-000000000067', 'a2600000-0000-4000-8000-000000000002', NULL, 'Open Play full', 'open_play', 'pickleball', '2027-09-20', '12:00', '14:00', 165, 1, '{}'::UUID[], '{}', true, 'published', false, NULL);
+
+INSERT INTO public.session_registrations (
+  venue_id, activity_session_id, session_date, user_id, customer_id, status,
+  price_paid_sek, source_type, source_id, metadata
+) VALUES (
+  'a2600000-0000-4000-8000-000000000002',
+  'a2600000-0000-4000-8000-000000000067',
+  '2027-09-20', NULL, 'a2600000-0000-4000-8000-000000000013',
+  'confirmed', 165, 'commerce_order', 'a2600000-0000-4000-8000-000000000070',
+  '{"purchase_kind":"activity_ticket","test":"full_occurrence"}'::JSONB
+);
 
 DO $$
 DECLARE
   v_paid RECORD;
   v_comp RECORD;
   v_comp_cancel RECORD;
+  v_first_hold RECORD;
+  v_second_hold RECORD;
+  v_wrong_scope_hold RECORD;
   v_first_open_play RECORD;
+  v_first_open_play_retry RECORD;
   v_second_open_play RECORD;
   v_second_open_play_retry RECORD;
+  v_full_open_play RECORD;
   v_series_entitlement_id UUID;
   v_result JSONB;
   v_orders INTEGER := (SELECT COUNT(*) FROM public.commerce_orders);
@@ -126,7 +143,8 @@ BEGIN
     WHERE session.id IN (
       'a2600000-0000-4000-8000-000000000062',
       'a2600000-0000-4000-8000-000000000063',
-      'a2600000-0000-4000-8000-000000000064'
+      'a2600000-0000-4000-8000-000000000064',
+      'a2600000-0000-4000-8000-000000000067'
     )
   LOOP
     IF NOT COALESCE((v_result->>'covered')::BOOLEAN, false)
@@ -162,6 +180,38 @@ BEGIN
     AND source_id = v_paid.commitment_id
     AND entitlement_type = 'series_access';
 
+  SELECT * INTO v_first_hold FROM public.acquire_capacity_hold(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_scope_type => 'activity_session',
+    p_scope_id => 'a2600000-0000-4000-8000-000000000062',
+    p_session_date => '2027-09-09',
+    p_capacity => 20,
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id,
+    p_idempotency_key => 'series-benefit-occurrence-a',
+    p_metadata => '{"test":"occurrence_a"}'::JSONB,
+    p_ttl_seconds => 600
+  );
+  SELECT * INTO v_second_hold FROM public.acquire_capacity_hold(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_scope_type => 'activity_session',
+    p_scope_id => 'a2600000-0000-4000-8000-000000000063',
+    p_session_date => '2027-09-15',
+    p_capacity => 20,
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id,
+    p_idempotency_key => 'series-benefit-occurrence-b',
+    p_metadata => '{"test":"occurrence_b"}'::JSONB,
+    p_ttl_seconds => 600
+  );
+  IF NOT v_first_hold.ok OR NOT v_second_hold.ok THEN
+    RAISE EXCEPTION 'reusable Series access did not acquire independent occurrence holds';
+  END IF;
+
   SELECT * INTO v_first_open_play FROM public.commit_activity_registration_capacity(
     p_venue_id => 'a2600000-0000-4000-8000-000000000002',
     p_activity_session_id => 'a2600000-0000-4000-8000-000000000062',
@@ -169,7 +219,8 @@ BEGIN
     p_user_id => NULL,
     p_customer_id => 'a2600000-0000-4000-8000-000000000011',
     p_source_type => 'series_access',
-    p_source_id => v_series_entitlement_id
+    p_source_id => v_series_entitlement_id,
+    p_hold_id => v_first_hold.hold_id
   );
   SELECT * INTO v_second_open_play FROM public.commit_activity_registration_capacity(
     p_venue_id => 'a2600000-0000-4000-8000-000000000002',
@@ -178,7 +229,18 @@ BEGIN
     p_user_id => NULL,
     p_customer_id => 'a2600000-0000-4000-8000-000000000011',
     p_source_type => 'series_access',
-    p_source_id => v_series_entitlement_id
+    p_source_id => v_series_entitlement_id,
+    p_hold_id => v_second_hold.hold_id
+  );
+  SELECT * INTO v_first_open_play_retry FROM public.commit_activity_registration_capacity(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_activity_session_id => 'a2600000-0000-4000-8000-000000000062',
+    p_session_date => '2027-09-09',
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id,
+    p_hold_id => v_first_hold.hold_id
   );
   SELECT * INTO v_second_open_play_retry FROM public.commit_activity_registration_capacity(
     p_venue_id => 'a2600000-0000-4000-8000-000000000002',
@@ -194,10 +256,28 @@ BEGIN
      OR v_first_open_play.registration_id = v_second_open_play.registration_id THEN
     RAISE EXCEPTION 'reusable Series access did not commit one registration per occurrence';
   END IF;
+  IF NOT v_first_open_play_retry.ok
+     OR v_first_open_play_retry.registration_id <> v_first_open_play.registration_id
+     OR v_first_open_play_retry.reason <> 'already_committed' THEN
+    RAISE EXCEPTION 'occurrence A retry was not idempotent';
+  END IF;
   IF NOT v_second_open_play_retry.ok
      OR v_second_open_play_retry.registration_id <> v_second_open_play.registration_id
      OR v_second_open_play_retry.reason <> 'already_committed' THEN
-    RAISE EXCEPTION 'same-occurrence Series access retry was not idempotent';
+    RAISE EXCEPTION 'occurrence B retry was not idempotent';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.capacity_holds
+    WHERE id = v_first_hold.hold_id
+      AND status = 'committed'
+      AND metadata->>'registration_id' = v_first_open_play.registration_id::TEXT
+  ) OR NOT EXISTS (
+    SELECT 1 FROM public.capacity_holds
+    WHERE id = v_second_hold.hold_id
+      AND status = 'committed'
+      AND metadata->>'registration_id' = v_second_open_play.registration_id::TEXT
+  ) THEN
+    RAISE EXCEPTION 'capacity hold was not committed to its exact occurrence registration';
   END IF;
   IF (SELECT COUNT(*) FROM public.session_registrations
       WHERE source_type = 'series_access' AND source_id = v_series_entitlement_id) <> 2 THEN
@@ -220,6 +300,64 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Series access ticket identity diverged from canonical occurrence truth';
   END IF;
+
+  SELECT * INTO v_wrong_scope_hold FROM public.acquire_capacity_hold(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_scope_type => 'activity_session',
+    p_scope_id => 'a2600000-0000-4000-8000-000000000064',
+    p_session_date => '2027-09-30',
+    p_capacity => 20,
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id,
+    p_idempotency_key => 'series-benefit-wrong-scope-hold',
+    p_metadata => '{"test":"must_remain_active"}'::JSONB,
+    p_ttl_seconds => 600
+  );
+  PERFORM * FROM public.commit_activity_registration_capacity(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_activity_session_id => 'a2600000-0000-4000-8000-000000000062',
+    p_session_date => '2027-09-09',
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id,
+    p_hold_id => v_wrong_scope_hold.hold_id
+  );
+  IF NOT EXISTS (
+    SELECT 1 FROM public.capacity_holds
+    WHERE id = v_wrong_scope_hold.hold_id
+      AND status = 'active'
+      AND metadata->>'registration_id' IS NULL
+  ) THEN
+    RAISE EXCEPTION 'retry committed a hold belonging to another occurrence';
+  END IF;
+  PERFORM public.release_capacity_hold(v_wrong_scope_hold.hold_id, 'test_complete');
+
+  SELECT * INTO v_full_open_play FROM public.commit_activity_registration_capacity(
+    p_venue_id => 'a2600000-0000-4000-8000-000000000002',
+    p_activity_session_id => 'a2600000-0000-4000-8000-000000000067',
+    p_session_date => '2027-09-20',
+    p_user_id => NULL,
+    p_customer_id => 'a2600000-0000-4000-8000-000000000011',
+    p_source_type => 'series_access',
+    p_source_id => v_series_entitlement_id
+  );
+  IF v_full_open_play.ok OR v_full_open_play.registration_id IS NOT NULL
+     OR v_full_open_play.reason <> 'capacity_full'
+     OR EXISTS (
+       SELECT 1 FROM public.session_registrations
+       WHERE activity_session_id = 'a2600000-0000-4000-8000-000000000067'
+         AND session_date = '2027-09-20'
+         AND customer_id = 'a2600000-0000-4000-8000-000000000011'
+     ) THEN
+    RAISE EXCEPTION 'full included occurrence produced a registration or ticket';
+  END IF;
+
+  UPDATE public.session_registrations
+  SET status = 'checked_in'
+  WHERE id = v_first_open_play.registration_id;
   IF COALESCE((public.get_session_public_context(
       'a2600000-0000-4000-8000-000000000062', '2027-09-09'
     )->>'attendee_count')::INTEGER, 0) <> 1
