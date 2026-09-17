@@ -3619,14 +3619,14 @@ Deno.serve(async (req) => {
     try {
       const venueResolution = await resolvePublicVenueQuery(readContext, async () => {
         let venueResult = await admin.from('venues')
-          .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status, group_booking_title, group_booking_intro, group_booking_notes, group_booking_image_url')
+          .select('id, name, slug, description, address, city, postal_code, country, latitude, longitude, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status, group_booking_title, group_booking_intro, group_booking_notes, group_booking_image_url')
           .eq('slug', slug)
           .eq('is_public', true)
           .maybeSingle();
 
         if (venueResult.error?.message?.includes('group_booking_')) {
           venueResult = await admin.from('venues')
-            .select('id, name, slug, description, address, city, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status')
+            .select('id, name, slug, description, address, city, postal_code, country, latitude, longitude, logo_url, cover_image_url, primary_color, secondary_color, phone, email, website_url, status')
             .eq('slug', slug)
             .eq('is_public', true)
             .maybeSingle();

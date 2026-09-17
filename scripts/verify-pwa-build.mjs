@@ -98,7 +98,12 @@ if (!cacheHeader("/manifest-admin.webmanifest")?.includes("must-revalidate")) fa
 if (cacheHeader("/assets/(.*)") !== "public, max-age=31536000, immutable") {
   fail("hashed assets are not immutable");
 }
-if (!cacheHeader("/((?!.*\\.[^/]+$).*)")?.includes("no-store")) {
+const spaDocumentHeader = vercel.headers.find((entry) =>
+  entry.source === "/((?!pickleball-stockholm$|.*\\.[^/]+$).*)"
+);
+if (!spaDocumentHeader?.headers
+  .find((header) => header.key.toLowerCase() === "cache-control")?.value
+  .includes("no-store")) {
   fail("extensionless SPA documents are not no-store");
 }
 

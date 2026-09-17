@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:dev": "vite build --mode development",
+    "build": "vite build && npm run verify:public-web-build",
+    "build:dev": "vite build --mode development && npm run verify:public-web-build",
     "lint": "eslint .",
     "ops:agent": "node scripts/ops-agent-check.mjs",
     "preview": "vite preview",
@@ -15,6 +15,7 @@
     "verify:edge-cors-live": "node scripts/verify-live-edge-cors.mjs",
     "edge:release-plan": "node scripts/edge-release-plan.mjs",
     "verify:pwa-build": "node scripts/verify-pwa-build.mjs",
+    "verify:public-web-build": "node scripts/verify-public-web-build.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

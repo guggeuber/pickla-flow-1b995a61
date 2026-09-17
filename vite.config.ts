@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { componentTagger } from "lovable-tagger";
 import { VitePWA } from "vite-plugin-pwa";
 import { renderPwaSurfaceBootstrap } from "./src/lib/pwaSurface";
+import { publicWebPlugin } from "./public-web/vitePlugin";
 
 function resolveBuildSha() {
   const environmentSha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA;
@@ -65,6 +66,7 @@ export default defineConfig(({ mode }) => {
     mode === "development" && componentTagger(),
     buildIdentityPlugin,
     pwaSurfaceHtmlPlugin,
+    publicWebPlugin(__dirname),
     VitePWA({
       registerType: "autoUpdate",
       strategies: "injectManifest",
