@@ -147,9 +147,18 @@ export async function safeServiceCredentialDiagnostic(credential: string | undef
   };
 }
 
-export function createPublicReadContext(functionName: string, endpoint: string): PublicReadContext {
+function incomingRequestId(request?: Request) {
+  if (!request) return null;
+  const candidate = request.headers.get('x-pickla-request-id')
+    || new URL(request.url).searchParams.get('pickla_request_id');
+  return candidate && /^[a-zA-Z0-9-]{8,80}$/.test(candidate) ? candidate : null;
+}
+
+export function createPublicReadContext(functionName: string, endpoint: string, request?: Request): PublicReadContext {
   return {
-    requestId: globalThis.crypto?.randomUUID?.() || `pickla-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    requestId: incomingRequestId(request)
+      || globalThis.crypto?.randomUUID?.()
+      || `pickla-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
     functionName,
     endpoint,
     startedAt: performance.now(),

@@ -3608,7 +3608,7 @@ Deno.serve(async (req) => {
 
   // ── Public endpoint: venue by slug (no auth required) ──
   if (req.method === 'GET' && path === 'public-venue') {
-    const readContext = createPublicReadContext('api-bookings', 'public-venue');
+    const readContext = createPublicReadContext('api-bookings', 'public-venue', req);
     const slug = url.searchParams.get('slug');
     if (!slug) return publicReadClientErrorResponse('Missing slug', 400, readContext);
 

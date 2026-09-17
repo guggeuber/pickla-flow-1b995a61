@@ -29,6 +29,15 @@ const terminalAuthFailureListeners = new Set<TerminalAuthFailureListener>();
 const terminallyRejectedAccessTokens = new Set<string>();
 const MAX_REMEMBERED_REJECTED_TOKENS = 8;
 
+export function authConcurrencySnapshot() {
+  return {
+    auth_operation_in_flight: Boolean(authOperationInFlight),
+    session_read_in_flight: Boolean(sessionReadInFlight),
+    session_refresh_in_flight: Boolean(sessionRefreshInFlight),
+    unauthorized_recovery_in_flight: Boolean(unauthorizedRecoveryInFlight),
+  };
+}
+
 export function rememberTerminallyRejectedAccessToken(accessToken: string) {
   terminallyRejectedAccessTokens.delete(accessToken);
   terminallyRejectedAccessTokens.add(accessToken);

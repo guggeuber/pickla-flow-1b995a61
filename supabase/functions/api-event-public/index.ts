@@ -18,6 +18,7 @@ import {
 } from '../_shared/activity_schedule_versions.ts';
 import { reconcileExpiredFirstVisitCheckouts } from '../_shared/commerce_checkout_expiry.ts';
 import {
+  attachPublicReadHeaders,
   createPublicReadContext,
   measurePublicReadStage,
   PublicReadStageError,
@@ -1524,7 +1525,7 @@ Deno.serve(async (req) => {
     // One bounded auth-free Prices read. The RPC batches canonical public
     // presentation facts; checkout and personalized price truth stay separate.
     if (req.method === 'GET' && path === 'public-prices') {
-      const readContext = createPublicReadContext('api-event-public', 'public-prices');
+      const readContext = createPublicReadContext('api-event-public', 'public-prices', req);
       const serviceCredential = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
       const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
       if (!venueSlug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(venueSlug)) {
@@ -1568,7 +1569,7 @@ Deno.serve(async (req) => {
     // One bounded auth-free secondary Today read. The RPC batches canonical
     // facts; shared Edge resolvers apply public display pricing locally.
     if (req.method === 'GET' && path === 'today-secondary') {
-      const readContext = createPublicReadContext('api-event-public', 'today-secondary');
+      const readContext = createPublicReadContext('api-event-public', 'today-secondary', req);
       const serviceCredential = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
       const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
       const startDate = String(url.searchParams.get('startDate') || '').trim();
@@ -1605,7 +1606,7 @@ Deno.serve(async (req) => {
     // avatars, interests, bookings and personalized pricing so public first
     // paint never waits for optional authentication or enrichment.
     if (req.method === 'GET' && path === 'today-primary') {
-      const readContext = createPublicReadContext('api-event-public', 'today-primary');
+      const readContext = createPublicReadContext('api-event-public', 'today-primary', req);
       const serviceCredential = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
       const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
       const startDate = String(url.searchParams.get('startDate') || '').trim();
@@ -1643,7 +1644,7 @@ Deno.serve(async (req) => {
     // session price while waiting for a second private enrichment request.
     if (req.method === 'GET' && path === 'today-personalized') {
       const totalStartedAt = performance.now();
-      const readContext = createPublicReadContext('api-event-public', 'today-personalized');
+      const readContext = createPublicReadContext('api-event-public', 'today-personalized', req);
       const timings: Record<string, number> = {};
       const venueSlug = String(url.searchParams.get('venueSlug') || url.searchParams.get('v') || '').trim();
       const startDate = String(url.searchParams.get('startDate') || '').trim();
@@ -1652,7 +1653,10 @@ Deno.serve(async (req) => {
       const end = DateTime.fromISO(endDate, { zone: 'Europe/Stockholm' });
       const rangeDays = start.isValid && end.isValid ? Math.round(end.startOf('day').diff(start.startOf('day'), 'days').days) : -1;
       if (!venueSlug || !/^[a-z0-9][a-z0-9-]{0,119}$/.test(venueSlug) || rangeDays < 0 || rangeDays > 13) {
-        return privateErrorResponse('Venue and a 1–14 day date range are required', 400);
+        return attachPublicReadHeaders(
+          privateErrorResponse('Venue and a 1–14 day date range are required', 400),
+          readContext,
+        );
       }
 
       try {
@@ -1666,8 +1670,12 @@ Deno.serve(async (req) => {
           loadTodayPrimaryProjection(client, { venueSlug, startDate, endDate, readContext }),
         ]);
         timings.schedule_projection_ms = Math.round(performance.now() - scheduleStartedAt);
-        if (auth.error || !auth.userId) return privateErrorResponse('Unauthorized', 401);
-        if (projection.kind === 'not_found') return privateErrorResponse('Venue not found', 404);
+        if (auth.error || !auth.userId) {
+          return attachPublicReadHeaders(privateErrorResponse('Unauthorized', 401), readContext);
+        }
+        if (projection.kind === 'not_found') {
+          return attachPublicReadHeaders(privateErrorResponse('Venue not found', 404), readContext);
+        }
         if (projection.kind === 'error') throw new PublicReadStageError(projection.stage, projection.error);
 
         const boundedOccurrences = boundedPersonalizedTodayOccurrences(projection.data);
@@ -1731,20 +1739,31 @@ Deno.serve(async (req) => {
           pricing_resolver_count: personalizedPricing.diagnostics.resolver_count,
           timings,
         };
-        console.log('authenticated-today-personalized-timing', diagnostics);
-        return privateJsonResponse({
+        readContext.timings.handler_total = timings.total_ms;
+        console.log('authenticated-today-personalized-timing', {
+          request_id: readContext.requestId,
+          request_started_at: readContext.requestStartedAt,
+          ...diagnostics,
+        });
+        return attachPublicReadHeaders(privateJsonResponse({
           ...boundedProjection,
           personalized_pricing: personalizedPricing,
           diagnostics,
-        });
+        }), readContext);
       } catch (error) {
         timings.total_ms = Math.round(performance.now() - totalStartedAt);
+        readContext.timings.handler_total = timings.total_ms;
         console.error('authenticated-today-personalized-failure', {
+          request_id: readContext.requestId,
+          request_started_at: readContext.requestStartedAt,
           stage: error instanceof PublicReadStageError ? error.stage : 'personalized_projection',
           timings,
           error_class: error instanceof Error ? error.name : 'unknown',
         });
-        return privateErrorResponse('Personalized Today is temporarily unavailable', 503);
+        return attachPublicReadHeaders(
+          privateErrorResponse('Personalized Today is temporarily unavailable', 503),
+          readContext,
+        );
       }
     }
 

@@ -142,9 +142,11 @@ export function reportApiFailure(input: {
   initial_request_id?: string;
   final_request_id?: string;
   error_class?: string;
+  failure_kind?: string;
   retry_count?: number;
   retry_outcome?: "recovered" | "failed";
   stale_retained?: boolean;
+  timings?: object;
 }) {
   if (input.fn === "api-ops" && input.endpoint === "client-event") return;
   const isPublicReadIncident = input.retry_outcome !== undefined;

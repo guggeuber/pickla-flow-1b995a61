@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { terminateInvalidSessionSingleFlight } from "@/lib/authSessionSingleFlight";
+import { markReliabilityMilestone } from "@/lib/reliabilityTiming";
 
 export type AccountIdentityRecord = {
   id?: string | null;
@@ -156,10 +157,29 @@ const supabaseBootstrapClient: BootstrapClient = {
 };
 
 export async function loadAccountBootstrap(userId: string) {
-  await validateRestoredSessionWith(
-    userId,
-    () => supabase.auth.getUser() as Promise<SessionUserResult>,
-    () => terminateInvalidSessionSingleFlight(),
-  );
-  return loadAccountBootstrapWith(supabaseBootstrapClient, userId);
+  markReliabilityMilestone("account_bootstrap_started");
+  const remoteAuthStartedAt = performance.now();
+  try {
+    await validateRestoredSessionWith(
+      userId,
+      () => supabase.auth.getUser() as Promise<SessionUserResult>,
+      () => terminateInvalidSessionSingleFlight(),
+    );
+    markReliabilityMilestone("remote_session_validated", {
+      duration_ms: Math.round(performance.now() - remoteAuthStartedAt),
+    });
+    const identityStartedAt = performance.now();
+    const account = await loadAccountBootstrapWith(supabaseBootstrapClient, userId);
+    markReliabilityMilestone("account_identity_loaded", {
+      duration_ms: Math.round(performance.now() - identityStartedAt),
+      identity_missing: account.identityMissing,
+    });
+    return account;
+  } catch (error) {
+    markReliabilityMilestone("account_bootstrap_failed", {
+      duration_ms: Math.round(performance.now() - remoteAuthStartedAt),
+      error_class: error instanceof Error ? error.name : "unknown",
+    });
+    throw error;
+  }
 }

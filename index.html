@@ -1,6 +1,12 @@
 <!doctype html>
 <html lang="sv">
   <head>
+    <script>
+      window.__PICKLA_RELIABILITY_BOOTSTRAP__ = {
+        started_at_ms: performance.now(),
+        started_at_wall: new Date().toISOString()
+      };
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Pickla | Play, Meet and Belong</title>
@@ -68,6 +74,9 @@
 
   <body>
     <div id="root" class="notranslate" translate="no"></div>
+    <script>
+      window.__PICKLA_RELIABILITY_BOOTSTRAP__.document_available_ms = performance.now();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

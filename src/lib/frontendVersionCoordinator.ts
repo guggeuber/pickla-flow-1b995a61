@@ -23,6 +23,7 @@ export type FrontendVersionTrigger =
 
 export type FrontendVersionDiagnostic =
   | "version_checked"
+  | "version_check_failure"
   | "stale_detected"
   | "reload_deferred"
   | "convergence_executed"
@@ -196,7 +197,9 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
         }
         await attemptConvergence(build, trigger);
       } catch (error: unknown) {
-        deps.report("convergence_failure", {
+        const staleBuild = pendingBuild
+          ?? (currentServerBuild?.sha !== deps.runningBuild.sha ? currentServerBuild : null);
+        deps.report(staleBuild ? "convergence_failure" : "version_check_failure", {
           ...baseDetail(),
           trigger,
           stage: "version_check",

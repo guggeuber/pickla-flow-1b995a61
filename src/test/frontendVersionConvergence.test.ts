@@ -172,7 +172,26 @@ describe("frontend version convergence", () => {
     const harness = coordinatorHarness({ fetchError: new Error("offline") });
     await harness.coordinator.check("bootstrap", true);
     expect(harness.reload).not.toHaveBeenCalled();
-    expect(harness.report).toHaveBeenCalledWith("convergence_failure", expect.objectContaining({
+    expect(harness.report).toHaveBeenCalledWith("version_check_failure", expect.objectContaining({
+      stage: "version_check",
+    }));
+  });
+
+  it("does not classify a same-build controllerchange transport failure as convergence failure", async () => {
+    const harness = coordinatorHarness({ serverBuild: buildA });
+    await harness.coordinator.check("bootstrap", true);
+    harness.fetchCurrentBuild.mockRejectedValueOnce(new TypeError("Load failed"));
+    harness.advance(30_000);
+
+    await harness.coordinator.check("controllerchange", true);
+
+    expect(harness.report).toHaveBeenCalledWith("version_check_failure", expect.objectContaining({
+      running_sha: buildA.sha,
+      current_sha: buildA.sha,
+      stage: "version_check",
+      trigger: "controllerchange",
+    }));
+    expect(harness.report).not.toHaveBeenCalledWith("convergence_failure", expect.objectContaining({
       stage: "version_check",
     }));
   });

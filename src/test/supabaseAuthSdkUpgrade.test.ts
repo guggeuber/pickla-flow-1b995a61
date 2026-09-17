@@ -68,12 +68,12 @@ describe("Supabase auth SDK coordination", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not use navigator.locks for default session coordination", async () => {
+  it("coordinates default session reads through abortable navigator locks", async () => {
     const request = vi.fn(async (
-      _name: string,
+      name: string,
       _options: LockOptions,
-      callback: () => Promise<unknown>,
-    ) => callback());
+      callback: (lock: Lock | null) => Promise<unknown>,
+    ) => callback({ name, mode: "exclusive" } as Lock));
     Object.defineProperty(navigator, "locks", {
       configurable: true,
       value: { request },
@@ -88,7 +88,11 @@ describe("Supabase auth SDK coordination", () => {
 
     expect(first).toMatchObject({ data: { session: null }, error: null });
     expect(second).toMatchObject({ data: { session: null }, error: null });
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalled();
+    for (const [, options] of request.mock.calls) {
+      expect(options).toMatchObject({ mode: "exclusive" });
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+    }
   });
 
   it("single-flights concurrent session reads while refreshing an expired session", async () => {

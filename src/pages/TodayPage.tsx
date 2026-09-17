@@ -28,6 +28,10 @@ import { activitySessionOccurrenceInterval } from "@/lib/activitySessionTime";
 import { fetchCourseDetail, fetchCourseHome, type CourseDetail, type MyCourseItem } from "@/lib/courses";
 import { inheritedEventImages } from "@/lib/eventMedia";
 import { useVerifiedAccount } from "@/hooks/useVerifiedAccount";
+import {
+  completeStartupTiming,
+  markReliabilityMilestone,
+} from "@/lib/reliabilityTiming";
 import { resolveCustomerVenueContext } from "@/lib/customerVenue";
 import type { ActivitySessionOverride } from "@/lib/activitySessionOverrides";
 import { SeriesRegistrationCard } from "@/components/series/SeriesRegistrationCard";
@@ -1015,6 +1019,15 @@ export default function TodayPage() {
       } : null,
     };
   }), [pricingByOccurrence, rawItems, verifiedAccount.isVerified, verifiedAccount.state]);
+  useEffect(() => {
+    if (!primary.data) return;
+    const frame = window.requestAnimationFrame(() => {
+      markReliabilityMilestone("first_meaningful_render", { surface: "customer" });
+      markReliabilityMilestone("first_actionable_ui", { surface: "customer" });
+      completeStartupTiming("customer");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [primary.data]);
   const { data: coursePersonalization } = useQuery<CoursePersonalization>({
     queryKey: ["today-course-personalization", slug, publicCoursePromotion?.id || "fallback", verifiedAccount.verifiedUserId],
     enabled: Boolean(primary.data) && Boolean(committedSecondary) && verifiedAccount.isVerified,

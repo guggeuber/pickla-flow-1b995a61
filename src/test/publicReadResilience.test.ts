@@ -125,6 +125,24 @@ describe("safe public read incident diagnostics", () => {
     expect(JSON.stringify(body)).not.toContain("JWT issued at future");
   });
 
+  it("preserves a valid client correlation id from a header or public query parameter", () => {
+    const fromHeader = createPublicReadContext(
+      "api-event-public",
+      "today-personalized",
+      new Request("https://example.test/today-personalized", {
+        headers: { "x-pickla-request-id": "01999999-aaaa-7bbb-8ccc-123456789abc" },
+      }),
+    );
+    const fromQuery = createPublicReadContext(
+      "api-bookings",
+      "public-venue",
+      new Request("https://example.test/public-venue?pickla_request_id=pickla-safe-1234"),
+    );
+
+    expect(fromHeader.requestId).toBe("01999999-aaaa-7bbb-8ccc-123456789abc");
+    expect(fromQuery.requestId).toBe("pickla-safe-1234");
+  });
+
   it("uses a one-way truncated fingerprint rather than credential material", async () => {
     const serviceJwt = fakeServiceJwt();
     const diagnostic = await safeServiceCredentialDiagnostic(serviceJwt);

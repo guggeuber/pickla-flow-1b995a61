@@ -15,6 +15,7 @@ import {
   type VerifiedAccountState,
 } from "@/hooks/useVerifiedAccount";
 import { routeRequiresVerifiedAccount } from "@/lib/publicFirstPaintRoutes";
+import { markReliabilityMilestone } from "@/lib/reliabilityTiming";
 
 type BootstrapUser = {
   id: string;
@@ -83,6 +84,13 @@ export function AuthenticatedBootstrapGate({
   }, [bootstrap.error, queryClient, user?.id]);
 
   const state = accountState(user, authLoading, authStatus, bootstrap, bypass);
+  useEffect(() => {
+    if (!["verified", "anonymous", "terminal_failure", "validation_error"].includes(state)) return;
+    markReliabilityMilestone("route_authorization_complete", {
+      state,
+      blocked_for_account: blockForAccount,
+    });
+  }, [blockForAccount, state]);
   const value = useMemo<VerifiedAccountContextValue>(() => ({
     state,
     account: state === "verified" ? bootstrap.data || null : null,

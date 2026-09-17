@@ -14,15 +14,37 @@ import {
   setFrontendVersionRegistration,
   type FrontendVersionDiagnostic,
 } from "@/lib/frontendVersionCoordinator";
+import {
+  installWarmResumeTiming,
+  markReliabilityMilestone,
+} from "@/lib/reliabilityTiming";
 import "./index.css";
 
 const MAINTENANCE_MODE = import.meta.env.VITE_MAINTENANCE_MODE === "true";
 let updateServiceWorker: ((reloadPage?: boolean) => Promise<void>) | undefined;
 
+markReliabilityMilestone("main_js_evaluated");
+markReliabilityMilestone("service_worker_state_known", {
+  supported: typeof navigator !== "undefined" && "serviceWorker" in navigator,
+  controlled: typeof navigator !== "undefined" && Boolean(navigator.serviceWorker?.controller),
+});
+installWarmResumeTiming();
+
 function reportFrontendVersionDiagnostic(
   event: FrontendVersionDiagnostic,
   detail: Record<string, unknown>,
 ) {
+  if (event === "version_checked") {
+    markReliabilityMilestone("version_check_completed", {
+      trigger: detail.trigger,
+      current_matches_running: detail.current_sha === detail.running_sha,
+    });
+  } else if (event === "version_check_failure") {
+    markReliabilityMilestone("version_check_failed", {
+      trigger: detail.trigger,
+      error_class: "transport",
+    });
+  }
   const level = event === "convergence_failure" ? "error" : event === "version_checked" ? "info" : "warn";
   console[level](`[frontend-version] ${event}`, detail);
   if (event === "version_checked") return;
@@ -37,6 +59,7 @@ function reportFrontendVersionDiagnostic(
 }
 
 if (typeof navigator !== "undefined") {
+  markReliabilityMilestone("version_check_started", { blocking: false });
   installFrontendVersionCoordinator(reportFrontendVersionDiagnostic);
 }
 

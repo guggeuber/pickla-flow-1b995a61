@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
@@ -73,6 +73,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { adminModuleHref, adminModuleIdFromPath } from "@/lib/adminModuleRoute";
+import {
+  completeStartupTiming,
+  markReliabilityMilestone,
+} from "@/lib/reliabilityTiming";
 
 /* ── Surfaces ── */
 const SURFACES: AdminSurfaceDef[] = [
@@ -229,6 +233,16 @@ const AdminPage = () => {
 
   const venueId = selectedVenueId || adminData?.venueId;
   const currentVenue = venues.find((v: any) => v.id === venueId);
+
+  useEffect(() => {
+    if (!adminData?.isAdmin) return;
+    const frame = window.requestAnimationFrame(() => {
+      markReliabilityMilestone("first_meaningful_render", { surface: "admin" });
+      markReliabilityMilestone("first_actionable_ui", { surface: "admin" });
+      completeStartupTiming("admin");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [adminData?.isAdmin]);
 
   if (isLoading) {
     return (

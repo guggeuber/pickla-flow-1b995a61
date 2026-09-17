@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 
-import { apiGet } from "@/lib/api";
+import { apiGet, type ApiClientTiming } from "@/lib/api";
 import type { BackendActivityPricingDecision, CustomerActivityPricePresentation } from "@/lib/activityPricing";
 import { reportClientEvent } from "@/lib/clientObservability";
 import { RUNNING_FRONTEND_BUILD } from "@/lib/frontendBuild";
@@ -188,6 +188,7 @@ export async function fetchPersonalizedToday<T>(input: {
   endDate: string;
 }) {
   const startedAt = performance.now();
+  let clientTiming: ApiClientTiming | null = null;
   reportPricingMetric("authenticated_today_requested", "Authenticated Today read model requested", {
     date_count: Math.max(1, Math.round((new Date(input.endDate).getTime() - new Date(input.startDate).getTime()) / 86_400_000) + 1),
   });
@@ -199,6 +200,9 @@ export async function fetchPersonalizedToday<T>(input: {
         venueSlug: input.venueSlug,
         startDate: input.startDate,
         endDate: input.endDate,
+      },
+      {
+        onTiming: (timing) => { clientTiming = timing; },
       },
     );
     reportPricingMetric("authenticated_today_resolved", "Authenticated Today read model resolved", {
@@ -213,12 +217,17 @@ export async function fetchPersonalizedToday<T>(input: {
       day_access_lookup_count: response.diagnostics?.day_access_lookup_count || null,
       entitlement_batch_lookup_count: response.diagnostics?.entitlement_batch_lookup_count || null,
       pricing_resolver_count: response.diagnostics?.pricing_resolver_count || null,
+      client_phases: clientTiming,
     });
     return response;
   } catch (error) {
     reportPricingMetric("authenticated_today_failure", "Authenticated Today read model failed", {
       client_duration_ms: Math.round(performance.now() - startedAt),
       error_class: error instanceof Error ? error.name : "unknown",
+      failure_kind: error && typeof error === "object" && "failureKind" in error
+        ? String((error as { failureKind?: unknown }).failureKind || "unknown_transport_failure")
+        : null,
+      client_phases: clientTiming,
     });
     throw error;
   }

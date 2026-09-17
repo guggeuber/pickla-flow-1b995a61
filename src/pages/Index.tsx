@@ -15,6 +15,10 @@ import DeskQueue from "@/components/desk/shell/DeskQueue";
 import DeskCommandBar from "@/components/desk/shell/DeskCommandBar";
 import { DeskOperationalDetailDrawer } from "@/components/operations/DeskOperationalDetailDrawer";
 import picklaLogo from "@/assets/pickla-logo.svg";
+import {
+  completeStartupTiming,
+  markReliabilityMilestone,
+} from "@/lib/reliabilityTiming";
 
 type DeskBookingRow = {
   id?: string;
@@ -56,10 +60,24 @@ const Index = () => {
   const now = useClock();
 
   useEffect(() => {
+    if (!staffVenue) return;
+    const frame = window.requestAnimationFrame(() => {
+      markReliabilityMilestone("first_meaningful_render", { surface: "desk" });
+      markReliabilityMilestone("first_actionable_ui", { surface: "desk" });
+      completeStartupTiming("desk");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [staffVenue]);
+
+  useEffect(() => {
     setOpenDetail(deepLinkedBookingId ? { target: { kind: "booking", booking_id: deepLinkedBookingId } } : null);
   }, [deepLinkedBookingId]);
 
   const { data: bookings } = useTodayBookings(venueId);
+  useEffect(() => {
+    if (bookings === undefined) return;
+    markReliabilityMilestone("primary_state_committed", { surface: "desk" });
+  }, [bookings]);
   const courtRows = useMemo(
     () => ((bookings as DeskBookingRow[] | undefined) || []).filter((booking) =>
       booking.kind !== "activity_registration" && booking.kind !== "activity_court_block"

@@ -10,6 +10,7 @@ import {
   subscribeToTerminalAuthFailure,
 } from "@/lib/authSessionSingleFlight";
 import { clearCustomerQueryCache } from "@/lib/authQueryCache";
+import { markReliabilityMilestone } from "@/lib/reliabilityTiming";
 
 export type LocalAuthStatus = "session_hydrating" | "local_session" | "anonymous" | "terminal_failure";
 
@@ -73,6 +74,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(nextSession?.user ?? null);
       setLoading(false);
       setAuthStatus(nextSession ? "local_session" : "anonymous");
+      markReliabilityMilestone("session_restored", { has_session: Boolean(nextSession) });
+      markReliabilityMilestone("authenticated_identity_known", { authenticated: Boolean(nextSession?.user) });
     };
 
     const unsubscribeTerminalFailure = subscribeToTerminalAuthFailure(() => {
@@ -94,6 +97,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     );
 
+    markReliabilityMilestone("session_restore_started");
     getSessionSingleFlight()
       .then(({ data: { session } }) => {
         if (!receivedAuthEvent) applySession(session);
