@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Loader2, Search, UserRoundPlus } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
-import { AxCard, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
+import { AxCard, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 
 type BruceSession = {
@@ -76,7 +76,7 @@ export default function DeskBrucePanel({
     enabled: Boolean(venueId && serviceDate),
     refetchInterval: 30_000,
   });
-  const sessions = sessionsQuery.data?.sessions || [];
+  const sessions = useMemo(() => sessionsQuery.data?.sessions || [], [sessionsQuery.data?.sessions]);
   const selectedSession = useMemo(() => sessions.find((session) => `${session.program_id}:${session.activity_session_id}` === selectedKey) || sessions[0] || null, [selectedKey, sessions]);
   const normalizedSearch = customerSearch.trim();
   const customersQuery = useQuery<CustomerOption[]>({
@@ -130,13 +130,13 @@ export default function DeskBrucePanel({
     onError: (error: Error) => toast.error(error.message),
   });
 
+  if (!sessionsQuery.isLoading && sessions.length === 0) return null;
+
   return (
     <section className="space-y-2">
       <AxSectionLabel icon={UserRoundPlus} accent={ax("electric")}>Bruce</AxSectionLabel>
       {sessionsQuery.isLoading ? (
         <AxCard pad="row"><Loader2 className="h-5 w-5 animate-spin" style={{ color: ax("electric") }} /></AxCard>
-      ) : sessions.length === 0 ? (
-        <AxEmpty icon={UserRoundPlus} title="Inga Bruce-pass denna dag" hint="Aktivera Bruce på passet under Admin · Schema." tint={ax("electric")} />
       ) : (
         <AxCard pad="row">
           <div className="space-y-4">

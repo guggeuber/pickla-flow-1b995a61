@@ -90,6 +90,7 @@ type DeskFulfillmentLineRow = {
   fulfillment_status: string;
   fulfilled_at: string | null;
   activity_session_id: string | null;
+  session_date: string | null;
 };
 
 type DeskFulfillmentLineWithOrderRow = DeskFulfillmentLineRow & {
@@ -1553,16 +1554,17 @@ function serializeDeskFulfillmentItem(
 async function loadDeskFulfillmentItems(
   admin: AdminClient,
   venueId: string,
-  filter: { status?: string; lineId?: string } = {},
+  filter: { status?: string; lineId?: string; serviceDate?: string } = {},
 ): Promise<DeskFulfillmentItem[]> {
   let lineQuery = admin.from('commerce_order_lines')
-    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id, commerce_orders!inner(id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
+    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id, session_date, commerce_orders!inner(id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
     .eq('commerce_orders.venue_id', venueId)
     .in('commerce_orders.status', ['paid', 'attention'])
     .eq('fulfillment_type', 'desk_pickup')
     .order('created_at');
   if (filter.status) lineQuery = lineQuery.eq('fulfillment_status', filter.status);
   if (filter.lineId) lineQuery = lineQuery.eq('id', filter.lineId);
+  if (filter.serviceDate) lineQuery = lineQuery.eq('session_date', filter.serviceDate);
   const { data: lineData, error: lineError } = await lineQuery;
   if (lineError) throw new Error(lineError.message);
   const lines = (lineData || []) as DeskFulfillmentLineWithOrderRow[];
@@ -2720,7 +2722,12 @@ const commerceHandler = async (req: Request) => {
       const venueId = url.searchParams.get('venueId') || '';
       await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff']);
       const status = url.searchParams.get('status') || 'pending_pickup';
-      const items = await loadDeskFulfillmentItems(admin, venueId, { status });
+      const serviceDate = String(url.searchParams.get('date') || '').trim();
+      const parsedServiceDate = DateTime.fromISO(serviceDate, { zone: 'Europe/Stockholm' });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate) || !parsedServiceDate.isValid || parsedServiceDate.toISODate() !== serviceDate) {
+        return errorResponse('Invalid fulfillment date', 400);
+      }
+      const items = await loadDeskFulfillmentItems(admin, venueId, { status, serviceDate });
       return jsonResponse({ items }, 200, 5);
     }
 

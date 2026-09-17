@@ -5736,6 +5736,60 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true }, 200, 0);
     }
 
+    // GET /api-bookings/live-resources?venueId=X — canonical current reservation
+    // state for Desk. The physical resolver owns closure, maintenance/block,
+    // activity and booking precedence; the response intentionally contains no PII.
+    if (req.method === 'GET' && path === 'live-resources') {
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      if (!UUID_PATTERN.test(venueId)) return errorResponse('Invalid venueId', 400);
+      const admin = getServiceClient();
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const { data: resources, error: resourcesError } = await admin
+        .from('venue_courts')
+        .select('id, name, court_number, sport_type, is_available')
+        .eq('venue_id', venueId)
+        .order('court_number');
+      if (resourcesError) return errorResponse(resourcesError.message, 500);
+
+      const asOf = DateTime.now().toUTC();
+      let conflicts: Array<{
+        type: string;
+        resource_id: string;
+        source_id?: string;
+        occurrence_date?: string;
+        starts_at: string;
+        ends_at: string;
+      }> = [];
+      if ((resources || []).length > 0) {
+        try {
+          const decision = await checkPhysicalAvailability(admin, {
+            venueId,
+            courtIds: (resources || []).map((resource: { id: string }) => resource.id),
+            startsAt: asOf.toISO()!,
+            endsAt: asOf.plus({ milliseconds: 1 }).toISO()!,
+          });
+          conflicts = decision.conflicts.map((conflict) => ({
+            type: conflict.type,
+            resource_id: conflict.resource_id,
+            source_id: conflict.source_id,
+            occurrence_date: conflict.occurrence_date,
+            starts_at: conflict.starts_at,
+            ends_at: conflict.ends_at,
+          }));
+        } catch (availabilityError) {
+          console.error('Desk live resources failed closed:', availabilityError instanceof Error ? availabilityError.message : availabilityError);
+          return errorResponse('Live resource state unavailable', 503);
+        }
+      }
+
+      return jsonResponse({
+        as_of: asOf.toISO(),
+        interval_semantics: '[start,end)',
+        resources: resources || [],
+        conflicts,
+      }, 200, 5);
+    }
+
     // GET /api-bookings/venue?venueId=X&date=YYYY-MM-DD
     if (req.method === 'GET' && path === 'venue') {
       const venueId = url.searchParams.get('venueId');

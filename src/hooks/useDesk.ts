@@ -21,6 +21,7 @@ export function useVenueForStaff() {
       return {
         venue_id: v.venue_id,
         role: v.role,
+        roles: Array.isArray(me.roles) ? me.roles : [],
         venues: v.venues,
       };
     },
@@ -43,6 +44,15 @@ export function useTodayBookings(venueId: string | undefined, date?: string) {
     queryFn: () => {
       return apiGet("api-bookings", "venue", { venueId: venueId!, date: date || todayStockholm() });
     },
+  });
+}
+
+export function useLiveResources(venueId: string | undefined) {
+  return useQuery({
+    queryKey: ["desk-live-resources", venueId],
+    enabled: !!venueId,
+    refetchInterval: 30000,
+    queryFn: () => apiGet("api-bookings", "live-resources", { venueId: venueId! }),
   });
 }
 

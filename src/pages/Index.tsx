@@ -20,6 +20,7 @@ import {
   markReliabilityMilestone,
 } from "@/lib/reliabilityTiming";
 import { resolveAuthorizationUiState } from "@/lib/authorizationUiState";
+import { canAccessDeskAdmin, DEFAULT_DESK_SURFACE } from "@/lib/deskTruth";
 
 type DeskBookingRow = {
   id?: string;
@@ -66,7 +67,7 @@ const Index = () => {
     isAuthorized: Boolean(staffVenue),
   });
 
-  const [active, setActive] = useState<DeskSurfaceId>("arrivals");
+  const [active, setActive] = useState<DeskSurfaceId>(DEFAULT_DESK_SURFACE);
   const [openDetail, setOpenDetail] = useState<{ target: unknown; sourceItem?: DeskBookingRow | null } | null>(
     deepLinkedBookingId ? { target: { kind: "booking", booking_id: deepLinkedBookingId } } : null,
   );
@@ -109,9 +110,9 @@ const Index = () => {
   };
 
   const surfaces: DeskSurfaceDef[] = [
+    { id: "today", label: "Today", icon: Gauge, hint: "Dagens arbete" },
     { id: "arrivals", label: "Arrivals", icon: UserCheck, hint: "Senaste incheckningar" },
-    { id: "today", label: "Today", icon: Gauge, hint: "Intäkt och kommande" },
-    { id: "live", label: "Live", icon: Radio, hint: "Hela hallen i realtid" },
+    { id: "live", label: "Live", icon: Radio, hint: "Reservationer just nu" },
     { id: "queue", label: "Queue", icon: AlertTriangle, hint: "Undantag", badge: pendingCount || undefined },
   ];
 
@@ -218,13 +219,15 @@ const Index = () => {
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
-              <button onClick={() => navigate("/hub/admin")}
-                className="w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: ax("muted") }}
-                aria-label="Admin"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
+              {canAccessDeskAdmin(staffVenue) ? (
+                <button onClick={() => navigate("/hub/admin")}
+                  className="w-10 h-10 rounded-xl flex items-center justify-center"
+                  style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: ax("muted") }}
+                  aria-label="Admin"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              ) : null}
               <button onClick={signOut}
                 className="w-10 h-10 rounded-xl flex items-center justify-center"
                 style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}`, color: ax("muted") }}

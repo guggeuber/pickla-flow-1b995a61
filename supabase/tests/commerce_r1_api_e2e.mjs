@@ -99,7 +99,7 @@ async function fn(path, { method = "GET", body, token, expected } = {}) {
   });
 }
 
-async function canonicalFulfillmentLineIds(venueId, status) {
+async function canonicalFulfillmentLineIds(venueId, status, serviceDate = today) {
   const orders = (await rest(
     "commerce_orders",
     `venue_id=eq.${venueId}&status=in.(paid,attention)&select=id`,
@@ -110,7 +110,7 @@ async function canonicalFulfillmentLineIds(venueId, status) {
     orderIds.slice(index * 100, (index + 1) * 100));
   const lineChunks = await Promise.all(chunks.map(async (chunk) => (await rest(
     "commerce_order_lines",
-    `commerce_order_id=in.(${chunk.join(",")})&fulfillment_type=eq.desk_pickup&fulfillment_status=eq.${status}&select=id&order=created_at.asc`,
+    `commerce_order_id=in.(${chunk.join(",")})&fulfillment_type=eq.desk_pickup&fulfillment_status=eq.${status}&session_date=eq.${serviceDate}&select=id&order=created_at.asc`,
   )).payload));
   const lines = lineChunks.flat();
   return lines.map((line) => line.id).sort();
@@ -428,7 +428,7 @@ await rest("venue_staff", "", { method: "POST", body: [
 await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { expected: 401 });
 const deniedDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { token: attacker.token, expected: [400, 403] })).payload;
 assert(String(deniedDeskPayload?.error || "").startsWith("Forbidden") && !deniedDeskPayload?.items, "unauthorized venue user received Desk data");
-const emptyDeskPayload = (await fn(`fulfillment?venueId=${ids.capacityVenue}&status=pending_pickup`, { token: deskUser.token })).payload;
+const emptyDeskPayload = (await fn(`fulfillment?venueId=${ids.capacityVenue}&status=pending_pickup&date=${today}`, { token: deskUser.token })).payload;
 assert(Array.isArray(emptyDeskPayload.items) && emptyDeskPayload.items.length === 0, "zero-match Desk queue was not cleanly empty");
 
 const fulfillmentOrganizationId = (await rest("venues", `id=eq.${ids.venue}&select=organization_id`)).payload[0].organization_id;
@@ -448,6 +448,7 @@ const parityOrders = [
   { id: "c2bf0100-0000-4000-8000-000000000005", venue_id: ids.venue, status: "expired", label: "expired" },
   { id: "c2bf0100-0000-4000-8000-000000000006", venue_id: ids.capacityVenue, status: "paid", label: "other-venue" },
   { id: "c2bf0100-0000-4000-8000-000000000007", venue_id: ids.venue, status: "paid", label: "collected" },
+  { id: "c2bf0100-0000-4000-8000-000000000008", venue_id: ids.venue, status: "paid", label: "tomorrow" },
 ];
 await rest("commerce_orders", "", { method: "POST", body: [
   ...historicalOrders,
@@ -476,6 +477,7 @@ const parityLines = parityOrders.map((order, index) => ({
   source_type: "catalog",
   fulfillment_type: "desk_pickup",
   fulfillment_status: order.label === "collected" ? "collected" : "pending_pickup",
+  session_date: order.label === "tomorrow" ? tomorrow : today,
 }));
 await rest("commerce_order_lines", "", { method: "POST", body: parityLines });
 for (const order of parityOrders) {
@@ -484,7 +486,7 @@ for (const order of parityOrders) {
   }
 }
 
-const pendingDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { token: deskUser.token })).payload;
+const pendingDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup&date=${today}`, { token: deskUser.token })).payload;
 assertDeskPayloadPrivate(pendingDeskPayload);
 const expectedPendingLineIds = await canonicalFulfillmentLineIds(ids.venue, "pending_pickup");
 const actualPendingLineIds = pendingDeskPayload.items.map((item) => item.line_id).sort();
@@ -496,7 +498,7 @@ const excludedLineIds = parityLines
   .map((line) => line.id);
 assert(actualPendingLineIds.includes(attentionLineId), "attention order pickup was excluded from Desk queue");
 assert(excludedLineIds.every((lineId) => !actualPendingLineIds.includes(lineId)), "ineligible status or other-venue line entered Desk queue");
-const adminDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup`, { token: deskAdmin.token })).payload;
+const adminDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=pending_pickup&date=${today}`, { token: deskAdmin.token })).payload;
 assert(JSON.stringify(adminDeskPayload.items.map((item) => item.line_id).sort()) === JSON.stringify(expectedPendingLineIds), "venue admin did not receive the canonical Desk queue");
 const publicReceipt = (await rest("booking_receipts", `id=eq.${guestOrder.booking_receipt_id}&select=receipt_number`)).payload[0];
 const deskAllowlist = [
@@ -520,7 +522,7 @@ const collectedTwice = (await rest("commerce_order_lines", `id=eq.${guestRacketL
 const fulfillmentAudits = (await rest("audit_log", `entity_id=eq.${guestRacketLine.id}&action=eq.commerce.fulfillment.transition&select=id`)).payload;
 assert(collectedOnce.fulfilled_at === collectedTwice.fulfilled_at, "fulfillment retry changed fulfilled_at");
 assert(collectedOnce.fulfilled_by === collectedTwice.fulfilled_by && fulfillmentAudits.length === 1, "fulfillment retry changed actor or duplicated audit");
-const collectedDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=collected`, { token: deskUser.token })).payload;
+const collectedDeskPayload = (await fn(`fulfillment?venueId=${ids.venue}&status=collected&date=${today}`, { token: deskUser.token })).payload;
 assertDeskPayloadPrivate(collectedDeskPayload);
 const expectedCollectedLineIds = await canonicalFulfillmentLineIds(ids.venue, "collected");
 assert(JSON.stringify(collectedDeskPayload.items.map((item) => item.line_id).sort()) === JSON.stringify(expectedCollectedLineIds), "set-based collected queue differs from canonical semantics");

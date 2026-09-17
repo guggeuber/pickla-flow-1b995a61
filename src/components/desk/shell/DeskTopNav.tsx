@@ -21,21 +21,21 @@ interface Props {
 export default function DeskTopNav({ surfaces, active, onChange }: Props) {
   return (
     <nav
-      className="-mx-4 px-4 overflow-x-auto scrollbar-none"
+      className="-mx-2 overflow-x-auto px-2 scrollbar-none sm:-mx-4 sm:px-4"
       style={{ WebkitOverflowScrolling: "touch" }}
       aria-label="Desk OS surfaces"
     >
-      <ul className="flex gap-1.5 min-w-max pb-1">
+      <ul className="grid grid-cols-4 gap-1 pb-1 sm:flex sm:min-w-max sm:gap-1.5">
         {surfaces.map((s) => {
           const isActive = s.id === active;
           return (
-            <li key={s.id}>
+            <li key={s.id} className="min-w-0">
               <motion.button
                 whileTap={{ scale: 0.94 }}
                 whileHover={!isActive ? { y: -1 } : undefined}
                 onClick={() => onChange(s.id)}
                 aria-current={isActive ? "page" : undefined}
-                className="relative flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-colors"
+                className="relative flex w-full items-center justify-center gap-1.5 rounded-xl px-1.5 py-2.5 text-[10px] font-bold uppercase tracking-wide transition-colors sm:w-auto sm:justify-start sm:gap-2 sm:px-3.5 sm:text-[11px] sm:tracking-wider"
                 style={
                   isActive
                     ? {

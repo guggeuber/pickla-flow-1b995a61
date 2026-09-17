@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, CalendarCheck, CalendarDays, Check, CheckCircl
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
-import { useTodayBookings, useTodayRevenue, useVenueCourts } from "@/hooks/useDesk";
+import { useTodayBookings } from "@/hooks/useDesk";
 import { apiGet, apiPatch } from "@/lib/api";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
@@ -208,18 +208,16 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
   const isToday = selectedOffset === 0;
   const maxDate = toStockholmDate(today).plus({ days: DESK_LOOKAHEAD_DAYS }).toISODate()!;
   const { data: bookings } = useTodayBookings(venueId, selectedDate);
-  const { data: revenue } = useTodayRevenue(venueId);
-  const { data: courts } = useVenueCourts(venueId);
   const { data: fulfillment } = useQuery({
-    queryKey: ["commerce-fulfillment", venueId, "pending_pickup"],
+    queryKey: ["commerce-fulfillment", venueId, "pending_pickup", today],
     enabled: !!venueId && isToday,
-    queryFn: () => apiGet<DeskFulfillmentResponse>("api-commerce", "fulfillment", { venueId: venueId!, status: "pending_pickup" }),
+    queryFn: () => apiGet<DeskFulfillmentResponse>("api-commerce", "fulfillment", { venueId: venueId!, status: "pending_pickup", date: today }),
     refetchInterval: 30000,
   });
   const { data: collectedFulfillment } = useQuery({
-    queryKey: ["commerce-fulfillment", venueId, "collected"],
+    queryKey: ["commerce-fulfillment", venueId, "collected", today],
     enabled: !!venueId && isToday,
-    queryFn: () => apiGet<DeskFulfillmentResponse>("api-commerce", "fulfillment", { venueId: venueId!, status: "collected" }),
+    queryFn: () => apiGet<DeskFulfillmentResponse>("api-commerce", "fulfillment", { venueId: venueId!, status: "collected", date: today }),
     refetchInterval: 30000,
   });
   const changeDateBy = (days: number) => {
@@ -268,7 +266,7 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
     mutationFn: (line: DeskFulfillmentItem) => apiPatch("api-commerce", "fulfillment", { venue_id: venueId, line_id: line.line_id, status: "collected" }),
     onSuccess: (_result, line) => {
       toast.success("Uthämtningen är klar");
-      qc.setQueryData<DeskFulfillmentResponse>(["commerce-fulfillment", venueId, "pending_pickup"], (current) => current
+      qc.setQueryData<DeskFulfillmentResponse>(["commerce-fulfillment", venueId, "pending_pickup", today], (current) => current
         ? { ...current, items: current.items.filter((item) => item.line_id !== line.line_id) }
         : current);
       qc.invalidateQueries({ queryKey: ["commerce-fulfillment", venueId] });
@@ -288,7 +286,7 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
   );
 
   const sortedBookings = useMemo(
-    () => [...courtRows].sort((a: any, b: any) => +new Date(a.start_time) - +new Date(b.start_time)).slice(0, 16),
+    () => [...courtRows].sort((a: any, b: any) => +new Date(a.start_time) - +new Date(b.start_time)),
     [courtRows]
   );
 
@@ -326,7 +324,7 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
         });
       }
     }
-    return Array.from(map.values()).sort((a: any, b: any) => +new Date(a.start_time) - +new Date(b.start_time)).slice(0, 8);
+    return Array.from(map.values()).sort((a: any, b: any) => +new Date(a.start_time) - +new Date(b.start_time));
   }, [activityRows, rows]);
   const recentlyCollected = useMemo(() => (collectedFulfillment?.items || []).filter((line) => {
     if (!line.fulfilled_at) return false;
@@ -378,11 +376,8 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
       }
     }
 
-    return items.slice(0, 8);
+    return items;
   }, [activityGroups, courtRows]);
-
-  const totalCourts = (courts as any[] | undefined)?.length || 0;
-  const total = revenue ? `${(revenue as any).total.toLocaleString("sv-SE")} kr` : "–";
 
   return (
     <div className="space-y-4">
@@ -432,13 +427,6 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
-          {isToday ? (
-            <div className="grid grid-cols-3 gap-2 text-center md:w-[420px]">
-              <MiniStat label="Intäkt" value={total} />
-              <MiniStat label="Bokningar" value={String(courtRows.length)} />
-              <MiniStat label="Banor" value={String(totalCourts)} />
-            </div>
-          ) : null}
         </div>
       </div>
 
@@ -459,7 +447,7 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
             Needs attention
           </AxSectionLabel>
           {suggestions.length === 0 ? (
-            <AxEmpty icon={CheckCircle2} title="Inget akut just nu" hint="När något behöver ageras på hamnar det här." tint={ax("lime")} />
+            <AxEmpty icon={CheckCircle2} title="Inga kända uppgifter just nu" hint="Den här vyn visar bokningar och aktiviteter som den kan följa upp." tint={ax("lime")} />
           ) : (
             <div className="grid gap-2 lg:grid-cols-2">
               {suggestions.map((item) => (
@@ -568,15 +556,6 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
         customerId={customerTarget?.customerId || undefined}
         userId={customerTarget?.userId || undefined}
       />
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border px-3 py-2" style={{ background: ax("surfaceHi"), borderColor: ax("borderSoft") }}>
-      <p className={AX_TYPE.microSoft} style={{ color: ax("muted") }}>{label}</p>
-      <p className="mt-0.5 truncate text-sm font-black text-white">{value}</p>
     </div>
   );
 }

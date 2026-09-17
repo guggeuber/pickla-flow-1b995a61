@@ -42,7 +42,7 @@ export default function DeskQueue({ venueId, onOpenBooking }: Props) {
   );
 
   const cancelledToday = useMemo(
-    () => courtRows.filter((b: any) => b.status === "cancelled").slice(0, 8),
+    () => courtRows.filter((b: any) => b.status === "cancelled"),
     [courtRows]
   );
 
@@ -57,7 +57,7 @@ export default function DeskQueue({ venueId, onOpenBooking }: Props) {
         </h2>
         <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
           {totalIssues === 0
-            ? "Allt rullar utan friktion."
+            ? "Inga kända problem i nuvarande Queue."
             : `${totalIssues} ärende${totalIssues === 1 ? "" : "n"} att kolla på.`}
         </p>
       </div>

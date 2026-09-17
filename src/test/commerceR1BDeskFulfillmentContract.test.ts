@@ -71,6 +71,7 @@ function fulfillmentRequestLengths(orderCount: number) {
     "commerce_orders.venue_id": "eq.c2b00000-0000-4000-8000-000000000001",
     "commerce_orders.status": "in.(paid,attention)",
     fulfillment_type: "eq.desk_pickup",
+    session_date: "eq.2026-09-17",
     order: "created_at.asc",
     fulfillment_status: "eq.pending_pickup",
   });
@@ -109,6 +110,7 @@ describe("Commerce R1B Desk fulfillment contract", () => {
     expect(loader).toContain(".eq('commerce_orders.venue_id', venueId)");
     expect(loader).toContain(".in('commerce_orders.status', ['paid', 'attention'])");
     expect(loader).toContain(".eq('fulfillment_type', 'desk_pickup')");
+    expect(loader).toContain(".eq('session_date', filter.serviceDate)");
     expect(loader).not.toContain(".from('commerce_orders')");
     expect(loader).not.toContain(".in('commerce_order_id'");
     expect(loader).not.toContain("orderIds");
