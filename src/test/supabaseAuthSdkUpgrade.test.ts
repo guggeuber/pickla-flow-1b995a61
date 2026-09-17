@@ -68,12 +68,12 @@ describe("Supabase auth SDK coordination", () => {
     vi.restoreAllMocks();
   });
 
-  it("coordinates default session reads through abortable navigator locks", async () => {
+  it("uses the SDK's lockless single-flight path for default session reads", async () => {
     const request = vi.fn(async (
-      name: string,
+      _name: string,
       _options: LockOptions,
-      callback: (lock: Lock | null) => Promise<unknown>,
-    ) => callback({ name, mode: "exclusive" } as Lock));
+      callback: () => Promise<unknown>,
+    ) => callback());
     Object.defineProperty(navigator, "locks", {
       configurable: true,
       value: { request },
@@ -88,11 +88,9 @@ describe("Supabase auth SDK coordination", () => {
 
     expect(first).toMatchObject({ data: { session: null }, error: null });
     expect(second).toMatchObject({ data: { session: null }, error: null });
-    expect(request).toHaveBeenCalled();
-    for (const [, options] of request.mock.calls) {
-      expect(options).toMatchObject({ mode: "exclusive" });
-      expect(options.signal).toBeInstanceOf(AbortSignal);
-    }
+    // auth-js 2.110 keeps the default lock null and coordinates refreshes
+    // internally. navigator.locks is used only when a custom lock is supplied.
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("single-flights concurrent session reads while refreshing an expired session", async () => {

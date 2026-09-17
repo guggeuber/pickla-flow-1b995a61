@@ -15,6 +15,31 @@ npm run ops:agent -- --mode=deploy
 
 `prod:check` runs tests and production build. Full `npm run lint` currently has legacy repo-wide debt, so run targeted lint on touched files until that backlog is cleared.
 
+If any file under `supabase/functions/_shared/` changed, generate the Edge
+deployment matrix from the dependency graph before deploying:
+
+```bash
+npm run edge:release-plan -- --base <pre-release-sha>
+```
+
+After deployment, verify the recorded function list against the same plan:
+
+```bash
+npm run edge:release-plan -- --base <pre-release-sha> \
+  --verify-deployed <comma-separated-function-names>
+```
+
+This gate is mandatory for shared runtime changes. In particular, browser
+request headers and `_shared/cors.ts` are one release contract; a frontend
+header change must not ship against older function bundles.
+
+After deploying the planned functions, hard-gate the live browser methods and
+headers rather than trusting source code alone:
+
+```bash
+npm run verify:edge-cors-live -- --project-ref <production-project-ref>
+```
+
 4. Review whether the change includes:
    - frontend only
    - migrations

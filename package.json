@@ -10,7 +10,10 @@
     "lint": "eslint .",
     "ops:agent": "node scripts/ops-agent-check.mjs",
     "preview": "vite preview",
-    "prod:check": "npm run test && npm run build && npm run verify:pwa-build",
+    "prod:check": "npm run test && npm run verify:edge-contract && npm run build && npm run verify:pwa-build",
+    "verify:edge-contract": "node scripts/verify-edge-browser-contract.mjs",
+    "verify:edge-cors-live": "node scripts/verify-live-edge-cors.mjs",
+    "edge:release-plan": "node scripts/edge-release-plan.mjs",
     "verify:pwa-build": "node scripts/verify-pwa-build.mjs",
     "test": "vitest run",
     "test:watch": "vitest"

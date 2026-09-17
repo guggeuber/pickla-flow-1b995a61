@@ -19,6 +19,7 @@ import {
   completeStartupTiming,
   markReliabilityMilestone,
 } from "@/lib/reliabilityTiming";
+import { resolveAuthorizationUiState } from "@/lib/authorizationUiState";
 
 type DeskBookingRow = {
   id?: string;
@@ -50,8 +51,20 @@ const Index = () => {
   const navigate = useNavigate();
   const { bookingId: deepLinkedBookingId } = useParams<{ bookingId?: string }>();
   const queryClient = useQueryClient();
-  const { data: staffVenue, isLoading: venueLoading } = useVenueForStaff();
+  const {
+    data: staffVenue,
+    isLoading: venueLoading,
+    isError: venueError,
+    error: venueQueryError,
+    refetch: refetchVenue,
+  } = useVenueForStaff();
   const venueId = staffVenue?.venue_id;
+  const authorizationState = resolveAuthorizationUiState({
+    isLoading: venueLoading,
+    isError: venueError,
+    error: venueQueryError,
+    isAuthorized: Boolean(staffVenue),
+  });
 
   const [active, setActive] = useState<DeskSurfaceId>("arrivals");
   const [openDetail, setOpenDetail] = useState<{ target: unknown; sourceItem?: DeskBookingRow | null } | null>(
@@ -102,7 +115,7 @@ const Index = () => {
     { id: "queue", label: "Queue", icon: AlertTriangle, hint: "Undantag", badge: pendingCount || undefined },
   ];
 
-  if (venueLoading) {
+  if (authorizationState === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center" style={{ background: ax("ink") }}>
         <Loader2 className="w-6 h-6 animate-spin" style={{ color: ax("electric") }} />
@@ -110,7 +123,30 @@ const Index = () => {
     );
   }
 
-  if (!staffVenue) {
+  if (authorizationState === "unavailable") {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-6" style={{ background: ax("ink") }}>
+        <div className="text-center space-y-4 max-w-sm">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto"
+            style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}>
+            <AlertCircle className="w-7 h-7" style={{ color: ax("muted") }} />
+          </div>
+          <h1 className={`${AX_TYPE.display} text-2xl`} style={{ color: "white" }}>Kan inte verifiera behörighet just nu</h1>
+          <p className="text-sm" style={{ color: ax("muted") }}>
+            Anslutningen till behörighetstjänsten misslyckades. Försök igen utan att logga ut.
+          </p>
+          <button onClick={() => void refetchVenue()}
+            className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold"
+            style={{ background: ax("electric"), color: "white" }}>
+            <RefreshCw className="h-4 w-4" />
+            Försök igen
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (authorizationState === "denied") {
     return (
       <div className="flex min-h-screen items-center justify-center px-6" style={{ background: ax("ink") }}>
         <div className="text-center space-y-4 max-w-sm">

@@ -19,6 +19,7 @@ import {
   Package,
   Plus,
   ReceiptText,
+  RefreshCw,
   Settings,
   ShieldAlert,
   Sparkles,
@@ -53,6 +54,7 @@ import AdminEventLeads from "@/components/admin/AdminEventLeads";
 import AdminResourceBlocks from "@/components/admin/AdminResourceBlocks";
 import AdminVenueOperations from "@/components/admin/AdminVenueOperations";
 import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
+import { resolveAuthorizationUiState } from "@/lib/authorizationUiState";
 import AdminFinancialMaintenance from "@/components/admin/AdminFinancialMaintenance";
 import CustomersScreen from "@/screens/CustomersScreen";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
@@ -220,7 +222,7 @@ const AdminPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { modulePath } = useParams<{ modulePath?: string }>();
-  const { data: adminDataRaw, isLoading, isError } = useAdminCheck();
+  const { data: adminDataRaw, isLoading, isError, error, refetch } = useAdminCheck();
   const { data: venuesRaw } = useAdminVenues();
   const adminData = adminDataRaw as any;
   const venues = (venuesRaw as any[]) || [];
@@ -233,6 +235,12 @@ const AdminPage = () => {
 
   const venueId = selectedVenueId || adminData?.venueId;
   const currentVenue = venues.find((v: any) => v.id === venueId);
+  const authorizationState = resolveAuthorizationUiState({
+    isLoading,
+    isError,
+    error,
+    isAuthorized: adminData?.isAdmin === true,
+  });
 
   useEffect(() => {
     if (!adminData?.isAdmin) return;
@@ -244,7 +252,7 @@ const AdminPage = () => {
     return () => window.cancelAnimationFrame(frame);
   }, [adminData?.isAdmin]);
 
-  if (isLoading) {
+  if (authorizationState === "loading") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -252,7 +260,28 @@ const AdminPage = () => {
     );
   }
 
-  if (isError || !adminData?.isAdmin) {
+  if (authorizationState === "unavailable") {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-6">
+        <div className="w-14 h-14 rounded-2xl bg-muted flex items-center justify-center">
+          <ShieldAlert className="w-7 h-7 text-muted-foreground" />
+        </div>
+        <h1 className="text-xl font-display font-bold text-foreground">Kan inte verifiera behörighet just nu</h1>
+        <p className="text-sm text-muted-foreground text-center">
+          Anslutningen till behörighetstjänsten misslyckades. Försök igen utan att logga ut.
+        </p>
+        <button
+          onClick={() => void refetch()}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Försök igen
+        </button>
+      </div>
+    );
+  }
+
+  if (authorizationState === "denied") {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-6">
         <div className="w-14 h-14 rounded-2xl bg-destructive/15 flex items-center justify-center">
