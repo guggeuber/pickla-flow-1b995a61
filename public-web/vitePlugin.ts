@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Plugin } from "vite";
 import { loadAcquisitionData } from "./acquisitionData";
+import { renderJoinPage } from "./renderJoinPage";
 import { renderPublicWebPage } from "./renderPage";
 import { PUBLIC_WEB_ROUTES, renderPublicWebSitemap } from "./registry";
 
@@ -47,6 +48,11 @@ export function publicWebPlugin(rootDirectory: string): Plugin {
           }, null, 2)}\n`,
         });
       }
+      this.emitFile({
+        type: "asset",
+        fileName: "join/index.html",
+        source: renderJoinPage({ logo: `/${LOGO_FILE}` }),
+      });
       this.emitFile({ type: "asset", fileName: "sitemap.xml", source: renderPublicWebSitemap() });
     },
   };

@@ -16,8 +16,9 @@ function expectExcludes(source, value, label) {
   if (source.includes(value)) fail(`${label} unexpectedly contains: ${value}`);
 }
 
-const [html, sitemap, robots, factsText, vercelText, mailProxy] = await Promise.all([
+const [html, joinHtml, sitemap, robots, factsText, vercelText, mailProxy] = await Promise.all([
   readFile(fromRoot("dist/pickleball-stockholm/index.html"), "utf8"),
+  readFile(fromRoot("dist/join/index.html"), "utf8"),
   readFile(fromRoot("dist/sitemap.xml"), "utf8"),
   readFile(fromRoot("dist/robots.txt"), "utf8"),
   readFile(fromRoot("dist/public-web/pickleball-stockholm.build-facts.json"), "utf8"),
@@ -100,6 +101,7 @@ if (!imageTags.length || imageTags.some((tag) => !/\bwidth="\d+"/.test(tag) || !
 }
 
 expectIncludes(sitemap, "https://playpickla.com/pickleball-stockholm", "sitemap route");
+expectIncludes(sitemap, "https://playpickla.com/join", "sitemap join route");
 expectExcludes(sitemap, "https://www.playpickla.com", "sitemap");
 expectExcludes(sitemap, "<lastmod>", "sitemap");
 for (const privatePath of ["/my", "/checkout", "/orders", "/receipts", "/claims", "/invites", "/desk", "/hub/admin", "/ops"]) {
@@ -114,9 +116,13 @@ const publicHeader = vercel.headers.find((entry) => entry.source === "/picklebal
 if (!publicHeader?.headers?.some((header) => header.key === "X-Robots-Tag" && header.value === "index, follow")) {
   fail("Public Web index header is missing");
 }
+const joinHeader = vercel.headers.find((entry) => entry.source === "/join");
+if (!joinHeader?.headers?.some((header) => header.key === "X-Robots-Tag" && header.value === "index, follow")) {
+  fail("/join index header is missing");
+}
 const genericDocumentHeader = vercel.headers.find((entry) => entry.source.includes("[^/]+$"));
-if (!genericDocumentHeader?.source.includes("pickleball-stockholm$")) {
-  fail("generic SPA no-store header must exclude the cacheable Public Web route");
+if (!genericDocumentHeader?.source.includes("pickleball-stockholm$") || !genericDocumentHeader.source.includes("join$")) {
+  fail("generic SPA no-store header must exclude both cacheable Public Web routes");
 }
 const privateHeaderSources = new Set(
   vercel.headers
@@ -127,11 +133,14 @@ for (const source of ["/my", "/hub/(.*)", "/desk/(.*)", "/ops/(.*)", "/auth/(.*)
   if (!privateHeaderSources.has(source)) fail(`private noindex header is missing for ${source}`);
 }
 const publicRewriteIndex = vercel.rewrites.findIndex((entry) => entry.source === "/pickleball-stockholm" && entry.destination === "/pickleball-stockholm/index.html");
+const joinRewriteIndex = vercel.rewrites.findIndex((entry) => entry.source === "/join" && entry.destination === "/join/index.html");
 const fallbackIndex = vercel.rewrites.findIndex((entry) => entry.source === "/(.*)" && entry.destination === "/index.html");
-if (publicRewriteIndex < 0 || fallbackIndex < 0 || publicRewriteIndex > fallbackIndex) {
-  fail("Public Web must be served before the preserved SPA fallback");
+if (publicRewriteIndex < 0 || joinRewriteIndex < 0 || fallbackIndex < 0
+  || publicRewriteIndex > fallbackIndex || joinRewriteIndex > fallbackIndex) {
+  fail("Public Web routes must be served before the preserved SPA fallback");
 }
 if (vercel.rewrites[publicRewriteIndex].has) fail("Public Web rewrite must not vary by crawler");
+if (vercel.rewrites[joinRewriteIndex].has) fail("/join rewrite must not vary by crawler");
 const mailProxyRewrite = vercel.rewrites.find((entry) => entry.source === "/mail/:action" && entry.destination === "/api/mail?action=:action");
 if (!mailProxyRewrite) fail("same-origin Pickla Mail proxy rewrite is missing");
 for (const expected of ["PICKLA_MAIL_PROXY_CREDENTIAL", "x-pickla-mail-proxy", "x-pickla-client-network", "MAX_SUBSCRIBE_BODY_BYTES"]) {
@@ -149,6 +158,33 @@ for (const [file, id, startUrl, name] of expectedManifests) {
     fail(`${file} identity or startup behavior changed`);
   }
 }
+
+for (const expected of [
+  "<title>Join Pickla — News, events and community</title>",
+  '<meta name="robots" content="index,follow">',
+  '<link rel="canonical" href="https://playpickla.com/join">',
+  "STAY IN<br>THE PICKLA<br>LOOP",
+  "Events. People. Things we're building.",
+  "Yes, send me Pickla news &amp; community.",
+  "JOIN PICKLA",
+  'fetch("/mail/subscribe"',
+  'source:"public_web_root"',
+  'href="/privacy"',
+]) expectIncludes(joinHtml, expected, "/join static HTML");
+if (/name="consent"[^>]*\bchecked\b/i.test(joinHtml)) fail("/join consent must be unchecked");
+if (/<script\s+[^>]*src=/i.test(joinHtml)) fail("/join loads an external JavaScript bundle");
+for (const forbidden of [
+  'id="root"',
+  "manifest.webmanifest",
+  "registerSW",
+  "serviceWorker.register",
+  "AuthProvider",
+  "QueryClientProvider",
+  "api.resend.com",
+  "RESEND_API_KEY",
+  "googletagmanager",
+  "analytics",
+]) expectExcludes(joinHtml, forbidden, "/join static Public Web HTML");
 
 const executableScripts = [...html.matchAll(/<script(?! type="application\/ld\+json")[^>]*>([\s\S]*?)<\/script>/g)]
   .reduce((total, match) => total + Buffer.byteLength(match[1]), 0);
@@ -170,6 +206,22 @@ for (const [name, budget] of Object.entries(budgets)) {
   if (budget.actual > budget.maximum) fail(`${name} budget exceeded (${budget.actual} > ${budget.maximum})`);
 }
 
+const joinExecutableScripts = [...joinHtml.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
+  .reduce((total, match) => total + Buffer.byteLength(match[1]), 0);
+const joinInlineCss = [...joinHtml.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
+  .reduce((total, match) => total + Buffer.byteLength(match[1]), 0);
+const joinResourceUrls = [...joinHtml.matchAll(/<(?:img|link)\b[^>]*(?:src|href)="([^"]+)"/g)]
+  .map((match) => match[1])
+  .filter((value) => !value.startsWith("https://playpickla.com/") && !value.startsWith("#"));
+const joinBudgets = {
+  html: { actual: Buffer.byteLength(joinHtml), maximum: 24 * 1024 },
+  executable_js: { actual: joinExecutableScripts, maximum: 2 * 1024 },
+  inline_css: { actual: joinInlineCss, maximum: 12 * 1024 },
+};
+for (const [name, budget] of Object.entries(joinBudgets)) {
+  if (budget.actual > budget.maximum) fail(`/join ${name} budget exceeded (${budget.actual} > ${budget.maximum})`);
+}
+
 console.log(JSON.stringify({
   ok: true,
   route: facts.route,
@@ -179,5 +231,11 @@ console.log(JSON.stringify({
   budgets,
   external_javascript_files: 0,
   initial_request_count: initialRequestCount,
+  join: {
+    route: "/join",
+    budgets: joinBudgets,
+    external_javascript_files: 0,
+    initial_request_count: 1 + new Set(joinResourceUrls).size,
+  },
   pwa_start_urls: expectedManifests.map(([file, , startUrl]) => ({ file, start_url: startUrl })),
 }, null, 2));

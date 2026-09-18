@@ -126,11 +126,21 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
 
   it("generates the approved concise confirmation email with plain text and HTML", () => {
     const email = renderPicklaConfirmationEmail("https://playpickla.com/mail/confirm?token=opaque");
-    expect(email.subject).toBe("One more click and you're in 🥒");
-    expect(email.text).toContain("Confirm that you want to hear from Pickla.");
-    expect(email.text).toContain("YES, I'M IN");
+    expect(email.subject).toBe("One more click. Then you're in.");
+    expect(email.text).toBe("PICKLA\n\nOne more click.\nThen you're in.\n\nConfirm you want to hear from Pickla.\n\nYES, I'M IN → https://playpickla.com/mail/confirm?token=opaque\n\nIf this wasn't you, ignore this email.\nThe link expires after 24 hours.");
+    expect(email.html).toContain('<meta name="viewport" content="width=device-width,initial-scale=1">');
+    expect(email.html).toContain('<table role="presentation"');
+    expect(email.html).toContain("One more click.<br>Then you're in.");
     expect(email.html).toContain("YES, I'M IN");
-    expect(email.html).not.toContain("tracking");
+    expect(email.html).toContain('href="https://playpickla.com/mail/confirm?token=opaque"');
+    expect(email.html).toContain("The link expires after 24 hours.");
+    expect(email.html).toContain("@media only screen and (max-width:620px)");
+    expect(email.html).toContain("background:#fffaf7");
+    expect(email.html).toContain("color:#071126");
+    expect(email.html).not.toContain("background:#071126;border-radius:28px");
+    expect(email.html).not.toMatch(/<(?:img|script)\b/i);
+    expect(email.html).not.toMatch(/https?:\/\/(?!playpickla\.com\/mail\/confirm)/i);
+    expect(email.html).not.toMatch(/(?:tracking|open[_-]?pixel|utm_|resend)/i);
     expect(api).toContain("'Idempotency-Key': `pickla-confirm-");
     expect(api).toContain("tags: [{ name: 'category', value: 'confirm_email' }]");
   });
@@ -229,6 +239,9 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
     expect(admin).toContain("complaints");
     expect(admin).toContain("sync_failures");
     expect(admin).toContain("WAF/rate-limit verifierad");
+    expect(admin).toContain("rate_limit_secret_ring_configured");
+    expect(admin).not.toMatch(/rate_limit_secret_configured\b/);
+    expect(api).toContain("rate_limit_secret_ring_configured");
     expect(api).toContain("requireSuperAdmin(admin, auth.userId)");
     expect(api).toContain("waf_verified");
   });

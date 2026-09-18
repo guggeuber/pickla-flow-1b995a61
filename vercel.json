@@ -34,6 +34,14 @@
       ]
     },
     {
+      "source": "/join",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400" },
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" },
+        { "key": "X-Robots-Tag", "value": "index, follow" }
+      ]
+    },
+    {
       "source": "/my",
       "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
     },
@@ -214,7 +222,7 @@
       ]
     },
     {
-      "source": "/((?!pickleball-stockholm$|.*\\.[^/]+$).*)",
+      "source": "/((?!pickleball-stockholm$|join$|.*\\.[^/]+$).*)",
       "headers": [
         { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" }
       ]
@@ -308,11 +316,17 @@
       "source": "/pickleball-stockholm/",
       "destination": "/pickleball-stockholm",
       "permanent": true
+    },
+    {
+      "source": "/join/",
+      "destination": "/join",
+      "permanent": true
     }
   ],
   "rewrites": [
     { "source": "/invest", "destination": "/invest.html" },
     { "source": "/pickleball-stockholm", "destination": "/pickleball-stockholm/index.html" },
+    { "source": "/join", "destination": "/join/index.html" },
     {
       "source": "/p/:sessionId",
       "has": [

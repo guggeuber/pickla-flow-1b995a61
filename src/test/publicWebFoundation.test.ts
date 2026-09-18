@@ -172,6 +172,7 @@ describe("Public Web foundation", () => {
   it("generates a non-www, public-only sitemap from the route registry", () => {
     const sitemap = renderPublicWebSitemap();
     expect(sitemap).toContain("<loc>https://playpickla.com/pickleball-stockholm</loc>");
+    expect(sitemap).toContain("<loc>https://playpickla.com/join</loc>");
     expect(sitemap).not.toContain("www.playpickla.com");
     expect(sitemap).not.toMatch(/\/(?:my|desk|hub\/admin|ops|checkout|receipt)/);
     expect(sitemap).not.toContain("lastmod");
@@ -188,10 +189,11 @@ describe("Public Web foundation", () => {
     expect(pwaSurface).toContain('startUrl: "/"');
     expect(pwaSurface).toContain('startUrl: "/desk"');
     expect(pwaSurface).toContain('startUrl: "/hub/admin"');
-    expect(vercel.rewrites[1]).toEqual({ source: "/pickleball-stockholm", destination: "/pickleball-stockholm/index.html" });
+    expect(vercel.rewrites).toContainEqual({ source: "/pickleball-stockholm", destination: "/pickleball-stockholm/index.html" });
+    expect(vercel.rewrites).toContainEqual({ source: "/join", destination: "/join/index.html" });
     expect(vercel.rewrites[vercel.rewrites.length - 1]).toEqual({ source: "/(.*)", destination: "/index.html" });
     expect(vercel.headers).toContainEqual(expect.objectContaining({
-      source: "/((?!pickleball-stockholm$|.*\\.[^/]+$).*)",
+      source: "/((?!pickleball-stockholm$|join$|.*\\.[^/]+$).*)",
     }));
     expect(robots.match(/^User-agent:/gm)).toHaveLength(1);
     expect(robots).not.toContain("User-agent: Googlebot");

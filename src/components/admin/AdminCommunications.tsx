@@ -36,7 +36,7 @@ type CommunicationSummary = {
   production_gates: {
     send_mode: string;
     canary_allowlist_configured: boolean;
-    rate_limit_secret_configured: boolean;
+    rate_limit_secret_ring_configured: boolean;
     confirmation_secret_ring_configured: boolean;
     unsubscribe_secret_ring_configured: boolean;
     webhook_secret_configured: boolean;
@@ -139,7 +139,7 @@ export default function AdminCommunications() {
           <Gate ok={provider.topic_name_valid && provider.topic_default_opt_out && provider.topic_public}>Topic är publikt och default opt_out</Gate>
           <Gate ok={gates.send_mode === "canary" && gates.canary_allowlist_configured}>Releaseverifiering är låst till godkänd canary-lista</Gate>
           <Gate ok={gates.confirmation_secret_ring_configured && gates.unsubscribe_secret_ring_configured}>Token-secret rings konfigurerade</Gate>
-          <Gate ok={gates.rate_limit_secret_configured}>Server-rate limiting konfigurerad</Gate>
+          <Gate ok={gates.rate_limit_secret_ring_configured}>Server-rate limiting konfigurerad</Gate>
           <Gate ok={gates.webhook_secret_configured}>Webhook-signatur konfigurerad</Gate>
           <Gate ok={gates.waf_verified}>WAF/rate-limit verifierad</Gate>
         </ul>

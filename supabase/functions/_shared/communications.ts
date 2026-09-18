@@ -294,10 +294,47 @@ function escapeHtml(value: string) {
 
 export function renderPicklaConfirmationEmail(confirmUrl: string) {
   const safeUrl = escapeHtml(confirmUrl);
-  const subject = "One more click and you're in 🥒";
+  const subject = "One more click. Then you're in.";
   return {
     subject,
-    text: `${subject}\n\nConfirm that you want to hear from Pickla.\n\nYES, I'M IN: ${confirmUrl}\n\nIf you did not request this, you can ignore this email.`,
-    html: `<!doctype html><html lang="en"><body style="margin:0;background:#fffaf7;color:#071126;font-family:Inter,Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 16px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#071126;border-radius:28px;color:#fff"><tr><td style="padding:42px"><p style="margin:0 0 14px;color:#32efa0;font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase">PICKLA</p><h1 style="margin:0 0 18px;font-size:38px;line-height:1.05">One more click and you're in 🥒</h1><p style="margin:0 0 28px;color:#dbe3f1;font-size:17px;line-height:1.6">Confirm that you want to hear from Pickla.</p><a href="${safeUrl}" style="display:inline-block;padding:16px 22px;border-radius:14px;background:#f43278;color:#071126;text-decoration:none;font-weight:900">YES, I'M IN</a><p style="margin:28px 0 0;color:#9eabc0;font-size:12px;line-height:1.6">If you did not request this, you can ignore this email. The link expires after 24 hours.</p></td></tr></table></td></tr></table></body></html>`,
+    text: `PICKLA\n\nOne more click.\nThen you're in.\n\nConfirm you want to hear from Pickla.\n\nYES, I'M IN → ${confirmUrl}\n\nIf this wasn't you, ignore this email.\nThe link expires after 24 hours.`,
+    html: `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <title>${subject}</title>
+    <style>@media only screen and (max-width:620px){.pickla-pad{padding:42px 24px!important}.pickla-title{font-size:42px!important}}</style>
+  </head>
+  <body style="margin:0;padding:0;background:#fffaf7;color:#071126;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#fffaf7" style="width:100%;border-collapse:collapse;background:#fffaf7">
+      <tr>
+        <td align="center" style="padding:0 12px">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse">
+            <tr><td style="height:12px;background:#32efa0;font-size:0;line-height:0">&nbsp;</td></tr>
+            <tr>
+              <td class="pickla-pad" style="padding:68px 52px 72px">
+                <p style="margin:0 0 54px;color:#b62068;font-size:12px;line-height:16px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase">PICKLA</p>
+                <h1 class="pickla-title" style="margin:0;color:#071126;font-size:52px;line-height:54px;font-weight:800;letter-spacing:-2.4px">One more click.<br>Then you're in.</h1>
+                <p style="margin:30px 0 34px;color:#071126;font-size:18px;line-height:29px">Confirm you want to hear from Pickla.</p>
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="border-collapse:separate">
+                  <tr>
+                    <td bgcolor="#f43278" style="background:#f43278">
+                      <a href="${safeUrl}" style="display:inline-block;padding:18px 24px;color:#071126;font-size:14px;line-height:18px;font-weight:800;letter-spacing:.7px;text-decoration:none">YES, I'M IN&nbsp;&nbsp;→</a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:54px 0 0;color:#566176;font-size:12px;line-height:20px">If this wasn't you, ignore this email.<br>The link expires after 24 hours.</p>
+              </td>
+            </tr>
+            <tr><td style="height:1px;background:#d5d8de;font-size:0;line-height:0">&nbsp;</td></tr>
+            <tr><td style="padding:22px 0 36px;color:#566176;font-size:11px;line-height:18px">Pickla · Play, meet and belong.</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`,
   };
 }

@@ -99,7 +99,7 @@ if (cacheHeader("/assets/(.*)") !== "public, max-age=31536000, immutable") {
   fail("hashed assets are not immutable");
 }
 const spaDocumentHeader = vercel.headers.find((entry) =>
-  entry.source === "/((?!pickleball-stockholm$|.*\\.[^/]+$).*)"
+  entry.source === "/((?!pickleball-stockholm$|join$|.*\\.[^/]+$).*)"
 );
 if (!spaDocumentHeader?.headers
   .find((header) => header.key.toLowerCase() === "cache-control")?.value

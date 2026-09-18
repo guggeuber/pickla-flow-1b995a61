@@ -85,14 +85,22 @@ export const PUBLIC_WEB_ROUTES = [
   },
 ] as const satisfies readonly PublicWebRoute[];
 
+export const PUBLIC_WEB_STATIC_CANONICALS = [
+  `${PUBLIC_WEB_ORIGIN}/join`,
+] as const;
+
 export function renderRouteTemplate(template: string, facts: { courtCount: number }) {
   return template.split("{courtCount}").join(String(facts.courtCount));
 }
 
 export function renderPublicWebSitemap(routes: readonly PublicWebRoute[] = PUBLIC_WEB_ROUTES) {
-  const locations = routes
+  const locations = [
+    ...routes
     .filter((route) => route.includeInSitemap && route.indexability === "index,follow")
-    .map((route) => `  <url><loc>${route.canonical}</loc></url>`)
+    .map((route) => route.canonical),
+    ...PUBLIC_WEB_STATIC_CANONICALS,
+  ]
+    .map((canonical) => `  <url><loc>${canonical}</loc></url>`)
     .join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${locations}\n</urlset>\n`;
