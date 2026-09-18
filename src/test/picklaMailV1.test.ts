@@ -239,7 +239,10 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
   it("routes branded confirmation safely and keeps all broadcast/autonomous send capability locked", () => {
     expect(vercel.headers).toContainEqual({
       source: "/mail/confirm",
-      headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+      headers: [
+        { key: "Content-Type", value: "text/html; charset=utf-8" },
+        { key: "X-Robots-Tag", value: "noindex, nofollow" },
+      ],
     });
     expect(vercel.rewrites).toContainEqual({
       source: "/mail/confirm",
