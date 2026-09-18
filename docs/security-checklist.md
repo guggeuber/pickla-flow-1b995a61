@@ -40,6 +40,7 @@ Keep separate production and stage secrets for:
 - Supabase project refs and keys
 - Stripe secret and webhook secret
 - Resend key and webhook secret
+- Pickla Mail uses a separate Resend communications webhook secret, an opaque unsubscribe signing secret, and a default-opt-out Resend Topic ID. These remain server-only. See `docs/pickla-mail-v1.md`.
 - VAPID keys
 - Giphy key if used
 

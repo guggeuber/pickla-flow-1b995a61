@@ -12,7 +12,7 @@ type LegalSection = {
   body: string[];
 };
 
-const UPDATED_AT = "26 maj 2026";
+const UPDATED_AT = "18 september 2026";
 const PLATFORM_COMPANY = "Pickla Orbit AB, org.nr 559203-1610";
 const SOLNA_OPERATOR = "Pickla Solna AB, org.nr 556977-4481";
 
@@ -38,6 +38,7 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
           "Drift: bokningar, resurser/banor, åtkomstkoder, check-ins, medlemskap, förmånsanvändning, vouchers, sessioner och eventförfrågningar.",
           "Betalning: Stripe-id:n, betalstatus, kvitton och kortmetadata som korttyp, sista fyra siffror och giltighetstid. Fullständiga kortnummer och CVC sparas aldrig hos Pickla.",
           "Kommunikation: bokningschattar, supportanteckningar, eventdialog och e-postlogg när det behövs för att hjälpa kunden.",
+          "Pickla Mail: e-postadress, valfritt förnamn, vilken typ av utskick du har valt, när och var valet gjordes samt när du avslutar utskicken. Vi sparar också nödvändig spärrinformation vid exempelvis permanent studs eller spamklagomål.",
         ],
       },
       {
@@ -45,6 +46,7 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
         body: [
           "Vi använder data för att skapa och hantera bokningar, aktivera medlemsförmåner, ta betalt, skicka kvitton, ge support, driva desk/check-in och hålla hallen fungerande.",
           "Telefon krävs bara i flöden där det är motiverat, till exempel medlemskap, staff-hantering och gruppbokningar.",
+          "Redaktionella, community- och andra marknadsföringsmail skickas bara efter ett separat, frivilligt val. Valet påverkar inte nödvändiga boknings-, betalnings-, säkerhets- eller kontomail och kan återkallas när som helst.",
         ],
       },
       {
@@ -53,7 +55,7 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
           "Supabase används för databas, inloggning, edge functions, storage och realtime.",
           "Stripe används för betalningar, abonnemang och sparade betalmetoder.",
           "Vercel används för hosting och deploy av webbappen.",
-          "Resend används för transaktionsmail och kunddialog kring eventförfrågningar.",
+          "Resend används som personuppgiftsbiträde för transaktionsmail, kunddialog kring eventförfrågningar och — för den som aktivt väljer det — Pickla Mail. Pickla behåller den styrande samtyckes- och spärrinformationen i den egna databasen.",
           "Giphy kan användas när en kund aktivt söker GIF:ar i chatten.",
         ],
       },
@@ -69,6 +71,15 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
           "Du kan be om export, rättelse eller radering av dina kunduppgifter. Vi verifierar först att du kontrollerar kontot eller e-postadressen.",
           "Finansiella records, kvitton och betalningsunderlag kan behöva sparas enligt bokförings- och betalningskrav, men onödiga profil- och supportfält kan minimeras eller anonymiseras.",
           "Kontakta Pickla via den supportkanal du normalt använder eller via personalen på anläggningen.",
+          "Du kan avsluta Pickla Mail utan inloggning via länken i varje marknadsföringsmail eller ändra valet på Min sida. En invändning mot direktmarknadsföring gäller omedelbart för sådana utskick.",
+        ],
+      },
+      {
+        title: "Pickla Mail och lagring",
+        body: [
+          "Samtyckeshändelser sparas så att Pickla kan visa när och hur ett val gjordes och respektera en senare återkallelse. Uppgifterna ska inte användas för ett nytt utskicksändamål utan ett nytt relevant val.",
+          "En begränsad spärrpost kan behöva behållas efter avregistrering eller leveransproblem för att hindra framtida otillåtna utskick. Exakta gallringsfrister fastställs i Picklas interna dataskyddsrutin.",
+          "Pickla Mail v1 synkar endast minsta nödvändiga uppgifter till Resend: e-post, valfritt förnamn och utskicksstatus. Bokningshistorik, betalningsdata och känsliga profiluppgifter synkas inte.",
         ],
       },
     ],
@@ -173,6 +184,7 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
         title: "Ingen marketing-cookie i v1",
         body: [
           "Pickla använder inte analytics- eller marketingcookies i soft launch-versionen. Om det införs senare ska informationen uppdateras och samtycke hanteras där det krävs.",
+          "En anmälan till Pickla Mail är ett e-postval och inte ett samtycke till cookies eller beteendespårning. Pickla Mail v1 ska lanseras utan öppnings- och klickspårning i Resend.",
         ],
       },
     ],

@@ -6,6 +6,9 @@ verify_jwt = false
 [functions.api-bookings]
 verify_jwt = false
 
+[functions.api-communications]
+verify_jwt = false
+
 [functions.api-matches]
 verify_jwt = false
 

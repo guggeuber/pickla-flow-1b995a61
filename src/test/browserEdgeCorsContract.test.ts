@@ -22,8 +22,9 @@ describe("browser Edge/CORS release contract", () => {
     expect(plan.browser_functions_to_deploy).toContain("api-admin");
     expect(plan.browser_functions_to_deploy).toContain("api-auth");
     expect(plan.browser_functions_to_deploy).toContain("api-bookings");
+    expect(plan.browser_functions_to_deploy).toContain("api-communications");
     expect(plan.browser_functions_to_deploy).toContain("api-event-public");
-    expect(plan.browser_functions_to_deploy).toHaveLength(25);
+    expect(plan.browser_functions_to_deploy).toHaveLength(26);
   });
 
   it("fails a release verification when a required dependent deployment is omitted", () => {

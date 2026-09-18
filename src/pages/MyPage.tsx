@@ -41,6 +41,7 @@ import { useMySessionRegistrations, type MySessionRegistration } from "@/hooks/u
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 import { useMyLeagues } from "@/hooks/useMyLeagues";
 import { SocialVisibilityControl } from "@/components/session";
+import CommunicationPreference from "@/components/my/CommunicationPreference";
 import {
   fetchPlayedWith,
   fetchSocialPreferences,
@@ -2381,8 +2382,6 @@ function SettingsSection() {
     }
   };
 
-  if (permission === "unsupported") return null;
-
   return (
     <motion.div variants={item}>
       <div className="flex items-center gap-2 mb-2">
@@ -2391,6 +2390,8 @@ function SettingsSection() {
       </div>
 
       <div className="rounded-2xl overflow-hidden" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+        <CommunicationPreference />
+        {permission !== "unsupported" && <div style={{ borderTop: `1px solid ${CARD_BORDER}` }} />}
         {permission === "granted" ? (
           <div className="flex items-center gap-2 px-4 py-3">
             <Check className="w-4 h-4 shrink-0" style={{ color: "#22C55E" }} />
@@ -2405,7 +2406,7 @@ function SettingsSection() {
               Notiser blockerade — ändra i Safari-inställningar
             </span>
           </div>
-        ) : (
+        ) : permission === "default" ? (
           <button
             onClick={handleEnablePush}
             disabled={enabling}
@@ -2415,7 +2416,7 @@ function SettingsSection() {
             {enabling ? <Loader2 className="w-4 h-4 animate-spin" style={{ color: TEXT_MUTED }} /> : <span>🔔</span>}
             Aktivera notiser
           </button>
-        )}
+        ) : null}
       </div>
 
       <p className="text-xs mt-2 text-right" style={{ color: TEXT_MUTED, fontFamily: FONT_HEADING }}>

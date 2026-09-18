@@ -18,6 +18,7 @@ const ADMIN_MODULE_PATHS = {
   templates: "templates",
   corporate: "corporate",
   channels: "channels",
+  communications: "communications",
 } as const;
 
 export type AdminModuleId = keyof typeof ADMIN_MODULE_PATHS;

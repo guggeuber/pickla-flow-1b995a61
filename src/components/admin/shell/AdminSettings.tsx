@@ -10,6 +10,7 @@ import {
   LayoutGrid,
   Link2,
   LucideIcon,
+  Mail,
   MessageSquare,
   Package,
   ReceiptText,
@@ -85,6 +86,7 @@ const groups: SettingsGroup[] = [
       { id: "staff", label: "Personal", desc: "Roller & access", icon: Users, tint: ax("electric", 0.7) },
       { id: "corporate", label: "Företag", desc: "B2B-konton", icon: Building2, tint: ax("lime", 0.7) },
       { id: "channels", label: "Chat channels", desc: "Forum & community", icon: MessageSquare, tint: ax("magenta", 0.7) },
+      { id: "communications", label: "Pickla Mail", desc: "Samtycke, publik & synkhälsa", icon: Mail, tint: ax("electric", 0.7), superAdmin: true },
     ],
   },
 ];

@@ -19,6 +19,8 @@ The public v1 policy pages are:
 
 There is no cookie banner in v1 because Pickla does not use marketing or analytics cookies. If non-essential tracking is introduced later, add consent handling before launch.
 
+Pickla Mail has a separate consent and delivery contract in [pickla-mail-v1.md](./pickla-mail-v1.md). Email opt-in is not cookie consent. The V1 design adds no browser tracker and requires Resend open/click tracking to remain disabled.
+
 ## Personal Data We Intend To Store
 
 Customer account:
@@ -79,7 +81,7 @@ Do not store full card numbers, CVC, personal identity numbers, address, birth d
 - Supabase: database, auth, storage, edge functions, realtime.
 - Stripe: payments, subscriptions, saved payment methods.
 - Vercel: frontend hosting/build/deploy.
-- Resend: transactional and customer email.
+- Resend: transactional/customer email and, only for explicitly opted-in recipients, the synchronized delivery representation for Pickla Mail. Pickla's database remains the canonical marketing-consent source.
 - Giphy: optional GIF search in chat if enabled.
 
 ## Customer Rights Routine

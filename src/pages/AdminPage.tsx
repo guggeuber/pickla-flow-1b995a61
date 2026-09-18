@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   Link2,
   Loader2,
+  Mail,
   MessageSquare,
   Package,
   Plus,
@@ -56,6 +57,7 @@ import AdminVenueOperations from "@/components/admin/AdminVenueOperations";
 import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
 import { resolveAuthorizationUiState } from "@/lib/authorizationUiState";
 import AdminFinancialMaintenance from "@/components/admin/AdminFinancialMaintenance";
+import AdminCommunications from "@/components/admin/AdminCommunications";
 import CustomersScreen from "@/screens/CustomersScreen";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
 import AdminToday from "@/components/admin/shell/AdminToday";
@@ -164,11 +166,13 @@ const sectionLabels: Record<string, { label: string; icon: any }> = {
   templates: { label: "Event-mallar", icon: FileText },
   corporate: { label: "Företag", icon: Building2 },
   channels: { label: "Chat Channels", icon: MessageSquare },
+  communications: { label: "Pickla Mail", icon: Mail },
 };
 
 function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | undefined; onBack: () => void }) {
   const s = sectionLabels[id];
   if (!s) return null;
+  const requiresVenue = id !== "communications";
   return (
     <div className="min-h-screen bg-background max-w-2xl mx-auto">
       <div className="sticky top-0 z-20 px-4 pt-4 pb-3" style={{ background: "hsl(var(--background))" }}>
@@ -186,7 +190,7 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
         </div>
       </div>
       <div className="px-4 pb-8 pt-1">
-        {!venueId ? (
+        {requiresVenue && !venueId ? (
           <div className="flex items-center justify-center py-12">
             <p className="text-sm text-muted-foreground">Välj en venue först</p>
           </div>
@@ -211,6 +215,7 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
             {id === "templates" && <AdminTemplates />}
             {id === "corporate" && <AdminCorporate venueId={venueId} />}
             {id === "channels" && <AdminChannels venueId={venueId} />}
+            {id === "communications" && <AdminCommunications />}
           </>
         )}
       </div>
