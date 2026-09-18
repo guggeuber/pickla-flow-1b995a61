@@ -38,7 +38,7 @@ The candidate mounts the reviewed form after the useful acquisition content and 
 
 The external WAF rules must protect both incoming paths beginning `/mail/` and the directly addressable `/api/mail` Vercel Function route, count by IP, and return 429 after the approved fixed-window threshold. Application limits remain 3 attempts per email and 10 per network per 15 minutes, with a one-hour block. Both active and previous HMAC buckets are consumed during rotation.
 
-Observed on 2026-09-18: Vercel Firewall is enabled with mitigations active. Rule `rule_pickla_mail_public_endpoints_7VA7UT` is enabled for `/mail/` OR `/api/mail`, uses a fixed 60-second window keyed by IP, and rate-limits after 30 requests. `COMMUNICATION_WAF_VERIFIED` remains false until this exact candidate is deployed to preview, both routes produce a live 429, and the release owner approves the production activation sequence.
+Observed on 2026-09-18: Vercel Firewall is enabled with mitigations active. Rule `rule_pickla_mail_public_endpoints_7VA7UT` is enabled for `/mail/` OR `/api/mail`, uses a fixed 60-second window keyed by IP, and rate-limits after 30 requests. An independent production-path probe returned 429 on `/mail/waf-probe` after the shared fixed-window threshold and then returned 429 on `/api/mail`; all probes were harmless GET/honeypot requests and created no subscriber or email. `COMMUNICATION_WAF_VERIFIED=true` was set only after that proof. Send mode remains `canary`, so this does not activate arbitrary signup.
 
 ## Human activation record required
 
