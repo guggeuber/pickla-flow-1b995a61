@@ -241,6 +241,10 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
       source: "/mail/confirm",
       headers: [
         { key: "Content-Type", value: "text/html; charset=utf-8" },
+        {
+          key: "Content-Security-Policy",
+          value: "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        },
         { key: "X-Robots-Tag", value: "noindex, nofollow" },
       ],
     });
