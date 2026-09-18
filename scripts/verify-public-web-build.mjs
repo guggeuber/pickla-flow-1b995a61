@@ -16,12 +16,13 @@ function expectExcludes(source, value, label) {
   if (source.includes(value)) fail(`${label} unexpectedly contains: ${value}`);
 }
 
-const [html, sitemap, robots, factsText, vercelText] = await Promise.all([
+const [html, sitemap, robots, factsText, vercelText, mailProxy] = await Promise.all([
   readFile(fromRoot("dist/pickleball-stockholm/index.html"), "utf8"),
   readFile(fromRoot("dist/sitemap.xml"), "utf8"),
   readFile(fromRoot("dist/robots.txt"), "utf8"),
   readFile(fromRoot("dist/public-web/pickleball-stockholm.build-facts.json"), "utf8"),
   readFile(fromRoot("vercel.json"), "utf8"),
+  readFile(fromRoot("api/mail.ts"), "utf8"),
 ]);
 
 const facts = JSON.parse(factsText);
@@ -71,8 +72,27 @@ for (const forbidden of [
   "AuthProvider",
   "QueryClientProvider",
   "stripe",
+  "PICKLA_MAIL_PROXY_CREDENTIAL",
+  "api.resend.com",
 ]) expectExcludes(html, forbidden, "static Public Web HTML");
 if (/<script\s+[^>]*src=/i.test(html)) fail("Public Web loads an external JavaScript bundle");
+
+for (const expected of [
+  'data-pickla-mail-signup',
+  'STAY IN THE PICKLA LOOP',
+  "Events, community, new things we're building and the occasional story worth reading.",
+  'Yes, send me Pickla news &amp; community.',
+  'JOIN PICKLA',
+  'Check your inbox to confirm.',
+  'fetch("/mail/subscribe"',
+  'href="/privacy"',
+  'For adults 18+',
+]) expectIncludes(html, expected, "Pickla Mail public signup");
+if (/name="consent"[^>]*\bchecked\b/i.test(html)) fail("Pickla Mail consent must be unchecked");
+if (html.indexOf('data-pickla-mail-signup') < html.indexOf('class="final-cta"')
+  || html.indexOf('data-pickla-mail-signup') > html.indexOf('<footer>')) {
+  fail("Pickla Mail signup must follow acquisition content and precede the footer");
+}
 
 const imageTags = html.match(/<img\b[^>]*>/g) || [];
 if (!imageTags.length || imageTags.some((tag) => !/\bwidth="\d+"/.test(tag) || !/\bheight="\d+"/.test(tag))) {
@@ -112,6 +132,11 @@ if (publicRewriteIndex < 0 || fallbackIndex < 0 || publicRewriteIndex > fallback
   fail("Public Web must be served before the preserved SPA fallback");
 }
 if (vercel.rewrites[publicRewriteIndex].has) fail("Public Web rewrite must not vary by crawler");
+const mailProxyRewrite = vercel.rewrites.find((entry) => entry.source === "/mail/:action" && entry.destination === "/api/mail?action=:action");
+if (!mailProxyRewrite) fail("same-origin Pickla Mail proxy rewrite is missing");
+for (const expected of ["PICKLA_MAIL_PROXY_CREDENTIAL", "x-pickla-mail-proxy", "x-pickla-client-network", "MAX_SUBSCRIBE_BODY_BYTES"]) {
+  expectIncludes(mailProxy, expected, "Pickla Mail proxy");
+}
 
 const expectedManifests = [
   ["manifest.webmanifest", "/", "/", "Pickla"],
@@ -131,6 +156,10 @@ const inlineCss = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
   .reduce((total, match) => total + Buffer.byteLength(match[1]), 0);
 const htmlBytes = Buffer.byteLength(html);
 const venuePhotoBytes = (await stat(fromRoot("dist/public-web/pickla-venue.jpg"))).size;
+const eagerResourceUrls = [...html.matchAll(/<(?:img|link)\b[^>]*(?:src|href)="([^"]+)"/g)]
+  .map((match) => match[1])
+  .filter((value) => !value.startsWith("https://playpickla.com/") && !value.startsWith("#"));
+const initialRequestCount = 1 + new Set(eagerResourceUrls).size;
 const budgets = {
   html: { actual: htmlBytes, maximum: 64 * 1024 },
   executable_js: { actual: executableScripts, maximum: 2 * 1024 },
@@ -149,5 +178,6 @@ console.log(JSON.stringify({
   starting_court_price_sek: facts.starting_court_price_sek,
   budgets,
   external_javascript_files: 0,
+  initial_request_count: initialRequestCount,
   pwa_start_urls: expectedManifests.map(([file, , startUrl]) => ({ file, start_url: startUrl })),
 }, null, 2));

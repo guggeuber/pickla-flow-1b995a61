@@ -125,6 +125,11 @@ describe("Public Web foundation", () => {
     expect(html).not.toContain("registerSW");
     expect(html).not.toContain("manifest.webmanifest");
     expect(html).not.toMatch(/<script\s+[^>]*src=/);
+    expect(html).toContain('data-pickla-mail-signup');
+    expect(html).toContain('STAY IN THE PICKLA LOOP');
+    expect(html).toContain('fetch("/mail/subscribe"');
+    expect(html.indexOf('data-pickla-mail-signup')).toBeGreaterThan(html.indexOf('class="final-cta"'));
+    expect(html.indexOf('data-pickla-mail-signup')).toBeLessThan(html.indexOf('<footer>'));
   });
 
   it("fails generation instead of inventing missing critical facts", () => {

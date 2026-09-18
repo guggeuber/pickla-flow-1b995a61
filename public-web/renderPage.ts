@@ -1,4 +1,5 @@
 import type { AcquisitionFacts, OpeningHour, PublicCourtPrice } from "./acquisitionData";
+import { renderPicklaMailSignup } from "./renderMailSignup";
 import {
   PUBLIC_WEB_ORIGIN,
   renderRouteTemplate,
@@ -246,6 +247,9 @@ export function renderPublicWebPage({
       <section class="final-cta">
         <div class="wrap final-grid"><h2>Redo att spela pickleball i Stockholm?</h2>${link(route.links.booking, "button", "footer-booking")}</div>
       </section>
+      <div class="section">
+        <div class="wrap">${renderPicklaMailSignup({ source: "public_web" })}</div>
+      </div>
     </main>
     <footer>
       <div class="wrap">

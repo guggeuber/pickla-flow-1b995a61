@@ -10,7 +10,7 @@ import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { requireSuperAdmin } from '../_shared/authorization.ts';
 import {
   createOpaqueConfirmationToken,
-  hmacScopeHash,
+  hmacScopeHashes,
   isCanonicallyMarketingEligible,
   isValidCommunicationEmail,
   normalizeCommunicationEmail,
@@ -22,6 +22,7 @@ import {
   PICKLA_MAIL_TOPIC,
   PICKLA_MAIL_TOPIC_LABEL,
   publicSendModeAllows,
+  proxyCredentialIsAuthorized,
   renderPicklaConfirmationEmail,
   resendWebhookAction,
   sanitizeFirstName,
@@ -92,6 +93,22 @@ function confirmationSecrets() {
 
 function unsubscribeSecrets() {
   return Deno.env.get('COMMUNICATION_UNSUBSCRIBE_SECRETS') || '';
+}
+
+function proxySecrets() {
+  return Deno.env.get('COMMUNICATION_PROXY_SECRETS') || '';
+}
+
+function rateLimitSecrets() {
+  return Deno.env.get('COMMUNICATION_RATE_LIMIT_SECRETS') || '';
+}
+
+function requestHasTrustedProxy(req: Request) {
+  return proxyCredentialIsAuthorized(req.headers.get('x-pickla-mail-proxy'), proxySecrets());
+}
+
+function liveProxyGateIsReady(req: Request) {
+  return Deno.env.get('COMMUNICATION_WAF_VERIFIED') === 'true' && requestHasTrustedProxy(req);
 }
 
 function publicOrigin() {
@@ -313,6 +330,8 @@ async function synchronizeSubscriber(admin: AdminClient, subscriberId: string) {
 }
 
 function clientNetworkAddress(req: Request) {
+  const proxied = requestHasTrustedProxy(req) ? req.headers.get('x-pickla-client-network')?.trim() : '';
+  if (proxied && /^[0-9a-f.:]{3,64}$/i.test(proxied)) return proxied;
   const forwarded = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
   return req.headers.get('cf-connecting-ip')?.trim()
     || req.headers.get('x-real-ip')?.trim()
@@ -328,17 +347,17 @@ async function consumeRateLimit(
   windowSeconds: number,
   blockSeconds: number,
 ) {
-  const secret = Deno.env.get('COMMUNICATION_RATE_LIMIT_SECRET') || '';
-  const scopeHash = await hmacScopeHash(`${action}:${scope}`, secret);
-  const { data, error } = await admin.rpc('check_communication_rate_limit', {
+  const scopeHashes = await hmacScopeHashes(`${action}:${scope}`, rateLimitSecrets());
+  const results = await Promise.all(scopeHashes.map((scopeHash) => admin.rpc('check_communication_rate_limit', {
     p_action_key: action,
     p_scope_hash: scopeHash,
     p_limit: limit,
     p_window_seconds: windowSeconds,
     p_block_seconds: blockSeconds,
-  });
-  if (error) throw new Error(error.message);
-  return data === true;
+  })));
+  const failed = results.find((result) => result.error);
+  if (failed?.error) throw new Error(failed.error.message);
+  return results.every((result) => result.data === true);
 }
 
 async function enforcePublicSubscribeRateLimit(req: Request, admin: AdminClient, email: string) {
@@ -407,7 +426,7 @@ async function publicSubscribe(req: Request, admin: AdminClient) {
 
   const sendMode = Deno.env.get('COMMUNICATION_SEND_MODE') || 'canary';
   const canaryEmails = Deno.env.get('COMMUNICATION_CANARY_EMAILS') || '';
-  if (sendMode === 'live' && Deno.env.get('COMMUNICATION_WAF_VERIFIED') !== 'true') {
+  if (sendMode === 'live' && !liveProxyGateIsReady(req)) {
     return errorResponse('Signup protection is not configured', 503);
   }
   if (!publicSendModeAllows(email, sendMode, canaryEmails)) {
@@ -465,6 +484,9 @@ function confirmationHtml(result: 'confirmed' | 'invalid') {
 }
 
 async function confirmWithToken(req: Request, admin: AdminClient) {
+  if ((Deno.env.get('COMMUNICATION_SEND_MODE') || 'canary') === 'live' && !liveProxyGateIsReady(req)) {
+    return htmlResponse(confirmationHtml('invalid'));
+  }
   const token = new URL(req.url).searchParams.get('token') || '';
   const network = clientNetworkAddress(req);
   if (!network) return htmlResponse(confirmationHtml('invalid'));
@@ -844,9 +866,10 @@ async function adminSummary(req: Request, admin: AdminClient) {
   const gates = {
     send_mode: sendMode,
     canary_allowlist_configured: Boolean((Deno.env.get('COMMUNICATION_CANARY_EMAILS') || '').trim()),
-    rate_limit_secret_configured: (Deno.env.get('COMMUNICATION_RATE_LIMIT_SECRET') || '').length >= 32,
+    rate_limit_secret_ring_configured: secretRingIsReady(rateLimitSecrets()),
     confirmation_secret_ring_configured: secretRingIsReady(confirmationSecrets()),
     unsubscribe_secret_ring_configured: secretRingIsReady(unsubscribeSecrets()),
+    proxy_secret_ring_configured: secretRingIsReady(proxySecrets()),
     webhook_secret_configured: Boolean(Deno.env.get('RESEND_COMMUNICATIONS_WEBHOOK_SECRET')),
     waf_verified: Deno.env.get('COMMUNICATION_WAF_VERIFIED') === 'true',
   };

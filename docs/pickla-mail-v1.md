@@ -208,8 +208,8 @@ Required server-only secrets/configuration (never frontend-exposed):
 - new endpoint-specific `RESEND_COMMUNICATIONS_WEBHOOK_SECRET`
 - new `RESEND_NEWS_COMMUNITY_TOPIC_ID` for a public, default `opt_out` topic
 - new rotating `COMMUNICATION_CONFIRMATION_SECRETS` key ring (`kid:secret,kid:previous-secret`; each secret at least 32 characters)
-- new rotating `COMMUNICATION_UNSUBSCRIBE_SECRETS` key ring with the same format
-- new random `COMMUNICATION_RATE_LIMIT_SECRET` with at least 32 characters
+- rotating `COMMUNICATION_UNSUBSCRIBE_SECRETS`, `COMMUNICATION_RATE_LIMIT_SECRETS`, and `COMMUNICATION_PROXY_SECRETS` rings in the same format
+- Vercel-only `PICKLA_MAIL_PROXY_CREDENTIAL` containing only the active `kid:secret` proxy credential; it must never be exposed through a `VITE_` variable
 - `COMMUNICATION_PUBLIC_ORIGIN=https://playpickla.com`
 - `COMMUNICATION_SEND_MODE=canary` and an explicit `COMMUNICATION_CANARY_EMAILS` allowlist during verification
 - `COMMUNICATION_WAF_VERIFIED=true` only after the production WAF/rate-limit configuration has been independently verified
@@ -222,7 +222,8 @@ Production activation also requires:
 - deploy `api-communications` with `--no-verify-jwt`
 - create the Resend Topic as default opt-out and record its ID as a secret
 - create a Resend webhook for the documented events and store its endpoint-specific secret
-- set and verify edge/WAF rate controls; the in-function email/network limiter is defense in depth, not a WAF replacement
+- route public signup and confirmation through `/mail/:action`, backed by the bounded same-origin Vercel Function; direct Supabase-origin access is rejected in live mode
+- set and verify Vercel WAF rate rules for both the public `/mail/` route and the directly addressable `/api/mail` function route; the in-function email/network limiter is defense in depth, not a WAF replacement
 - verify confirmation and Contacts sync using designated internal canary addresses only; do not send a Broadcast
 - retrieve the Resend domain and prove `status=verified`, sending capability enabled, and `open_tracking=false` plus `click_tracking=false`
 - retrieve the Resend Topic and prove exact name, public visibility, and `default_subscription=opt_out`
@@ -232,3 +233,14 @@ Production activation also requires:
 ## Permanent test contract
 
 The repository contract suite covers public double opt-in, verified-account preference, canonical evidence, token expiry and rotation, idempotency, safe linking, no-login immediate unsubscribe, eligibility, transactional independence, fail-safe sync, verified/idempotent webhooks, suppression, zero legacy migration, no public PII/secrets, organization isolation, accessible capture, canary-only release verification, rate limiting, provider tracking gates, canonical audience calculation, and no autonomous send surface.
+
+### Key rotation runbook
+
+All rings are ordered active first, previous second. Generate unique random values of at least 32 bytes, use a new `kid`, update server-side stores only, and never print or commit values.
+
+- Confirmation: prepend the new key, deploy, and keep the previous key for at least the 24-hour token lifetime plus deployment/clock-skew margin. Remove it only after that overlap. Unknown or retired `kid` values fail closed.
+- Unsubscribe: because V1 has sent no marketing Broadcast, no public marketing unsubscribe tokens have been issued. Rotate before the first marketing send, keep the previous key for the controller-approved useful life of messages issued under it, then remove it. Before Broadcast is built, legal/product must define that lifetime and the fallback withdrawal route; a key must not remain accepted indefinitely by accident.
+- Rate-limit HMAC: the function increments both active and previous keyed buckets during overlap. Keep the previous key for at least the longest block plus cleanup margin (currently 25 hours), then remove it. This prevents a rotation from silently creating a second bypass bucket.
+- Vercel proxy: put the new credential first in `COMMUNICATION_PROXY_SECRETS`, deploy the Edge Function, switch `PICKLA_MAIL_PROXY_CREDENTIAL` in Vercel, verify proxy traffic, then remove the old key after the maximum deployment overlap. Direct origin calls fail closed when live mode is enabled.
+
+Rotation is complete only after tests prove current and previous credentials work during overlap, the retired credential fails, Admin shows every ring configured, and secret scanning/log inspection finds no value in source, frontend HTML, build artifacts, or logs.

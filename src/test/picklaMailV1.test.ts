@@ -6,11 +6,13 @@ import { htmlResponse } from "../../supabase/functions/_shared/cors";
 import {
   createOpaqueConfirmationToken,
   createOpaqueUnsubscribeToken,
+  hmacScopeHashes,
   isCanonicallyMarketingEligible,
   isTransactionalEmailAllowed,
   PICKLA_MAIL_POLICY_VERSION,
   PICKLA_MAIL_PUBLIC_CONSENT_STATEMENT,
   publicSendModeAllows,
+  proxyCredentialIsAuthorized,
   renderPicklaConfirmationEmail,
   resendWebhookAction,
   sha256Hex,
@@ -36,14 +38,14 @@ beforeAll(() => {
 
 describe("Pickla Mail V1 double opt-in release contract", () => {
   it("renders the approved anonymous signup copy with unchecked explicit adult consent", () => {
-    const html = renderPicklaMailSignup({ source: "public_web_root", apiOrigin: "https://api.example.test" });
+    const html = renderPicklaMailSignup({ source: "public_web_root", endpoint: "/mail/subscribe" });
     const document = new DOMParser().parseFromString(html, "text/html");
     const email = document.querySelector<HTMLInputElement>('input[name="email"]');
     const consent = document.querySelector<HTMLInputElement>('input[name="consent"]');
     expect(html).toContain("STAY IN THE PICKLA LOOP");
     expect(html).not.toContain("Pickla Paper");
     expect(html).toContain("Events, community, new things we're building and the occasional story worth reading.");
-    expect(html).toContain("Join Pickla");
+    expect(html).toContain("JOIN PICKLA");
     expect(html).toContain("Check your inbox to confirm.");
     expect(html).toContain("For adults 18+");
     expect(email?.required).toBe(true);
@@ -53,7 +55,8 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
     expect(document.querySelector('[role="status"][aria-live="polite"]')).not.toBeNull();
     expect(html).toContain("@media(max-width:760px)");
     expect(html).toContain('audience:"adult_or_parent_guardian"');
-    expect(read("public-web/renderPage.ts")).not.toContain("renderPicklaMailSignup");
+    expect(html).toContain('fetch("/mail/subscribe"');
+    expect(read("public-web/renderPage.ts")).toContain('renderPicklaMailSignup({ source: "public_web" })');
   });
 
   it("models pending, subscribed, unsubscribed, and suppressed as distinct canonical states", () => {
@@ -116,6 +119,7 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
     expect(token).not.toContain("@");
     expect(await verifyOpaqueUnsubscribeToken(token, rotatedRing)).toBe(subscriberId);
     expect(await verifyOpaqueUnsubscribeToken(`${token}x`, rotatedRing)).toBeNull();
+    expect(await verifyOpaqueUnsubscribeToken(token, testCurrentSecret)).toBeNull();
     expect(api).toContain("COMMUNICATION_UNSUBSCRIBE_SECRETS");
     expect(api).toContain("['GET', 'POST'].includes(req.method) && path === 'unsubscribe'");
   });
@@ -144,8 +148,9 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
     expect(publicSendModeAllows("other@example.test", "unexpected", "")).toBe(false);
     expect(api).toContain("COMMUNICATION_SEND_MODE");
     expect(api).toContain("COMMUNICATION_CANARY_EMAILS");
-    expect(api).toContain("COMMUNICATION_RATE_LIMIT_SECRET");
-    expect(api).toContain("sendMode === 'live' && Deno.env.get('COMMUNICATION_WAF_VERIFIED') !== 'true'");
+    expect(api).toContain("COMMUNICATION_RATE_LIMIT_SECRETS");
+    expect(api).toContain("sendMode === 'live' && !liveProxyGateIsReady(req)");
+    expect(api).toContain("COMMUNICATION_PROXY_SECRETS");
     expect(api).toContain("public_subscribe_email");
     expect(api).toContain("public_subscribe_network");
     expect(api).toContain("confirm_network");
@@ -153,6 +158,17 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
     expect(migration).toContain("CREATE OR REPLACE FUNCTION public.check_communication_rate_limit");
     expect(migration).toContain("raw email and IP values are never stored");
     expect(api).toContain("from: 'Pickla <hello@playpickla.com>'");
+  });
+
+  it("uses rotating rate-limit and origin-proxy key rings", async () => {
+    const ring = `${testCurrentSecret},${testOldSecret}`;
+    const hashes = await hmacScopeHashes("public_subscribe_network:203.0.113.7", ring);
+    expect(hashes).toHaveLength(2);
+    expect(new Set(hashes).size).toBe(2);
+    expect(proxyCredentialIsAuthorized(testCurrentSecret, ring)).toBe(true);
+    expect(proxyCredentialIsAuthorized(testOldSecret, ring)).toBe(true);
+    expect(proxyCredentialIsAuthorized("retired-key:test-only-retired-secret-000000000000000", ring)).toBe(false);
+    expect(proxyCredentialIsAuthorized(`${testCurrentSecret}x`, ring)).toBe(false);
   });
 
   it("requires verified account identity for My Page direct confirmation and surfaces pending state", () => {
@@ -249,8 +265,8 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
       ],
     });
     expect(vercel.rewrites).toContainEqual({
-      source: "/mail/confirm",
-      destination: "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-communications/confirm",
+      source: "/mail/:action",
+      destination: "/api/mail?action=:action",
     });
     expect(api).not.toContain("/broadcasts");
     expect(api).not.toContain("send: true");

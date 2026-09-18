@@ -357,10 +357,7 @@
       ],
       "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/course-og?seriesId=:seriesId"
     },
-    {
-      "source": "/mail/confirm",
-      "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-communications/confirm"
-    },
+    { "source": "/mail/:action", "destination": "/api/mail?action=:action" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

@@ -127,6 +127,20 @@ export function secretRingIsReady(serialized: string) {
   }
 }
 
+export function proxyCredentialIsAuthorized(credential: string | null, serializedSecrets: string) {
+  if (!credential) return false;
+  try {
+    const separator = credential.indexOf(':');
+    if (separator < 1) return false;
+    const kid = credential.slice(0, separator);
+    const supplied = new TextEncoder().encode(credential.slice(separator + 1));
+    const entry = parseSecretRing(serializedSecrets).find((candidate) => candidate.kid === kid);
+    return Boolean(entry) && constantTimeEqual(supplied, new TextEncoder().encode(entry!.secret));
+  } catch {
+    return false;
+  }
+}
+
 function bytesToBase64Url(value: Uint8Array) {
   let binary = '';
   for (const byte of value) binary += String.fromCharCode(byte);
@@ -166,6 +180,10 @@ export async function hmacScopeHash(value: string, secret: string) {
   if (secret.length < 32) throw new Error('Rate-limit secret is not configured');
   const digest = await hmac(value, secret);
   return Array.from(digest).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function hmacScopeHashes(value: string, serializedSecrets: string) {
+  return Promise.all(parseSecretRing(serializedSecrets).map((entry) => hmacScopeHash(value, entry.secret)));
 }
 
 export async function createOpaqueConfirmationToken(
