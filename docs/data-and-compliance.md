@@ -19,7 +19,7 @@ The public v1 policy pages are:
 
 There is no cookie banner in v1 because Pickla does not use marketing or analytics cookies. If non-essential tracking is introduced later, add consent handling before launch.
 
-Pickla Mail has a separate consent and delivery contract in [pickla-mail-v1.md](./pickla-mail-v1.md). Email opt-in is not cookie consent. The V1 design adds no browser tracker and requires Resend open/click tracking to remain disabled.
+Pickla Mail has a separate consent and delivery contract in [pickla-mail-v1.md](./pickla-mail-v1.md). Anonymous/public signup uses double opt-in: a request is pending and not marketing-eligible until the mailbox confirmation succeeds. Email opt-in is not cookie consent. The V1 design adds no browser tracker and requires Resend open/click tracking to remain disabled.
 
 ## Personal Data We Intend To Store
 
@@ -57,6 +57,7 @@ Communications:
 - booking chat messages
 - event/inquiry internal notes
 - outbound/inbound customer email logs for group inquiries
+- Pickla Mail request, confirmation, current preference, withdrawal and suppression evidence; only the minimum delivery projection is synchronized to Resend
 
 Technical data:
 
@@ -83,6 +84,10 @@ Do not store full card numbers, CVC, personal identity numbers, address, birth d
 - Vercel: frontend hosting/build/deploy.
 - Resend: transactional/customer email and, only for explicitly opted-in recipients, the synchronized delivery representation for Pickla Mail. Pickla's database remains the canonical marketing-consent source.
 - Giphy: optional GIF search in chat if enabled.
+
+Pickla Mail V1 does not offer direct marketing signup to minors. Public capture is for an adult or a parent/guardian; communication concerning children remains addressed to the parent/guardian. It does not import existing customers or infer consent from an account, booking, purchase, attendance, or legacy consent column.
+
+The exact Pickla Mail retention schedule in [pickla-mail-v1.md](./pickla-mail-v1.md) is a proposal for controller/legal review. No automated deletion schedule is activated until approved. The proposed periods are: pending confirmation data 30 days after token expiry; pseudonymous rate-limit data 24 hours after expiry; operational provider digests/errors 90 days; active evidence while active; withdrawn consent evidence 3 years; and minimal suppression while needed, followed by 3 years of evidence after a verified lift. Legal holds override automated deletion.
 
 ## Customer Rights Routine
 

@@ -98,6 +98,10 @@
       "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
     },
     {
+      "source": "/mail/confirm",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    },
+    {
       "source": "/pass/(.*)",
       "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
     },
@@ -348,6 +352,10 @@
         }
       ],
       "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-event-public/course-og?seriesId=:seriesId"
+    },
+    {
+      "source": "/mail/confirm",
+      "destination": "https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1/api-communications/confirm"
     },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

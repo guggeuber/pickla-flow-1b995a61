@@ -10,8 +10,9 @@ V1 has one human preference:
 
 - key: `news_community`
 - label: `Pickla news & community`
-- default: unsubscribed
-- lawful/operational launch basis: explicit, separate opt-in
+- Resend Topic name: `Pickla news & community`
+- Resend Topic default: `opt_out`
+- canonical public flow: explicit, separate double opt-in
 
 The legacy `customers.marketing_consent` and `customers.consent_at` columns are not sufficient evidence: no application path, purpose wording, source, version, or withdrawal trail was found. The V1 migration does not read or migrate them.
 
@@ -42,7 +43,7 @@ This is an engineering interpretation for review, not a substitute for Swedish l
 - Pickla must prove how and when consent was obtained and which information was shown. V1 stores source, timestamp, topic, policy version, and the exact statement in an append-only event plus current projection.
 - Withdrawal must be as easy as consent. Token unsubscribe is no-login, opaque, idempotent, non-enumerating, and changes Pickla state before any provider synchronization.
 - Objection to direct marketing is absolute. Local unsubscribe or suppression always wins over a stale or contradictory Resend state.
-- Children require particular care. V1 is general-audience, does not profile minors, and must not contain direct purchase exhortations aimed at people under 18. Child-targeted campaigns or online consent collection from children require legal/product review and an age/guardian design before use.
+- Children require particular care. V1 has no direct marketing signup path for minors. Public capture is expressly for an adult or a parent/guardian, and communication about children remains parent/guardian based. Child-targeted campaigns or online consent collection from children require a new legal/product review and age/guardian design before implementation.
 - Resend acts as a processor for customer data. Before production, Pickla must confirm acceptance of the current DPA, subprocessors, international-transfer assessment, and internal records of processing.
 - Retention needs an approved schedule. Consent evidence and a minimal suppression tombstone may need to remain after withdrawal to prove and honor the objection; full campaign content and unnecessary provider metadata should not be retained by default.
 
@@ -58,40 +59,51 @@ Official review sources:
 
 `communication_subscribers` holds one organization-scoped identity per normalized email. It can link to a customer only when the verified account email matches an active customer in the same organization. Anonymous signup never creates a general customer record.
 
-`communication_preferences` is the current per-topic projection. A subscribed row cannot exist without consent source, time, version, and statement.
+`communication_preferences` is the current per-topic projection. It distinguishes `pending_confirmation`, `subscribed`, and `unsubscribed`; the subscriber projection additionally distinguishes `suppressed`. A subscribed row cannot exist without request evidence and a successful confirmation timestamp/source.
 
-`communication_consent_events` is the append-only audit trail for subscribe, resubscribe, unsubscribe, suppression, and verified account linking.
+`communication_consent_events` is the append-only audit trail for confirmation requests, subscribe, resubscribe, unsubscribe, suppression, and verified account linking.
 
 `communication_provider_events` stores only an event identifier, event type, payload digest, email digest, processing state, and bounded error — not the raw provider payload.
 
 Eligibility requires all of:
 
-1. `marketing_status = active`
+1. `marketing_status = subscribed`
 2. no local suppression
 3. topic preference `subscribed`
-4. a fresh server-side calculation immediately before a future send
+4. canonical `confirmed_at` exists
+5. a fresh server-side calculation immediately before a future send
 
 Resend state is not an eligibility input that can override these rules.
 
 ## Anonymous signup and later linking
 
-Public signup accepts email, optional first name, explicit checkbox, approved surface source, and a honeypot. It returns the same success shape whether the email is new, already subscribed, linked, or locally suppressed. Duplicate calls preserve one subscriber identity and one current preference.
+Public signup accepts email, explicit unchecked consent, an adult/parent-or-guardian declaration, approved surface source, and a honeypot. It returns the same success shape whether the email is new, already subscribed, linked, not in the release canary list, or locally suppressed. Duplicate calls preserve one subscriber identity and one current preference.
+
+The public state machine is:
+
+1. submit accepted → `pending_confirmation`; not marketing-eligible and no Resend Contact/Topic opt-in
+2. confirmation link verified before expiry → `subscribed`; canonical confirmation evidence committed first
+3. repeated valid confirmation → idempotent `already_confirmed`
+4. unsubscribe → `unsubscribed`; immediately ineligible before provider synchronization
+5. permanent bounce, complaint, or provider/local suppression → `suppressed`; cannot be lifted by signup, account preference, provider opt-in, or webhook
+
+The confirmation token is opaque (`c1` version, key id, expiry, random 256-bit nonce, HMAC-SHA-256 signature), contains no email/customer/subscriber identifier, expires after 24 hours, and is stored only as a SHA-256 digest. The endpoint requires no login. Verification fails closed for malformed, expired, unknown-key, or bad-signature tokens. The database consumes the digest atomically and retains it only for idempotent confirmation during its validity; unsubscribe and suppression clear it.
 
 When an authenticated customer opens communication preferences, the API uses the verified Supabase Auth email. If that normalized address matches the anonymous subscriber and a same-organization customer, the existing subscriber is linked. It never creates a second marketing identity.
 
-V1 uses explicit single opt-in. Double opt-in is not implemented or legally assumed. Pickla may add mailbox verification later as an abuse/deliverability control without weakening the consent evidence contract.
+An authenticated user whose Supabase Auth email is verified can make an immediate preference choice on Min sida. That is canonical account evidence and does not weaken the anonymous/public double opt-in contract. An unverified account cannot activate marketing.
 
 ## Transactional versus marketing
 
 Transactional email is required to provide or secure a requested service: auth, booking/ticket, receipt, payment link, necessary operational information, and direct customer-service/event dialogue. It does not consult or mutate Pickla Mail preferences.
 
-Marketing/editorial email promotes discovery or ongoing engagement: Pickla Paper, community roundups, event discovery, offers, and re-engagement. It requires current canonical eligibility and unsubscribe. Promotional material must not be inserted into transactional mail to bypass consent.
+Marketing/editorial email promotes discovery or ongoing engagement: community roundups, event discovery, offers, and re-engagement. It requires current canonical eligibility and unsubscribe. Promotional material must not be inserted into transactional mail to bypass consent.
 
 ## Resend projection
 
 Use current Resend Contacts plus one public Topic configured with default subscription `opt_out`. The environment variable `RESEND_NEWS_COMMUNITY_TOPIC_ID` points to that topic. Do not use a Resend Segment or stale CSV as consent authority.
 
-Pickla subscribe/resubscribe:
+Public confirmation and verified-account subscribe/resubscribe:
 
 1. commit Pickla projection and audit event
 2. create/update Resend Contact
@@ -99,7 +111,7 @@ Pickla subscribe/resubscribe:
 4. set the topic to `opt_in`
 5. persist sync result without rolling back Pickla truth on provider failure
 
-Pickla unsubscribe/suppression performs the local change first, then pushes global unsubscribed/topic opt-out. Sync failure is visible to Admin and never restores eligibility.
+Pending public signup is never synchronized as subscribed. Pickla unsubscribe/suppression performs the local change first, then pushes global unsubscribed/topic opt-out. Sync failure is visible to Admin and never restores eligibility.
 
 Relevant verified Resend webhooks:
 
@@ -133,7 +145,7 @@ Future Pickla-rendered marketing mail should include both:
 - `List-Unsubscribe: <https://.../api-communications/unsubscribe?token=...>`
 - `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
 
-The token is versioned, HMAC-signed, contains no email or customer ID, and is accepted by GET and POST without login. Invalid, expired-by-secret-rotation, and valid links return the same non-enumerating confirmation. Token-secret rotation needs an overlap strategy before old links are invalidated.
+The token is versioned and AES-256-GCM encrypted, includes a key id, contains no visible email or customer ID, and is accepted by GET and POST without login. Invalid and valid links return the same non-enumerating confirmation. Pickla state changes first and repeated withdrawal is idempotent.
 
 Resend's native unsubscribe page can remain a secondary provider safety net because its `contact.updated` webhook flows back to Pickla. It is not the canonical UI or truth source.
 
@@ -173,14 +185,36 @@ Provider minimum: email, optional first name, global subscription state, and the
 
 Email consent is not cookie consent. The reusable form adds no browser tracking and requires no cookie banner change. Resend open/click tracking is disabled by default and V1 requires it to remain disabled. Open tracking inserts a recipient-specific pixel and click tracking rewrites links; enabling either requires a separate privacy/legal assessment and updated transparency before use.
 
+## Proposed retention schedule — legal approval required
+
+This is a concrete engineering proposal for legal review, not an activated retention rule. No automatic purge job is enabled until the controller approves the purposes, periods, legal basis, deletion/anonymization method, and legal-hold exceptions.
+
+- unconfirmed request identity, token digest, request evidence, and confirmation-delivery metadata: delete 30 days after the latest confirmation token expires
+- rate-limit counters and pseudonymous email/network scope digests: delete 24 hours after the window or block expires
+- operational provider-event digests and bounded delivery/sync errors: delete after 90 days
+- current affirmative consent evidence: retain while the consent remains active
+- withdrawn consent evidence: retain for 3 years after withdrawal or the last disputed marketing event, then delete or irreversibly anonymize unless a documented legal hold applies
+- minimal suppression record: retain while necessary to honor the objection, complaint, or delivery block; after a verified manual lift, retain the append-only evidence for 3 years, then delete or irreversibly anonymize unless a legal hold applies
+
+These periods are intentionally proposed rather than silently assumed. DPA/subprocessor/international-transfer review and Swedish counsel/controller approval remain hard production gates.
+
 ## Configuration and release gates
 
 Required server-only secrets/configuration (never frontend-exposed):
 
 - existing `RESEND_API_KEY`
+- Pickla Mail sender is code-fixed to `Pickla <hello@playpickla.com>` for V1 (transactional flows may continue to use their existing `RESEND_FROM` configuration)
+- new `RESEND_DOMAIN_ID` for read-only launch validation
 - new endpoint-specific `RESEND_COMMUNICATIONS_WEBHOOK_SECRET`
 - new `RESEND_NEWS_COMMUNITY_TOPIC_ID` for a public, default `opt_out` topic
-- new random `COMMUNICATION_UNSUBSCRIBE_SECRET` with at least 32 characters
+- new rotating `COMMUNICATION_CONFIRMATION_SECRETS` key ring (`kid:secret,kid:previous-secret`; each secret at least 32 characters)
+- new rotating `COMMUNICATION_UNSUBSCRIBE_SECRETS` key ring with the same format
+- new random `COMMUNICATION_RATE_LIMIT_SECRET` with at least 32 characters
+- `COMMUNICATION_PUBLIC_ORIGIN=https://playpickla.com`
+- `COMMUNICATION_SEND_MODE=canary` and an explicit `COMMUNICATION_CANARY_EMAILS` allowlist during verification
+- `COMMUNICATION_WAF_VERIFIED=true` only after the production WAF/rate-limit configuration has been independently verified
+
+Rotation is two-phase: prepend a new active key and deploy while retaining previous verification/decryption keys. Confirmation keys remain for at least the 24-hour token lifetime plus deployment clock skew. Unsubscribe keys must remain for the useful lifetime of messages issued with them; future messages use the active key, and an old key is removed only after the approved retention/operational window means its links no longer need to work. The implementation accepts at most four keys to prevent an unbounded ring.
 
 Production activation also requires:
 
@@ -188,11 +222,13 @@ Production activation also requires:
 - deploy `api-communications` with `--no-verify-jwt`
 - create the Resend Topic as default opt-out and record its ID as a secret
 - create a Resend webhook for the documented events and store its endpoint-specific secret
-- verify Contacts sync using designated internal test addresses only
-- confirm Resend open/click tracking remains disabled
-- legal review of controller wording, privacy text, retention schedule, DPA/subprocessors/transfers, minor-facing policy, and single-opt-in choice
+- set and verify edge/WAF rate controls; the in-function email/network limiter is defense in depth, not a WAF replacement
+- verify confirmation and Contacts sync using designated internal canary addresses only; do not send a Broadcast
+- retrieve the Resend domain and prove `status=verified`, sending capability enabled, and `open_tracking=false` plus `click_tracking=false`
+- retrieve the Resend Topic and prove exact name, public visibility, and `default_subscription=opt_out`
+- legal review of controller wording, privacy text, proposed retention schedule, DPA/subprocessors/transfers, and parent/guardian-only minors policy
 - operational owner and incident runbook for complaints, webhook failure, and sync backlog
 
 ## Permanent test contract
 
-The repository contract suite maps to requirements A–T in the task: anonymous and account subscription, evidence, idempotency, safe linking, no-login immediate unsubscribe, eligibility, transactional independence, fail-safe sync, verified/idempotent webhooks, suppression, zero legacy migration, no public PII/secrets, organization isolation, accessible capture, canonical audience calculation, and no autonomous send surface.
+The repository contract suite covers public double opt-in, verified-account preference, canonical evidence, token expiry and rotation, idempotency, safe linking, no-login immediate unsubscribe, eligibility, transactional independence, fail-safe sync, verified/idempotent webhooks, suppression, zero legacy migration, no public PII/secrets, organization isolation, accessible capture, canary-only release verification, rate limiting, provider tracking gates, canonical audience calculation, and no autonomous send surface.

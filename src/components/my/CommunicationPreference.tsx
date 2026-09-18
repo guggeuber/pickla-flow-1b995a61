@@ -7,8 +7,10 @@ import { apiGet, apiPost } from "@/lib/api";
 type CommunicationPreferenceState = {
   topic: "news_community";
   label: string;
+  status: "pending_confirmation" | "subscribed" | "unsubscribed" | "suppressed";
   subscribed: boolean;
   suppressed: boolean;
+  confirmation_expires_at: string | null;
 };
 
 const QUERY_KEY = ["communication-preference", "news_community"] as const;
@@ -25,7 +27,7 @@ export default function CommunicationPreference() {
     mutationFn: (subscribed: boolean) => apiPost<CommunicationPreferenceState>(
       "api-communications",
       "preference",
-      { subscribed },
+      { subscribed, ...(subscribed ? { audience: "adult_or_parent_guardian" } : {}) },
     ),
     onSuccess: (next) => {
       queryClient.setQueryData(QUERY_KEY, next);
@@ -64,11 +66,16 @@ export default function CommunicationPreference() {
         <div>
           <p className="text-sm font-semibold text-gray-900">Pickla news &amp; community</p>
           <p id="communication-preference-description" className="mt-0.5 text-xs leading-relaxed text-gray-500">
-            Nyheter, människor, event och redaktionellt från Pickla. Avsluta när du vill.
+            För vuxna eller vårdnadshavare: nyheter, människor, event och redaktionellt från Pickla. Avsluta när du vill.
           </p>
           {state?.suppressed && (
             <p className="mt-1 text-xs font-semibold text-red-600">
-              Utskicken är pausade eftersom adressen inte kunde ta emot e-post.
+              Adressen är leveransspärrad. Pickla Admin kan se orsaken.
+            </p>
+          )}
+          {state?.status === "pending_confirmation" && (
+            <p className="mt-1 text-xs font-semibold text-amber-700">
+              Väntar på bekräftelse via e-post. Du kan också aktivera här med ditt verifierade konto.
             </p>
           )}
         </div>

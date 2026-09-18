@@ -47,6 +47,7 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
           "Vi använder data för att skapa och hantera bokningar, aktivera medlemsförmåner, ta betalt, skicka kvitton, ge support, driva desk/check-in och hålla hallen fungerande.",
           "Telefon krävs bara i flöden där det är motiverat, till exempel medlemskap, staff-hantering och gruppbokningar.",
           "Redaktionella, community- och andra marknadsföringsmail skickas bara efter ett separat, frivilligt val. Valet påverkar inte nödvändiga boknings-, betalnings-, säkerhets- eller kontomail och kan återkallas när som helst.",
+          "Vid publik anmälan skickar vi först ett bekräftelsemail. Adressen blir inte berättigad till marknadsföringsmail förrän bekräftelselänken har använts. Publik anmälan är för vuxna eller vårdnadshavare; kommunikation om barn går via vårdnadshavaren.",
         ],
       },
       {
@@ -78,6 +79,7 @@ const CONTENT: Record<LegalPageKind, { title: string; eyebrow: string; intro: st
         title: "Pickla Mail och lagring",
         body: [
           "Samtyckeshändelser sparas så att Pickla kan visa när och hur ett val gjordes och respektera en senare återkallelse. Uppgifterna ska inte användas för ett nytt utskicksändamål utan ett nytt relevant val.",
+          "En obekräftad publik anmälan är väntande och används inte som tillstånd för marknadsföring. Pickla sparar begäran och bekräftelse separat för att kunna visa vad som faktiskt hände.",
           "En begränsad spärrpost kan behöva behållas efter avregistrering eller leveransproblem för att hindra framtida otillåtna utskick. Exakta gallringsfrister fastställs i Picklas interna dataskyddsrutin.",
           "Pickla Mail v1 synkar endast minsta nödvändiga uppgifter till Resend: e-post, valfritt förnamn och utskicksstatus. Bokningshistorik, betalningsdata och känsliga profiluppgifter synkas inte.",
         ],

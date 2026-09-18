@@ -40,7 +40,7 @@ Keep separate production and stage secrets for:
 - Supabase project refs and keys
 - Stripe secret and webhook secret
 - Resend key and webhook secret
-- Pickla Mail uses a separate Resend communications webhook secret, an opaque unsubscribe signing secret, and a default-opt-out Resend Topic ID. These remain server-only. See `docs/pickla-mail-v1.md`.
+- Pickla Mail uses a separate Resend communications webhook secret, rotating confirmation and unsubscribe key rings, a rate-limit HMAC secret, domain/topic IDs, and a default-opt-out Resend Topic. These remain server-only. See `docs/pickla-mail-v1.md`.
 - VAPID keys
 - Giphy key if used
 
@@ -56,3 +56,9 @@ Never commit `.env` files with real secrets.
 - Realtime publications only include tables intended for live frontend use.
 - Public legal pages `/privacy`, `/terms`, and `/cookies` render and are linked from customer flows.
 - New customer data fields are reflected in [data-and-compliance.md](./data-and-compliance.md).
+- Pickla Mail public sends remain `canary`-allowlisted until release approval; a pending address is not synchronized to Resend.
+- Edge/WAF rate limiting is independently verified in addition to the application email/network limiter.
+- Resend domain validation proves verified/sending-enabled and `open_tracking=false`, `click_tracking=false`.
+- Confirmation tokens expire after 24 hours, contain no identity, and accept the active plus previous signing keys; unsubscribe decryption keys overlap for the useful lifetime of issued links.
+- Resend webhook verification uses the raw request body, endpoint-specific secret, five-minute timestamp tolerance, and event-ID idempotency.
+- Complaints, permanent bounces, suppression and sync/confirmation-delivery failures are visible to Pickla Admin.
