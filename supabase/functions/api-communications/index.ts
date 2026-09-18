@@ -1,6 +1,7 @@
 import {
   corsHeaders,
   errorResponse,
+  htmlResponse,
   jsonResponse,
   privateErrorResponse,
   privateJsonResponse,
@@ -461,20 +462,6 @@ function confirmationHtml(result: 'confirmed' | 'invalid') {
     ? 'Pickla news & community is now confirmed. Welcome to the loop.'
     : 'No subscription was activated. Return to Pickla and request a new confirmation email.';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Email confirmation · Pickla</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fffaf7;color:#071126;font-family:Inter,system-ui,sans-serif}.card{width:min(560px,calc(100% - 32px));box-sizing:border-box;padding:clamp(28px,7vw,52px);border-radius:28px;background:#071126;color:#fff;box-shadow:0 20px 60px rgba(7,17,38,.16)}.tag{margin:0;color:#32efa0;font-size:12px;font-weight:850;letter-spacing:.16em;text-transform:uppercase}h1{margin:14px 0;font-size:clamp(36px,9vw,58px);line-height:1}p{line-height:1.65;color:#dbe3f1}a{display:inline-flex;margin-top:14px;padding:14px 18px;border-radius:14px;background:#f43278;color:#071126;font-weight:900;text-decoration:none}</style></head><body><main class="card"><p class="tag">Pickla Mail</p><h1>${heading}</h1><p>${body}</p><a href="https://playpickla.com">Go to Pickla</a></main></body></html>`;
-}
-
-function htmlResponse(html: string, status = 200) {
-  return new Response(html, {
-    status,
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'private, no-store',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'Referrer-Policy': 'no-referrer',
-    },
-  });
 }
 
 async function confirmWithToken(req: Request, admin: AdminClient) {

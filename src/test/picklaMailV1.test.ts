@@ -2,6 +2,7 @@ import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderPicklaMailSignup } from "../../public-web/renderMailSignup";
+import { htmlResponse } from "../../supabase/functions/_shared/cors";
 import {
   createOpaqueConfirmationToken,
   createOpaqueUnsubscribeToken,
@@ -128,6 +129,12 @@ describe("Pickla Mail V1 double opt-in release contract", () => {
     expect(email.html).not.toContain("tracking");
     expect(api).toContain("'Idempotency-Key': `pickla-confirm-");
     expect(api).toContain("tags: [{ name: 'category', value: 'confirm_email' }]");
+  });
+
+  it("serves confirmation HTML with the required actual response Content-Type", () => {
+    const response = htmlResponse("<!doctype html><title>Pickla Mail</title>");
+    expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("keeps canary mode fail-closed and requires server-side abuse controls", () => {

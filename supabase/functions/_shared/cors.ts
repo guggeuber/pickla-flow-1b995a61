@@ -27,6 +27,21 @@ export function privateJsonResponse(data: unknown, status = 200) {
   });
 }
 
+export function htmlResponse(html: string, status = 200) {
+  const body = new Blob([html], { type: 'text/html; charset=utf-8' });
+  return new Response(body, {
+    status,
+    headers: {
+      ...corsHeaders,
+      'content-type': 'text/html; charset=utf-8',
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+    },
+  });
+}
+
 export function errorResponse(message: string, status = 400) {
   return jsonResponse({ error: message }, status);
 }
