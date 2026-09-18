@@ -1,5 +1,6 @@
 const UPSTREAM_ORIGIN = 'https://ptnvhbniiiapzbyofctg.supabase.co/functions/v1';
 const MAX_SUBSCRIBE_BODY_BYTES = 4 * 1024;
+const CONFIRMATION_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 function noStoreHeaders(contentType = 'application/json; charset=utf-8') {
   return {
@@ -14,6 +15,22 @@ function errorResponse(status: number) {
     status,
     headers: noStoreHeaders(),
   });
+}
+
+function finalResponseHeaders(isConfirm: boolean, upstreamContentType: string | null) {
+  const headers = noStoreHeaders(isConfirm
+    ? 'text/html; charset=utf-8'
+    : upstreamContentType || 'application/json; charset=utf-8');
+  if (isConfirm) {
+    return {
+      ...headers,
+      'Content-Security-Policy': CONFIRMATION_CSP,
+      'Referrer-Policy': 'no-referrer',
+      'X-Frame-Options': 'DENY',
+      'X-Robots-Tag': 'noindex, nofollow',
+    };
+  }
+  return headers;
 }
 
 export default {
@@ -52,12 +69,9 @@ export default {
       redirect: 'manual',
     });
 
-    const contentType = upstream.headers.get('content-type') || (isConfirm
-      ? 'text/html; charset=utf-8'
-      : 'application/json; charset=utf-8');
     return new Response(upstream.body, {
       status: upstream.status,
-      headers: noStoreHeaders(contentType),
+      headers: finalResponseHeaders(isConfirm, upstream.headers.get('content-type')),
     });
   },
 };
